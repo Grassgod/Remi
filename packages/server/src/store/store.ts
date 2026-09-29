@@ -3738,6 +3738,17 @@ runMigrations(this.db);
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
 
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; statusChangeEventId?: string | null } = {},
+  ): void {
+    this.issues.notifyChildStatusChangeWithinTransaction(previous, issue, parentTaskId, collector, deferredEvents, options);
+  }
+
   restoreIssue(id: string): MultiremiIssue {
     return this.issues.restoreIssue(id);
   }

@@ -174,7 +174,6 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
-const DELEGATION_RETURN_BODY_MAX_LENGTH = 16_000;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
 // MUL-336: how long a transient-throttle retry waits before it may be claimed
@@ -544,9 +543,8 @@ interface DelegationReturnDrainResult {
 }
 
 /**
- * One Issue transition produced by the task-terminal sync. The E1/E2 hook that
- * consumes it writes comments, session events and follow-up tasks, so it runs
- * after the terminal transaction commits (see {@link TasksRepo.runChildStatusChanges}).
+ * One Issue transition retained for post-commit automatic-start replay.
+ * Required reports and wakes have already been written in the owner's transaction.
  */
 export interface ChildStatusChange {
   previous: MultiremiIssue;
@@ -561,12 +559,8 @@ export interface ChildStatusChange {
  * MUL-400 S1 (QA round 3): where an in-transaction writer hands the Issue
  * transitions its writes produced.
  *
- * It is a required parameter on every `...WithinTransaction` variant. The type
- * is deliberately not optional and not nullable: the alternative — running the
- * E1/E2 hook inline — opens a second `BEGIN` inside the caller's transaction,
- * and `PostgresSyncDatabase` has no savepoints, so that inner `COMMIT` would
- * commit the caller's work early and release its locks. Requiring the collector
- * makes the compiler ask every call site which transaction owns the write.
+ * It remains required on transaction writers to preserve automatic-start replay
+ * after COMMIT. Inline reports use the same transaction and its event queue.
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
 
@@ -1347,9 +1341,6 @@ export class TasksRepo {
       }
       return this.ensureDelegationWakeupWithinWorkspaceLock(source, input, childStatusChanges, deferredEvents);
     })();
-    for (const task of result.createdTasks ?? (result.created && result.task ? [result.task] : [])) {
-      this.ctx.notifyTaskEnqueued(task);
-    }
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     return result;
@@ -1369,14 +1360,12 @@ export class TasksRepo {
       return { task: null, created: false, covered: false };
     }
     const result = this.ensureDelegationWakeupWithinWorkspaceLock(source, input, childStatusChanges, deferredEvents);
-    deferredEvents.enqueuedTasks.push(...(result.createdTasks ?? (result.created && result.task ? [result.task] : [])));
     return result;
   }
 
   /**
-   * Caller owns the transaction; notification and the E1/E2 hook must happen
-   * only after it commits. `childStatusChanges` is required (see
-   * {@link ChildStatusChangeCollector}) so no call site can run the hook inline.
+   * Caller owns the transaction and flushes notifications and automatic-start
+   * replay after COMMIT. Required reports share this transaction.
    */
   createTaskWithinTransaction(
     input: CreateTaskInput,
@@ -1447,6 +1436,7 @@ export class TasksRepo {
         const task = this.getTask(pending.id)!;
         appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_coalesced", {
           seq: wake.seq, reason: wake.reason, commentId: wake.commentId ?? null,
+          ...(["mention", "comment"].includes(wake.reason) ? { taskId: task.id, agentId: task.agentId } : {}),
         });
         return { task, action: "coalesced" };
       }
@@ -4728,7 +4718,31 @@ ${placementAfter.sql}
       ).all(workspaceId, ...uniqueCommentIds) as Row[];
       const tasks = rows.map(toTask);
       this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
-      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents));
+      return tasks.map((task, index) => {
+        const wakeSeq = Number(rows[index]!.wake_seq ?? 0);
+        const executionScope = task.execution_scope ?? "";
+        const terminal = this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents);
+        const trigger = task.triggerCommentId
+          ? this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId) : null;
+        if (!task.issueSessionId || !task.issueId || !trigger || wakeSeq <= 0 || wakeSeq <= trigger.seq) return terminal;
+        const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
+        const result = this.ensurePendingTurnWithinTransaction({
+          lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId,
+            executionScope },
+          wake: { reason: "re_ring", seq: wakeSeq },
+          create: () => this.createTaskWithinWorkspaceLock({
+            agentId: task.agentId, issueId: task.issueId, issueSessionId: task.issueSessionId,
+            workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
+            prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
+            wakeSource: "re_ring", preserveIssueStatus: true,
+            delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
+            delegatedFromIssueSessionId: task.delegatedFromIssueSessionId,
+            assignmentAuthorType: "system", assignmentAuthorId: null,
+          }, childStatusChanges, deferredEvents, undefined, executionScope),
+        });
+        if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
+        return terminal;
+      });
     })();
     this.runChildStatusChanges(childStatusChanges);
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
@@ -5196,28 +5210,6 @@ ${placementAfter.sql}
       return { task: returnTask, created: false, covered: true };
     }
 
-    if (terminalStatus && returnSessionId && delegatedByAgentId) {
-      const manualRow = this.ctx.db.query(
-        `SELECT * FROM multiremi_tasks
-         WHERE parent_task_id = ? AND agent_id = ? AND issue_session_id = ?
-           AND status NOT IN ('failed', 'cancelled')
-           AND NOT (delegation_id IS NOT NULL AND delegated_by_agent_id = agent_id)
-           AND wake_source IS NULL
-         ORDER BY created_at DESC, id DESC LIMIT 1`,
-      ).get(source.id, delegatedByAgentId, returnSessionId) as Row | null;
-      if (manualRow) {
-        const manual = toTask(manualRow);
-        this.ctx.db.run(
-          `UPDATE multiremi_tasks SET delegation_return_task_id = ?, updated_at = ?
-           WHERE id = ? AND delegation_return_task_id IS NULL`,
-          [manual.id, nowIso(), source.id],
-        );
-        this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
-          "covered_by_delegate_wakeup", { returnTaskId: manual.id }, deferredEvents);
-        const drained = drainTerminalReturns();
-        return { task: manual, created: false, covered: true, createdTasks: drained.createdTasks };
-      }
-    }
 
     const delegator = this.ctx.agents().getAgent(delegatedByAgentId!);
     if (!delegator || delegator.archivedAt || delegator.workspaceId !== source.workspaceId) {
@@ -5236,83 +5228,52 @@ ${placementAfter.sql}
     );
     if (terminalStatus) return drainTerminalReturns();
 
-    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(returnSessionId!, delegator.id);
-    if (lane.cursorSeq >= requiredEventSeq) {
-      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
-        laneCursorSeq: lane.cursorSeq,
-      }, deferredEvents);
-      return { task: null, created: false, covered: true };
+    const returnIssue = this.ctx.issues().getIssue(this.ctx.issueSessions().getIssueSession(returnSessionId!)!.issueId);
+    if (!returnIssue || ["done", "cancelled"].includes(returnIssue.status)) {
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "delegator_issue_closed", {}, deferredEvents);
+      return { task: null, created: false, covered: false };
     }
-
-    const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_tasks
-       WHERE delegation_id = ? AND agent_id = ? AND issue_session_id = ?
-       ORDER BY created_at DESC`,
-    ).all(source.delegationId, delegator.id, returnSessionId) as Row[];
-    for (const row of rows) {
-      const candidate = toTask(row);
-      const projectedThrough = candidate.projectionToSeq;
-      if (isActiveTaskStatus(candidate.status) && projectedThrough == null) {
-        this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
-          returnTaskId: candidate.id,
-        }, deferredEvents);
-        return { task: candidate, created: false, covered: true };
-      }
-      if (
-        (isActiveTaskStatus(candidate.status) && projectedThrough != null && projectedThrough >= requiredEventSeq)
-        || (candidate.status === "completed" && projectedThrough != null && projectedThrough >= requiredEventSeq)
-      ) {
-        this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
-          returnTaskId: candidate.id,
-          projectionToSeq: projectedThrough,
-        }, deferredEvents);
-        return { task: candidate, created: false, covered: true };
-      }
-    }
-
     const sourceAgent = this.ctx.agents().getAgent(source.agentId);
-    const returnIssueId = this.ctx.issueSessions().getIssueSession(returnSessionId!)!.issueId;
     const sourceIssue = this.ctx.issues().getIssue(source.issueId);
-    const task = this.createTaskWithinWorkspaceLock({
-      agentId: delegator.id,
-      issueId: returnIssueId,
-      issueSessionId: returnSessionId,
-      triggerCommentId: cleanOptionalString(input.triggerCommentId),
-      workspaceId: source.workspaceId,
-      priority: source.priority,
-      prompt: delegationReturnPrompt({
-        sourceTaskId: source.id,
-        sourceAgentName: sourceAgent?.name ?? source.agentId,
-        terminalStatus: null,
-        terminalBody: null,
-      }),
-      delegationId: source.delegationId,
-      delegatedByAgentId: delegator.id,
-      parentTaskId: source.id,
-      assignmentAuthorType: "system",
-      assignmentAuthorId: null,
-    }, childStatusChanges, deferredEvents);
-    this.ctx.appendIssueActivity(returnIssueId, {
-      actorType: "system",
-      actorId: null,
-      type: "delegation_return_triggered",
-      body: `Queued ${delegator.name} to review ${sourceAgent?.name ?? "a delegated teammate"}${returnIssueId !== source.issueId ? ` (${sourceIssue?.key ?? source.issueId})` : ""}`,
-      data: {
-        delegationId: source.delegationId,
-        sourceTaskId: source.id,
-        sourceIssueId: source.issueId,
-        sourceIssueKey: sourceIssue?.key ?? null,
-        returnIssueId,
-        returnTaskId: task.id,
-        delegatorAgentId: delegator.id,
-        delegateAgentId: source.agentId,
-        requiredEventSeq,
-        terminalStatus: null,
-        coveredSourceTaskIds: [],
-        drained: false,
-      },
+    const parentTask = source.parentTaskId ? this.getTask(source.parentTaskId) : null;
+    const executionScope = parentTask?.agentId === delegator.id && parentTask.issueSessionId === returnSessionId
+      ? parentTask.execution_scope ?? "" : "";
+    let turn: EnsurePendingTurnResult;
+    if (returnSessionId !== source.issueSessionId) {
+      const comment = input.triggerCommentId ? this.ctx.issues().getIssueComment(input.triggerCommentId) : null;
+      const delivery = this.ctx.inbox().sendEnvelopeWithinTransaction({
+        to: { role: "delegator", delegationId: source.delegationId! }, kind: "reply", wake: "now",
+        dedupeKey: `delegation_progress:${input.triggerCommentId ?? `${source.id}:${requiredEventSeq}`}`,
+        replyTo: input.triggerCommentId ?? undefined,
+        body: comment?.body ?? `${sourceAgent?.name ?? source.agentId} requested your attention on ${source.id}.`,
+        source: { issueId: source.issueId, taskId: source.id, commentId: input.triggerCommentId ?? undefined },
+      }, childStatusChanges, deferredEvents)[0]!;
+      turn = delivery;
+      requiredEventSeq = delivery.entry.seq;
+    } else {
+      turn = this.ensurePendingTurnWithinTransaction({
+        lane: { kind: "issue", issueSessionId: returnSessionId!, agentId: delegator.id, executionScope },
+        wake: { reason: "delegation_return", seq: requiredEventSeq, commentId: input.triggerCommentId },
+        create: () => this.createTaskWithinWorkspaceLock({
+          agentId: delegator.id, issueId: returnIssue.id, issueSessionId: returnSessionId,
+          triggerCommentId: cleanOptionalString(input.triggerCommentId), workspaceId: source.workspaceId,
+          priority: source.priority, prompt: `读收件箱\n\n${returnSessionId}:${requiredEventSeq}`,
+          delegationId: source.delegationId, delegatedByAgentId: delegator.id, parentTaskId: source.id,
+          preserveIssueStatus: true, wakeSource: "delegation_return",
+          assignmentAuthorType: "system", assignmentAuthorId: null,
+        }, childStatusChanges, deferredEvents, undefined, executionScope),
+      });
+      if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
+    }
+    if (turn.action === "created") this.ctx.appendIssueActivity(returnIssue.id, {
+      actorType: "system", actorId: null, type: "delegation_return_triggered",
+      body: `Queued ${delegator.name} to review ${sourceAgent?.name ?? "a delegated teammate"}`,
+      data: { delegationId: source.delegationId, sourceTaskId: source.id, sourceIssueId: source.issueId,
+        sourceIssueKey: sourceIssue?.key ?? null, returnIssueId: returnIssue.id, returnTaskId: turn.task!.id,
+        delegatorAgentId: delegator.id, delegateAgentId: source.agentId, requiredEventSeq,
+        terminalStatus: null, coveredSourceTaskIds: [], drained: false },
     }, deferredEvents);
-    return { task, created: true, covered: false };
+    return { task: turn.task, created: turn.action === "created", covered: turn.action !== "created" };
   }
 
   /** Caller holds the workspace lifecycle lock and the Issue Session row lock. */
@@ -5362,6 +5323,7 @@ ${placementAfter.sql}
          AND task.delegated_by_agent_id IS NOT NULL
          AND task.agent_id <> task.delegated_by_agent_id
          AND task.delegation_return_task_id IS NULL
+         AND task.delegation_skip_reason IS NULL
          AND EXISTS (
            SELECT 1 FROM multiremi_conversation_log terminal_event
            WHERE terminal_event.session_id = task.issue_session_id
@@ -5416,176 +5378,69 @@ ${placementAfter.sql}
     });
     if (!reports.length) return { createdTasks: [], taskBySourceId: new Map() };
 
-    const groups = new Map<string, DelegationTerminalReport[]>();
-    for (const report of reports) {
-      const delegatorId = report.source.delegatedByAgentId!;
-      const group = groups.get(delegatorId) ?? [];
-      group.push(report);
-      groups.set(delegatorId, group);
-    }
-
     const createdTasks: MultiremiTask[] = [];
     const taskBySourceId = new Map<string, MultiremiTask>();
-    for (const [delegatorId, group] of groups) {
-      const delegator = this.ctx.agents().getAgent(delegatorId);
-      const triggerReport = group.find((report) => report.source.id === trigger?.source.id) ?? null;
-      if (!delegator || delegator.archivedAt || delegator.workspaceId !== group[0]!.source.workspaceId) {
-        if (triggerReport) {
-          this.recordDelegationReturnSkipped(
-            triggerReport.source,
-            delegationWakeupInputForReport(triggerReport),
-            triggerReport.requiredEventSeq,
-            "delegator_unavailable",
-            {},
-            deferredEvents,
-          );
-        }
+    const returnIssue = this.ctx.issues().getIssue(returnIssueId);
+    for (const report of reports) {
+      const delegator = this.ctx.agents().getAgent(report.source.delegatedByAgentId!);
+      if (!delegator || delegator.archivedAt || delegator.workspaceId !== report.source.workspaceId
+        || !returnIssue || ["done", "cancelled"].includes(returnIssue.status)) {
+        this.recordDelegationReturnSkipped(report.source, delegationWakeupInputForReport(report), report.requiredEventSeq,
+          returnIssue && !["done", "cancelled"].includes(returnIssue.status) ? "delegator_unavailable" : "delegator_issue_closed",
+          {}, deferredEvents);
         continue;
       }
-
-      const unresolved: DelegationTerminalReport[] = [];
-      let exactQueuedCandidate: MultiremiTask | null = null;
-      for (const report of group) {
-        const rows = this.ctx.db.query(
-          `SELECT * FROM multiremi_tasks
-           WHERE delegation_id = ? AND agent_id = ? AND issue_session_id = ?
-           ORDER BY created_at DESC`,
-        ).all(report.source.delegationId, delegatorId, issueSessionId) as Row[];
-        let coveredBy: MultiremiTask | null = null;
-        for (const row of rows) {
-          const candidate = toTask(row);
-          if (candidate.status === "queued" && candidate.projectionToSeq == null) {
-            exactQueuedCandidate ??= candidate;
-            break;
-          }
-          const projectedThrough = candidate.projectionToSeq;
-          if (
-            projectedThrough != null
-            && projectedThrough >= report.requiredEventSeq
-            && (isActiveTaskStatus(candidate.status) || candidate.status === "completed")
-          ) {
-            coveredBy = candidate;
-            break;
-          }
-        }
-        if (!coveredBy) {
-          unresolved.push(report);
-          continue;
-        }
-        this.stampDelegationReports([report], coveredBy.id);
-        taskBySourceId.set(report.source.id, coveredBy);
-        this.recordDelegationReturnSkipped(
-          report.source,
-          delegationWakeupInputForReport(report),
-          report.requiredEventSeq,
-          "already_covered",
-          { returnTaskId: coveredBy.id, projectionToSeq: coveredBy.projectionToSeq },
-          deferredEvents,
-        );
+      const delivery = this.ctx.inbox().sendEnvelopeWithinTransaction({
+        to: { role: "delegator", delegationId: report.source.delegationId! },
+        kind: "report", wake: "now", outcome: report.terminalStatus === "completed" ? "done" : report.terminalStatus,
+        dedupeKey: `delegation_terminal:${report.source.id}`,
+        body: delegationTerminalReportSection(report),
+        source: { issueId: report.source.issueId ?? undefined, taskId: report.source.id,
+          commentId: report.resultCommentId ?? undefined },
+      }, childStatusChanges, deferredEvents)[0]!;
+      let turn = delivery;
+      if (delivery.deduplicated) {
+        // Cancelling an unfrozen return clears its source stamp. The report
+        // remains in the inbox; ring again without allocating another log seq.
+        const result = this.ensurePendingTurnWithinTransaction({
+          lane: { kind: "issue", issueSessionId, agentId: delegator.id,
+            executionScope: delivery.recipient.executionScope },
+          wake: { reason: "delegation_return", seq: delivery.entry.seq },
+          create: () => this.createTaskWithinWorkspaceLock({
+            agentId: delegator.id, issueId: returnIssueId, issueSessionId,
+            workspaceId: report.source.workspaceId, priority: report.source.priority,
+            prompt: `读收件箱\n\n${issueSessionId}:${delivery.entry.seq} (${delivery.entry.id})`,
+            delegationId: report.source.delegationId, delegatedByAgentId: delegator.id,
+            parentTaskId: report.source.id, preserveIssueStatus: true, wakeSource: "delegation_return",
+            assignmentAuthorType: "system", assignmentAuthorId: null,
+          }, childStatusChanges, deferredEvents, undefined, delivery.recipient.executionScope),
+        });
+        turn = { ...delivery, ...result };
+        if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
       }
-      if (!unresolved.length) continue;
-
-      const queuedCandidate = exactQueuedCandidate ?? this.findQueuedTaskForDelegationReturn(
-        delegatorId,
-        issueSessionId,
-      );
-      if (queuedCandidate) {
-        const returnTask = isDelegationReturnTask(queuedCandidate);
-        const guarded = returnTask
-          ? this.ctx.db.run(
-              `UPDATE multiremi_tasks
-               SET prompt = ?, updated_at = ?
-               WHERE id = ? AND status = 'queued' AND projection_to_seq IS NULL`,
-              [appendDelegationTerminalReports(queuedCandidate.prompt, unresolved), nowIso(), queuedCandidate.id],
-            )
-          : this.ctx.db.run(
-              `UPDATE multiremi_tasks
-               SET updated_at = updated_at
-               WHERE id = ? AND status = 'queued' AND projection_to_seq IS NULL`,
-              [queuedCandidate.id],
-            );
-        if (guarded.changes > 0) {
-          const coveredTask = this.getTask(queuedCandidate.id)!;
-          this.stampDelegationReports(unresolved, coveredTask.id);
-          const coveredSourceTaskIds = unresolved.map((report) => report.source.id);
-          for (const report of unresolved) {
-            taskBySourceId.set(report.source.id, coveredTask);
-            const sameDelegation = report.source.delegationId === coveredTask.delegationId;
-            this.recordDelegationReturnSkipped(
-              report.source,
-              delegationWakeupInputForReport(report),
-              report.requiredEventSeq,
-              returnTask
-                ? sameDelegation ? "already_covered" : "coalesced_into_pending_return"
-                : "covered_by_queued_task",
-              {
-                returnTaskId: coveredTask.id,
-                coveredSourceTaskIds,
-                ...(returnTask ? { terminalReportMerged: true } : {}),
-              },
-              deferredEvents,
-            );
-          }
-          continue;
-        }
+      if (!turn.task) continue;
+      this.stampDelegationReports([report], turn.task.id);
+      if (isDelegationReturnTask(turn.task) && turn.task.triggerCommentId
+        && turn.task.triggerCommentId !== delivery.entry.id) {
+        this.ctx.db.run("UPDATE multiremi_tasks SET trigger_comment_id = NULL, trigger_summary = NULL WHERE id = ?",
+          [turn.task.id]);
       }
-
-      const first = unresolved[0]!;
-      const task = this.createTaskWithinWorkspaceLock({
-        agentId: delegator.id,
-        issueId: returnIssueId,
-        issueSessionId,
-        workspaceId: first.source.workspaceId,
-        priority: Math.max(...unresolved.map((report) => report.source.priority)),
-        prompt: delegationReturnPrompt({ reports: unresolved }),
-        delegationId: first.source.delegationId,
-        delegatedByAgentId: delegator.id,
-        parentTaskId: first.source.id,
-        assignmentAuthorType: "system",
-        assignmentAuthorId: null,
-      }, childStatusChanges, deferredEvents);
-      this.stampDelegationReports(unresolved, task.id);
-      const coveredSourceTaskIds = unresolved.map((report) => report.source.id);
-      for (const report of unresolved) taskBySourceId.set(report.source.id, task);
-      createdTasks.push(task);
+      taskBySourceId.set(report.source.id, this.getTask(turn.task.id)!);
+      if (turn.action !== "created") continue;
+      createdTasks.push(turn.task);
       this.ctx.appendIssueActivity(returnIssueId, {
-        actorType: "system",
-        actorId: null,
-        type: "delegation_return_triggered",
-        body: `Queued ${delegator.name} to review delegated teammate reports${returnIssueId !== first.source.issueId ? ` (${first.sourceIssueKey ?? first.source.issueId})` : ""}`,
-        data: {
-          delegationId: first.source.delegationId,
-          sourceTaskId: first.source.id,
-          sourceIssueId: first.source.issueId,
-          sourceIssueKey: first.sourceIssueKey,
-          returnIssueId,
-          returnTaskId: task.id,
-          delegatorAgentId: delegator.id,
-          delegateAgentId: first.source.agentId,
-          requiredEventSeq: Math.max(...unresolved.map((report) => report.requiredEventSeq)),
-          terminalStatus: first.terminalStatus,
-          coveredSourceTaskIds,
-          drained: triggerReport == null || group.length > 1,
-        },
+        actorType: "system", actorId: null, type: "delegation_return_triggered",
+        body: `Queued ${delegator.name} to review delegated teammate reports`,
+        data: { delegationId: report.source.delegationId, sourceTaskId: report.source.id,
+          sourceIssueId: report.source.issueId, sourceIssueKey: report.sourceIssueKey, returnIssueId,
+          returnTaskId: turn.task.id, delegatorAgentId: delegator.id, delegateAgentId: report.source.agentId,
+          requiredEventSeq: delivery.entry.seq, terminalStatus: report.terminalStatus,
+          coveredSourceTaskIds: [report.source.id], drained: trigger?.source.id !== report.source.id || reports.length > 1 },
       }, deferredEvents);
     }
     return { createdTasks, taskBySourceId };
   }
 
-  private findQueuedTaskForDelegationReturn(
-    delegatorId: string,
-    issueSessionId: string,
-  ): MultiremiTask | null {
-    const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_tasks
-       WHERE agent_id = ? AND issue_session_id = ?
-         AND status = 'queued' AND projection_to_seq IS NULL
-         AND execution_scope = ''
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1`,
-    ).get(delegatorId, issueSessionId) as Row | null;
-    return row ? toTask(row) : null;
-  }
 
   private stampDelegationReports(reports: DelegationTerminalReport[], returnTaskId: string): void {
     if (!reports.length) return;
@@ -5856,7 +5711,7 @@ ${placementAfter.sql}
         // lineage, so the delegator hears the chain's real outcome exactly once
         // (MUL-336) without this branch having to know about model switching.
         if (!replacementPlanned) {
-          const wakeup = workspaceLockHeld
+          workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
@@ -5869,9 +5724,7 @@ ${placementAfter.sql}
                 terminalStatus: status,
                 terminalBody: body,
               });
-          delegationReturns.push(
-            ...(wakeup.createdTasks ?? (wakeup.created && wakeup.task ? [wakeup.task] : [])),
-          );
+          // The unified writer put fresh returns on the owner's commit queue.
         }
       }
       // Compute status after the return task is present. Otherwise the child
@@ -6303,20 +6156,16 @@ ${placementAfter.sql}
   ): void {
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    this.ctx.db.transaction(() => this.syncIssueStatusFromTaskWithinTransaction(task, status, {
-      ...options,
-      collectChildStatusChanges: childStatusChanges,
-      deferredEvents,
-    }))();
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
+      this.syncIssueStatusFromTaskWithinTransaction(task, status, {
+        ...options, collectChildStatusChanges: childStatusChanges, deferredEvents,
+      });
+    })();
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
   }
 
-  /**
-   * Post-commit E1/E2 hook for the task-terminal path (MUL-400). Failure is
-   * logged, never rethrown: the task and Issue transitions are already committed
-   * and must not be rolled back by a notification problem.
-   */
   /**
    * Public replay for callers that own their own transaction (the organizer
    * action path and the store facade's task-creation callers). Failure is
@@ -6330,11 +6179,8 @@ ${placementAfter.sql}
   /**
    * Replay collected Issue transitions, now that their transaction committed.
    *
-   * A hook can itself produce a further transition (the parent round it queues
-   * moves that parent's own status, which is a child event for the grandparent).
-   * Those nested transitions come back as the hook's return value and are
-   * drained here — always after the write that produced them committed, so the
-   * hook never opens a transaction inside another one.
+   * An automatic start can produce another transition. Its transaction writes
+   * required reports inline, then hands any further replay to this drain.
    *
    * `seen` bounds the chain: the same (issue, previous -> next, task) transition
    * is replayed once. Without it a parent/child status ping-pong would keep
@@ -6377,11 +6223,8 @@ ${placementAfter.sql}
     options: {
       rederive?: boolean;
       /**
-       * Caller-owned collector: the E1/E2 hook must run after the caller's
-       * transaction commits, so the transition is recorded here and replayed by
-       * {@link runChildStatusChanges}. Required — there is no inline path,
-       * because running the hook here would open a second `BEGIN` inside the
-       * caller's transaction and Postgres has no savepoints.
+       * Required collector for post-commit automatic-start replay. E1/E2/E3
+       * reports and pending turns are written before this transaction commits.
        */
       collectChildStatusChanges: ChildStatusChangeCollector;
       /** Skip guard B for a transition the guard deliberately exempts. */
@@ -6434,7 +6277,7 @@ ${placementAfter.sql}
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
-      const { dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      const { event: statusEvent, dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: updatedIssue,
         previousStatus: issue.status,
         actorType: "agent",
@@ -6442,12 +6285,14 @@ ${placementAfter.sql}
         automationSourceEventId: task.assignmentSourceEventId,
         automationSourceTaskId: task.id,
       });
-      // MUL-400 E1/E2: the task path is the second writer that must re-derive
-      // the parent and report child endings, so it enters the same hook as the
-      // direct Issue update path — but only AFTER this transaction commits. The
-      // hook writes comments, session events and tasks of its own, and
-      // PostgresSyncDatabase has no savepoints, so running it in here would both
-      // roll the status back on failure and emit a nested BEGIN on Postgres.
+      // Reports and pending turns share the status transaction. The collector
+      // retains only the post-commit automatic-start replay.
+      this.ctx.issues().notifyChildStatusChangeWithinTransaction(issue, updatedIssue, task.id,
+        childStatusChanges, options.deferredEvents, {
+          statusChangeEventId: statusEvent?.id,
+          taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+            ? task.status : undefined,
+        });
       childStatusChanges.push({
         previous: issue,
         issue: updatedIssue,
@@ -6572,55 +6417,22 @@ function normalizeTriggerSummary(value: unknown): string | null {
   return `${chars.slice(0, TRIGGER_SUMMARY_MAX_LENGTH).join("")}\u2026`;
 }
 
-function delegationReturnPrompt(input: {
-  sourceTaskId: string;
-  sourceAgentName: string;
-  terminalStatus: null;
-  terminalBody: null;
-} | {
-  reports: DelegationTerminalReport[];
-}): string {
-  if (!("reports" in input)) {
-    return [
-      `${input.sourceAgentName} requested your attention while working on a task you delegated.`,
-      "Read the latest Session Updates, respond to the teammate's report, and continue owning the parent task.",
-      "Treat this as progress or a blocker in the current round, not as the completed delivery.",
-      "Do not repeat work that the teammate already completed.",
-      "",
-      `Source task: ${input.sourceTaskId}`,
-    ].join("\n");
-  }
 
-  const first = input.reports[0]!;
-  const opening = input.reports.length > 1
-    ? `${input.reports.length} delegated task reports are ready for review.`
-    : first.terminalStatus === "completed"
-      ? `${first.sourceAgentName} completed a task you delegated.`
-      : first.terminalStatus === "failed"
-        ? `${first.sourceAgentName} could not complete a task you delegated.`
-        : `A task you delegated to ${first.sourceAgentName} was cancelled.`;
-  const prompt = [
-    opening,
+
+function delegationTerminalReportSection(report: DelegationTerminalReport): string {
+  const body = report.terminalBody?.trim();
+  const lines = [
+    report.terminalStatus === "completed"
+      ? `${report.sourceAgentName} completed a task you delegated.`
+      : report.terminalStatus === "failed"
+        ? `${report.sourceAgentName} could not complete a task you delegated.`
+        : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
     "Read the latest Session Updates and terminal reports, then continue owning the parent task.",
     "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
     "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
     "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
     "Do not repeat work that the teammate already completed.",
-  ];
-  for (const report of input.reports) prompt.push("", delegationTerminalReportSection(report));
-  return prompt.join("\n");
-}
-
-function appendDelegationTerminalReports(
-  prompt: string,
-  reports: DelegationTerminalReport[],
-): string {
-  return [prompt.trimEnd(), ...reports.map(delegationTerminalReportSection)].join("\n\n");
-}
-
-function delegationTerminalReportSection(report: DelegationTerminalReport): string {
-  const body = report.terminalBody?.trim();
-  const lines = [
+    "",
     `## Terminal Report: ${report.sourceAgentName}`,
     `Source task: ${report.source.id}`,
     `Status: ${report.terminalStatus}`,
@@ -6633,14 +6445,7 @@ function delegationTerminalReportSection(report: DelegationTerminalReport): stri
   }
   lines.push(`Delegation: ${report.source.delegationId ?? "none"}`);
   if (!body) return lines.join("\n");
-  const chars = Array.from(body);
-  const truncated = chars.length > DELEGATION_RETURN_BODY_MAX_LENGTH;
-  lines.push(
-    "",
-    truncated
-      ? `${chars.slice(0, DELEGATION_RETURN_BODY_MAX_LENGTH).join("")}\n\n[terminal report truncated]`
-      : body,
-  );
+  lines.push("", body);
   return lines.join("\n");
 }
 

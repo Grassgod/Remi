@@ -1327,8 +1327,8 @@ describe("MUL-400 E2 hook atomicity", () => {
     }
     ctx.appendIssueActivity = original;
 
-    // ADR 0003: the child's own status was committed before the hook ran.
-    expect(store.getIssue(child.id)?.status).toBe("done");
+    // ADR 0012: the source status and wake belong to the same transaction.
+    expect(store.getIssue(child.id)?.status).toBe("in_progress");
     // The failure is observable at the call site ...
     expect(thrown?.message).toBe("injected hook failure");
     // ... and nothing half-written is left behind: no round, no notification

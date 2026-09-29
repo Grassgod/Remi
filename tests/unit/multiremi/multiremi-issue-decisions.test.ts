@@ -3,6 +3,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 // The answered-window cases pin "now" so created_at / answered_at are ordered.
@@ -47,9 +48,10 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     const second = await create(source.id, sourceToken.token, "permission", "Access the resource");
     expect(first).toMatchObject({ status: "pending", issueId: parent.id, createdByAgentId: sourceAgent.id, sourceTaskId: sourceTask.id });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.agentId === owner.id && task.status === "queued")).toHaveLength(1);
-    const parentPrompt = store.getTask(ownerTask.id)?.prompt ?? "";
-    expect(parentPrompt).toContain(first.id);
-    expect(parentPrompt).toContain(second.id);
+    const parentInbox = inboxReportBody(store, ownerTask);
+    expect(parentInbox).toContain(first.id);
+    expect(parentInbox).toContain(second.id);
+    expect(store.getTask(ownerTask.id)!.prompt).toBe(ownerTask.prompt);
     expect(store.listInboxItems(member.id).filter((item) => item.type === "decision_requested")).toHaveLength(0);
 
     const answerPath = `/api/issues/${parent.id}/decisions/${first.id}/answer`;
@@ -68,7 +70,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
       status: "answered", answeredByMemberId: null, answer: { answererType: "agent", answererId: owner.id,
         answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
     });
-    expect(store.getTask(sourceTask.id)?.prompt).toContain(`decision:${first.id}`);
+    expect(inboxReportBody(store, sourceTask)).toContain(`decision:${first.id}`);
+    expect(store.listTasksForIssue(source.id).filter(task => task.status === "queued")).toHaveLength(1);
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_answered" && entry.actorType === "agent")).toBe(true);
     expect(store.listIssueActivity(source.id).some((entry) => entry.type === "decision_received")).toBe(true);
 
@@ -81,8 +84,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect(history[1]?.answererId).toBe(member.id);
     expect(store.getIssueDecision(parent.id, first.id)?.answeredByMemberId).toBe(member.id);
     expect(store.getIssueDecision(parent.id, first.id)?.answeredAt).toBe(history[1]?.answeredAt);
-    expect(store.getTask(ownerTask.id)?.prompt).toContain(`member changed your answer to decision ${first.id}`);
-    expect(store.getTask(sourceTask.id)?.prompt).toContain("Hold for QA");
+    expect(inboxReportBody(store, ownerTask)).toContain(`member changed your answer to decision ${first.id}`);
+    expect(inboxReportBody(store, sourceTask)).toContain("Hold for QA");
 
     const escalated = await request(`/api/issues/${parent.id}/decisions/${second.id}/escalate`, ownerToken.token, {});
     expect(escalated.status, await escalated.clone().text()).toBe(200);

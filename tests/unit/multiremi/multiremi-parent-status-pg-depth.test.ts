@@ -396,7 +396,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(counter.maxTopLevel).toBe(1);
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
-    expect(queued[0]?.prompt).toContain("reported is done");
+    expect(store.listIssueComments(parent.id).filter(comment => comment.authorType === "system")[0]!.body)
+      .toContain("is done");
   });
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner free: fresh round)", () => {
@@ -841,9 +842,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       // them — and it left no round behind either.
       expect(otherStore.getTask(task.id)?.status).toBe("failed");
       expect(otherStore.getIssue(child.id)?.status).toBe("blocked");
-      expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(0);
+      expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(1);
       expect(otherStore.listIssueComments(parent.id).filter((comment) => comment.authorType === "system"))
-        .toHaveLength(0);
+        .toHaveLength(1);
     } finally {
       other.close();
     }
@@ -1193,11 +1194,10 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
-    // Both reports are in the one round: the first one is the round's subject,
-    // the second is appended as an additional report.
-    expect(queued[0]?.prompt).toMatch(/reported is (blocked|done)/);
-    expect(queued[0]?.prompt).toContain("## Additional Sub-Issue Report");
     const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(2);
+    expect(comments.map(comment => comment.body).join("\n")).toContain("is blocked");
+    expect(comments.map(comment => comment.body).join("\n")).toContain("is done");
+    expect(comments.every(comment => store.getConversationLogEntryById(comment.id)!.metadata.envelope)).toBe(true);
   }, 90_000);
 });
