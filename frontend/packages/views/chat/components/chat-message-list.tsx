@@ -40,6 +40,7 @@ import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../
 
 interface ChatMessageListProps {
   sessionId: string;
+  visible?: boolean;
   replica: SessionReplicaPort;
   optimisticRows: readonly OptimisticChatRow[];
   pendingTask: ChatPendingTask | null | undefined;
@@ -53,6 +54,7 @@ interface ChatMessageListProps {
 
 export function ChatMessageList({
   sessionId,
+  visible = true,
   replica,
   optimisticRows,
   pendingTask,
@@ -90,8 +92,8 @@ export function ChatMessageList({
       if (row?.dataset.perfKey) prependAnchor.current = { id: row.dataset.perfKey,
         top: row.getBoundingClientRect().top };
     }
-    onLoadOlderMessages?.();
-  }, [onLoadOlderMessages]);
+    if (visible) onLoadOlderMessages?.();
+  }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
     mergeOptimisticChatRows(entries.filter(entry => entry.seq > 0), optimisticRows), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
@@ -105,7 +107,7 @@ export function ChatMessageList({
   const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
   const { data: liveTaskMessages } = useQuery({
     ...taskMessagesOptions(pendingTaskId ?? ""),
-    enabled: canFetchLiveTimeline,
+    enabled: visible && canFetchLiveTimeline,
   });
   const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskMessages ?? []);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
@@ -118,7 +120,7 @@ export function ChatMessageList({
     transformEntries={transformEntries}
     entryKey={entryKey}
     header={<div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
-      {hasOlderMessages ? <button type="button" data-chat-earlier disabled={isFetchingOlderMessages}
+      {hasOlderMessages ? <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
         onClick={loadOlder} className="h-full hover:text-foreground">
         {isFetchingOlderMessages ? t(($) => $.message_list.loading_older) : t(($) => $.message_list.expand_older)}
       </button> : t(($) => $.message_list.earliest)}
@@ -148,7 +150,7 @@ export function ChatMessageList({
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
       return <div className="py-2">
         <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
-          isPush={isPush} />
+          isPush={isPush} visible={visible} />
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
           onRetry={() => onRetrySend?.(local.clientId)} /></div>}
       </div>;
@@ -181,7 +183,7 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
-function MessageBubble({ message, isPending, isPush }: { message: ChatMessage; isPending: boolean; isPush: boolean }) {
+function MessageBubble({ message, isPending, isPush, visible }: { message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean }) {
   if (message.role === "user") {
     const markdown = chatMessageMarkdown(message);
     return (
@@ -204,17 +206,19 @@ function MessageBubble({ message, isPending, isPush }: { message: ChatMessage; i
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} />;
+  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} />;
 }
 
 function AssistantMessage({
   message,
   isPending,
   isPush,
+  visible,
 }: {
   message: ChatMessage;
   isPending: boolean;
   isPush: boolean;
+  visible: boolean;
 }) {
   const taskId = message.task_id;
   // A mid-run attachment push shares its task id with the terminal reply that
@@ -228,7 +232,7 @@ function AssistantMessage({
   // task finishes, since WS already populated it.
   const { data: taskMessages } = useQuery({
     ...taskMessagesOptions(taskId ?? ""),
-    enabled: canFetchTaskMessages,
+    enabled: visible && canFetchTaskMessages,
   });
 
   const timeline: ChatTimelineItem[] = isPush

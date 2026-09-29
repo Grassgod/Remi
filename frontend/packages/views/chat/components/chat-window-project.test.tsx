@@ -59,10 +59,14 @@ vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a"
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
 vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {} }));
-vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string) => ({
+vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string, _initial: unknown, _comment: unknown, _cached: unknown, enabled: boolean) => {
+  // The 444 replica replaces listChatMessagesPage; observe its load gate here.
+  if (enabled && sessionId) listChatMessagesPageCalls();
+  return ({
   replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: [] }) },
   snapshot: { entries: [], head: null, ready: true }, error: false,
-}) }));
+  });
+} }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ chat: () => "/chat" }) }));
 vi.mock("@multiremi/views/issues/components", () => ({ canAssignAgent: () => true }));
 vi.mock("../../navigation", () => ({ useNavigation: () => ({ push: vi.fn() }) }));

@@ -9,7 +9,7 @@ import { useWS } from "../realtime";
 import { useReplicaEnv } from "../platform/replica-env";
 import { IssueLogReplica } from "./issue-log";
 
-export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string, preferCached = false) {
+export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string, preferCached = false, enabled = true) {
   const replica = useMemo(() => new IssueLogReplica(sessionId, initial, preferCached), [sessionId, initial, preferCached]);
   const snapshot = useSyncExternalStore(
     listener => replica.subscribe(sessionId, listener),
@@ -22,7 +22,7 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
   const env = useReplicaEnv();
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !enabled) return;
     let active = true;
     setError(false);
     if (!replica.hasWindowFor(commentId)) {
@@ -30,10 +30,10 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
       void load.catch(() => { if (active) setError(true); });
     }
     return () => { active = false; };
-  }, [replica, sessionId, initial, commentId]);
+  }, [replica, sessionId, initial, commentId, enabled]);
 
   useEffect(() => {
-    if (!sessionId || !userId || !workspaceId || !ws) return;
+    if (!sessionId || !enabled || !userId || !workspaceId || !ws) return;
     const subscriptions = new Map<string, StreamSubscription>();
     let active = true;
     let disconnect: (() => void) | undefined;
@@ -51,6 +51,6 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
     }).then(cleanup => { if (active) disconnect = cleanup; else cleanup(); }).catch(() => { if (active) setError(true); });
     const offReconnect = ws.onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
     return () => { active = false; offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
-  }, [replica, sessionId, userId, workspaceId, ws, env]);
+  }, [replica, sessionId, enabled, userId, workspaceId, ws, env]);
   return { replica, snapshot, error };
 }

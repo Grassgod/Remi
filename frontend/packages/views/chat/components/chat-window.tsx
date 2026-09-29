@@ -102,6 +102,7 @@ export function ChatWindow({
   const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>(null);
   useEffect(() => { setRuntimeWorkspaceId(null); }, [wsId]);
   const isOpen = useChatStore((s) => s.isOpen);
+  const chatVisible = isPage || isOpen;
   const storedActiveSessionId = useChatStore((s) => s.activeSessionId);
   const [pageSessionId, setPageSessionId] = useState(initialSessionId ?? storedActiveSessionId);
   useEffect(() => { if (isPage) setPageSessionId(initialSessionId ?? storedActiveSessionId); }, [isPage, initialSessionId]);
@@ -127,9 +128,9 @@ export function ChatWindow({
   );
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: chatVisible }));
+  const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: chatVisible });
+  const { data: projects = [] } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -137,24 +138,25 @@ export function ChatWindow({
     isLoading: sessionsLoading,
     isError: sessionsError,
     refetch: refetchSessions,
-  } = useQuery(chatSessionsOptions(wsId));
+  } = useQuery(chatSessionsOptions(wsId, "all", { enabled: chatVisible }));
   const { replica, snapshot: logSnapshot, error: messagesError } = useIssueLog(
     displayedSessionId ?? "", initialLog?.sessionId === displayedSessionId ? initialLog : undefined,
-    undefined, true,
+    undefined, true, chatVisible,
   );
   const replicaRef = useRef(replica);
   replicaRef.current = replica;
   const [pendingRefreshSessionId, setPendingRefreshSessionId] = useState<string | null>(null);
   const refreshSession = useCallback((sessionId: string) => {
+    if (!chatVisible) { setPendingRefreshSessionId(sessionId); return; }
     if (replicaRef.current.sessionId === sessionId)
       void replicaRef.current.refreshTailPreservingWindow().catch(() => {});
     else setPendingRefreshSessionId(sessionId);
-  }, []);
+  }, [chatVisible]);
   useEffect(() => {
-    if (!pendingRefreshSessionId || replica.sessionId !== pendingRefreshSessionId) return;
+    if (!chatVisible || !pendingRefreshSessionId || replica.sessionId !== pendingRefreshSessionId) return;
     setPendingRefreshSessionId(null);
     void replica.refreshTailPreservingWindow().catch(() => {});
-  }, [replica, pendingRefreshSessionId]);
+  }, [replica, pendingRefreshSessionId, chatVisible]);
   const [optimisticRows, setOptimisticRows] = useState<OptimisticChatRow[]>([]);
   const [isFetchingOlderMessages, setIsFetchingOlderMessages] = useState(false);
   const optimisticCounter = useRef(0);
@@ -190,10 +192,10 @@ export function ChatWindow({
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
   const { data: pendingTask } = useQuery(
-    pendingChatTaskOptions(displayedSessionId ?? ""),
+    pendingChatTaskOptions(displayedSessionId ?? "", { enabled: chatVisible }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
-  useChatScopeSubscription(displayedSessionId, !!displayedSessionId);
+  useChatScopeSubscription(displayedSessionId, chatVisible && !!displayedSessionId);
 
   // Archived sessions remain readable; restore them before sending.
   const currentSession = activeSessionId
@@ -249,7 +251,7 @@ export function ChatWindow({
   // disable) so the input doesn't flash a fake "no agent" state in the
   // few hundred ms before the agent list query resolves. Only `"none"`
   // (server confirmed: zero usable agents) drives the disabled UI.
-  const agentAvailability = useWorkspaceAgentAvailability();
+  const agentAvailability = useWorkspaceAgentAvailability(chatVisible);
   const noAgent =
     agentAvailability === "none" ||
     (!!currentSession &&
@@ -537,7 +539,7 @@ export function ChatWindow({
     pointerEvents: isVisible ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId);
+  const contextItems = useChatContextItems(wsId, chatVisible);
 
   const conversation = (
     <>
@@ -573,6 +575,7 @@ export function ChatWindow({
             </TooltipContent>
           </Tooltip>
           <SessionDropdown
+            chatVisible={chatVisible}
             sessions={sessions}
             // Use the full agent list (incl. archived) so historical
             // sessions can still resolve their avatar.
@@ -643,6 +646,7 @@ export function ChatWindow({
             <ProjectDisplay projects={projects} projectId={currentSession?.project_id ?? null} />
           ) : (
             <WorkLocationPicker
+              projectsEnabled={chatVisible}
               wsId={wsId}
               value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
               projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
@@ -675,6 +679,7 @@ export function ChatWindow({
         <div className="min-h-0 flex-1" />
       ) : hasMessages ? (
         <ChatMessageList
+          visible={chatVisible}
           key={displayedSessionId}
           sessionId={displayedSessionId ?? ""}
           replica={replica}
@@ -710,7 +715,7 @@ export function ChatWindow({
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      <HumanRequestDock taskId={pendingTaskId} />
+      <HumanRequestDock taskId={pendingTaskId} enabled={chatVisible} />
 
       {noAgent ? (
         <NoAgentBanner />
@@ -820,6 +825,7 @@ export function ChatWindow({
                 </div>
               ) : (
                 <SessionDropdown
+                  chatVisible={chatVisible}
                   presentation="list"
                   sessions={sessions}
                   agents={agents}
