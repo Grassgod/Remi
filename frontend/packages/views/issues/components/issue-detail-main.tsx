@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock3, Play } from "lucide-react";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -19,7 +19,7 @@ import { IssueSessionList } from "./issue-session-list";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useT } from "../../i18n";
 import { useNavigation } from "../../navigation";
-import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
+import { AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS, useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 
 /** Gate (i) and gate (ii) as the activity section reports them. */
 export interface RevealGates {
@@ -94,9 +94,20 @@ export function IssueDetailMain({
   const { t } = useT("issues");
   const { pathname } = useNavigation();
   const readyKey = `${issueId}:${sessions.activeId}:${highlightCommentId ?? ""}`;
-  const [revealedKey, setRevealedKey] = useState("");
-  useRouteContentReady(pathname, revealedKey === readyKey);
-  const onContentReady = useCallback(() => setRevealedKey(readyKey), [readyKey]);
+  const [readiness, setReadiness] = useState({ key: readyKey, ready: false });
+  // Reset before children commit, including when returning to a previously ready key.
+  if (readiness.key !== readyKey) setReadiness({ key: readyKey, ready: false });
+  useRouteContentReady(pathname, readiness.key === readyKey && readiness.ready);
+  useEffect(() => {
+    if (readiness.ready) return;
+    const timer = setTimeout(() => {
+      setReadiness(current => current.key === readyKey && !current.ready ? { ...current, ready: true } : current);
+    }, AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS);
+    return () => clearTimeout(timer);
+  }, [readyKey, readiness.ready]);
+  const onContentReady = useCallback(() => {
+    setReadiness(current => current.key === readyKey && !current.ready ? { ...current, ready: true } : current);
+  }, [readyKey]);
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const updateIssue = useUpdateIssue();

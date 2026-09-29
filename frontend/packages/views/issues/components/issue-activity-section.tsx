@@ -80,8 +80,9 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   const reaction = useToggleCommentReaction(issueId, sessionId);
   const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
   useEffect(() => {
-    if ((!sessionId && !sessionsPending) || (error && !snapshot.ready)) onContentReady?.();
-  }, [sessionId, sessionsPending, error, snapshot.ready, onContentReady]);
+    if ((!sessionId && !sessionsPending) || (error && !snapshot.ready)
+      || (sessionId && snapshot.ready && snapshot.entries.every(entry => entry.seq === 0))) onContentReady?.();
+  }, [sessionId, sessionsPending, error, snapshot.ready, snapshot.entries, onContentReady]);
   const onLegacyUpdate = useCallback((payload: unknown) => {
     const p = payload as { issue_id?: string; comment?: { issue_id?: string; issue_session_id?: string } };
     if ((p.issue_id ?? p.comment?.issue_id) === issueId && (!p.comment?.issue_session_id || p.comment.issue_session_id === sessionId)) refresh();

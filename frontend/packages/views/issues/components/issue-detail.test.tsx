@@ -1795,6 +1795,70 @@ describe("IssueDetail (shared)", () => {
   });
 
   describe("flat session stream", () => {
+    it.each(["no rows", "protocol head only"])("marks an answered empty log ready immediately with %s", (caseName) => {
+      const head: SessionLogRow = {
+        session_id: "session-main", id: "head-session-main", seq: 0, kind: "head", revision: 1,
+        visibility: "shown", author_type: "system", author_id: null, task_id: null, parent_id: null,
+        body_md: "", body_html: "", render_version: "test", metadata: { attachments: [] },
+        resolved_at: null, resolved_by_type: null, resolved_by_id: null, created_at: "", updated_at: "", deleted_at: null,
+      };
+      const entries = caseName === "protocol head only" ? [head] : [];
+      const replica = new MemorySessionReplica({ "session-main": { entries, ready: true, fresh: true } });
+      issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
+      const onContentReady = vi.fn();
+
+      render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <QueryClientProvider client={createTestQueryClient()}>
+            <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+              canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
+              sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()}
+              scrollContainerEl={null} onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
+              onContentReady={onContentReady} />
+          </QueryClientProvider>
+        </I18nProvider>,
+      );
+
+      expect(onContentReady).toHaveBeenCalledOnce();
+    });
+
+    it("publishes a log 500 immediately, replacing old session content with a retry view", () => {
+      const oldRow: SessionLogRow = {
+        session_id: "session-main", id: "old-row", seq: 1, kind: "system", revision: 1,
+        visibility: "shown", author_type: "system", author_id: null, task_id: null, parent_id: null,
+        body_md: "Old session body", body_html: "<p>Old session body</p>", render_version: "test",
+        metadata: { attachments: [] }, resolved_at: null, resolved_by_type: null,
+        resolved_by_id: null, created_at: "", updated_at: "", deleted_at: null,
+      };
+      const oldReplica = new MemorySessionReplica({ "session-main": { entries: [oldRow], ready: true, fresh: true } });
+      issueLogOverride.current = { replica: oldReplica, snapshot: oldReplica.getSnapshot("session-main"), error: false };
+      const onContentReady = vi.fn();
+      const queryClient = createTestQueryClient();
+      const view = (sessionId: string) => <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <QueryClientProvider client={queryClient}>
+          <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+            canModerateComments={false} activeIssueSessionId={sessionId} activeIssueSession={null}
+            sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()}
+            scrollContainerEl={null} onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
+            onContentReady={onContentReady} />
+        </QueryClientProvider>
+      </I18nProvider>;
+      const rendered = render(view("session-main"));
+      expect(screen.getByText("Old session body")).toBeInTheDocument();
+      onContentReady.mockClear();
+
+      const failedReplica = new MemorySessionReplica({ "session-review": { entries: [], ready: false, fresh: false } });
+      const refreshVisible = vi.fn(async () => {});
+      issueLogOverride.current = { replica: Object.assign(failedReplica, { refreshVisible }),
+        snapshot: failedReplica.getSnapshot("session-review"), error: true };
+      rendered.rerender(view("session-review"));
+
+      expect(onContentReady).toHaveBeenCalled();
+      expect(screen.queryByText("Old session body")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+      expect(refreshVisible).toHaveBeenCalledOnce();
+    });
+
     // comment-1 and comment-2 are roots; reply-1 answers comment-1 but was
     // written last. The old grouping hoisted it inside comment-1's card, so it
     // appeared *before* comment-2 — a second layer of parallelism inside a
