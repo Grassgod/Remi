@@ -353,6 +353,13 @@ function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole, peer: Pee
   });
 }
 
+function attachOwnedConversationLogHub(store: MultiremiStore, hub: LiveHub | null, options: MultiremiApiOptions): () => void {
+  if (!hub || options.liveHub !== undefined || options.hub !== undefined) return () => {};
+  return store.subscribeConversationLog({ onEntry: (sessionId, payload) => {
+    hub.onEntry(sessionId, "target_seq" in payload ? { ...payload, session_id: sessionId } : payload);
+  } });
+}
+
 /**
  * The only two `/internal/` routes that exist, and so the only two the dashboard
  * auth middleware may skip. A prefix rule would silently exempt whatever route
@@ -416,6 +423,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
   // an explicitly injected hub is shared rather than rebuilt.
   const hub = resolveAppHub(options, effectiveApiRole);
+  attachOwnedConversationLogHub(store, hub, options);
 
   // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
   // detach handle, but an app has no shutdown hook — the listener lives exactly as
@@ -953,6 +961,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   }
 
   const store = options.store ?? new MultiremiStore();
+  const detachConversationLogHub = attachOwnedConversationLogHub(store, liveHub, options);
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
   const scheduler = backgroundJobs
@@ -1365,8 +1374,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     issueTitleScheduler?.stop();
     store.stopNotificationDeliverySweeper();
     bodyHtmlBackfill?.stop();
-    closeOwnedReadPool();
+    detachConversationLogHub();
     if (options.liveHub === undefined && options.hub === undefined) (liveHub as HubImpl).shutdown();
+    closeOwnedReadPool();
     return stopServer(closeActiveConnections);
   };
   return serverWithResync;

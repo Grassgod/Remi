@@ -740,6 +740,7 @@ export interface ConversationLogSurface {
   listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
+  subscribeConversationLog(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener): () => void;
   ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
   syncConversationLogIssueHead(
     sessionId: string,

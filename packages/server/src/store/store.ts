@@ -4290,6 +4290,10 @@ runMigrations(this.db);
     this.conversationLog.setConversationLogListener(listener);
   }
 
+  subscribeConversationLog(listener: ConversationLogListener): () => void {
+    return this.conversationLog.subscribeConversationLog(listener);
+  }
+
   ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): ConversationLogEntry {
     return this.ctx.db.transaction(() => this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input))();
   }

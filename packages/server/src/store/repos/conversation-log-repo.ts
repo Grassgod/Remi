@@ -103,6 +103,11 @@ export class ConversationLogRepo {
     if (listener) this.listeners.add(listener);
   }
 
+  subscribeConversationLog(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
   private emit(sessionId: string, payload: ConversationLogEntry | ConversationLogPatch): void {
     afterCommit(this.ctx.db, () => {
       for (const listener of [...this.listeners]) {
