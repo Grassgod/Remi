@@ -701,8 +701,11 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   // concurrent startup safe — but it costs wall time here: measured against an
   // already-migrated database, four concurrent opens take 3666 / 2738 / 1778 /
   // 925 ms (wall 3.88 s) where the pre-merge tree ran the same four in parallel
-  // at ~930 ms each (wall 1.15 s), and a single open is 976 ms. The file goes
-  // from ~3.2 s to ~5.3 s against the 5 s default budget.
+  // at ~930 ms each (wall 1.15 s), and a single open is 976 ms. The two cases
+  // below therefore go from 5.84 s wall together (2.9 s each, pre-merge tree)
+  // to 11.43 s with the lock, 5.88 s and 6.03 s for the two of them on their
+  // own — each one crosses the 5 s default budget. The whole file goes from
+  // 61.5 s to 69-71 s; the file total is dominated by the other PG cases.
   //
   // The budget is not what the cases assert (one migration row, and a
   // contiguous seq per reader), and the lock is main's design, so the timeout
