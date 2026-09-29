@@ -6,14 +6,14 @@ import { InMemoryDaemonTraceReader, type DaemonTraceReader } from "@multiremi/ap
 import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
 import { TraceReader, TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
-import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
+import { isTraceFileEvent, TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
-import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES } from "./trace-budget-fixtures.js";
+import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES, traceFiniteEventBytes } from "./trace-budget-fixtures.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -30,7 +30,7 @@ function pointer(location: MultiremiTaskTrace["location"]): MultiremiTaskTrace {
 }
 
 async function archiveReaderFor(events: TraceEvent[]): Promise<TraceReader> {
-  const root = mkdtempSync(join(tmpdir(), "m429-r8-trace-budget-"));
+  const root = mkdtempSync(join(tmpdir(), "m429-r9-trace-budget-"));
   dirs.push(root);
   const store = createStore();
   store.ensureLocalWorkspace();
@@ -60,13 +60,15 @@ describe("TraceReader oversized first event", () => {
     for (const { name, input } of oversizedTraceCases) {
       it(`returns ${name} byte-for-byte alone and pages through last (${source})`, async () => {
         const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
-        if (name === "contract-limit event") {
-          expect(sanitizeStoredEvent(input, TRACE_BUDGET_FIXTURE_TS)).toEqual({ ts: TRACE_BUDGET_FIXTURE_TS, ...input });
+        if (name === "contract-limit event" || input.type === "x") {
+          expect(sanitizeStoredEvent(input, input.ts ?? TRACE_BUDGET_FIXTURE_TS)).toEqual({ ts: TRACE_BUDGET_FIXTURE_TS, ...input });
         }
         const original = trace.append("tsk_trace", [input, { type: "text", content: "last" }]).events;
         const eventBytes = Buffer.byteLength(JSON.stringify(original[0]));
         expect(eventBytes).toBeGreaterThan(TRACE_READ_MAX_BYTES);
-        if (name === "contract-limit event") expect(eventBytes).toBeLessThanOrEqual(TRACE_SANITIZED_EVENT_MAX_BYTES);
+        expect(isTraceFileEvent(original[0])).toBe(true);
+        expect(original[0]!.ts).toBe(input.ts ?? TRACE_BUDGET_FIXTURE_TS);
+        expect(traceFiniteEventBytes(original[0]!)).toBeLessThanOrEqual(TRACE_SANITIZED_EVENT_MAX_BYTES);
         const store = createStore();
         const reader = source === "archive" ? await archiveReaderFor(original) : new TraceReader({
           store, daemon: new InMemoryDaemonTraceReader(() => trace),
@@ -79,9 +81,34 @@ describe("TraceReader oversized first event", () => {
         const last = await reader.readTrace("tsk_trace", page.next_after_seq);
         expect(last).toMatchObject({ state: "ok", next_after_seq: original[1]!.seq, head: 2, eof: true });
         expect(JSON.stringify(last.events)).toBe(JSON.stringify([original[1]]));
-        console.log(`B5 r8 ${name} ${source}: event=${eventBytes}, events=${Buffer.byteLength(JSON.stringify(page.events))}, reply=${Buffer.byteLength(JSON.stringify(page))}`);
+        console.log(`B5 r9 ${name} ${source}: event=${eventBytes}, finite=${traceFiniteEventBytes(original[0]!)}, events=${Buffer.byteLength(JSON.stringify(page.events))}, reply=${Buffer.byteLength(JSON.stringify(page))}`);
       });
     }
+
+    it(`returns normal, oversized, normal events on exact successive pages (${source})`, async () => {
+      const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+      const original = trace.append("tsk_trace", [
+        { type: "text", content: "first" },
+        { type: "text", content: "\u0001".repeat(180_000) },
+        { type: "text", content: "last" },
+      ]).events;
+      const store = createStore();
+      const reader = source === "archive" ? await archiveReaderFor(original) : new TraceReader({
+        store, daemon: new InMemoryDaemonTraceReader(() => trace),
+        archive: new SessionArchiveReader({ store, root: "/nonexistent" }), getPointer: () => pointer("daemon"),
+      });
+      let afterSeq = 0;
+      for (const event of original) {
+        const page = await reader.readTrace("tsk_trace", afterSeq);
+        expect(page).toMatchObject({ state: "ok", source, head: 3, next_after_seq: event.seq, eof: event.seq === 3 });
+        expect(JSON.stringify(page.events)).toBe(JSON.stringify([event]));
+        if (event.seq !== 2) {
+          expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES);
+          expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+        }
+        afterSeq = page.next_after_seq;
+      }
+    });
 
     it(`keeps two 600KiB events on separate bounded pages (${source})`, async () => {
       const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
@@ -242,7 +269,7 @@ describe("TraceReader states and hot routing", () => {
 
 describe("TraceReader archive path", () => {
   it("pages a B4 fixture by sparse seq and follows a trace_not_hot pointer swap", async () => {
-    const root = mkdtempSync(join(tmpdir(), "m429-r8-trace-reader-"));
+    const root = mkdtempSync(join(tmpdir(), "m429-r9-trace-reader-"));
     dirs.push(root);
     const store = createStore();
     store.ensureLocalWorkspace();
