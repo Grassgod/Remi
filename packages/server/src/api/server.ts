@@ -347,8 +347,7 @@ export interface MultiremiApiOptions {
 function resolveAppHub(
   options: MultiremiApiOptions,
   apiRole: ApiRole,
-  store: MultiremiStore,
-  readPool: ReturnType<typeof createReadPool> | null,
+  defaultFill: HubFillReader | null,
   peer: PeerChannel | null = options.peerChannel ?? null,
 ): LiveHub | null {
   if (options.liveHub !== undefined) return options.liveHub;
@@ -356,7 +355,7 @@ function resolveAppHub(
   return createHub({
     transport: peer?.enabled ? createPeerHubTransport({ peer }) : createLocalHubTransport(),
     role: apiRole,
-    fill: options.hubFill === undefined ? createConversationLogFillReader(store, readPool) : options.hubFill,
+    fill: options.hubFill === undefined ? defaultFill : options.hubFill,
     ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
   });
 }
@@ -430,7 +429,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
   // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
   // an explicitly injected hub is shared rather than rebuilt.
-  const hub = resolveAppHub(options, effectiveApiRole, store, options.readPool ?? null);
+  // An app factory has no shutdown hook; only a server-owned Hub may keep an
+  // asynchronous reader alive after the caller closes the store.
+  const hub = resolveAppHub(options, effectiveApiRole, null);
   attachOwnedConversationLogHub(store, hub, options);
 
   // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
@@ -964,7 +965,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const ownedReadPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
     ? null
     : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole }));
-  const liveHub = resolveAppHub(options, effectiveApiRole, store, ownedReadPool, peer);
+  const liveHub = resolveAppHub(options, effectiveApiRole,
+    createConversationLogFillReader(store, ownedReadPool), peer);
   if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).

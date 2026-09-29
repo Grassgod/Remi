@@ -63,6 +63,7 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 [Live Hub 对接说明](live-hub-a6-integration.md)。
 
 服务端自建 Hub 默认使用 [会话日志 fill reader](../../packages/server/src/api/hub/conversation-log-fill-reader.ts)：冷流订阅和 peer head 补齐均读取 `log:` 的 B1 head 与有界范围页，包含隐藏标记以保留 seq 连续性；Postgres 走异步 read pool，SQLite 走 store。`trace:` 的 head 返回 `null`，不从数据库补帧。关停时先解除日志 listener、关闭 Hub，再关闭读池，避免进行中的 fill 访问已关闭的连接。
+独立调用 `createMultiremiApp` 没有关停句柄，默认不启用这个异步 fill；需要它的调用方可显式传入 `hubFill` 并负责自身生命周期。
 
 实现在 [hub/stream-auth.ts](../../packages/server/src/api/hub/stream-auth.ts)，规则只写一次，两种后端各自提供事实：
 
