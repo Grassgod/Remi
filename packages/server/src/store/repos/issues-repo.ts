@@ -31,7 +31,7 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { advisoryXactLock, withSavepoint } from "@multiremi/store/db/postgres.js";
+import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -3040,20 +3040,21 @@ export class IssuesRepo {
 
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
-    try {
-      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
-      const workspaceId = withSavepoint(this.ctx.db, lookupWorkspace);
-      if (!workspaceId) return;
-      this.ctx.emitWorkspaceEvent({
-        type: "comment:created",
-        workspaceId,
-        actorType: "system",
-        actorId: SYSTEM_AUTHOR_ID,
-        payload: { comment },
-      });
-    } catch (err) {
-      log.warn(`comment:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    afterCommit(this.ctx.db, () => {
+      try {
+        const workspaceId = this.ctx.issueWorkspaceId(issueId);
+        if (!workspaceId) return;
+        this.ctx.emitWorkspaceEvent({
+          type: "comment:created",
+          workspaceId,
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          payload: { comment },
+        });
+      } catch (err) {
+        log.warn(`comment:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
   }
 
   /**

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { AgentIssueUpdatesRepo } from "@multiremi/store/repos/agent-issue-updates-repo.js";
+import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -208,6 +211,30 @@ function verifyLegacyIssueUpdateQueueIsUnused(db: SqlDatabase): void {
   expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives without legacy queue");
   const count = db.query("SELECT COUNT(*) AS count FROM multiremi_agent_issue_update_state").get() as { count: number | string };
   expect(Number(count.count)).toBe(0);
+}
+
+function verifyQueueBeforeFlush(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = store.createIssue({ title: "Queue before flush", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Flush recipient", provider: "codex" });
+  const chat = store.createChatSession({ agentId: agent.id });
+  bindFeishuTopicFixture(store, db, chat.id, issue.id);
+  const context = (store as unknown as { ctx: StoreContext }).ctx;
+  const events = createCommitEventQueue();
+  context.db.transaction(() => {
+    store.queueAgentIssueUpdate({
+      activityId: "leader-round:flush-once", issueId: issue.id,
+      actorType: "agent", type: "leader_round_completed", body: "Flush this round once",
+      createdAt: new Date().toISOString(),
+    });
+    expect(store.flushAgentIssueUpdatesForIssueWithinTransaction(issue.id, events)).toEqual({
+      delivered: 1, dropped: 0,
+    });
+  })();
+  expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 0, dropped: 0 });
+  const messages = store.listChatMessages(chat.id);
+  expect(messages).toHaveLength(1);
+  expect(messages[0]?.body).toContain("Flush this round once");
 }
 
 function verifyBestEffortWorkspaceLookups(db: SqlDatabase): void {
@@ -488,6 +515,12 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: Issue comments do not enter the legacy update queue", async () => {
     await withPostgres(async (db) => verifyLegacyIssueUpdateQueueIsUnused(db));
   });
+  it("SQLite: round aggregation stays before an in-transaction flush", async () => {
+    await withSqlite(async (db) => verifyQueueBeforeFlush(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: round aggregation stays before an in-transaction flush", async () => {
+    await withPostgres(async (db) => verifyQueueBeforeFlush(db));
+  }, 30_000);
   it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
     await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db));
   });
@@ -626,13 +659,13 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
     });
-  });
+  }, 30_000);
   it.skipIf(!pgAdminUrl)("Postgres: four processes append without duplicate or missing seq", async () => {
     await withPostgres(async (db, url) => {
       await runFour("pg", url, "append");
       assertContiguous(db);
     });
-  });
+  }, 30_000);
   it.skipIf(!pgAdminUrl)("Postgres: rolls back a comment and its mirrored log row together", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
