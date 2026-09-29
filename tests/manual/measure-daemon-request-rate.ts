@@ -14,7 +14,7 @@
  * is the candidate host every machine runs: offered the host, never assigned.
  */
 
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,7 +34,7 @@ const hostOnly = args.includes("--host-only");
 const concierge = args.includes("--concierge");
 const seconds = Number(args.find((arg) => /^\d+$/.test(arg)) ?? 60);
 
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 store.ensureLocalWorkspace();
 const token = await store.createAccessToken({

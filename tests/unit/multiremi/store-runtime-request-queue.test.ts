@@ -6,7 +6,8 @@
 //      transcribed from the pre-refactor source), and
 //   2. the lifecycle it implements — claim oldest-first, expire on either deadline — still works.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
@@ -35,7 +36,7 @@ function recordingDb(target: Database): Database {
 }
 
 function createRepo(): RuntimesRepo {
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   db = raw;
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   store = new MultiremiStore(raw);

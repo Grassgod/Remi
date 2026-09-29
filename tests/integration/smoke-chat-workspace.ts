@@ -15,7 +15,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -56,7 +57,7 @@ process.env.NODE_ENV = "test";
 
 try {
   await assertPortAvailable(port);
-  db = new Database(join(root, "chat.sqlite"));
+  db = openSqliteDatabase(join(root, "chat.sqlite"));
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const user = store.getOrCreateUser({ name: "Chat smoke user", email: "chat-smoke@example.test" });

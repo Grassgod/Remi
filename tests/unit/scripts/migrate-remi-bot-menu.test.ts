@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,7 +15,7 @@ test("bot menu migration can read the W4 v2 backup after the live table is gone"
   sandbox = mkdtempSync(join(tmpdir(), "remi-menu-backup-"));
   const livePath = join(sandbox, "remi.db");
   const backupPath = `${livePath}.pre-remi-config-purge-v2.bak`;
-  const backup = new Database(backupPath);
+  const backup = openSqliteDatabase(backupPath);
   backup.exec("CREATE TABLE remi_config (section TEXT, key TEXT, value TEXT)");
   backup.run(
     "INSERT INTO remi_config (section, key, value) VALUES ('botMenu', '', ?)",
