@@ -209,5 +209,84 @@ describe("MUL-427 merge rulings", () => {
         expect(store.getConversationLogHead(session.id)?.headSeq).toBe(events.length);
       });
     }, 30_000);
+
+    // Ruling (ab) item 2: `postAgentReplyComment` owns one transaction for the
+    // reply (comment, Session event, log row) and its turn card's
+    // `final_entry_id`; the reply's pushes, notifications and agent dispatch run
+    // after that COMMIT.
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply pushes and dispatches only after its own COMMIT`, async () => {
+      await withStore(backend, (store, db) => {
+        const runtime = store.registerRuntime({ id: "rt_reply_after_commit", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+        const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
+        const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
+        const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
+        const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        store.startTask(task.id);
+        const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
+        const enqueued: Array<{ agentId: string; inTransaction: boolean | undefined }> = [];
+        const unsubscribers = [
+          store.onWorkspaceEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEnqueued((queued) => enqueued.push({ agentId: queued.agentId, inTransaction: db.inTransaction })),
+        ];
+        try {
+          store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+          const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id)!;
+          expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
+            .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
+          expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
+          expect(events.map((event) => event.type)).toContain("comment:created");
+          expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
+        } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply commits with its turn card's final_entry_id or not at all`, async () => {
+      await withStore(backend, (store, db) => {
+        const runtime = store.registerRuntime({ id: "rt_reply_final_entry", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+        const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Final entry", workspaceId: "local" });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const completeRound = (output: string) => {
+          const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });
+          expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+          store.startTask(task.id);
+          store.completeTask(task.id, { output });
+          return task;
+        };
+        const committed = completeRound("Committed answer");
+        const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === committed.id)!;
+        expect(reply.body).toBe("Committed answer");
+        expect(store.findTurnEntry(committed.id)?.metadata.final_entry_id).toBe(reply.id);
+
+        // Reject only the reply's own card update; the terminal transaction
+        // writes `final_entry_id: null` and must still go through.
+        if (backend === "pg") {
+          db.run(`CREATE FUNCTION reject_final_entry() RETURNS trigger AS $$ BEGIN
+            IF NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL THEN RAISE EXCEPTION 'final entry rejected'; END IF;
+            RETURN NEW; END; $$ LANGUAGE plpgsql`);
+          db.run("CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log FOR EACH ROW EXECUTE FUNCTION reject_final_entry()");
+        } else {
+          db.exec(`CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log
+            WHEN NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'final entry rejected'); END`);
+        }
+        const emitted: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => emitted.push(event.type));
+        try {
+          const rejected = completeRound("Rolled back answer");
+          expect(store.getTask(rejected.id)?.status).toBe("completed");
+          expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
+          expect(store.listConversationLogEntriesByTask(rejected.id).filter((entry) => entry.kind === "message")).toEqual([]);
+          expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
+          expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+            .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
+          expect(emitted).not.toContain("comment:created");
+        } finally { unsubscribe(); }
+      });
+    }, 30_000);
   }
 });
