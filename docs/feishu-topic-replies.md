@@ -359,6 +359,17 @@ the executing side and the human surfaces. The capability flag
 one, so a host that predates decisions is handed no decision card at all — the
 decision simply stays on the web workbench, exactly as it did before.
 
+A decision exists for the card path only while the decision row, its source
+Issue and its target Issue are in one workspace (MUL-476). If an Issue moved
+away, card reads and answers — terminal replays included — return 404 without
+title or body, also when the host's own decision now sits on a moved-away
+target Issue. Such a card is not queued, patched, reminded or recovered, and a
+pending outbound row for it is skipped at claim time without holding back later
+messages on the same binding. Existing outbound rows are not migrated; a card
+already delivered to Feishu keeps its content there. Receipts, patches and
+reminders also require the original card delivery and its binding to belong to
+the decision's workspace and target Issue.
+
 ### 真人与第二个人验收（D6）
 
 前置条件与上一节相同，另加两条：decision 挂在**父单**上（子单里 `remi issue

@@ -26,6 +26,7 @@ export class IssueWorkspacesRepo {
               r.device_info AS runtime_device_info, r.daemon_id AS runtime_daemon_id,
               p.display_name AS runtime_machine_name
        FROM multiremi_issue_workspaces iw
+       JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
        LEFT JOIN multiremi_runtimes r ON r.id = iw.runtime_id
        LEFT JOIN multiremi_daemon_profiles p
          ON p.workspace_id = iw.workspace_id AND p.daemon_id = r.daemon_id
@@ -129,6 +130,8 @@ export class IssueWorkspacesRepo {
          status, repos, last_task_id, cleaned_at, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(issue_id) DO UPDATE SET
+         workspace_id = excluded.workspace_id,
+         issue_key = excluded.issue_key,
          runtime_id = excluded.runtime_id,
          root_path = excluded.root_path,
          branch_name = excluded.branch_name,

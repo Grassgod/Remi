@@ -6,6 +6,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import {
   agentBroadcastCompatibilityResponse,
@@ -615,10 +616,11 @@ export function safeAssignIssue(
   store: MultiremiStore,
   issueId: string,
   input: AssignIssueInput,
-): ReturnType<MultiremiStore["assignIssue"]> | { error: string; status: 400 | 404 } {
+): ReturnType<MultiremiStore["assignIssue"]> | { error: string; status: 400 | 404 | 409; code?: string } {
   try {
     return store.assignIssue(issueId, input);
   } catch (error) {
+    if (error instanceof IssueLockSetStaleError) return { error: error.message, status: 409, code: error.code };
     const message = error instanceof Error ? error.message : String(error);
     if (message.startsWith("Issue not found:")) return { error: "issue not found", status: 404 };
     if (/^(Agent|Member|Squad|Assignee) not found:/.test(message)) {

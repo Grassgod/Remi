@@ -174,7 +174,7 @@ function buildSharedIssueBundle(
     }));
   const issueWorkspace = store.getIssueWorkspace(issue.id);
   const project = issue.projectId ? store.getProject(issue.projectId) : null;
-  const parentIssue = issue.parentIssueId ? store.getIssue(issue.parentIssueId) : null;
+  const parentIssue = issue.parentIssueId ? store.getIssueByRef(issue.parentIssueId, issue.workspaceId) : null;
 
   return {
     share: publicShareResponse(share),

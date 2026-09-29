@@ -31,6 +31,24 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 [MultiremiStore.updateAgent](../../packages/server/src/store/store.ts)的角色更新和所属任务凭据撤销共用一个外层事务；仓储调用 `updateAgentWithinTransaction`，保留排序后的 workspace 锁、plugin workspace 锁与 Agent 行锁，不在撤销之前另行提交。`setAgentRole`、`setAgentSupervisor` 同样在角色变化时撤销任务凭据。整体回滚与正常提交的真 PG 对照见 [事务边界用例](../../tests/unit/multiremi/multiremi-existing-pg-transaction-boundaries.test.ts)。
 
+## Issue 关系与跨工作区移动
+
+[IssuesRepo](../../packages/server/src/store/repos/issues-repo.ts)的父子和依赖内容读取只认可同工作区关系，依赖行自身的 `workspace_id` 也必须与两端一致。旧的跨工作区关系在详情、列表、收件箱、分享、决策、父单状态推导和依赖自动开工中视为不存在；子单序列化仍保留不透明的 `parent_issue_id`，不附带对方标题、key 或状态。旧的跨工作区子单因此不再阻止父单结束；本规则不修改或迁移存量关系。
+
+飞书 Issue 决策卡片沿用同一限定：决策行、来源 Issue 和目标 Issue 的工作区必须一致。按决策 ID 读取、卡片入队、回执补丁、消息领取、重启恢复和提醒均过滤失效关系；回调包括终态回放都返回 404；目标 Issue 已移出时，bot host 的 daemon 访问本工作区记录的该决策同样返回 404，其他外部 Issue 仍返回 403。已有出站行不迁移，领取时过滤且不阻塞后面的有效消息；旧消息已发到飞书时无法撤回其既有内容。回执与提醒还要求原始卡片、绑定和目标 Issue 属于决策工作区。
+
+移动检查使用原始关系列。有父单、子单、任意类型依赖或未结束任务（`queued`、`dispatched`、`running` 等非 `completed`/`failed`/`cancelled` 状态）的 Issue 均返回 `409 workspace_move_blocked`；必须先单独清除父关系、移除子关系、删除依赖，或取消任务、取消指派、等任务结束，再移动。任务留在原工作区会继续写入该 Issue，所以与父子和依赖同样阻止移动；这是 MUL-476 的 API 行为变化。即使请求同时清父单和移动，也仍拒绝。`relations.parent`、`children` 和 `dependencies` 只列同工作区的 key，`relations.tasks` 只列同工作区任务的 `id` 与 `status`，外部关系仅计入 `relations.hidden`。无关系 Issue 仍可移动；[路由](../../packages/server/src/api/routers/issues.ts)先检查来源成员资格，再检查目标成员资格，无权限返回 404。空目标返回 404；`null` 沿用 store 的 `local` 目标规则。`remi issue batch-update --data` 使用同样的规则，CLI 保留该错误码。
+
+移动到另一个工作区时，Issue 在目标工作区取下一个号（目标的最大号加 1），`number` 与 `key` 一起改变；MUL-405 的 `(workspace_id, issue_number)` 唯一索引不允许沿用原号，这也是 MUL-476 的 API 行为变化。原 key 此后不再指向该 Issue，评论、分支名等外部写下的旧 key 不会随之更新；源工作区的这个号只有在它是当前最大号时才会被新建 Issue 再次使用。取号先拿目标工作区的编号锁，再拿 Issue 行锁；批量移动逐行取号。
+
+未清理的 Issue 工作区记录（`status != 'cleaned'`）同样阻止移动；`relations.issue_workspace` 只返回本工作区记录的 `status` 与 `runtime_id`，外部记录仅计入 `hidden`，仍然阻止移动。必须先清理或放弃记录：附着 Runtime 的记录由 daemon GC 归档清理，或管理员删除/退役 Runtime 时显式放弃；`runtime_id` 为空的孤儿记录可用 `remi issue workspace abandon`。已清理的记录随移动改到目标工作区，Runtime、路径、分支、仓库、最后任务清空，清理时间与归档绑定保留。硬删门禁的答案不因移动改变：有精确归档的可删并清除留在源工作区的归档，无归档的仍返回 `409 issue_workspace_archive_invalid`，无记录但有运行证据的仍返回 `409 issue_workspace_not_cleaned`；三类运行证据（任务、归档、物化会话）按 Issue ID 全局核验。
+
+存量错位记录按 Issue 读取时视为不存在，详情、`GET /workspace`、分享、归档写入及任务派发均要求记录与 Issue 同工作区。源 Runtime 删除的影响清单只显示记录自己的旧 key 与记录状态，不连接已移走 Issue 的标题或状态。目标 Runtime 首次 report 可以接管旧记录并刷新工作区与 key；源 Runtime 的后续 report/cleaned 不能写入目标工作区。不迁移存量数据，源机器残留目录需人工清理或随 Runtime 删除/退役处理。
+
+批量在写入前预检全部 Issue，发现关系冲突则整批拒绝并返回 `issue_ids`。逐行写入仍各自提交；预检后并发新增关系可能使后续行拒绝，先前行不会回滚。该并发边界不允许形成跨工作区关系，也不代表批量具备整批事务原子性。
+
+创建子单、改父单、添加依赖、移动、把已结束子单改回未结束以及派给 Agent 重开已结束子单，都在一个事务内经 [issue-row-lock](../../packages/server/src/store/issue-row-lock.ts) 一次性按 ID 升序锁完所需的现有 Issue 行，锁后重读再校验；创建时父单与所有 `blocked_by` 端点一起加锁，改回未结束与 Agent 派单把当前父单一起入集。锁集由输入加一次不加锁的本单读取决定；锁后重读发现还需要一行没锁到的 Issue（等锁期间父单或结束状态变了），或 Issue 已被别人移走、这次变成需要移动却没拿编号锁，都由事务所有者回滚重来一次，再过期或事务由调用方持有时返回 `409 issue_relation_changed`，任何情况下都不在持有行锁后补锁。沿用已有工作区锁且先于 Issue 行锁（创建时和移到其他工作区时，MUL-405 的编号锁也在 Issue 行锁之前，即 W → N → D；移动只拿目标工作区的编号锁），不新增工作区锁，不在获得 Issue 行锁后再拿工作区锁，不改为 `REPEATABLE READ`。删除依赖、清父关系不增加关系行锁。任务创建在工作区锁之后先锁所属 Issue 行，再校验 Issue 与 Agent 同工作区，所以与移动互斥：移动先提交则建任务报 `Issue workspace does not match agent workspace`，任务先提交则移动返回 `409`。派给 Agent 或成员时，锁后重读若发现 Issue 已移到别的工作区，就在新工作区重新解析经办人，报与先移动后派单相同的错误（如 `Agent not found`）且不写入。派单写经办人与建任务仍是两个事务，两者之间插入的移动会留下陈旧经办人但没有任务，归 MUL-480。完整顺序见 [ADR 0003](../adr/0003-parent-status-derived-from-children.md) 第 8 条。
+
 ## 启动条件
 
 Runtime 的 Codex / Claude Code 自定义连接 GET/PUT 使用 Runtime 可见性/编辑权限，task token 对整个配置路由为 hard deny；直接填写的 API Key 经服务端 AES-256-GCM 加密并版本化。只允许绑定机器身份的 daemon token 从专用 `codex-profile-key` / `claude-profile-key` 路由读取对应 Runtime 的凭据，浏览器响应和任务公共响应不含密钥。加密配置、轮换和执行快照见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)，Claude 的字段和请求头见 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)，权限回归见 [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)。
@@ -49,6 +67,9 @@ Runtime 的 Codex / Claude Code 自定义连接 GET/PUT 使用 Runtime 可见性
 | 密码账号预配、会话身份、错误凭据、重设及并发边界 | [password-auth.test.ts](../../tests/unit/multiremi/password-auth.test.ts) |
 | Bearer/Cookie、task 权限、daemon 边界与迁移例外 | [multiremi-api-auth.test.ts](../../tests/unit/multiremi/multiremi-api-auth.test.ts) |
 | Agent 操作、私有资源和配置脱敏 | [multiremi-store-agent-authz.test.ts](../../tests/unit/multiremi/multiremi-store-agent-authz.test.ts) |
+| Issue 移动、存量父子/依赖隔离、单工作区 PAT 和 CLI | [multiremi-issue-workspace-boundaries.test.ts](../../tests/unit/multiremi/multiremi-issue-workspace-boundaries.test.ts) |
+| 飞书 Issue 决策卡片、旧跨工作区来源/目标、终态回调与出站隔离 | [multiremi-issue-decision-card-workspace.test.ts](../../tests/unit/multiremi/multiremi-issue-decision-card-workspace.test.ts) |
+| 关系写入锁序、锁后重读及 PG 双连接竞态 | [multiremi-issue-relation-locks.test.ts](../../tests/unit/multiremi/multiremi-issue-relation-locks.test.ts)、[读取限定架构检查](../../tests/arch/issue-relation-reads-workspace-scoped.test.ts) |
 | 生产配置缺项、本地模式与配置脱敏 | [startup-env.test.ts](../../tests/unit/multiremi/startup-env.test.ts) |
 
 在仓库根目录按修改范围选择测试，例如：

@@ -102,6 +102,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 
 import {
   dependencyGateEnabled,
@@ -413,6 +414,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
              )
              OR EXISTS (
@@ -420,6 +422,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
                LEFT JOIN multiremi_runtimes issue_workspace_runtime
                  ON issue_workspace_runtime.id = issue_workspace.runtime_id
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
                  AND (
                    issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
@@ -881,8 +884,9 @@ function liveIssueWorkspaceMachines(
   const cached = cache?.issueWorkspaces.get(issueId);
   if (cached) return cached;
   const rows = ctx.db.query(
-    `SELECT runtime_id FROM multiremi_issue_workspaces
-      WHERE issue_id = ? AND status <> 'cleaned'`,
+    `SELECT iw.runtime_id FROM multiremi_issue_workspaces iw
+      JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
+      WHERE iw.issue_id = ? AND iw.status <> 'cleaned'`,
   ).all(issueId) as Array<{ runtime_id?: unknown }>;
   const aliases = new Set<string>();
   for (const row of rows) {
@@ -1497,6 +1501,10 @@ export class TasksRepo {
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
     const issueId = input.issueId ?? triggerComment?.issueId ?? null;
+    // MUL-476: a task is an edge to its Issue, so lock the Issue (after the
+    // workspace lock) before checking its workspace; a concurrent move then
+    // either sees this task or commits before this read.
+    if (issueId) lockIssueRowWithinTransaction(this.ctx.db, issueId);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
