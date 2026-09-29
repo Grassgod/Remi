@@ -134,6 +134,14 @@ describe("MUL-427 merge rulings", () => {
           expect(store.getConversationLogEntryById(comments[0]!.id)).toMatchObject({
             session_id: session.id, kind: "message", body_md: body,
           });
+          // The comment's Session event and the head commit with it, at its log
+          // row's seq. `listSessionEvents` is projected from the log on this
+          // branch, so the legacy event is read from its own table.
+          const commentSeq = store.getConversationLogEntryById(comments[0]!.id)!.seq;
+          expect(db.query("SELECT session_id, seq FROM multiremi_session_events WHERE source_comment_id = ?").all(comments[0]!.id)
+            .map((row) => ({ sessionId: (row as { session_id: string }).session_id, seq: Number((row as { seq: number }).seq) })))
+            .toEqual([{ sessionId: session.id, seq: commentSeq }]);
+          expect(store.getConversationLogHead(session.id)?.headSeq).toBe(commentSeq);
           expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
             .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([comments[0]!.id]);
           expect(emitted).toEqual([
