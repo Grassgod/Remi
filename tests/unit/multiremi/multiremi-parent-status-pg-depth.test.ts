@@ -18,6 +18,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -58,6 +59,7 @@ interface DepthCounter {
   maxTopLevel: number;
   maxNested: number;
   controls: TransactionControl[];
+  taskInserts: TransactionControl[];
   reset(): void;
   assertTransactionControl(label?: string): void;
 }
@@ -69,11 +71,13 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
     maxTopLevel: 0,
     maxNested: 0,
     controls: [],
+    taskInserts: [],
     reset() {
       counter.assertTransactionControl("before the next entry point");
       counter.maxTopLevel = 0;
       counter.maxNested = 0;
       counter.controls = [];
+      counter.taskInserts = [];
     },
     assertTransactionControl(label = "PG transaction control") {
       let outerOpen = false;
@@ -119,6 +123,9 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const execute = target.execute.bind(database);
   target.execute = (sql, params) => {
     const command = sql.trim().toUpperCase();
+    if (/INSERT\s+INTO\s+MULTIREMI_TASKS\b/.test(command)) {
+      counter.taskInserts.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+    }
     if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
       counter.controls.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
     }
@@ -394,6 +401,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
     expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toHaveLength(1);
+    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
     expect(store.listIssueComments(parent.id).filter(comment => comment.authorType === "system")[0]!.body)
@@ -419,8 +429,23 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
     expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toHaveLength(1);
+    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
   });
+
+  for (const scenario of ["e3", "e4"] as const) {
+    it(`inserts the ${scenario} pending turn inside its state transaction at depth 1 on Postgres`, () => {
+      const flow = inboxFlowFixture(store, scenario);
+      counter.reset();
+      triggerInboxFlow(store, flow);
+      expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toHaveLength(1);
+      expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
+    });
+  }
 
   /**
    * MUL-457 QA round 1, blocker 1: on real Postgres the status write and its
