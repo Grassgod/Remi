@@ -21,18 +21,15 @@ const A0_MODULES = [
   // names, categories, limits, close codes and version checks from it, and
   // `api/server.ts` reads the socket payload ceiling. The rest is untouched.
   { specifier: "@multiremi/contracts/daemon-protocol", wired: true },
-  // Imported by nothing outside tests until A-2/A-5/A-6 wire them up.
-  { specifier: "@multiremi/contracts/trace", wired: false },
-  { specifier: "@multiremi/worker/trace-store", wired: false },
-  { specifier: "@multiremi/api/trace/trace-sink", wired: false },
-  { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: false },
+  // A-6 now wires the memory implementations, reverse reader and trace frames.
+  { specifier: "@multiremi/contracts/trace", wired: true },
+  { specifier: "@multiremi/worker/trace-store", wired: true },
+  { specifier: "@multiremi/api/trace/trace-sink", wired: true },
+  { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: true },
   // A-0b additions: the shared sanitize point and the derived read-side values.
-  // Both are called only by tests and by other A-0 modules so far. A-6 wires
-  // `trace-sanitize` into the daemon's write path and A-5/A-8 wire
-  // `trace-derive` into completion; until then the equivalence tests are what
-  // hold them to the current behaviour.
-  { specifier: "@shared/trace-sanitize", wired: false },
-  { specifier: "@shared/trace-derive", wired: false },
+  // A-6 wires sanitize into TraceStore and derive into terminal reports.
+  { specifier: "@shared/trace-sanitize", wired: true },
+  { specifier: "@shared/trace-derive", wired: true },
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
@@ -100,7 +97,7 @@ const WIRING_OWNER = new Map<string, string>([
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
-describe("A-0 modules are not yet wired into runtime code", () => {
+describe("A-0 module wiring boundaries", () => {
   for (const { specifier, wired } of A0_MODULES) {
     it(`${specifier} is imported by ${wired ? "runtime code" : "nothing but tests"}`, () => {
       const consumers: string[] = [];
@@ -110,7 +107,8 @@ describe("A-0 modules are not yet wired into runtime code", () => {
         const files = listTsFiles(root);
         expect(files.length, `${root} yielded no files to scan`).toBeGreaterThan(0);
         for (const file of files) {
-          if (A0_SOURCES.has(file)) continue;
+          // A wired implementation's dependencies are now production consumers.
+          if (A0_SOURCES.has(file) && !wired) continue;
           const src = readFileSync(file, "utf8");
           for (const match of src.matchAll(IMPORT_RE)) {
             const spec = match[1]!;

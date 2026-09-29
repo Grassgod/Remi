@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { reportFrame } from "../../fixtures/report-session.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -1141,33 +1142,27 @@ describe("Multiremi session archives", () => {
       runtime.daemonId!,
       Buffer.from("exact cleaned acknowledgement"),
     );
-    const endpoint = `/api/daemon/issues/${issue.id}/workspace/cleaned`;
-    const mismatch = await app.request(endpoint, {
-      method: "POST",
-      headers: daemonHeaders,
-      body: JSON.stringify({
+    const mismatch = await reportFrame(store, "gc.workspace_cleaned", {
+        issue_id: issue.id,
         runtime_id: runtime.id,
         archive_id: binding.archiveId,
         source_revision: binding.sourceRevision,
         sha256: "0".repeat(64),
-      }),
-    });
-    expect(mismatch.status).toBe(409);
-    expect(await mismatch.json()).toMatchObject({ code: "issue_workspace_archive_invalid" });
+    }, { headers: daemonHeaders, archives: sessionArchives });
+    expect(mismatch).toMatchObject({ ok: false, code: "invalid_report", operation_error: {
+      status: 409, code: "issue_workspace_archive_invalid",
+    } });
     expect(store.getIssueWorkspace(issue.id)?.status).toBe("ready");
 
-    const acknowledged = await app.request(endpoint, {
-      method: "POST",
-      headers: daemonHeaders,
-      body: JSON.stringify({
+    const acknowledged = await reportFrame(store, "gc.workspace_cleaned", {
+        issue_id: issue.id,
         runtime_id: runtime.id,
         archive_id: binding.archiveId,
         source_revision: binding.sourceRevision,
         sha256: binding.sha256,
-      }),
-    });
-    expect(acknowledged.status).toBe(200);
-    expect(await acknowledged.json()).toMatchObject({
+    }, { headers: daemonHeaders, archives: sessionArchives });
+    expect(acknowledged).toMatchObject({
+      ok: true,
       status: "cleaned",
       archive_id: binding.archiveId,
       source_revision: binding.sourceRevision,

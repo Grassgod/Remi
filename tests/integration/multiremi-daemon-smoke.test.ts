@@ -18,14 +18,24 @@ import {
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { bindReportFrames } from "../fixtures/report-session.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
+import { traceEventToTaskMessage, type TraceEvent } from "@multiremi/contracts/trace.js";
+import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
+import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
+const daemons = new Set<TestMultiremiDaemon>();
+class MultiremiDaemon extends TestMultiremiDaemon {
+  constructor(options: ConstructorParameters<typeof TestMultiremiDaemon>[0]) {
+    super(options); daemons.add(this);
+  }
+}
 
 /**
  * Pin the provider base homes at an empty temp dir for this file.
@@ -52,7 +62,9 @@ afterAll(() => {
   providerHomeBase = null;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const daemon of daemons) await daemon.stopAndDrainTestWork();
+  daemons.clear();
   db?.close();
   db = null;
   if (workDir) {
@@ -754,12 +766,14 @@ describe("Bun Multiremi daemon smoke", () => {
       workspaceId: "local",
       ownerId: "local",
     });
+    let smokeLayer!: DaemonProtocolLayer;
     const server = startMultiremiServer({
       store,
       scheduler: null,
       authToken: "root-smoke-secret",
       hostname: "127.0.0.1",
       port: 0,
+      onDaemonProtocol: layer => { smokeLayer = layer; },
     });
 
     const providerOptions: AcpProviderOptions[] = [];
@@ -828,7 +842,7 @@ describe("Bun Multiremi daemon smoke", () => {
         runtimeName: "smoke-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
+        once: false,
         daemonPort: 0,
         workspacesRoot,
         repoCacheRoot: join(workDir, ".repo-cache"),
@@ -836,7 +850,8 @@ describe("Bun Multiremi daemon smoke", () => {
       });
 
       daemonRun = daemon.start();
-      await daemonRun;
+      await waitForCondition(() => store.getTask(task.id)?.status === "completed"
+        && daemonTraceService(smokeLayer).sink.head(task.id) === 7, 5_000);
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
@@ -890,7 +905,7 @@ describe("Bun Multiremi daemon smoke", () => {
         allowedTools: ["Read"],
         permissionMode: "bypassPermissions",
       });
-      const messages = store.listTaskMessages(task.id);
+      const messages = daemon.traceStore().read(task.id).events.map(traceEventToTaskMessage);
       // The initial tool_call already carries rawOutput and no follow-up update,
       // so the stateful mapper emits BOTH a tool_use and its paired tool_result
       // (each with its own seq). Output lives on the result, not the use.
@@ -917,12 +932,11 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(messages[3]?.toolCallId).toBe(messages[2]?.toolCallId);
       // usage numbers now live in meta, not a content JSON string.
       expect(messages[5]?.meta).toMatchObject({ model: "claude-smoke", inputTokens: 7, outputTokens: 3 });
-      const transcriptResponse = await fetch(`http://127.0.0.1:${server.port}/api/daemon/tasks/${task.id}/messages`, {
-        headers: { Authorization: `Bearer ${daemonToken.token}` },
-      });
-      expect(transcriptResponse.status).toBe(200);
-      const transcriptBody = await transcriptResponse.json() as any[];
-      expect(transcriptBody.map((m) => ({ seq: m.seq, type: m.type, tool: m.tool, content: m.content, output: m.output }))).toEqual([
+      const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id });
+      expect(transcript.ok).toBe(true);
+      if (!transcript.ok) throw new Error(transcript.code);
+      const transcriptBody = transcript.events;
+      expect(transcriptBody.map((m) => ({ seq: m.seq, type: m.type, tool: m.tool ?? undefined, content: m.content ?? undefined, output: m.output ?? undefined }))).toEqual([
         { seq: 1, type: "execution", tool: undefined, content: undefined, output: undefined },
         { seq: 2, type: "thinking", tool: undefined, content: "Thinking", output: undefined },
         { seq: 3, type: "tool_use", tool: "Read", content: undefined, output: undefined },
@@ -931,9 +945,9 @@ describe("Bun Multiremi daemon smoke", () => {
         { seq: 6, type: "usage", tool: undefined, content: undefined, output: undefined },
         { seq: 7, type: "execution", tool: undefined, content: undefined, output: undefined },
       ]);
-      // wire carries created_at + the paired tool_call_id
-      expect(transcriptBody[0].created_at).toBeTruthy();
-      expect(transcriptBody[3].tool_call_id).toBe(transcriptBody[2].tool_call_id);
+      expect(transcriptBody[0]!.ts).toBeTruthy();
+      expect(transcriptBody[3]!.tool_call_id).toBe(transcriptBody[2]!.tool_call_id);
+      expect(store.listTaskMessages(task.id)).toEqual([]);
       expect(store.getTask(task.id)?.usage[0]).toMatchObject({
         provider: "claude",
         model: "claude-smoke",
@@ -963,7 +977,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("keeps a real answer when compaction status arrives at the turn tail", async () => {
-    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+    const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "answer-tail",
       chunks: [
         "Implemented the fix and verified it.",
@@ -980,7 +994,7 @@ describe("Bun Multiremi daemon smoke", () => {
     expect(store.listIssueComments(issueId).map((comment) => comment.body)).toEqual([
       "Implemented the fix and verified it.",
     ]);
-    expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+    expect(traceEvents.map((message) => message.type)).toEqual([
       "execution",
       "text",
       "compaction",
@@ -989,7 +1003,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("fails a compaction-only run after the provider filters its fallback text", async () => {
-    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+    const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "compaction-only",
       chunks: ["Compacting...", "\n\nCompacting completed."],
       lastText: "",
@@ -1001,7 +1015,7 @@ describe("Bun Multiremi daemon smoke", () => {
       failureReason: "agent_error.empty_or_unparseable_output",
     });
     expect(store.listIssueComments(issueId)).toEqual([]);
-    expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+    expect(traceEvents.map((message) => message.type)).toEqual([
       "execution",
       "compaction",
       "compaction",
@@ -1009,7 +1023,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("preserves the existing placeholder for empty output without compaction", async () => {
-    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+    const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "ordinary-empty",
       chunks: [],
       lastText: "",
@@ -1020,7 +1034,7 @@ describe("Bun Multiremi daemon smoke", () => {
       result: "Task completed.",
     });
     expect(store.listIssueComments(issueId)).toEqual([]);
-    expect(store.listTaskMessages(taskId).map(message => ({ type: message.type, meta: message.meta })))
+    expect(traceEvents.map(message => ({ type: message.type, meta: message.meta })))
       .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
   });
 
@@ -1053,16 +1067,17 @@ describe("Bun Multiremi daemon smoke", () => {
     let pluginBody = "";
     let providerPluginPaths: string[] = [];
     let sendPluginFingerprint = "";
+    let pluginDaemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = pluginDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-plugin",
         runtimeName: "plugin-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
+        once: false,
         daemonPort: 0,
         workspacesRoot,
         repoCacheRoot: join(root, ".repo-cache"),
@@ -1095,8 +1110,10 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
-      await daemon.start();
-
+      void daemon.start();
+      await waitForCondition(() => store.getTask(task.id)?.status === "completed"
+        && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId }).some(state => state.status === "ready"), 5_000);
+      await daemon.stopAndDrainTestWork();
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Plugin completed" });
       expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
         status: "ready",
@@ -1109,6 +1126,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(false);
       expect(existsSync(join(root, ".plugin-cache", plugin.activeVersion!.artifactDigest, "payload"))).toBe(true);
     } finally {
+      await pluginDaemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
@@ -1139,16 +1157,17 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
     const expectedRuntimeId = daemonRuntimeIdForTest("daemon-plugin-preflight", "claude");
+    let preflightDaemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = preflightDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-plugin-preflight",
         runtimeName: "plugin-preflight-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
+        once: false,
         daemonPort: 0,
         workspacesRoot: join(root, "workspaces"),
         repoCacheRoot: join(root, ".repo-cache"),
@@ -1159,8 +1178,10 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
-      await daemon.start();
-
+      void daemon.start();
+      await waitForCondition(() => !!store.getRuntime(expectedRuntimeId) && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })
+        .some(state => state.status === "setup_required"), 5_000);
+      await daemon.stopAndDrainTestWork();
       expect(store.getTask(task.id)?.status).toBe("queued");
       expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
         status: "setup_required",
@@ -1168,6 +1189,7 @@ describe("Bun Multiremi daemon smoke", () => {
         lastErrorCode: "plugin_binary_missing",
       }]);
     } finally {
+      await preflightDaemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
@@ -2450,6 +2472,7 @@ describe("Bun Multiremi daemon smoke", () => {
       const oldDate = new Date(Date.now() - 10_000);
       utimesSync(orphanDir, oldDate, oldDate);
 
+      bindReportFrames((daemon as any).client, store);
       expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 1, skipped: 1 });
       expect(existsSync(completedDir)).toBe(false);
       expect(existsSync(chatDir)).toBe(false);
@@ -2520,6 +2543,7 @@ describe("Bun Multiremi daemon smoke", () => {
       const oldIso = new Date(Date.now() - 10_000).toISOString();
       db!.run("UPDATE multiremi_autopilot_runs SET completed_at = ? WHERE id = ?", [oldIso, run.id]);
 
+      bindReportFrames((daemon as any).client, store);
       expect(await daemon.runGcOnce()).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
       expect(existsSync(taskDir)).toBe(false);
     } finally {
@@ -2689,6 +2713,7 @@ describe("Bun Multiremi daemon smoke", () => {
       });
 
       // MUL-419: 换回真实 v2 下发
+      bindReportFrames((daemon as any).client, store);
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
@@ -2805,16 +2830,16 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
+    let daemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeId,
         runtimeName: "model-probe-failure-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
         inProcessRuntimeModelDiscoveryEnabled: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
@@ -2829,7 +2854,8 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // MUL-419: 换回真实 v2 下发
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
-      await daemon.start();
+      void daemon.start();
+      await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
         status: "failed",
@@ -2837,6 +2863,7 @@ describe("Bun Multiremi daemon smoke", () => {
       });
       expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
+      await daemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
@@ -2870,16 +2897,16 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
     let providerFactoryCalls = 0;
+    let daemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeId,
         runtimeName: "model-probe-disabled-request-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: () => {
@@ -2898,7 +2925,8 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // MUL-419: 换回真实 v2 下发
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
-      await daemon.start();
+      void daemon.start();
+      await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
         status: "failed",
@@ -2908,6 +2936,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(providerFactoryCalls).toBe(0);
       expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
+      await daemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
@@ -2930,6 +2959,8 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
 
+    let desktopDaemon: MultiremiDaemon | undefined;
+    let desktopRun: Promise<void> | undefined;
     try {
       const daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -2938,7 +2969,7 @@ describe("Bun Multiremi daemon smoke", () => {
         runtimeName: "desktop-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
+        once: false,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
         launchedBy: "desktop",
@@ -2949,13 +2980,17 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // MUL-419: 换回真实 v2 下发
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
-      await daemon.start();
+      desktopDaemon = daemon;
+      desktopRun = daemon.start();
+      await waitForCondition(() => store.getRuntimeUpdateRequest(runtimeId, updateRequest.id)?.status === "failed", 5_000);
 
       const failed = store.getRuntimeUpdateRequest(runtimeId, updateRequest.id)!;
       expect(failed.status).toBe("failed");
       expect(failed.error).toBe("CLI is managed by Multiremi Desktop - update the Desktop app to upgrade the CLI");
       expect(store.getRuntime(runtimeId)?.metadata).toMatchObject({ launched_by: "desktop" });
     } finally {
+      desktopDaemon?.stop();
+      await desktopRun;
       server.stop(true);
     }
   });
@@ -3596,7 +3631,7 @@ async function runCompactionFinalizeCase(spec: {
   id: string;
   chunks: string[];
   lastText: string;
-}): Promise<{ store: MultiremiStore; taskId: string; issueId: string }> {
+}): Promise<{ store: MultiremiStore; taskId: string; issueId: string; traceEvents: TraceEvent[] }> {
   const { store, workDir: root } = daemonTestBed(`multiremi-daemon-${spec.id}-`);
   const agent = store.createAgent({
     name: `Claude ${spec.id}`,
@@ -3636,6 +3671,7 @@ async function runCompactionFinalizeCase(spec: {
     }),
   });
 
+  let traceEvents: TraceEvent[] = [];
   try {
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
@@ -3652,11 +3688,12 @@ async function runCompactionFinalizeCase(spec: {
       providerFactory,
     });
     await daemon.start();
+    traceEvents = daemon.traceStore().read(task.id).events;
   } finally {
     server.stop(true);
   }
 
-  return { store, taskId: task.id, issueId: issue.id };
+  return { store, taskId: task.id, issueId: issue.id, traceEvents };
 }
 
 async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Promise<void> {

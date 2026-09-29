@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
+import { sanitizeTraceEventFields } from "@shared/trace-sanitize.js";
 import {
   ACTIVE_TASK_STATUSES,
   CHAT_ISSUE_DECOUPLED_FINGERPRINT,
@@ -4182,6 +4183,7 @@ ${placementAfter.sql}
     return this.getTask(taskId)!;
   }
 
+  /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     if (messages.length === 0) return [];
     // MUL-474: identity only. The fan-out below routes and authorizes by these
@@ -4218,18 +4220,19 @@ ${placementAfter.sql}
       for (const message of messages) {
         const seq = message.seq ?? nextSeq++;
         const id = createId("msg");
+        const fields = sanitizeTraceEventFields({ ...message, tool_call_id: message.toolCallId });
         const result = insert.run(
           id,
           taskId,
           seq,
-          message.type,
-          truncateUtf8(cleanTaskMessageField(message.tool), TASK_MESSAGE_TOOL_MAX),
-          truncateUtf8(cleanTaskMessageField(message.content), TASK_MESSAGE_TEXT_MAX),
-          message.input == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.input)), TASK_MESSAGE_INPUT_MAX),
-          truncateUtf8(cleanTaskMessageField(message.output), TASK_MESSAGE_OUTPUT_MAX),
-          cleanTaskMessageField(message.toolCallId),
-          normalizeTaskMessageStatus(message.status),
-          message.meta == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.meta)), TASK_MESSAGE_META_MAX),
+          fields.type,
+          fields.tool,
+          fields.content,
+          fields.input,
+          fields.output,
+          fields.tool_call_id,
+          fields.status,
+          fields.meta,
           persistedAt,
         );
         if (result.changes > 0) changedSeqs.push(seq);
@@ -6648,18 +6651,6 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
   };
 }
 
-// ── Task-message sanitization / size caps ──────────────────────────────────
-// The daemon POST path is untrusted-ish (a compromised or buggy agent could
-// send megabytes). These are the server-side backstop; the API layer also
-// caps total request size. Byte counts, not code-point counts, because SQLite
-// TEXT is bytes and that's what actually bloats the DB / WS frames.
-
-const TASK_MESSAGE_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
-const TASK_MESSAGE_TOOL_MAX = 512;
-const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
-const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
-const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
-
 /**
  * A daemon that predates `timeout_ms` (MUL-407) still gets a reminder lane and
  * a terminal card, so the server records its own hour-long deadline instead of
@@ -6667,53 +6658,6 @@ const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
  * that may expire the request.
  */
 const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
-const TASK_MESSAGE_META_MAX = 64 * 1024;
-const TASK_MESSAGE_JSON_MAX_DEPTH = 8;
-const TASK_MESSAGE_JSON_MAX_ARRAY = 256;
-
-function cleanTaskMessageField(value: unknown): string | null {
-  if (value == null) return null;
-  const s = String(value);
-  return s.length > 0 ? s : null;
-}
-
-function normalizeTaskMessageStatus(value: unknown): string | null {
-  const s = cleanTaskMessageField(value);
-  return s && TASK_MESSAGE_STATUSES.has(s) ? s : null;
-}
-
-function truncateUtf8(value: string | null, maxBytes: number): string | null {
-  if (value == null) return null;
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(value);
-  if (bytes.length <= maxBytes) return value;
-  // Cut on a char boundary at or below the limit, then flag the truncation.
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  const head = decoder.decode(bytes.slice(0, maxBytes)).replace(/�+$/, "");
-  return head + "… [truncated]";
-}
-
-// Drop image/base64 payloads and cap depth/array width so a huge structured
-// input/meta blob can't blow up the DB or the WS broadcast.
-function sanitizeTaskMessageJson(value: unknown, depth = 0): unknown {
-  if (depth > TASK_MESSAGE_JSON_MAX_DEPTH) return "[depth-limited]";
-  if (value == null || typeof value !== "object") {
-    if (typeof value === "string" && value.length > 4096 && /^[A-Za-z0-9+/=]+$/.test(value)) {
-      return "[base64-elided]";
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const out = value.slice(0, TASK_MESSAGE_JSON_MAX_ARRAY).map((v) => sanitizeTaskMessageJson(v, depth + 1));
-    if (value.length > TASK_MESSAGE_JSON_MAX_ARRAY) out.push(`[+${value.length - TASK_MESSAGE_JSON_MAX_ARRAY} more]`);
-    return out;
-  }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = sanitizeTaskMessageJson(v, depth + 1);
-  }
-  return out;
-}
 
 function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
   return {

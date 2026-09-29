@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -42,15 +43,13 @@ describe("Runtime skill directories", () => {
       runtime_id: runtime.id, supports_skill_directory: true,
     })).json();
     expect(heartbeat.pending_local_skills).toEqual({ id: scan.id, root: "~/.agents/custom-skills" });
-    expect((await post(`/api/daemon/runtimes/${runtime.id}/local-skills/${scan.id}/result`, {
-      status: "completed",
+    expect((await reportFrame(store, "runtime.local_skills_result", { runtime_id: runtime.id, request_id: scan.id, status: "completed",
       root: "/home/me/.agents/custom-skills",
       warnings: ["A nested directory could not be read"],
       skills: [
         { ...summary, source_path: "/home/me/.agents/custom-skills", file_count: 1 },
         { ...summary, key: "binary", name: "binary", error: "Contains unsupported binary files" },
-      ],
-    })).status).toBe(200);
+      ], }, { headers: undefined, authToken: "" })).ok).toBe(true);
     const result = await (await app.request(`/api/runtimes/${runtime.id}/local-skills/${scan.id}`)).json();
     expect(result).toMatchObject({ status: "completed", root: "/home/me/.agents/custom-skills", warnings: ["A nested directory could not be read"] });
     expect(result.skills[1].error).toBe("Contains unsupported binary files");
@@ -64,10 +63,8 @@ describe("Runtime skill directories", () => {
     })).json();
     expect(importHeartbeat.pending_local_skill_import).toEqual({ id: imported.id, skill_key: ".", root: imported.root });
     expect(importHeartbeat.pending_local_skill_imports).toEqual([importHeartbeat.pending_local_skill_import]);
-    expect((await post(`/api/daemon/runtimes/${runtime.id}/local-skills/import/${imported.id}/result`, {
-      status: "completed",
-      skill: { name: summary.name, content: "# Directory helper", source_path: imported.root, files: [{ path: "notes.md", content: "# Directory notes" }] },
-    })).status).toBe(200);
+    expect((await reportFrame(store, "runtime.local_skill_import_result", { runtime_id: runtime.id, request_id: imported.id, status: "completed",
+      skill: { name: summary.name, content: "# Directory helper", source_path: imported.root, files: [{ path: "notes.md", content: "# Directory notes" }] }, }, { headers: undefined, authToken: "" })).ok).toBe(true);
     const importResult = store.getRuntimeLocalSkillImportRequest(runtime.id, imported.id)!;
     expect(importResult.error).toBeNull();
     expect(importResult.status).toBe("completed");
@@ -100,15 +97,13 @@ describe("Runtime skill directories", () => {
   it("preserves scan keys so whitespace directory names cannot alias a valid sibling", async () => {
     const { store, runtime, app, post } = fixture();
     const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/custom/skills" });
-    expect((await post(`/api/daemon/runtimes/${runtime.id}/local-skills/${scan.id}/result`, {
-      status: "completed",
+    expect((await reportFrame(store, "runtime.local_skills_result", { runtime_id: runtime.id, request_id: scan.id, status: "completed",
       root: "/custom/skills",
       skills: [
         { ...summary, key: " helper", name: "leading helper", error: "Leading whitespace is unsupported" },
         { ...summary, key: "helper", name: "valid helper" },
         { ...summary, key: "helper ", name: "trailing helper", error: "Trailing whitespace is unsupported" },
-      ],
-    })).status).toBe(200);
+      ], }, { headers: undefined, authToken: "" })).ok).toBe(true);
     const result = await (await app.request(`/api/runtimes/${runtime.id}/local-skills/${scan.id}`)).json();
     expect(result.skills.map((skill: { key: string }) => skill.key)).toEqual([" helper", "helper", "helper "]);
     const imported = await post(`/api/runtimes/${runtime.id}/local-skills/import`, { scan_request_id: scan.id, skill_key: "helper" });
@@ -142,7 +137,7 @@ describe("Runtime skill directories", () => {
       expect(request.status).toBe("failed");
       expect(request.error).toContain("upgrade the runtime daemon");
     }
-    await post(`/api/daemon/runtimes/${runtime.id}/local-skills/${customPending.id}/result`, { status: "completed", root: "/wrong", skills: [summary] });
+    await reportFrame(store, "runtime.local_skills_result", { runtime_id: runtime.id, request_id: customPending.id, status: "completed", root: "/wrong", skills: [summary] }, { headers: undefined, authToken: "" });
     expect(store.getRuntimeLocalSkillListRequest(runtime.id, customPending.id)?.status).toBe("failed");
   });
 
@@ -188,9 +183,7 @@ describe("Runtime skill directories", () => {
     const { store, runtime, post } = fixture();
     const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/skills/link" });
     const root = "/skills/helper ";
-    await post(`/api/daemon/runtimes/${runtime.id}/local-skills/${scan.id}/result`, {
-      status: "completed", root, skills: [{ ...summary, source_path: root }],
-    });
+    await reportFrame(store, "runtime.local_skills_result", { runtime_id: runtime.id, request_id: scan.id, status: "completed", root, skills: [{ ...summary, source_path: root }], }, { headers: undefined, authToken: "" });
     expect(store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)?.root).toBe(root);
     const imported = await post(`/api/runtimes/${runtime.id}/local-skills/import`, {
       scan_request_id: scan.id, skill_key: ".",
