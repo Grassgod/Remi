@@ -276,6 +276,7 @@ export interface IssuesSurface {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   };
   /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
   runIssueUpdatePostCommit(
@@ -284,6 +285,7 @@ export interface IssuesSurface {
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -317,6 +319,7 @@ export interface IssuesSurface {
   ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void;
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -347,6 +350,7 @@ export interface IssuesSurface {
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      dependencyCheckEventId?: string | null;
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
     },
@@ -506,7 +510,7 @@ export interface AutopilotsSurface {
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null;
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null };
 }
 
 export interface AccessTokensSurface {

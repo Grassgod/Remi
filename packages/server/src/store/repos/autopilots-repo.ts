@@ -109,6 +109,7 @@ export function autopilotRunSourceRevision(
 const AUTOPILOT_FAILURE_MONITOR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTOPILOT_FAILURE_MONITOR_MIN_RUNS = 50;
 const AUTOPILOT_FAILURE_MONITOR_FAIL_RATIO = 0.9;
+export const DEPENDENCY_AUTO_START_REPLAY_DELAY_MS = 5_000;
 
 export interface MultiremiAutopilotFailureThresholdOptions {
   since?: Date | string;
@@ -865,8 +866,8 @@ export class AutopilotsRepo {
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
-    if (input.previousStatus === input.issue.status) return null;
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
+    if (input.previousStatus === input.issue.status) return { event: null, dependencyCheckEventId: null };
     const id = createId("sev");
     const now = nowIso();
     const payload = {
@@ -888,7 +889,26 @@ export class AutopilotsRepo {
       ) VALUES (?, ?, 'issue', 'status_changed', ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
       [id, input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson(payload), now, now],
     );
-    return this.getSystemEvent(id);
+    let dependencyCheckEventId: string | null = null;
+    if (input.issue.status === "done") {
+      dependencyCheckEventId = createId("sev");
+      // Give recovery its own lease and retry budget, committed with `done`.
+      this.ctx.db.run(
+        `INSERT INTO multiremi_system_events (
+          id, workspace_id, resource, event, resource_id, project_id, payload,
+          status, attempt_count, available_at, lease_until, last_error, created_at, processed_at
+        ) VALUES (?, ?, 'issue', 'dependency_auto_start_check', ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
+        [dependencyCheckEventId, input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson({
+          issue_id: input.issue.id,
+          issue_key: input.issue.key,
+          workspace_id: input.issue.workspaceId,
+          project_id: input.issue.projectId,
+          automation_source_task_id: payload.automation_source_task_id,
+          status_changed_event_id: id,
+        }), new Date(Date.parse(now) + DEPENDENCY_AUTO_START_REPLAY_DELAY_MS).toISOString(), now],
+      );
+    }
+    return { event: this.getSystemEvent(id), dependencyCheckEventId };
   }
 
   getSystemEvent(id: string): MultiremiSystemEvent | null {
@@ -923,6 +943,16 @@ export class AutopilotsRepo {
     const runs: MultiremiAutopilotRun[] = [];
     for (const event of this.claimPendingSystemEvents(now, limit)) {
       try {
+        if (event.event === "dependency_auto_start_check") {
+          this.ctx.issues().replayDependencyAutoStart(event);
+          this.ctx.db.run(
+            `UPDATE multiremi_system_events
+             SET status = 'processed', processed_at = ?, lease_until = NULL, last_error = NULL
+             WHERE id = ? AND status = 'processing'`,
+            [nowIso(), event.id],
+          );
+          continue;
+        }
         const triggerRows = this.ctx.db.query(
           `SELECT t.*
            FROM multiremi_autopilot_triggers t
