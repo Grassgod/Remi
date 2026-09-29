@@ -27,7 +27,8 @@
  * (default /tmp/MUL-389-heartbeat-claim.json). Nothing here touches the
  * operator's database, PostgreSQL, the network, or a credential on disk.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { createHash } from "node:crypto";
@@ -74,7 +75,7 @@ function jsonBytes(value: unknown): number {
 }
 
 function countingDatabase(): CountingDatabase {
-  const database = new Database(":memory:");
+  const database = openSqliteDatabase(":memory:");
   const stats = new Map<string, StatementStat>();
   const charge = (sql: string, rows: unknown[], count: number): void => {
     const normalized = normalizeSql(sql);

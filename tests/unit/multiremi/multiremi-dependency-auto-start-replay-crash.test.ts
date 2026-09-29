@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MultiremiIssue, MultiremiSystemEvent } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -77,7 +77,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     function openStore(): void {
       db = dialect === "postgres"
         ? new PostgresSyncDatabase(database)
-        : Object.assign(new Database(database), { dialect: "sqlite" as const });
+        : openSqliteDatabase(database);
       store = new MultiremiStore(db);
     }
 

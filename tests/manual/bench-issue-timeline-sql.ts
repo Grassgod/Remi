@@ -5,7 +5,8 @@
  * Not a unit test — a measurement harness. Run with:
  *   bun run tests/manual/bench-issue-timeline-sql.ts
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 interface Counter {
@@ -50,7 +51,7 @@ function median(values: number[]): number {
 }
 
 function scenario(commentCount: number, sessionCount: number, attachmentsPerComment: number) {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const issue = store.createIssue({ title: `bench-${commentCount}`, workspaceId: "local" });

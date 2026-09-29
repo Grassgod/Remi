@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ const migrationId = "remi-config-purge-v2";
 const backupSuffix = `.pre-${migrationId}.bak`;
 
 function createConfigDb(path: string): void {
-  const legacy = new Database(path);
+  const legacy = openSqliteDatabase(path);
   legacy.exec(`
     CREATE TABLE remi_config (
       section TEXT NOT NULL,
@@ -57,7 +57,7 @@ test("v2 backs up and removes an existing remi_config table", () => {
   expect(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'remi_config'").get()).toBeNull();
   expect(db.query("SELECT id FROM remi_migrations WHERE id = ?").get(migrationId)).toEqual({ id: migrationId });
   expect(existsSync(`${path}${backupSuffix}`)).toBe(true);
-  const backup = new Database(`${path}${backupSuffix}`, { readonly: true });
+  const backup = openSqliteDatabase(`${path}${backupSuffix}`, { readonly: true });
   expect(backup.query("SELECT section, value FROM remi_config ORDER BY section").all()).toEqual([
     { section: "feishu", value: '{"appId":"legacy"}' },
     { section: "plugins", value: '{"enabled":[]}' },
@@ -68,7 +68,7 @@ test("v2 backs up and removes an existing remi_config table", () => {
 test("v2 rolls the dropped table back when a real later SQL statement fails", () => {
   const { path } = makeDbPath("remi-config-v2-failure-");
   createConfigDb(path);
-  const legacy = new Database(path);
+  const legacy = openSqliteDatabase(path);
   legacy.exec(`
     CREATE TABLE remi_migrations (
       id TEXT PRIMARY KEY,
@@ -87,7 +87,7 @@ test("v2 rolls the dropped table back when a real later SQL statement fails", ()
   expect(() => getDb()).toThrow(`${path}${backupSuffix}`);
   expect(existsSync(`${path}${backupSuffix}`)).toBe(true);
 
-  const rolledBack = new Database(path, { readonly: true });
+  const rolledBack = openSqliteDatabase(path, { readonly: true });
   expect(rolledBack.query("SELECT section, value FROM remi_config ORDER BY section").all()).toEqual([
     { section: "feishu", value: '{"appId":"legacy"}' },
     { section: "plugins", value: '{"enabled":[]}' },
