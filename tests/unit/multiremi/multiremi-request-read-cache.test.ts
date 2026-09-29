@@ -11,7 +11,7 @@
 //   2. invalidation — a store write must clear the rows it can change. A heartbeat writes its own
 //      Runtime row, so the read that follows inside the same request has to observe that write.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import {
@@ -194,7 +194,7 @@ describe("request-scoped read cache", () => {
     // heartbeat re-reads its Runtime row that way so a Runtime deleted by another connection is
     // reported gone. `raw` stands in for that other connection: the wrapper never sees its writes.
     function cachedTable() {
-      const raw = new Database(":memory:");
+      const raw = openSqliteDatabase(":memory:");
       raw.run("CREATE TABLE t (id TEXT PRIMARY KEY, v TEXT)");
       raw.run("INSERT INTO t VALUES ('a', 'before')");
       const wrapped = invalidatingDatabase(raw);

@@ -20,7 +20,8 @@
  * `db!.run(...)` exactly as it did when the variable was file-local.
  */
 import { expect } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +43,7 @@ let uploadDir: string | null = null;
 let previousFetch: typeof globalThis.fetch | null = null;
 
 export function createStore(): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
 }
 

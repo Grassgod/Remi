@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   HERMETIC_ENV_DEFAULTS,
   HERMETIC_ENV_SENTINEL,
@@ -116,7 +116,7 @@ describe("hermetic test environment", () => {
   test("an app built without authToken serves unauthenticated requests", async () => {
     // The exact shape of the MUL-318 false failure: no Authorization header,
     // and the response must not be a 401 produced by an inherited token.
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       const app = createMultiremiApp({ store: new MultiremiStore(db) });
       const res = await app.request("/api/multiremi/projects");

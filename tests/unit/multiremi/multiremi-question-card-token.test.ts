@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { decodeDecisionCardBody, questionCardAction, questionCardIdempotencyKey, decisionInteractionMarker, interactionMarker } from "@shared/feishu-task-card.js";
 import { handleIssueDecisionInteractionEvent, handleTaskInteractionEvent, registerQuestionCardClient } from "@connectors/feishu/task-interaction.js";
@@ -33,7 +33,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       process.env.MULTIREMI_PUBLIC_URL = "https://remi.example.com";
       process.env.MULTIREMI_LARK_APP_ID = "cli_mul487";
       process.env.MULTIREMI_LARK_APP_SECRET = fixtureSecret;
-      if (backend === "SQLite") db = new Database(":memory:");
+      if (backend === "SQLite") db = openSqliteDatabase(":memory:");
       else {
         // An explicitly configured but unreachable PG must fail, never skip.
         databaseName = `mul487_tokens_${process.pid}_${Date.now()}`;

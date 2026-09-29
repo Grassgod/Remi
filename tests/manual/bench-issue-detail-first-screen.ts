@@ -27,7 +27,7 @@
  * the harness falls back to in-memory SQLite and records
  * `"database": "sqlite"` plus `"bridgeBytes": "simulated"` in the report.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -403,7 +403,7 @@ async function main(): Promise<void> {
   let database = "sqlite";
   let transport = "in-process app.request()";
   let postgresNote: string | null = ADMIN_URL ? null : "MULTIREMI_TEST_POSTGRES_URL is not set";
-  let raw: SqlDatabase = new Database(":memory:");
+  let raw: SqlDatabase = openSqliteDatabase(":memory:");
 
   if (ADMIN_URL && await postgresReachable(ADMIN_URL)) {
     const { PostgresSyncDatabase } = await import("../../packages/server/src/store/db/postgres.js");

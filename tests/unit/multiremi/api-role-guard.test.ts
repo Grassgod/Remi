@@ -17,7 +17,8 @@
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -125,7 +126,7 @@ function concreteRequest(pattern: string): { method: string; path: string } {
 }
 
 function memoryStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   return { store, db };

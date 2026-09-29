@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
@@ -17,7 +18,7 @@ afterEach(() => {
 });
 
 function createStore(options: { debounceMs?: number } = {}): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db, {
     agentIssueUpdateDebounceMs: options.debounceMs,
   });

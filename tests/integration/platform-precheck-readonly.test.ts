@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -85,7 +86,7 @@ function auditedDatabase(raw: Database, audit: { recording: boolean; writes: Wri
 }
 
 async function fixture(scenario: Scenario) {
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   const audit = { recording: false, writes: [] as Write[] };
   const store = new MultiremiStore(auditedDatabase(raw, audit));
   store.ensureLocalWorkspace();
@@ -175,7 +176,7 @@ function assertOnlyAuthWrites(writes: Write[], writeCount = 1) {
 }
 
 function repoFixture() {
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   const audit = { recording: false, writes: [] as Write[] };
   const db = auditedDatabase(raw, audit);
   new MultiremiStore(db);

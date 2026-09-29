@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import type {
   CanonicalMessage,
   MessageProvider,
@@ -24,7 +25,7 @@ let db: Database | null = null;
 const ACTIVATED_AT = "2026-08-31T09:00:00.000Z";
 
 function createRepo(): MessagingRepo {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   const sqlDatabase = db as unknown as SqlDatabase;
   runMigrations(sqlDatabase);
   const repo = new MessagingRepo({ db: sqlDatabase } as Pick<StoreContext, "db">);
