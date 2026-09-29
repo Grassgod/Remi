@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
+import { sanitizeTraceEventFields } from "@shared/trace-sanitize.js";
 import {
   ACTIVE_TASK_STATUSES,
   CHAT_ISSUE_DECOUPLED_FINGERPRINT,
@@ -1012,7 +1013,39 @@ function fallbackSwitchPlan(parent: MultiremiTask, agent: MultiremiAgent | null,
 }
 
 export class TasksRepo {
+  private readonly acceptedOfferLeases = new Set<string>();
   constructor(private ctx: StoreContext) {}
+
+  recordTaskOffered(taskId: string, runtimeId: string, at = nowIso()): boolean {
+    return Boolean(this.ctx.db.query(
+      `UPDATE multiremi_tasks SET offered_at = ?, accepted_at = NULL
+       WHERE id = ? AND runtime_id = ? AND status = 'dispatched' RETURNING id`,
+    ).get(at, taskId, runtimeId));
+  }
+
+  acceptTaskOffer(taskId: string, runtimeId: string, at = nowIso()): boolean {
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_tasks SET accepted_at = COALESCE(accepted_at, ?)
+       WHERE id = ? AND runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory') RETURNING id`,
+    ).get(at, taskId, runtimeId);
+    if (row) this.acceptedOfferLeases.add(taskId);
+    return Boolean(row);
+  }
+
+  releaseTaskOfferLease(taskId: string): void {
+    this.acceptedOfferLeases.delete(taskId);
+  }
+
+  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
+    this.acceptedOfferLeases.delete(taskId);
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_tasks SET status = 'queued', dispatched_at = NULL,
+         offered_at = NULL, accepted_at = NULL, updated_at = ?
+       WHERE id = ? AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL RETURNING *`,
+    ).get(nowIso(), taskId, runtimeId) as Row | null;
+    if (row) this.ctx.notifyTaskEnqueued(toTask(row));
+    return Boolean(row);
+  }
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     const rows = this.ctx.db.query(
@@ -2024,6 +2057,7 @@ export class TasksRepo {
           AND (status = 'queued' OR (status = 'dispatched' AND started_at IS NULL
             AND dispatched_at IS NOT NULL AND dispatched_at < ?))`).all(chat.id, cutoff) as Row[];
       for (const task of tasks) {
+        if (this.acceptedOfferLeases.has(String(task.id))) continue;
         const source = { executionFingerprint: nullableString(task.execution_fingerprint),
           workDir: nullableString(task.work_dir), runtimeId: nullableString(task.runtime_id) };
         if (chatWorkspaceLineageCurrent(this.ctx, chat, source) && !workspace.changed) continue;
@@ -2721,6 +2755,15 @@ export class TasksRepo {
         failed_count: failedCount,
       };
     });
+  }
+
+  taskOfferRetryDeadlines(runtimeId: string): Array<{ taskId: string; runtimeId: string | null; at: string }> {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime) return [];
+    const rows = this.ctx.db.query(`SELECT id, runtime_id, next_retry_at FROM multiremi_tasks
+      WHERE workspace_id = ? AND status = 'queued' AND next_retry_at IS NOT NULL
+        AND (runtime_id = ? OR runtime_id IS NULL)`).all(runtime.workspaceId ?? "local", runtimeId) as Row[];
+    return rows.map(row => ({ taskId: String(row.id), runtimeId: nullableString(row.runtime_id), at: String(row.next_retry_at) }));
   }
 
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
@@ -3522,6 +3565,7 @@ ${routing.sql}
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
+    const leases = [...this.acceptedOfferLeases];
     const cutoff = new Date(Date.now() - CLAIM_RESPONSE_RECOVERY_MS).toISOString();
     const now = nowIso();
     const row = this.ctx.db.query(
@@ -3535,6 +3579,7 @@ ${routing.sql}
            AND started_at IS NULL
            AND dispatched_at IS NOT NULL
            AND dispatched_at < ?
+           ${leases.length ? `AND id NOT IN (${leases.map(() => "?").join(", ")})` : ""}
            ${excludedAgentIds.length ? `AND agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
          ORDER BY priority DESC, dispatched_at ASC
          LIMIT 1
@@ -3542,7 +3587,7 @@ ${routing.sql}
        AND status = 'dispatched'
        AND started_at IS NULL
        RETURNING *`,
-    ).get(now, now, runtimeId, cutoff, ...excludedAgentIds) as Row | null;
+    ).get(now, now, runtimeId, cutoff, ...leases, ...excludedAgentIds) as Row | null;
     if (!row) return null;
     const task = this.getTaskWithAgent(String(row.id));
     // The re-claim above matches only on runtime_id, so a task whose agent or
@@ -3976,6 +4021,7 @@ ${placementAfter.sql}
     if (transitionedTask) this.ctx.notifyTaskEvent("task:awaiting_human", transitionedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -4015,6 +4061,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -4038,6 +4085,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -4073,12 +4121,14 @@ ${placementAfter.sql}
 
   /**
    * Record a mid-run user directive for a live task. The daemon's steer
-   * watcher polls unconsumed rows and injects them into the executing
+   * push inbox receives unconsumed rows and injects them into the executing
    * provider session; the row doubles as the audit record. Rejects terminal
    * tasks — there is no run left to steer.
    */
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
-    return this.ctx.db.transaction(() => this.createTaskSteerMessageWithinTransaction(input))();
+    const message = this.ctx.db.transaction(() => this.createTaskSteerMessageWithinTransaction(input))();
+    this.publishTaskInputChanged(input.taskId);
+    return message;
   }
 
   /** Caller owns the transaction and any post-commit notifications. Emits no events. */
@@ -4118,6 +4168,14 @@ ${placementAfter.sql}
       });
     }
     return this.getTaskSteerMessage(id)!;
+  }
+
+  /** Callers of the WithinTransaction steer call this after their COMMIT. */
+  publishTaskInputChanged(taskId: string): void {
+    const task = this.getTaskIdentity(taskId);
+    if (!task) return;
+    this.ctx.emitWorkspaceEvent({ type: "daemon:task_input", workspaceId: task.workspaceId,
+      actorType: "system", actorId: null, payload: { runtime_id: task.runtimeId, task_id: taskId } });
   }
 
   private withSteerAttachments(row: Row): MultiremiTaskSteerMessage {
@@ -4240,6 +4298,7 @@ ${placementAfter.sql}
     return this.getTask(taskId)!;
   }
 
+  /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     if (messages.length === 0) return [];
     // MUL-474: identity only. The fan-out below routes and authorizes by these
@@ -4276,18 +4335,19 @@ ${placementAfter.sql}
       for (const message of messages) {
         const seq = message.seq ?? nextSeq++;
         const id = createId("msg");
+        const fields = sanitizeTraceEventFields({ ...message, tool_call_id: message.toolCallId });
         const result = insert.run(
           id,
           taskId,
           seq,
-          message.type,
-          truncateUtf8(cleanTaskMessageField(message.tool), TASK_MESSAGE_TOOL_MAX),
-          truncateUtf8(cleanTaskMessageField(message.content), TASK_MESSAGE_TEXT_MAX),
-          message.input == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.input)), TASK_MESSAGE_INPUT_MAX),
-          truncateUtf8(cleanTaskMessageField(message.output), TASK_MESSAGE_OUTPUT_MAX),
-          cleanTaskMessageField(message.toolCallId),
-          normalizeTaskMessageStatus(message.status),
-          message.meta == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.meta)), TASK_MESSAGE_META_MAX),
+          fields.type,
+          fields.tool,
+          fields.content,
+          fields.input,
+          fields.output,
+          fields.tool_call_id,
+          fields.status,
+          fields.meta,
           persistedAt,
         );
         if (result.changes > 0) changedSeqs.push(seq);
@@ -4635,7 +4695,7 @@ ${placementAfter.sql}
     return this.getTask(taskId)!;
   }
 
-  recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
+  recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {
     const initialRuntime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!initialRuntime) throw new Error(`Runtime not found: ${runtimeId}`);
     const workspaceId = initialRuntime.workspaceId ?? "local";
@@ -4647,8 +4707,10 @@ ${placementAfter.sql}
         throw new Error(`Runtime not found: ${runtimeId}`);
       }
       const orphanRows = this.ctx.db.query(
-        "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
-      ).all(runtimeId) as Row[];
+        `SELECT * FROM multiremi_tasks WHERE runtime_id = ?
+         AND status IN (${activeTaskIds ? "'running', 'waiting_local_directory', 'awaiting_human'" : "'dispatched', 'running', 'waiting_local_directory', 'awaiting_human'"})
+         ${activeTaskIds?.length ? `AND id NOT IN (${activeTaskIds.map(() => "?").join(", ")})` : ""}`,
+      ).all(runtimeId, ...(activeTaskIds ?? [])) as Row[];
       if (!orphanRows.length) {
         return {
           failedTasks: [] as MultiremiTask[],
@@ -6722,6 +6784,8 @@ function toTask(row: Row): MultiremiTask {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     dispatchedAt: nullableString(row.dispatched_at),
+    offeredAt: nullableString(row.offered_at),
+    acceptedAt: nullableString(row.accepted_at),
     startedAt: nullableString(row.started_at),
     completedAt: nullableString(row.completed_at),
     failedAt: nullableString(row.failed_at),
@@ -6795,18 +6859,6 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
   };
 }
 
-// ── Task-message sanitization / size caps ──────────────────────────────────
-// The daemon POST path is untrusted-ish (a compromised or buggy agent could
-// send megabytes). These are the server-side backstop; the API layer also
-// caps total request size. Byte counts, not code-point counts, because SQLite
-// TEXT is bytes and that's what actually bloats the DB / WS frames.
-
-const TASK_MESSAGE_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
-const TASK_MESSAGE_TOOL_MAX = 512;
-const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
-const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
-const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
-
 /**
  * A daemon that predates `timeout_ms` (MUL-407) still gets a reminder lane and
  * a terminal card, so the server records its own hour-long deadline instead of
@@ -6814,53 +6866,6 @@ const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
  * that may expire the request.
  */
 const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
-const TASK_MESSAGE_META_MAX = 64 * 1024;
-const TASK_MESSAGE_JSON_MAX_DEPTH = 8;
-const TASK_MESSAGE_JSON_MAX_ARRAY = 256;
-
-function cleanTaskMessageField(value: unknown): string | null {
-  if (value == null) return null;
-  const s = String(value);
-  return s.length > 0 ? s : null;
-}
-
-function normalizeTaskMessageStatus(value: unknown): string | null {
-  const s = cleanTaskMessageField(value);
-  return s && TASK_MESSAGE_STATUSES.has(s) ? s : null;
-}
-
-function truncateUtf8(value: string | null, maxBytes: number): string | null {
-  if (value == null) return null;
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(value);
-  if (bytes.length <= maxBytes) return value;
-  // Cut on a char boundary at or below the limit, then flag the truncation.
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  const head = decoder.decode(bytes.slice(0, maxBytes)).replace(/�+$/, "");
-  return head + "… [truncated]";
-}
-
-// Drop image/base64 payloads and cap depth/array width so a huge structured
-// input/meta blob can't blow up the DB or the WS broadcast.
-function sanitizeTaskMessageJson(value: unknown, depth = 0): unknown {
-  if (depth > TASK_MESSAGE_JSON_MAX_DEPTH) return "[depth-limited]";
-  if (value == null || typeof value !== "object") {
-    if (typeof value === "string" && value.length > 4096 && /^[A-Za-z0-9+/=]+$/.test(value)) {
-      return "[base64-elided]";
-    }
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const out = value.slice(0, TASK_MESSAGE_JSON_MAX_ARRAY).map((v) => sanitizeTaskMessageJson(v, depth + 1));
-    if (value.length > TASK_MESSAGE_JSON_MAX_ARRAY) out.push(`[+${value.length - TASK_MESSAGE_JSON_MAX_ARRAY} more]`);
-    return out;
-  }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = sanitizeTaskMessageJson(v, depth + 1);
-  }
-  return out;
-}
 
 function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
   return {

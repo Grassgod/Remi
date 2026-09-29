@@ -122,7 +122,7 @@ Options:
   --name <name>          Runtime display name
   --start                Start daemon in the background after setup
   --foreground           Run daemon in the current terminal
-  --once                 Daemon exits after one poll/claimed task
+  --once                 跑完一个任务后退出；等不到派活也退出
   --lines <number>       Log lines for daemon logs (default: 50)
   --follow               Follow daemon logs
   --platform <name>      Service platform: launchd or systemd

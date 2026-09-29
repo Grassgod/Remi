@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { runtimeProtocolSummary } from "@multiremi/contracts/runtime-protocol";
 import type {
   CreatePlatformOperationInput,
   MultiremiPlatformDeploymentDriver,
@@ -61,6 +62,7 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       lastOperation: store.listPlatformOperations(1)[0] ?? null,
       maintenance: store.getPlatformMaintenance(),
       recentReleases: state.recentReleases,
+      daemonProtocol: runtimeProtocolSummary(store.listRuntimes()),
     });
   });
 

@@ -2,20 +2,30 @@
 // while a turn is streaming soft-interrupts it and is injected as the next
 // prompt on the same provider session; force_answer additionally arms a grace
 // deadline after which the run completes with the output produced so far.
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon, type MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
+import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
+import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
+let activeDaemon: MultiremiDaemon | null = null;
+const activeServers = new Set<{ stop(closeActiveConnections?: boolean): unknown }>();
 
-afterEach(() => {
+afterEach(async () => {
+  await activeDaemon?.stopAndDrainTestWork();
+  activeDaemon = null;
+  for (const server of activeServers) server.stop(true);
+  activeServers.clear();
   db?.close();
   db = null;
   if (workDir) {
@@ -54,6 +64,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer", "claude");
     store.registerRuntime({ id: runtimeId, name: "steer-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-steer", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const sendOptions: SendOptions[] = [];
@@ -84,7 +95,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer",
@@ -115,11 +126,12 @@ describe("Bun Multiremi daemon steering", () => {
       expect(steerId).toBeTruthy();
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-      const steerMessages = store.listTaskMessages(task.id).filter((m) => m.type === "steer");
+      const steerMessages = daemon.traceStore().read(task.id).events.filter((m) => m.type === "steer");
       expect(steerMessages).toHaveLength(1);
       expect(steerMessages[0]?.content).toBe("改用中文输出");
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -131,6 +143,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-late", "claude");
     store.registerRuntime({ id: runtimeId, name: "late-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-late", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     let steerId: string | null = null;
@@ -159,7 +172,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-late",
@@ -186,42 +199,72 @@ describe("Bun Multiremi daemon steering", () => {
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
-  it("a delayed feed poll returning an already-handled steer does not cancel the next turn", async () => {
+  it("consumes a pushed steer after the completion barrier without HTTP steer calls", async () => {
+    const { store, root } = testBed("multiremi-steer-completion-rpc-");
+    const agent = store.createAgent({ name: "Completion race", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Answer briefly" });
+    const token = await store.createAccessToken({ name: "Completion race daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "completion-race-test",
+      hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
+    const prompts: string[] = [];
+    let steerId = "";
+    let conflicts = 0;
+    const originalComplete = store.completeTask.bind(store);
+    const complete = spyOn(store, "completeTask").mockImplementation((id, input) => {
+      if (id === task.id && !steerId) {
+        steerId = store.createTaskSteerMessage({ taskId: id, kind: "steer", content: "Include the final directive" }).id;
+        conflicts++;
+      }
+      return originalComplete(id, input);
+    });
+    const daemon = activeDaemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "daemon-completion-race",
+      runtimeName: "Completion race", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "repos"),
+      providerFactory: () => ({
+        async *sendStream(prompt) { prompts.push(prompt); yield chunk(prompts.length === 1 ? "draft. " : "final directive."); },
+        getLastResponse: () => ({ text: "", sessionId: "completion-race-session", requestId: "completion-race-request" }),
+      }),
+    });
+    const http = (daemon as unknown as { client: MultiremiDaemonClient }).client;
+    const list = spyOn(http, "listPendingTaskSteerMessages").mockRejectedValue(new Error("HTTP steer read is forbidden"));
+    const consume = spyOn(http, "consumeTaskSteerMessages").mockRejectedValue(new Error("HTTP steer consume is forbidden"));
+    try {
+      await daemon.start();
+      expect(conflicts).toBe(1);
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "draft. final directive." });
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("Include the final directive");
+      expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
+      expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
+      expect(list).not.toHaveBeenCalled();
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      await daemon.stopAndDrainTestWork();
+      complete.mockRestore(); list.mockRestore(); consume.mockRestore();
+      server.stop(true);
+    }
+  });
+
+  it("a delayed replayed steer push does not cancel the next turn", async () => {
     const { store, root } = testBed("multiremi-daemon-steer-duppoll-");
     const agent = store.createAgent({ name: "Dup Poll Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer in English" });
     const daemonToken = await store.createAccessToken({ name: "Dup poll daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-duppoll", "claude");
     store.registerRuntime({ id: runtimeId, name: "duppoll-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
-    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-dup", hostname: "127.0.0.1", port: 0 });
-
-    // Proxy that snapshots upstream responses immediately but delays delivery
-    // of the second pending-steer GET (the feed poll that observed the steer
-    // before the authoritative final fetch consumed it) until mid-turn-2.
-    let steerGets = 0;
-    const proxy = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        const upstream = await fetch(`http://127.0.0.1:${server.port}${url.pathname}${url.search}`, {
-          method: request.method,
-          headers: request.headers,
-          body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
-        });
-        const body = await upstream.arrayBuffer();
-        if (request.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/steer$/.test(url.pathname)) {
-          steerGets += 1;
-          if (steerGets === 2) await Bun.sleep(900);
-        }
-        return new Response(body, { status: upstream.status, headers: { "Content-Type": upstream.headers.get("Content-Type") ?? "application/json" } });
-      },
-    });
-
+    let layer!: DaemonProtocolLayer;
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-dup", hostname: "127.0.0.1", port: 0,
+      onDaemonProtocol: value => { layer = value; } });
+    activeServers.add(server);
+    let steerPushes = 0;
+    let steerId = "";
     const prompts: string[] = [];
     const response: AgentResponse = {
       text: "",
@@ -237,29 +280,33 @@ describe("Bun Multiremi daemon steering", () => {
         prompts.push(message);
         if (prompts.length === 1) {
           yield chunk("english draft. ");
-          store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" });
-          // Stay in the turn long enough for the 250ms feed tick to issue the
-          // GET the proxy will hold, then end naturally — the authoritative
-          // final fetch handles the steer first.
+          steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
           await Bun.sleep(450);
           return;
         }
         yield chunk("中文结论");
-        // Keep turn 2 running while the stale poll response lands. Like the
+        const replay = setTimeout(() => {
+          const session = layer.registry.sessionForRuntime(runtimeId);
+          if (session instanceof DaemonProtocolSession) session.sendEvent({ t: "task.steer", rt: runtimeId,
+            p: { task_id: task.id, steer: store.getTaskSteerMessage(steerId)! } });
+        }, 200);
+        // Keep turn 2 running while the stale push lands. Like the
         // real ACP provider, an abort cancels the turn — a duplicate-triggered
         // interrupt here is exactly the bug this test guards against.
         const deadline = Date.now() + 900;
-        while (Date.now() < deadline) {
-          if (options?.signal?.aborted) throw new Error("Cancelled");
-          await Bun.sleep(20);
-        }
+        try {
+          while (Date.now() < deadline) {
+            if (options?.signal?.aborted) throw new Error("Cancelled");
+            await Bun.sleep(20);
+          }
+        } finally { clearTimeout(replay); }
       },
       getLastResponse: () => response,
     });
 
     try {
-      const daemon = new MultiremiDaemon({
-        serverUrl: `http://127.0.0.1:${proxy.port}`,
+      const daemon = activeDaemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
         runtimeName: "duppoll-runtime",
@@ -269,7 +316,7 @@ describe("Bun Multiremi daemon steering", () => {
         daemonPort: 0,
         workspacesRoot: join(root, "workspaces"),
         repoCacheRoot: join(root, ".repo-cache"),
-        steerPollIntervalMs: 250,
+        protocolClientOptions: { onFrame: frame => { if (frame.type === "task.steer") steerPushes++; } },
         providerFactory,
       });
       await daemon.start();
@@ -280,11 +327,10 @@ describe("Bun Multiremi daemon steering", () => {
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("改用中文输出");
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-      // The held poll really did observe the steer before consumption.
-      expect(steerGets).toBeGreaterThanOrEqual(2);
+      expect(steerPushes).toBeGreaterThanOrEqual(2);
     } finally {
-      proxy.stop(true);
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -296,6 +342,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-force", "claude");
     store.registerRuntime({ id: runtimeId, name: "force-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-force", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const response: AgentResponse = {
@@ -326,7 +373,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-force",
@@ -351,7 +398,8 @@ describe("Bun Multiremi daemon steering", () => {
       expect(prompts[1]).toContain("Deliver now");
       expect(prompts[1]).toContain("先给结论");
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -363,6 +411,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-cancel", "claude");
     store.registerRuntime({ id: runtimeId, name: "cancel-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-cancel", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const providerFactory: MultiremiDaemonProviderFactory = () => ({
@@ -376,8 +425,10 @@ describe("Bun Multiremi daemon steering", () => {
       getLastResponse: () => null,
     });
 
+    const status = spyOn(MultiremiDaemonClient.prototype, "getTaskStatus")
+      .mockRejectedValue(new Error("HTTP task status is forbidden on cancellation"));
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-cancel",
@@ -395,8 +446,11 @@ describe("Bun Multiremi daemon steering", () => {
 
       expect(prompts).toHaveLength(1);
       expect(store.getTask(task.id)?.status).toBe("cancelled");
+      expect(status).not.toHaveBeenCalled();
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
+      status.mockRestore();
     }
   });
 });

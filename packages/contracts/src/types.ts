@@ -6,6 +6,7 @@
 
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
+import type { RuntimeProtocolStatus } from "./runtime-protocol.js";
 
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
@@ -649,6 +650,8 @@ export interface CreateRuntimeWorkspaceInput {
 }
 
 export interface MultiremiRuntime {
+  daemonProtocolVersion?: number | null;
+  protocol?: RuntimeProtocolStatus;
   executionGroupIds?: string[];
   executionGroupId?: string | null;
   execution_group_id?: string | null;
@@ -895,7 +898,7 @@ export interface CreateWorkspaceRuntimeProvisionInput {
 
 export type UpdateWorkspaceRuntimeProvisionInput = Partial<CreateWorkspaceRuntimeProvisionInput>;
 
-export interface MultiremiDaemonHeartbeatAck {
+export interface MultiremiDaemonRuntimeInput {
   runtime_id: string;
   status: "ok" | "runtime_gone";
   runtime_gone?: boolean;
@@ -958,6 +961,10 @@ export interface MultiremiDaemonHeartbeatAck {
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
 }
+
+/** The v1 compatibility heartbeat only delivers the mandatory upgrade and drain. */
+export type MultiremiDaemonHeartbeatAck = Pick<MultiremiDaemonRuntimeInput,
+  "runtime_id" | "status" | "runtime_gone" | "pending_update" | "drain">;
 
 /** Server → daemon drain instruction carried in every heartbeat ack. */
 export interface MultiremiDaemonDrainDirective {
@@ -1653,6 +1660,8 @@ export interface MultiremiTask {
   createdAt: string;
   updatedAt: string;
   dispatchedAt: string | null;
+  offeredAt?: string | null;
+  acceptedAt?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   failedAt: string | null;

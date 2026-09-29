@@ -1,4 +1,11 @@
 {
+  "protocol": {
+    "version": "协议 v{{version}}",
+    "ok": "正常",
+    "upgrade_pending": "待升级",
+    "upgrade_failed": "升级失败：{{error}}",
+    "rejected": "协议被拒绝"
+  },
   "codex_profile": {
     "auth": "鉴权方式",
     "api_key": "API Key",

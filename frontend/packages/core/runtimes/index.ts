@@ -19,3 +19,4 @@ export * from "./provisions";
 // root imports elsewhere are erased before bundling, which is why this is the
 // only import that broke `@multiremi/web build`.
 export { modelThinkingLevels } from "@multiremi/contracts/model-thinking";
+export { formatRuntimeProtocol } from "@multiremi/contracts/runtime-protocol";

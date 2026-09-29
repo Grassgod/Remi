@@ -4,7 +4,12 @@
 
 Accepted (MUL-401, sub-issue A-0). The protocol is specified in
 [daemon-protocol-v2.md](../daemon-protocol-v2.md); the contract module lands with
-this ADR and the connection layer follows in A-1/A-2.
+this ADR. A-1/A-2 now wire the server and daemon transport, handshake, heartbeat,
+RPC and upgrade wait. MUL-419 A-3 replaces HTTP claim and dispatch leases with
+server offers, accept/reject and ready reconciliation. A-4 now wires DB-derived
+pending/configuration snapshots, task inputs and plugin RPC. Cross-process
+delivery requires the MUL-462 realtime fanout; outbox and trace transport still
+follow in MUL-421.
 
 ## Context
 

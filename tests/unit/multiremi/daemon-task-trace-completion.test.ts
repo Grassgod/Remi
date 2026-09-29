@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { createMultiremiApp } from "@multiremi/api.js";
 import { log } from "@multiremi/api/helpers/common.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { reportFrame } from "../../fixtures/report-session.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const databaseName = `multiremi_trace_completion_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
@@ -65,15 +65,13 @@ for (const backend of ["SQLite", "Postgres"] as const) {
           expect(store.claimTask(runtime.id)?.id).toBe(task.id);
           store.startTask(task.id);
           expect(store.getTaskTrace(task.id)?.location).toBe("daemon");
-          const app = createMultiremiApp({ store, authToken: "trace-completion-test" });
           const warn = spyOn(log, "warn").mockImplementation(() => {});
           try {
-            const response = await app.request(`/api/daemon/tasks/${task.id}/${route}`, {
-              method: "POST",
-              headers: { Authorization: "Bearer trace-completion-test", "Content-Type": "application/json" },
-              body: JSON.stringify({ output: "done", error: "failed", trace: testCase.trace }),
-            });
-            expect(response.status).toBe(200);
+            // MUL-432: the HTTP completion routes were retired by MUL-401; the
+            // same body now arrives as a `task.complete` / `task.fail` frame.
+            const reply = await reportFrame(store, `task.${route}`,
+              { task_id: task.id, output: "done", error: "failed", trace: testCase.trace }, { runtimeId: runtime.id });
+            expect(reply.ok).toBe(true);
             expect(store.getTask(task.id)?.status).toBe(route === "complete" ? "completed" : "failed");
             expect(store.getTaskTrace(task.id)?.location).toBe(testCase.location);
             expect(store.getTaskTrace(task.id)?.runtimeId).toBe(testCase.location === "none" ? null : runtime.id);

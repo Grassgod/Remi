@@ -182,10 +182,14 @@ describe("CLI capabilities manifest", () => {
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
-      exempt: 110,
+      // A-5/A-6 remove 25 daemon routes; MUL-412 keeps its two decision routes.
+      // Merged into MUL-402 (MUL-432): MUL-401 drops 28 exempt daemon routes in
+      // all (774 -> 746 on its own base), so the parent's 110/793 becomes 82/765.
+      exempt: 82,
       missing: 0,
-      total: 793,
+      total: 765,
     });
+    expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);

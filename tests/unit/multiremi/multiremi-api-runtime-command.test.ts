@@ -1,6 +1,8 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -87,7 +89,9 @@ describe("Multiremi API - runtime commands", () => {
       body: JSON.stringify({ runtime_id: runtime.id }),
     });
     expect(heartbeat.status).toBe(200);
-    const heartbeatBody = await heartbeat.json();
+    expect((await heartbeat.json()).pending_command).toBeUndefined();
+    const heartbeatBody = await receiveRuntimeInputs(store, runtime.id,
+      { identity: { accessToken: await store.verifyAccessToken(daemonToken.token), masterToken: false } });
     expect(heartbeatBody.pending_command).toMatchObject({
       id: createdBody.id,
       command,
@@ -95,18 +99,12 @@ describe("Multiremi API - runtime commands", () => {
       timeout_ms: 2_000,
     });
 
-    const reported = await app.request(`/api/daemon/runtimes/${runtime.id}/commands/${createdBody.id}/result`, {
-      method: "POST",
-      headers: jsonHeaders(daemonToken.token),
-      body: JSON.stringify({
-        status: "completed",
+    const reported = await reportFrame(store, "runtime.command_result", { runtime_id: runtime.id, request_id: createdBody.id, status: "completed",
         exit_code: 9,
         stdout: `result ${tokenLikeValue}`,
         stderr: "",
-        duration_ms: 14,
-      }),
-    });
-    expect(reported.status).toBe(200);
+        duration_ms: 14, }, { headers: jsonHeaders(daemonToken.token), authToken: "root-command-secret" });
+    expect(reported.ok).toBe(true);
 
     const result = await app.request(`/api/runtimes/${runtime.id}/commands/${createdBody.id}`, {
       headers: { Authorization: `Bearer ${ownerToken.token}` },

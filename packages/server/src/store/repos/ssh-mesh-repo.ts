@@ -425,6 +425,11 @@ export class SshMeshRepo {
     );
   }
 
+  directiveForRuntime(runtimeId: string): MultiremiSshMeshHeartbeatAck | null {
+    const runtime = this.runtimeIdentity(runtimeId);
+    return runtime?.daemonId ? this.heartbeatAck(runtime.workspaceId, runtime.daemonId) : null;
+  }
+
   recordControlPlaneHeartbeat(
     workspaceId: string,
     nodeId: string,

@@ -559,6 +559,8 @@ export interface TasksSurface {
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
   /** Caller owns the transaction and post-commit notifications; emits no events. */
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
+  /** Kicks the task's daemon downlink; call after the steer's transaction commits. */
+  publishTaskInputChanged(taskId: string): void;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;

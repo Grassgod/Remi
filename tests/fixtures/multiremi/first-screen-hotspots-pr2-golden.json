@@ -43,14 +43,15 @@
   },
   "runtimes": {
     "status": 200,
-    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_hotspot\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Hotspot runtime\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_4fb6f999001326b25cc75490cf5daa2a\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":null,\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
+    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_hotspot\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Hotspot runtime\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_4fb6f999001326b25cc75490cf5daa2a\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":null,\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
   },
   "owned": {
     "status": 200,
-    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
+    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"protocol\":{\"version\":1,\"state\":\"rejected\",\"min_version\":\"0.2.83\",\"last_error\":null},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
   },
   "hydrated": [
     {
+      "daemonProtocolVersion": null,
       "id": "rt_hotspot",
       "name": "Hotspot runtime",
       "provider": "codex",
@@ -79,11 +80,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_4fb6f999001326b25cc75490cf5daa2a"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_1",
       "name": "Runtime 1",
       "provider": "codex",
@@ -129,11 +137,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_c8a1c055c58eeb97dd1ea6dda0634b3f"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_2",
       "name": "Runtime 2",
       "provider": "codex",
@@ -179,11 +194,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_2d26f796f541c42489b05e4008cbc47e"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_3",
       "name": "Runtime 3",
       "provider": "codex",
@@ -229,11 +251,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_7976d05077f4bc862847816a81ee4495"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_4",
       "name": "Runtime 4",
       "provider": "codex",
@@ -279,11 +308,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_31e0d71d671a0654cf83279618058a61"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_5",
       "name": "Runtime 5",
       "provider": "codex",
@@ -329,11 +365,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_b8c0ecffce727bcb0f80f366f4c673a6"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_6",
       "name": "Runtime 6",
       "provider": "codex",
@@ -379,11 +422,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_a9b82b58ffd1842fce276d583ce0a94c"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_7",
       "name": "Runtime 7",
       "provider": "codex",
@@ -429,11 +479,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_49b1c1eb4ab8e299a8b157277cb1322e"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_8",
       "name": "Runtime 8",
       "provider": "codex",
@@ -479,11 +536,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_aeb6d94b999bcb520118cc07a3a29454"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_9",
       "name": "Runtime 9",
       "provider": "codex",
@@ -529,11 +593,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_b17a5c2b60681f63ffdb7fc7e81e2eb9"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_10",
       "name": "Runtime 10",
       "provider": "codex",
@@ -579,11 +650,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_0ba822d3239440a2c19670dfff3971c6"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_11",
       "name": "Runtime 11",
       "provider": "codex",
@@ -629,11 +707,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_7a22b280c0abdd2faf83f80f889c286f"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_12",
       "name": "Runtime 12",
       "provider": "codex",
@@ -679,11 +764,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_f8a03f77ab2afc61bbfa0c86aa4c3375"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_13",
       "name": "Runtime 13",
       "provider": "codex",
@@ -729,11 +821,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_1278291d50249be170fe18455515e525"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_14",
       "name": "Runtime 14",
       "provider": "codex",
@@ -779,11 +878,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_9865a9e6d4ea91dde43babd1948d72a4"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_15",
       "name": "Runtime 15",
       "provider": "codex",
@@ -829,11 +935,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_ddebe97e01cbc46ebb50594ec37dd91d"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_16",
       "name": "Runtime 16",
       "provider": "codex",
@@ -879,11 +992,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_dc0552868c94faa061536597a9619b95"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_17",
       "name": "Runtime 17",
       "provider": "codex",
@@ -929,11 +1049,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_dc0f9d80786366be34768e14caa77bf5"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_18",
       "name": "Runtime 18",
       "provider": "codex",
@@ -979,11 +1106,18 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_b8e335287f0649384c98529ecb03ee41"
       ]
     },
     {
+      "daemonProtocolVersion": null,
       "id": "rt_pr2_19",
       "name": "Runtime 19",
       "provider": "codex",
@@ -1029,6 +1163,12 @@
       "lastHeartbeatAt": "<timestamp>",
       "createdAt": "<timestamp>",
       "updatedAt": "<timestamp>",
+      "protocol": {
+        "version": 1,
+        "state": "rejected",
+        "min_version": "0.2.83",
+        "last_error": null
+      },
       "executionGroupIds": [
         "eg_0d2689e1c72860bb7c42c93dcd23fc2b"
       ]

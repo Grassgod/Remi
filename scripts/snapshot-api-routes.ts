@@ -46,6 +46,7 @@ import { listAgentTemplates } from "@multiremi/api/agent-templates.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { VERSION } from "@shared/version.js";
+import { reportFrame } from "../tests/fixtures/report-session.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 export const GOLDEN_PATH = join(REPO_ROOT, "scripts", "api-routes.golden.json");
@@ -1111,7 +1112,13 @@ class Recorder {
   readonly covered = new Set<string>();
   private step = 0;
 
-  constructor(private readonly app: any, private readonly routes: RouteRef[], private readonly family: string) {}
+  constructor(private readonly app: any, private readonly routes: RouteRef[], private readonly family: string,
+    private readonly store: MultiremiStore) {}
+
+  async report(type: string, payload: Record<string, unknown>): Promise<void> {
+    const res = await reportFrame(this.store, type, payload);
+    if (res.ok !== true) throw new Error(`Snapshot seed ${type} failed: ${res.code}`);
+  }
 
   async call(method: string, path: string, init: RequestInit = {}): Promise<{ status: number; body: any }> {
     const [rawPath] = path.split("?");
@@ -1538,7 +1545,7 @@ flow("daemon-retirement", async (rec, refs) => {
 });
 
 // -- daemon -----------------------------------------------------------------
-flow("daemon", async (rec, refs) => {
+flow("daemon", async (rec, refs, store) => {
   await rec.json("POST", "/api/daemon/register", {
     workspace_id: refs.workspaceId,
     daemon_id: "dmn_flow",
@@ -1547,24 +1554,24 @@ flow("daemon", async (rec, refs) => {
     runtimes: [{ name: "flow-runtime", type: "claude", version: "9.9.9", status: "online", maxConcurrency: 1 }],
   });
   await rec.json("POST", "/api/daemon/heartbeat", { runtime_id: refs.runtimeId });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
-  await rec.json("PUT", `/api/daemon/runtimes/${refs.runtimeId}/models`, {
+  store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
+  await rec.report("runtime.model_list_result", { runtime_id: refs.runtimeId,
     models: [{ id: "claude-sonnet-4", label: "Claude Sonnet 4" }],
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/models/claim`, {});
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/models/${refs.runtimeModelRequestId}/result`, {
+  await rec.report("runtime.model_list_result", { runtime_id: refs.runtimeId, request_id: refs.runtimeModelRequestId, status: "completed",
     models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/directory-scans/claim`, {});
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/directory-scans/${refs.dirScanRequestId}/result`, {
+  await rec.report("runtime.directory_scan_result", { runtime_id: refs.runtimeId, request_id: refs.dirScanRequestId, status: "completed",
     entries: [{ path: "/snapshot/project", name: "project", is_git_repo: true }],
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/local-skills/claim`, {});
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/local-skills/${refs.localSkillListRequestId}/result`, {
+  await rec.report("runtime.local_skills_result", { runtime_id: refs.runtimeId, request_id: refs.localSkillListRequestId, status: "completed",
     skills: [{ key: "snapshot-skill", name: "Snapshot skill" }],
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/local-skills/import/claim`, {});
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/local-skills/import/${refs.localSkillImportRequestId}/result`, {
+  await rec.report("runtime.local_skill_import_result", { runtime_id: refs.runtimeId, request_id: refs.localSkillImportRequestId, status: "completed",
     files: [{ path: "SKILL.md", content: "# imported" }],
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/update/claim`, {});
@@ -1573,18 +1580,18 @@ flow("daemon", async (rec, refs) => {
     version: "9.9.9",
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/commands/claim`, {});
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/commands/${refs.runtimeCommandRequestId}/result`, {
+  await rec.report("runtime.command_result", { runtime_id: refs.runtimeId, request_id: refs.runtimeCommandRequestId,
     status: "completed",
     exit_code: 0,
     stdout: "snapshot",
     stderr: "",
     duration_ms: 1,
   });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/recover-orphans`, {});
+  store.recoverOrphans(refs.runtimeId, []);
   await rec.json("POST", "/api/daemon/deregister", { runtime_ids: [refs.runtimeId] });
 });
 
-flow("daemon-task-lifecycle", async (rec, refs) => {
+flow("daemon-task-lifecycle", async (rec, refs, store) => {
   const task = await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
     issueId: refs.issueId,
@@ -1593,44 +1600,31 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   const id = task.body?.id ?? task.body?.task?.id ?? refs.taskId;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
-    const claim = await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
-    if ((claim.body?.task?.id ?? claim.body?.id) === id) break;
+    const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
+    if (claim?.id === id) break;
   }
   // waiting_local_directory only applies to a dispatched task, so it runs
   // before start (startTask accepts dispatched and waiting_local_directory).
   await rec.json("POST", `/api/daemon/tasks/${id}/wait-local-directory`, { reason: "missing repo" });
-  await rec.json("POST", `/api/daemon/tasks/${id}/start`, {});
-  await rec.json("POST", `/api/daemon/tasks/${id}/progress`, { summary: "half", step: 1, total: 2 });
-  await rec.json("POST", `/api/daemon/tasks/${id}/messages`, { messages: [{ type: "assistant", content: "hello" }] });
+  await rec.report("task.start", { task_id: id });
+  await rec.report("task.progress", { task_id: id, summary: "half", step: 1, total: 2 });
   const assembledPrompt = "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task";
-  await rec.json("POST", `/api/daemon/tasks/${id}/prompt`, {
+  await rec.report("task.prompt", { task_id: id,
     mode: "bootstrap",
     prompt: assembledPrompt,
     sha256: createHash("sha256").update(assembledPrompt).digest("hex"),
   });
   await rec.call("GET", `/api/tasks/${id}/prompt`);
-  await rec.json("POST", `/api/daemon/tasks/${id}/session`, { session_id: "ses_snapshot", work_dir: "/snapshot/work" });
-  await rec.json("POST", `/api/daemon/tasks/${id}/usage`, { usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
-  const human = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Bash" },
-  });
-  const requestId = human.body?.id ?? human.body?.request_id ?? human.body?.request?.id ?? refs.humanRequestId;
+  await rec.report("task.session_pin", { task_id: id, session_id: "ses_snapshot", work_dir: "/snapshot/work" });
+  await rec.report("task.usage", { task_id: id, usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
+  const requestId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Bash" } }).id;
   await rec.json("POST", `/api/multiremi/tasks/${id}/human-requests/${requestId}/respond`, { outcome: "approved" });
-  const second = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Read" },
-  });
-  const secondId = second.body?.id ?? second.body?.request_id ?? second.body?.request?.id ?? requestId;
+  const secondId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Read" } }).id;
   await rec.json("POST", `/api/tasks/${id}/human-requests/${secondId}/respond`, { outcome: "approved" });
-  const third = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Write" },
-  });
-  const thirdId = third.body?.id ?? third.body?.request_id ?? third.body?.request?.id ?? secondId;
-  await rec.json("POST", `/api/daemon/tasks/${id}/human-requests/${thirdId}/expire`, { status: "timeout" });
-  await rec.json("POST", `/api/daemon/tasks/${id}/complete`, { result: "done", summary: "complete" });
-  await rec.json("POST", `/api/daemon/tasks/${refs.taskId}/fail`, { error: "boom" });
+  const thirdId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Write" } }).id;
+  store.expireTaskHumanRequest(thirdId, "timeout");
+  await rec.report("task.complete", { task_id: id, result: "done", summary: "complete" });
+  await rec.report("task.fail", { task_id: refs.taskId, error: "boom" });
 });
 
 flow("tasks", async (rec, refs) => {
@@ -1900,7 +1894,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
     const templates = await sweep.app.request("/api/agent-templates");
     const templateList = (await templates.json()) as Array<{ slug?: string }>;
     sweepRefs.templateSlug = templateList?.[0]?.slug ?? "unknown-template";
-    const sweepRecorder = new Recorder(sweep.app, routes, "get-sweep");
+    const sweepRecorder = new Recorder(sweep.app, routes, "get-sweep", sweep.store);
     for (const route of routes) {
       if (route.method !== "GET") continue;
       const key = `${route.method} ${route.path}`;
@@ -1934,7 +1928,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
     for (const { name, run } of [...MUTATION_FLOWS].sort((a, b) => a.name.localeCompare(b.name))) {
       resetDeterministicState();
       const boot = await buildApp();
-      const recorder = new Recorder(boot.app, routes, name);
+      const recorder = new Recorder(boot.app, routes, name, boot.store);
       await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);

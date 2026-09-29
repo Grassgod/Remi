@@ -8,7 +8,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * A-0 ships types, interfaces and in-memory implementations only. Each module
  * remains guarded here until a follow-up imports it from runtime code; that PR
  * removes the corresponding entry. B5 now consumes the trace contract and
- * DaemonTraceReader interface, and its HTTP completion routes use the protocol
+ * DaemonTraceReader interface, and its completion handling (the `task.complete`
+ * / `task.fail` frames since MUL-401 retired the HTTP routes) uses the protocol
  * contract. The protocol entry stays as a positive wiring guard.
  *
  * A failing test here is not a bug to work around; it means the module left the
@@ -17,17 +18,19 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 
 /** Every module A-0 adds, and whether it may be imported by runtime code yet. */
 const A0_MODULES = [
+  // A-1 wired the frame vocabulary: `api/daemon-protocol/` reads the frame
+  // names, categories, limits, close codes and version checks from it, and
+  // `api/server.ts` reads the socket payload ceiling. The rest is untouched.
   { specifier: "@multiremi/contracts/daemon-protocol", wired: true },
-  // Imported by nothing outside tests until their follow-ups wire them up.
-  { specifier: "@multiremi/worker/trace-store", wired: false },
-  { specifier: "@multiremi/api/trace/trace-sink", wired: false },
+  // A-6 now wires the memory implementations, reverse reader and trace frames.
+  { specifier: "@multiremi/contracts/trace", wired: true },
+  { specifier: "@multiremi/worker/trace-store", wired: true },
+  { specifier: "@multiremi/api/trace/trace-sink", wired: true },
+  { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: true },
   // A-0b additions: the shared sanitize point and the derived read-side values.
-  // Both are called only by tests and by other A-0 modules so far. A-6 wires
-  // `trace-sanitize` into the daemon's write path and A-5/A-8 wire
-  // `trace-derive` into completion; until then the equivalence tests are what
-  // hold them to the current behaviour.
-  { specifier: "@shared/trace-sanitize", wired: false },
-  { specifier: "@shared/trace-derive", wired: false },
+  // A-6 wires sanitize into TraceStore and derive into terminal reports.
+  { specifier: "@shared/trace-sanitize", wired: true },
+  { specifier: "@shared/trace-derive", wired: true },
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
@@ -89,14 +92,14 @@ const A0_SOURCES = new Set([
 
 /** Notes on who will consume each module once it is wired. */
 const WIRING_OWNER = new Map<string, string>([
-  ["@multiremi/contracts/daemon-protocol", "B5 daemon HTTP completion routes consume the A-0 trace block"],
+  ["@multiremi/contracts/daemon-protocol", "B5 task.complete / task.fail frame handling consumes the A-0 trace block"],
   ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
   ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
 ]);
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
-describe("A-0 modules are not yet wired into runtime code", () => {
+describe("A-0 module wiring boundaries", () => {
   for (const { specifier, wired } of A0_MODULES) {
     it(`${specifier} is imported by ${wired ? "runtime code" : "nothing but tests"}`, () => {
       const consumers: string[] = [];
@@ -106,7 +109,8 @@ describe("A-0 modules are not yet wired into runtime code", () => {
         const files = listTsFiles(root);
         expect(files.length, `${root} yielded no files to scan`).toBeGreaterThan(0);
         for (const file of files) {
-          if (A0_SOURCES.has(file)) continue;
+          // A wired implementation's dependencies are now production consumers.
+          if (A0_SOURCES.has(file) && !wired) continue;
           const src = readFileSync(file, "utf8");
           for (const match of src.matchAll(IMPORT_RE)) {
             const spec = match[1]!;

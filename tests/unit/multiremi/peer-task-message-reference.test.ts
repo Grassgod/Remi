@@ -85,7 +85,7 @@ function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: nu
   });
   const registries = (client: typeof local) => ({
     browser: new Map([["local", new Set([client.client, ...(client === remote ? [denied.client] : [])])]]),
-    browserScope: new Map(), browserUser: new Map(), daemon: new Map(),
+    browserScope: new Map(), browserUser: new Map(),
   });
   const receiving = createRealtimeFanout({
     store: receiverStore, role: "ui", peer: receiver, registries: registries(remote),

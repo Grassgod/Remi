@@ -5,6 +5,16 @@
 Accepted. Server compatibility half lands with MUL-368 PR-1; the daemon
 behaviour it enables is MUL-377.
 
+The revision hash and state dedupe remain. MUL-418 A-2 replaces the HTTP
+heartbeat timer and v1 WebSocket wake-up with a process-wide v2 connection.
+MUL-419 A-3 replaces claim polling with server offers. A-4 pushes
+`plugin.desired_revision` and reads the snapshot through `plugin.desired` RPC;
+the 30 s fallback and desired HTTP GET are removed. The 10 min forced refresh
+remains, also over RPC, to defend against fields missing from the revision hash.
+This ADR records
+the original polling decision; current transport is specified in
+[daemon-protocol-v2.md](../daemon-protocol-v2.md).
+
 ## Context
 
 Production serves roughly 14 req/s and about 94% of it is daemon polling: plugin

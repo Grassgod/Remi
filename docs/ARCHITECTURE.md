@@ -37,16 +37,23 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 协议、消息引用、字节预算与角色解析链见 [Realtime peer channel](dev/realtime-peer.md)。
 
 **任务执行**：issue/chat/autopilot 产生 task → [任务存储](../packages/server/src/store/repos/tasks-repo.ts) →
-[daemon client](../packages/server/src/worker/client.ts) / [worker loop](../packages/server/src/worker/daemon.ts) 领取 →
+[服务端 offer 泵](../packages/server/src/api/daemon-protocol/task-offers.ts) 推送 →
+[worker loop](../packages/server/src/worker/daemon.ts) accept 并执行 →
 [AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP 或原生 agy provider → 消息、usage 和终态上报。
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
-上面这段是当前工作树的实现：领取走 HTTP claim 轮询，过程消息经 `TaskMessageBatcher` 写入
-`multiremi_task_messages`。MUL-401（协议 v2）把它换成 daemon 进程一条全双工 socket——服务端推送派活、
-过程事件作为 trace 流交给 Live Hub 而不再落库、`trace.read` 作为反向 RPC 读热 trace。**协议 v2 尚未接线**：
-契约与内存实现随 A-0 落地，连接层与派活在其后的子单，规范见
+当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
+过程消息仍经 `TaskMessageBatcher` 写入 `multiremi_task_messages`；MUL-421 负责后续上行 outbox
+与 trace 接入：过程事件作为 trace 流交给 Live Hub 而不再落库，`trace.read` 作为反向 RPC 读热 trace。
+**A-2 连接层已接线**：[客户端](../packages/server/src/worker/daemon-protocol-client.ts)每进程一条 socket，
+`hello` 汇总所有 provider lane，`hb` 每 15 秒一次，ack 独立调度。主循环不再发 HTTP 心跳；
+4426、HTTP 426 或 v1 `ready` 会暂停全部 lane 接单，改走每 60 秒一次的 HTTP 升级探测。
+**A-3/A-4 下行已接线**：[DB 快照下发](../packages/server/src/api/daemon-protocol/downlinks.ts)在创建后及重连时
+推送待办和配置；steer、human request、取消与 plugin desired 使用 v2 帧和 RPC，不再搭心跳 ack 或定时轮询。
+跨进程触发依赖 MUL-462 的实时扇出，临时同进程接线不能替代该交付门禁。
+HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。规范见
 [daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0005](adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
-在这条链路换完之前，以本段描述的 HTTP 路径为准。
+上行报告在 MUL-421 合入前仍走现有 HTTP 路径，不能将它视为已经迁移。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
@@ -54,7 +61,7 @@ Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtim
 
 **飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
 工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；
-bot 控制指令携带版本和期望状态。[concierge supervisor](../packages/server/src/worker/feishu-concierge.ts)经鉴权接口拉取 assignment 后串行协调 connector 的启动、停止与重试，应用凭据不随心跳下发。心跳还可领取持久化出站投递，由 connector 发送并回报；自动 Issue 话题及负责人轮次完成推送见[飞书接入契约](feishu-message-ingestion.md)。
+bot 控制指令携带版本和期望状态。[concierge supervisor](../packages/server/src/worker/feishu-concierge.ts)经鉴权接口拉取 assignment 后串行协调 connector 的启动、停止与重试，应用凭据不随心跳下发。持久化出站投递使用 `feishu.outbound`，发出后收到 ACK 才领取原有租约；断连前未确认的投递由 DB 快照重推，不改变投递数据模型。自动 Issue 话题及负责人轮次完成推送见[飞书接入契约](feishu-message-ingestion.md)。
 
 ## 存储与事务
 

@@ -42,7 +42,7 @@ describe("MUL-474 peer task-message wire", () => {
           };
           const fanout = createRealtimeFanout({
             store, role: "ui",
-            registries: { browser, browserScope, browserUser: new Map(), daemon: new Map() },
+            registries: { browser, browserScope, browserUser: new Map() },
           });
           try {
             if (path === "local") listener!({ task, messages });
@@ -104,7 +104,7 @@ describe("MUL-474 peer task-message wire", () => {
     const subscribe = store.onTaskMessages.bind(store);
     store.onTaskMessages = (handler) => { listener = handler; return subscribe(handler); };
     const fanout = createRealtimeFanout({ store, role: "runtime", peer: sender,
-      registries: { browser: new Map(), browserScope: new Map(), browserUser: new Map(), daemon: new Map() },
+      registries: { browser: new Map(), browserScope: new Map(), browserUser: new Map() },
     });
     try {
       const messages = store.appendTaskMessages(task.id, [{ type: "text", content: "six fields" }]);
@@ -150,7 +150,7 @@ describe("peer real store serialized burst bound", () => {
       });
       const registries = (client: typeof local) => ({
         browser: new Map([["local", new Set([client.client])]]),
-        browserScope: new Map(), browserUser: new Map(), daemon: new Map(),
+        browserScope: new Map(), browserUser: new Map(),
       });
       const localFanout = createRealtimeFanout({ store, role: "ui", peer: sender, registries: registries(local) });
       const receiverStore = new MultiremiStore(db);

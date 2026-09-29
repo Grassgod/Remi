@@ -12,15 +12,14 @@
  * things per event:
  *
  *   - deliver locally, by role — `ui`/`all` to the browser registries,
- *     `runtime`/`all` to the daemon registry;
+ *     `runtime`/`all` to the daemon hook;
  *   - hand the raw event to the peer channel, which forwards it to the other
  *     process (see `peer/peer-channel.ts`).
  *
  * Events that arrive *from* the peer take the local-delivery path only and are
  * never forwarded again — that is what stops two processes echoing one event.
- * A peer-delivered `task_enqueued` still calls `notifyDaemonTaskAvailable`, which
- * is what lets the daemon-facing process wake a runtime for a task created in
- * the browser-facing one.
+ * Peer-delivered task and workspace events call the same daemon hooks as local
+ * events, so the runtime process can wake offers and DB-derived downlinks.
  *
  * `MULTIREMI_PEER_URL` unset means `peer` is null: local delivery only, and no
  * envelope is even built — exactly the pre-split behaviour.
@@ -46,15 +45,12 @@ import type {
   BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
-  DaemonWebSocketRegistry,
 } from "./helpers/realtime-types.js";
 import {
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
   notifyBrowserTaskMessageReadFailed,
   notifyBrowserWorkspaceEvent,
-  notifyDaemonTaskAvailable,
-  notifyDaemonTaskEvent,
 } from "./realtime.js";
 import {
   PEER_REALTIME_TOPIC,
@@ -73,7 +69,6 @@ import {
 export type LocalRealtimeRole = ApiRole;
 
 export interface RealtimeFanoutRegistries {
-  daemon: DaemonWebSocketRegistry;
   browser: BrowserWebSocketRegistry;
   browserUser: BrowserUserWebSocketRegistry;
   browserScope: BrowserScopeWebSocketRegistry;
@@ -85,6 +80,10 @@ export interface RealtimeFanoutOptions {
   registries: RealtimeFanoutRegistries;
   /** Absent/null means "no peer": local delivery only, nothing is forwarded. */
   peer?: PeerChannel | null;
+  /** Receives task changes on runtime/all, from either store or peer. */
+  onDaemonTask?: (event: { type: string; task: MultiremiTask }) => void;
+  /** Receives workspace changes on runtime/all, from either store or peer. */
+  onDaemonWorkspaceEvent?: (event: PeerWorkspaceEvent) => void;
 }
 
 export interface RealtimeFanout {
@@ -99,6 +98,7 @@ export interface RealtimeFanout {
 export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFanout {
   const { role, store, registries } = options;
   const peer = options.peer ?? null;
+  const onDaemonTask = options.onDaemonTask ?? (() => {});
 
   const deliversToBrowser = role === "ui" || role === "all";
   const deliversToDaemon = role === "runtime" || role === "all";
@@ -106,16 +106,14 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   // Local delivery only. `forward` is the switch that separates "this process
   // wrote it" from "the peer wrote it"; there is no third case.
   const deliverTaskEnqueued = (task: MultiremiTask): void => {
-    if (deliversToDaemon) notifyDaemonTaskAvailable(registries.daemon, store, task);
+    if (deliversToDaemon) onDaemonTask({ type: "task:queued", task });
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserScope, "task:queued", task);
     }
   };
 
   const deliverTaskEvent = (event: { type: string; task: MultiremiTask }): void => {
-    if (deliversToDaemon && event.type === "task:waiting_local_directory") {
-      notifyDaemonTaskEvent(registries.daemon, event.type, event.task);
-    }
+    if (deliversToDaemon) onDaemonTask(event);
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserScope, event.type, event.task);
     }
@@ -133,6 +131,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   };
 
   const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): void => {
+    if (deliversToDaemon) options.onDaemonWorkspaceEvent?.(event);
     if (!deliversToBrowser) return;
     notifyBrowserWorkspaceEvent(
       registries.browser,

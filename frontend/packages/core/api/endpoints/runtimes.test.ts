@@ -64,6 +64,21 @@ describe("RuntimesEndpoints runtime response schema", () => {
     ]);
   });
 
+  it("preserves protocol states but drops malformed or future protocol fields without losing the runtime", async () => {
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+    for (const state of ["ok", "upgrade_pending", "upgrade_failed", "rejected"]) {
+      const protocol = { version: 1, state, min_version: "0.2.83", last_error: state === "upgrade_failed" ? "Permission denied" : null };
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([{ ...runtime, protocol }])));
+      expect((await endpoints.listRuntimes())[0]?.protocol).toEqual(protocol);
+    }
+    for (const protocol of [42, { version: "2" }, { version: 3, state: "future", min_version: "1.0.0", last_error: null }]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([{ ...runtime, protocol }])));
+      const list = await endpoints.listRuntimes();
+      expect(list).toHaveLength(1);
+      expect(list[0]?.protocol).toBeNull();
+    }
+  });
+
   it("falls back instead of exposing a malformed daemon display name", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([
       { ...runtime, daemon_display_name: 42 },

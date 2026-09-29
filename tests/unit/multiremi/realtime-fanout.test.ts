@@ -23,15 +23,13 @@ import {
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
   notifyBrowserWorkspaceEvent,
-  notifyDaemonTaskAvailable,
-  notifyDaemonTaskEvent,
 } from "../../../packages/server/src/api/realtime.js";
 import {
   createRealtimeFanout,
   type LocalRealtimeRole,
+  type RealtimeFanoutOptions,
 } from "../../../packages/server/src/api/realtime-fanout.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
 import { createStore, nextWebSocketMessage, resetMultiremiTestEnv, waitWebSocketOpen } from "./helpers.js";
 
 afterEach(() => {
@@ -56,34 +54,19 @@ function fakeBrowserClient(frames: string[], options: { workspaceId?: string; us
   };
 }
 
-/** A daemon-registry client keyed by runtime. */
-function fakeDaemonClient(frames: string[], runtimeId: string) {
-  return {
-    data: {
-      kind: "daemon" as const,
-      connectedAt: new Date().toISOString(),
-      runtimeId,
-      runtimeIds: [runtimeId],
-      accessToken: null,
-      canReportAgentPluginProtocol: true,
-    },
-    sendText: (frame: string) => frames.push(frame),
-    close: () => {},
-  };
-}
+type DaemonTaskEvent = Parameters<NonNullable<RealtimeFanoutOptions["onDaemonTask"]>>[0];
 
 function registriesFor(workspaceId = "local") {
   const browserFrames: string[] = [];
   const userFrames: string[] = [];
   const scopeFrames: string[] = [];
-  const daemonFrames: string[] = [];
+  const daemonEvents: DaemonTaskEvent[] = [];
   const browserClient = fakeBrowserClient(browserFrames, { workspaceId });
-  const daemonClient = fakeDaemonClient(daemonFrames, "rt_fanout");
   return {
     browserFrames,
-    daemonFrames,
+    daemonEvents,
+    onDaemonTask: (event: DaemonTaskEvent) => { daemonEvents.push(event); },
     registries: {
-      daemon: new Map([["rt_fanout", new Set([daemonClient])]]) as DaemonWebSocketRegistry,
       browser: new Map([[workspaceId, new Set([browserClient])]]) as any,
       browserUser: new Map([["local", new Set([fakeBrowserClient(userFrames)])]]) as any,
       browserScope: new Map() as any,
@@ -96,22 +79,19 @@ describe("realtime fanout — role routing", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Fanout agent", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "all", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "all", store, registries, onDaemonTask });
 
     try {
       const task = store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:queued", payload: { task_id: task.id } });
-      expect(JSON.parse(daemonFrames[0]!)).toMatchObject({
-        type: "daemon:task_available",
-        payload: { runtime_id: runtime.id, task_id: task.id },
-      });
+      expect(daemonEvents).toEqual([{ type: "task:queued", task }]);
     } finally {
       fanout.close();
     }
   });
 
-  it("keeps a `ui` process off the daemon registry and a `runtime` process off the browser one", () => {
+  it("keeps a `ui` process off the daemon hook and a `runtime` process off the browser registry", () => {
     for (const [role, expectBrowser, expectDaemon] of [
       ["ui", 1, 0],
       ["runtime", 0, 1],
@@ -119,25 +99,26 @@ describe("realtime fanout — role routing", () => {
       const store = createStore();
       const agent = store.createAgent({ name: `Fanout ${role}`, provider: "codex" });
       const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
-      const { registries, browserFrames, daemonFrames } = registriesFor();
-      const fanout = createRealtimeFanout({ role, store, registries });
+      const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+      const fanout = createRealtimeFanout({ role, store, registries, onDaemonTask });
       try {
-        store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
+        const task = store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
         expect(browserFrames, role).toHaveLength(expectBrowser);
-        expect(daemonFrames, role).toHaveLength(expectDaemon);
+        expect(daemonEvents, role).toHaveLength(expectDaemon);
+        if (expectDaemon) expect(daemonEvents[0]).toEqual({ type: "task:queued", task });
       } finally {
         fanout.close();
       }
     }
   });
 
-  it("routes a peer-delivered task_enqueued to the daemon registry of a `runtime` process", () => {
+  it("routes a peer-delivered task_enqueued to the daemon hook of a `runtime` process", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Fanout remote", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "remote", runtimeId: runtime.id });
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "runtime", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "runtime", store, registries, onDaemonTask });
 
     try {
       // What the peer would have POSTed. A `runtime` process must wake the
@@ -149,10 +130,7 @@ describe("realtime fanout — role routing", () => {
         payload: { task, task_id: task.id },
       });
       expect(browserFrames).toHaveLength(0);
-      expect(JSON.parse(daemonFrames[0]!)).toMatchObject({
-        type: "daemon:task_available",
-        payload: { runtime_id: runtime.id, task_id: task.id },
-      });
+      expect(daemonEvents).toEqual([{ type: "task:queued", task }]);
     } finally {
       fanout.close();
     }
@@ -164,8 +142,8 @@ describe("realtime fanout — role routing", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "messages" });
     store.appendTaskMessages(task.id, [{ type: "assistant", content: "hello" }]);
     const messages = store.listTaskMessages(task.id);
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "ui", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "ui", store, registries, onDaemonTask });
 
     try {
       fanout.deliverRemote({
@@ -174,7 +152,7 @@ describe("realtime fanout — role routing", () => {
         kind: "task_messages",
         payload: { task: store.getTask(task.id)!, task_id: task.id, messages },
       });
-      expect(daemonFrames).toHaveLength(0);
+      expect(daemonEvents).toHaveLength(0);
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:message", payload: { seq: 1 } });
     } finally {
       fanout.close();
@@ -249,6 +227,7 @@ describe("realtime fanout — two servers over one database", () => {
     storeB: MultiremiStore;
     /** POST attempts each process made: `a` = A→B, `b` = B→A. */
     postCounts: { a: number; b: number };
+    daemonEvents: { a: DaemonTaskEvent[]; b: DaemonTaskEvent[] };
     /** Simulate the other machine being unreachable, or coming back. */
     setLink(direction: "a" | "b", open: boolean): void;
     cleanup: () => void;
@@ -277,6 +256,7 @@ describe("realtime fanout — two servers over one database", () => {
 
     const secret = "peer-secret-under-test";
     const postCounts = { a: 0, b: 0 };
+    const daemonEvents = { a: [] as DaemonTaskEvent[], b: [] as DaemonTaskEvent[] };
     const linkOpen = { a: true, b: true };
     // Each server's sender is a real HTTP client to the other server's port,
     // counted so the loop test can prove an inbound event is not re-sent and
@@ -318,6 +298,7 @@ describe("realtime fanout — two servers over one database", () => {
       apiRole: options.roles?.a,
       peerChannel: peerA,
       peerSecret: secret,
+      createRealtimeFanout: options => createRealtimeFanout({ ...options, onDaemonTask: event => { daemonEvents.a.push(event); } }),
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
         bufferCapacity: 16, role: options.roles?.a ?? "all",
@@ -331,6 +312,7 @@ describe("realtime fanout — two servers over one database", () => {
       apiRole: options.roles?.b,
       peerChannel: peerB,
       peerSecret: secret,
+      createRealtimeFanout: options => createRealtimeFanout({ ...options, onDaemonTask: event => { daemonEvents.b.push(event); } }),
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
         bufferCapacity: 16, role: options.roles?.b ?? "all",
@@ -343,6 +325,7 @@ describe("realtime fanout — two servers over one database", () => {
       storeA,
       storeB,
       postCounts,
+      daemonEvents,
       setLink: (direction, open) => { linkOpen[direction] = open; },
       cleanup: () => {
         try { serverA!.stop(true); } catch { /* already stopped */ }
@@ -590,28 +573,17 @@ describe("realtime fanout — two servers over one database", () => {
     }
   }, 60_000);
 
-  it("wakes a daemon socket on B for a task created on A", async () => {
+  it("calls the daemon hook on B for a task created on A without a v1 wakeup socket", async () => {
     const two = shared!;
     {
-      const { storeA, storeB, serverA, serverB } = two;
+      const { storeA } = two;
       const runtime = storeA.registerRuntime({ id: "rt_peer_wakeup", name: "Peer runtime", provider: "codex" });
       const agent = storeA.createAgent({ name: "Peer wakeup agent", provider: "codex", runtimeId: runtime.id });
 
-      // The daemon socket lives on B — the process that did not write the task.
-      const daemonSocket = new WebSocket(`ws://127.0.0.1:${serverB.port}/api/daemon/ws?runtime_ids=${runtime.id}`);
-      const ready = await nextWebSocketMessage(daemonSocket);
-      expect(ready).toMatchObject({ type: "ready", runtime_id: runtime.id });
-
-      try {
-        const wakeup = nextWebSocketMessage(daemonSocket);
-        const task = storeA.createTask({ agentId: agent.id, prompt: "wake the far side", runtimeId: runtime.id });
-        expect(await wakeup).toMatchObject({
-          type: "daemon:task_available",
-          payload: { runtime_id: runtime.id, task_id: task.id },
-        });
-      } finally {
-        daemonSocket.close();
-      }
+      const task = storeA.createTask({ agentId: agent.id, prompt: "wake the far side", runtimeId: runtime.id });
+      const deadline = Date.now() + WS_TIMEOUT_MS;
+      while (!two.daemonEvents.b.some(event => event.task.id === task.id) && Date.now() < deadline) await Bun.sleep(10);
+      expect(two.daemonEvents.b.filter(event => event.task.id === task.id)).toEqual([{ type: "task:queued", task }]);
     }
   });
 
@@ -773,6 +745,61 @@ describe("realtime fanout — two servers over one database", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("delivers each queued task once through the real server fanout, across 20 subscribe-ack barriers", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-fanout-once-"));
+    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const store = new MultiremiStore(database);
+    store.ensureLocalWorkspace();
+    const server = startMultiremiServer({ store, scheduler: null, backgroundJobs: false, port: 0, hostname: "127.0.0.1" });
+    let socket: WebSocket | null = null;
+    try {
+      const agent = store.createAgent({ name: "Single-delivery agent", provider: "codex" });
+      const runtime = store.registerRuntime({ id: "rt_single_delivery", name: "Single-delivery runtime", provider: "codex" });
+      const token = await store.createAccessToken({ name: "Single-delivery browser", type: "pat", workspaceId: "local" });
+      socket = openBrowserSocket(server.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
+
+      const durations: number[] = [];
+      for (let round = 0; round < 20; round++) {
+        const received: Record<string, any>[] = [];
+        let taskId = "";
+        let acknowledge!: () => void;
+        const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+        const onMessage = (event: MessageEvent) => {
+          const frame = JSON.parse(String(event.data)) as Record<string, any>;
+          received.push(frame);
+          if (frame.type === "subscribe_ack" && frame.payload?.scope === "task" && frame.payload?.id === taskId) {
+            acknowledge();
+          }
+        };
+        socket.addEventListener("message", onMessage);
+        const startedAt = performance.now();
+        try {
+          const task = store.createTask({ agentId: agent.id, prompt: `single delivery ${round}`, runtimeId: runtime.id });
+          taskId = task.id;
+          socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: taskId } }));
+          await ack;
+          expect(received.filter(frame => frame.type === "task:queued" && frame.payload?.task_id === taskId), `round ${round}`)
+            .toHaveLength(1);
+          durations.push(performance.now() - startedAt);
+        } finally {
+          socket.removeEventListener("message", onMessage);
+        }
+      }
+      const sorted = durations.toSorted((a, b) => a - b);
+      console.info(`[fanout-once] rounds=20 min=${sorted[0]!.toFixed(1)}ms p50=${sorted[9]!.toFixed(1)}ms p95=${sorted[18]!.toFixed(1)}ms max=${sorted[19]!.toFixed(1)}ms`);
+    } finally {
+      if (socket) {
+        const closing = new Promise<void>(resolve => socket!.addEventListener("close", () => resolve(), { once: true }));
+        socket.close();
+        await closing;
+      }
+      server.stop(true);
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("keeps the main flow moving while the peer is unreachable, drops the oldest, and catches up", async () => {
     // A tiny queue so overflow is reachable here; the accounting is the same one
