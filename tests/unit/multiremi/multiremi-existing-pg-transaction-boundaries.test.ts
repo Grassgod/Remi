@@ -3,7 +3,7 @@
  * role transactions. An explicit unreachable PG URL is a failure; otherwise
  * this suite skips when the optional local PostgreSQL service is unavailable.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
@@ -36,6 +36,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
   let fixtureNumber = 0;
   let depth = 0;
   let maxDepth = 0;
+  let controls: Array<{ sql: string; inTransaction: boolean }> = [];
+  let storeBackend = 0;
   let previousEncryptionKey: string | undefined;
 
   beforeAll(async () => {
@@ -45,19 +47,33 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     reader = new Bun.SQL(databaseUrl.toString(), { max: 1 });
+    // MUL-402 cmt_yxzagz5d1vqn item 2, same basis as ② cmt_78bx01xhb75x and (c)
+    // cmt_gestk2r6imjh: only an outer BEGIN (entered with inTransaction=false)
+    // is depth; a nested transaction() is a SAVEPOINT inside that one unit.
     const originalTransaction = db.transaction.bind(db);
     db.transaction = function transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
       const run = originalTransaction(fn);
       return (...args: any[]) => {
-        depth += 1;
-        maxDepth = Math.max(maxDepth, depth);
+        const nested = db.inTransaction;
+        if (!nested) maxDepth = Math.max(maxDepth, ++depth);
         try {
           return run(...args);
         } finally {
-          depth -= 1;
+          if (!nested) depth -= 1;
         }
       };
     };
+    // Every statement crosses this one bridge connection; keep its control SQL.
+    const target = db as unknown as { execute(sql: string, params: unknown[]): unknown };
+    const execute = target.execute.bind(db);
+    target.execute = (sql, params) => {
+      const command = sql.trim().toUpperCase();
+      if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+        controls.push({ sql: command, inTransaction: db.inTransaction });
+      }
+      return execute(sql, params);
+    };
+    storeBackend = Number((db.query("SELECT pg_backend_pid() AS pid").get() as { pid: number }).pid);
     previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   });
@@ -70,6 +86,55 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     await admin?.unsafe(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
     await admin?.end();
   });
+
+  // No second connection: besides the reader, this database has only the
+  // store's bridge backend, the same one it opened with (no reconnect).
+  afterEach(async () => {
+    expect(await reader<{ pid: number }[]>`SELECT pid FROM pg_stat_activity
+      WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()`)
+      .toEqual([{ pid: storeBackend }]);
+  });
+
+  function resetDepth(): void {
+    maxDepth = 0;
+    controls = [];
+  }
+
+  /**
+   * Since resetDepth(): exactly `units` outer transactions, each a single BEGIN
+   * closed by COMMIT or ROLLBACK with no second BEGIN inside it. Nested layers
+   * show only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT on a
+   * matching name stack.
+   */
+  function expectOuterTransactions(units = 1): void {
+    const detail = controls.map(control => control.sql).join(", ");
+    const savepoints: string[] = [];
+    let begins = 0;
+    let open = false;
+    for (const control of controls) {
+      if (control.sql === "BEGIN") {
+        expect(open, detail).toBe(false);
+        expect(control.inTransaction, detail).toBe(false);
+        begins += 1;
+        open = true;
+      } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+        expect(open, detail).toBe(true);
+        expect(savepoints, detail).toEqual([]);
+        open = false;
+      } else {
+        expect(open, detail).toBe(true);
+        expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+        const name = control.sql.split(" ").at(-1)!;
+        if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+        else {
+          expect(savepoints.at(-1), detail).toBe(name);
+          if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+        }
+      }
+    }
+    expect(open, detail).toBe(false);
+    expect(begins, detail).toBe(units);
+  }
 
   function freshAgent() {
     fixtureNumber += 1;
@@ -119,7 +184,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }
       return result;
     };
-    maxDepth = 0;
+    resetDepth();
     try {
       expect(() => store.submitFeishuBotMessage(workspaceId, runtime.id, input))
         .toThrow("MUL-465 Feishu rollback injection");
@@ -138,17 +203,19 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(events).toEqual([]);
     expect(db.inTransaction).toBe(false);
     expect(maxDepth).toBe(1);
+    expectOuterTransactions();
   });
 
   it("commits a Feishu steer in one transaction and preserves message linkage", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
-    maxDepth = 0;
+    resetDepth();
     expect(store.submitFeishuBotMessage(workspaceId, runtime.id, input))
       .toMatchObject({ taskId: first.taskId, steered: true, duplicate: false });
     const rows = await reader`SELECT s.content, c.body FROM multiremi_task_steer_messages s
       JOIN multiremi_chat_messages c ON c.id = s.source_chat_message_id WHERE s.task_id = ${first.taskId}`;
     expect(rows).toEqual([{ content: input.text, body: input.text }]);
     expect(maxDepth).toBe(1);
+    expectOuterTransactions();
     expect(db.inTransaction).toBe(false);
   });
 
@@ -202,7 +269,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }
       return result;
     };
-    maxDepth = 0;
+    resetDepth();
     try {
       expect(() => store.completeTask(leader.id, { output: "Current round result" }))
         .toThrow("MUL-465 round rollback injection");
@@ -221,6 +288,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(events.filter(type => type === "chat:message")).toHaveLength(0);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
+    expectOuterTransactions();
     expect(db.inTransaction).toBe(false);
   });
 
@@ -241,7 +309,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }
       return originalRun.call(this, sql, ...params);
     };
-    maxDepth = 0;
+    resetDepth();
     try {
       expect(store.completeTask(leader.id, { output: "Current round result" }).status).toBe("completed");
     } finally {
@@ -252,6 +320,9 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(workspaceLocks.length).toBeGreaterThanOrEqual(2);
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
+    // The completion unit, then the agent reply comment in its own unit after
+    // that COMMIT (postAgentReplyComment).
+    expectOuterTransactions(2);
     const chatEvents = events.filter(event => event.type === "chat:message");
     expect(chatEvents).toHaveLength(1);
     expect(chatEvents[0].inTransaction).toBe(false);
@@ -298,7 +369,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         }
         return result;
       };
-      maxDepth = 0;
+      resetDepth();
       try {
         expect(() => operation.update(agent.id)).toThrow("MUL-465 token rollback injection");
       } finally {
@@ -312,18 +383,20 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
           .toEqual([{ revoked_at: null }]);
       }
       expect(maxDepth).toBe(1);
+      expectOuterTransactions();
       expect(db.inTransaction).toBe(false);
     });
 
     it(`commits ${operation.name} and both token revocations in one transaction`, async () => {
       const { agent, tokens } = await roleFixture();
-      maxDepth = 0;
+      resetDepth();
       expect(operation.update(agent.id).role).toBe(operation.role);
       for (const tokenId of tokens) {
         const rows = await reader`SELECT revoked_at FROM multiremi_access_tokens WHERE id = ${tokenId}`;
         expect(rows[0].revoked_at).not.toBeNull();
       }
       expect(maxDepth).toBe(1);
+      expectOuterTransactions();
       expect(db.inTransaction).toBe(false);
     });
   }
@@ -342,18 +415,33 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") locks.push("session");
       return originalRun.call(this, sql, ...params);
     };
-    maxDepth = 0;
+    // B1 (MUL-426) moved the session event's seq lock from the session row to the
+    // heads allocator; its atomic UPDATE … RETURNING is that session lock now.
+    const originalQuery = db.query;
+    db.query = function query(sql) {
+      const statement = originalQuery.call(this, sql);
+      if (!/^\s*UPDATE multiremi_conversation_heads\s+SET head_seq = head_seq \+ 1\b[\s\S]*\bRETURNING\b/.test(sql)) return statement;
+      const get = statement.get.bind(statement);
+      statement.get = (...params: unknown[]) => {
+        locks.push("session");
+        return get(...params);
+      };
+      return statement;
+    };
+    resetDepth();
     try {
       db.transaction(() => store.createTaskSteerMessageWithinTransaction({
         taskId: task.id, kind: "steer", content: "New input",
       }))();
     } finally {
       db.run = originalRun;
+      db.query = originalQuery;
       unsubscribe();
     }
     expect(locks).toEqual(["workspace", "session", "session"]);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
+    expectOuterTransactions();
     expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);
   });
 
@@ -389,7 +477,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         }
         return originalRun.call(this, sql, ...params);
       };
-      maxDepth = 0;
+      resetDepth();
       let result: ReturnType<MultiremiStore["performOrganizerAction"]>;
       try {
         result = store.performOrganizerAction({
@@ -401,6 +489,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         unsubscribe();
       }
       expect(maxDepth).toBe(1);
+      expectOuterTransactions();
       expect(db.inTransaction).toBe(false);
       expect(locks.slice(0, 2).map(entry => entry.lock)).toEqual(["workspace", "session"]);
       expect(locks.every(entry => entry.inTransaction)).toBe(true);
@@ -436,7 +525,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       injected = true;
       throw new Error("MUL-465 Organizer rollback injection");
     };
-    maxDepth = 0;
+    resetDepth();
     try {
       expect(() => store.performOrganizerAction({
         supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisorAgent.id,
@@ -454,6 +543,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(await reader`SELECT id FROM multiremi_issue_comments WHERE issue_id = ${patrol.id}`).toHaveLength(0);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
+    expectOuterTransactions();
     expect(db.inTransaction).toBe(false);
   });
 
