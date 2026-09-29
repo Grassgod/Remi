@@ -3,10 +3,12 @@ import { resolve } from "node:path";
 
 const repo = resolve(import.meta.dir, "../..");
 const before = process.argv[2];
+const lifecycle = process.argv.includes("--lifecycle");
+const prefix = lifecycle ? "MUL-395-archive-marker" : "MUL-395-archive-count";
 const marker = randomBytes(24).toString("hex");
 const env: Record<string, string | undefined> = {
   ...process.env, MUL395_S9_3B_FIXTURE_AUTH: marker, MULTIREMI_QA_WEB_TOKEN: marker,
-  MUL395_S9_3B_BEFORE_HEAD: "e13655427bce8d0cb0420757b3d4516abab5606b",
+  MUL395_S9_3B_BEFORE_HEAD: before ? Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: before }).stdout.toString().trim() : "",
   REMOTE_API_URL: "http://127.0.0.1:18560", NEXT_TELEMETRY_DISABLED: "1",
 };
 delete env.MULTIREMI_TOKEN;
@@ -67,15 +69,17 @@ try {
     await ready("http://127.0.0.1:18572/login");
     await ready("http://127.0.0.1:18572/local/issues");
     await ready("http://127.0.0.1:18572/local/inbox");
-    const output = resolve(repo, `reports/performance/MUL-395-archive-count-${phase}.json`);
+    if (lifecycle) await ready("http://127.0.0.1:18572/local/my-issues");
+    const output = resolve(repo, `reports/performance/${prefix}-${phase}.json`);
     const probe = start([process.execPath, resolve(import.meta.dir, "mul395-s9-3b-positions.ts"), phase!,
-      "http://localhost:18572", "--issues-only", "--rounds", "3", "--timeout", "20000", "--out",
+      "http://localhost:18572", lifecycle ? "--list-pages-only" : "--issues-only", "--rounds", "3", "--timeout", "20000", "--out",
       output], repo);
     if (await probe.exited !== 0) throw new Error(`Row-position recorder failed: ${phase}`);
     const sample = await Bun.file(output).json() as { results: {
-      listRequests: number; archivedCountRequests: number;
+      scenario: string; listRequests: number; archivedCountRequests: number;
     }[] };
-    if (sample.results.length !== 6 || sample.results.some((row) => row.listRequests !== 1 || row.archivedCountRequests !== 0)) {
+    if (sample.results.length !== (lifecycle ? 18 : 6) || sample.results.some((row) =>
+      row.listRequests !== (row.scenario === "my-issues-all" ? 3 : 1) || row.archivedCountRequests !== 0)) {
       throw new Error(`First-screen request count regression: ${phase}`);
     }
     await stop(web);

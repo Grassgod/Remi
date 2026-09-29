@@ -5,6 +5,7 @@ import {
   skipToken,
   type InfiniteData,
   type QueryClient,
+  type QueryKey,
 } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
@@ -18,6 +19,7 @@ import type {
   TimelinePage,
 } from "../types";
 import { BOARD_STATUSES } from "./config";
+import { createArchivedTotalWriter } from "./archive-total-requests";
 
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
@@ -195,42 +197,23 @@ export function flattenIssueBuckets(data: ListIssuesCache) {
 async function fetchFirstPages(
   filter: MyIssuesFilter = {},
   sort?: IssueSortParam,
-  archive?: { client: QueryClient; wsId: string; signal: () => AbortSignal },
+  archive?: { client: QueryClient; wsId: string; queryKey: QueryKey; signal: () => AbortSignal },
 ): Promise<ListIssuesCache> {
   const cacheArchivedTotal = archive
-    ? createArchivedTotalWriter(archive.client, archive.wsId, archive.signal)
+    ? createArchivedTotalWriter(archive.client, archive.wsId, issueKeys.archivedCount(archive.wsId), archive.queryKey, archive.signal)
     : undefined;
-  const response = await api.listIssueStatusPages({
-    statuses: [...PAGINATED_STATUSES], limit: ISSUE_PAGE_SIZE, ...sort, ...filter,
-    ...(archive ? { include_archived_total: true } : {}),
-  });
-  cacheArchivedTotal?.(response.archived_total);
-  return reconcileIssueBuckets(PAGINATED_STATUSES.map((status) => ({
-    ...response.groups[status]!, status,
-  })));
-}
-
-const archivedTotalRequests = new WeakMap<QueryClient, Map<string, symbol>>();
-
-function createArchivedTotalWriter(client: QueryClient, wsId: string, signal: () => AbortSignal) {
-  let requests = archivedTotalRequests.get(client);
-  if (!requests) {
-    requests = new Map();
-    archivedTotalRequests.set(client, requests);
+  try {
+    const response = await api.listIssueStatusPages({
+      statuses: [...PAGINATED_STATUSES], limit: ISSUE_PAGE_SIZE, ...sort, ...filter,
+      ...(archive ? { include_archived_total: true } : {}),
+    });
+    cacheArchivedTotal?.publish(response.archived_total);
+    return reconcileIssueBuckets(PAGINATED_STATUSES.map((status) => ({
+      ...response.groups[status]!, status,
+    })));
+  } finally {
+    cacheArchivedTotal?.finish();
   }
-  const request = Symbol();
-  requests.set(wsId, request);
-  const key = issueKeys.archivedCount(wsId);
-  const updates = client.getQueryState(key)?.dataUpdateCount ?? 0;
-  // All grouped keys share this count. A newer request or an optimistic count
-  // write takes precedence, even when the old transport ignores cancellation.
-  return (total: number | undefined) => {
-    if (requests.get(wsId) !== request
-      || (client.getQueryState(key)?.dataUpdateCount ?? 0) !== updates
-      || signal().aborted) return;
-    if (total === undefined) throw new Error("List response is missing requested archived_total");
-    client.setQueryData(key, total);
-  };
 }
 
 /**
@@ -344,7 +327,7 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
     // Read the signal at publication time; reading it before the transport
     // settles also opts into TanStack's cancel-on-last-observer-removal policy.
     queryFn: (context) => fetchFirstPages({}, sort, {
-      client: context.client, wsId, signal: () => context.signal,
+      client: context.client, wsId, queryKey: context.queryKey, signal: () => context.signal,
     }),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
@@ -419,17 +402,21 @@ export function issueAssigneeGroupsOptions(
   return queryOptions<GroupedIssuesResponse>({
     queryKey: issueKeys.assigneeGroups(wsId, { ...filter, ...sort }),
     queryFn: async (context) => {
-      const cacheArchivedTotal = createArchivedTotalWriter(context.client, wsId, () => context.signal);
-      const response = await api.listGroupedIssues({
-        group_by: "assignee",
-        limit: ISSUE_PAGE_SIZE,
-        offset: 0,
-        ...sort,
-        ...filter,
-        include_archived_total: true,
-      });
-      cacheArchivedTotal(response.archived_total);
-      return response;
+      const cacheArchivedTotal = createArchivedTotalWriter(context.client, wsId, issueKeys.archivedCount(wsId), context.queryKey, () => context.signal);
+      try {
+        const response = await api.listGroupedIssues({
+          group_by: "assignee",
+          limit: ISSUE_PAGE_SIZE,
+          offset: 0,
+          ...sort,
+          ...filter,
+          include_archived_total: true,
+        });
+        cacheArchivedTotal.publish(response.archived_total);
+        return response;
+      } finally {
+        cacheArchivedTotal.finish();
+      }
     },
     placeholderData: keepPreviousData,
   });

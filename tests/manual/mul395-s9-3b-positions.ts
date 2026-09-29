@@ -24,6 +24,9 @@ const gated = (url: URL) => /\/api\/(pins|invitations|cli\/latest-version|inbox\
 const scenarios = [
   { name: "issues", path: "issues", shape: "list", kind: "issue", rounds },
   { name: "my-issues-all", path: "my-issues", shape: "list", kind: "issue", rounds },
+  ...(process.argv.includes("--list-pages-only") ? [
+    { name: "my-issues-default", path: "my-issues", shape: "list", kind: "issue", rounds },
+  ] as const : []),
   ...(phase === "after" ? [
     { name: "472-issues", path: "issues", shape: "list", kind: "issue", rounds: 1 },
     { name: "472-inbox", path: "inbox", shape: "list", kind: "inbox", rounds: 1 },
@@ -32,7 +35,8 @@ const scenarios = [
   ] as const : []),
 ] as const;
 try {
-  for (const scene of scenarios.filter((scene) => !process.argv.includes("--issues-only") || scene.name === "issues")) for (const mode of ["cold", "warm"] as const) for (let round = 1; round <= scene.rounds; round++) {
+  for (const scene of scenarios.filter((scene) => process.argv.includes("--issues-only") ? scene.name === "issues"
+    : !process.argv.includes("--list-pages-only") || ["issues", "my-issues-all", "my-issues-default"].includes(scene.name))) for (const mode of ["cold", "warm"] as const) for (let round = 1; round <= scene.rounds; round++) {
     await fetch("http://127.0.0.1:18561/reset-inbox", { method: "POST", signal: AbortSignal.timeout(timeout) });
     const target = `/local/${scene.path}`;
     const context = await mktContext(browser, marker, [], base);
