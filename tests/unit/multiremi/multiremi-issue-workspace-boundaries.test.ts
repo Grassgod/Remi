@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
+import { readyArchiveBinding } from "./helpers.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 
@@ -13,6 +19,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     let db: Database | PostgresSyncDatabase;
     let store: MultiremiStore;
     let admin: Bun.SQL | undefined;
+    let sessionArchives: SessionArchiveService;
+    let archiveRoot: string;
     const databaseName = `mul476_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
     let serial = 0;
 
@@ -28,14 +36,19 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       }
       store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
+      archiveRoot = mkdtempSync(join(tmpdir(), "mul476-iw-archives-"));
+      sessionArchives = new SessionArchiveService(store, { root: archiveRoot, maxBytes: 1024 * 1024, minFreeBytes: 0 });
     });
 
     afterAll(async () => {
+      sessionArchives?.stopIssueArchivePurgeRecovery();
+      await sessionArchives?.whenIssueArchivePurgeRecoveryIdle();
       db?.close();
       if (admin) {
         await admin.unsafe(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
         await admin.end();
       }
+      if (archiveRoot) rmSync(archiveRoot, { recursive: true, force: true });
     });
 
     function workspaces(reverse: boolean) {
@@ -56,7 +69,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }
 
     async function credentials(source: string, target: string) {
-      const app = createMultiremiApp({ store, authToken: "mul476-test-root", shareSecret: "mul476-test-share" });
+      const app = createMultiremiApp({ store, sessionArchives, authToken: "mul476-test-root", shareSecret: "mul476-test-share" });
       async function member(both: boolean, home = source) {
         const user = store.getOrCreateUser({ email: `${home}-${both}@example.test`, name: both ? "Both workspaces" : "One workspace" });
         let memberId = "";
@@ -105,8 +118,277 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       return read(auth, token, `/api/shares/${encodeURIComponent(body.share.token)}`);
     }
 
+    function issueWorkspace(source: string, title = "Issue workspace", createdBy?: string) {
+      const runtime = store.registerRuntime({ id: `rt_iw_${source}_${serial}`, name: `PRIVATE runtime ${source}`,
+        workspaceId: source, provider: "codex", daemonId: `dmn_iw_${source}_${serial}`,
+        metadata: { issue_workspaces: 1, parallel_execution: 1 } });
+      store.updateDaemonDisplayName(source, runtime.daemonId!, `PRIVATE machine ${source}`, null);
+      const issue = store.createIssue({ title, workspaceId: source, status: "done", createdBy });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, status: "ready",
+        rootPath: `/PRIVATE/${source}/${issue.key}`, branchName: `agent/${issue.key}`,
+        repos: [{ repoName: "private-repo", repoUrl: `https://private.example/${source}/repo.git`,
+          worktreePath: `/PRIVATE/${source}/repo`, branchName: `agent/${issue.key}`,
+          baseRef: "main", status: "ready", dirty: false, error: null }] });
+      return { issue, runtime };
+    }
+
+    function assertWorkspaceInvariant(issueId: string) {
+      expect(db.query(`SELECT iw.issue_id FROM multiremi_issue_workspaces iw
+        JOIN multiremi_issues i ON i.id = iw.issue_id
+        WHERE iw.issue_id = ? AND iw.workspace_id <> i.workspace_id`).all(issueId)).toEqual([]);
+    }
+
+    async function physicalArchive(issueId: string, runtimeId: string) {
+      const runtime = store.getRuntime(runtimeId)!;
+      const bytes = new TextEncoder().encode(`archive for ${issueId}`);
+      const initialized = sessionArchives.initialize({ workspaceId: runtime.workspaceId!, issueId, runtimeId,
+        daemonId: runtime.daemonId!, sourceRevision: `revision-${issueId}`,
+        sha256: createHash("sha256").update(bytes).digest("hex"), sizeBytes: bytes.byteLength }).archive;
+      const claimed = await sessionArchives.claimUploadAttempt(runtimeId, issueId, initialized.id);
+      await sessionArchives.upload(runtimeId, issueId, initialized.id, claimed.uploadAttempt!, new Response(bytes).body);
+      const ready = await sessionArchives.complete(runtimeId, issueId, initialized.id, claimed.uploadAttempt!);
+      return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
+    }
+
+    async function completedTask(issueId: string, workspaceId: string) {
+      const agent = store.createAgent({ name: "Completed worker", provider: "codex", workspaceId });
+      const task = store.createTask({ issueId, agentId: agent.id, workspaceId, prompt: "Completed work" });
+      db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+      store.updateIssue(issueId, { status: "done" });
+      return task;
+    }
+
     for (const reverse of [false, true]) {
       const direction = reverse ? "B -> A" : "A -> B";
+
+      it(`${direction}: IW1 uncleaned Issue workspaces block HTTP moves without exposing foreign records`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const { issue, runtime } = issueWorkspace(source);
+        const before = store.getIssueWorkspace(issue.id);
+        const denied = await auth.request(auth.sourceOnly, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target });
+        expect(denied.status).toBe(404);
+        for (const status of ["preparing", "ready", "in_use", "dirty", "error", "runtime_offline"]) {
+          db.run("UPDATE multiremi_issue_workspaces SET status = ? WHERE issue_id = ?", [status, issue.id]);
+          const response = await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target });
+          expect(response.status).toBe(409);
+          expect(await response.json()).toMatchObject({ code: "workspace_move_blocked",
+            relations: { issue_workspace: { status, runtime_id: runtime.id }, hidden: 0 } });
+          expect(store.getIssue(issue.id)?.workspaceId).toBe(source);
+        }
+        db.run("UPDATE multiremi_issue_workspaces SET status = 'ready', workspace_id = ? WHERE issue_id = ?", [target, issue.id]);
+        const hidden = await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target });
+        expect(hidden.status).toBe(409);
+        const body = await hidden.json();
+        expect(body.relations.issue_workspace).toBeNull();
+        expect(body.relations.hidden).toBe(1);
+        expect(JSON.stringify(body)).not.toContain(runtime.id);
+        expect(store.getIssue(issue.id)?.workspaceId).toBe(source);
+        db.run("UPDATE multiremi_issue_workspaces SET workspace_id = ? WHERE issue_id = ?", [source, issue.id]);
+        expect(store.getIssueWorkspace(issue.id)).toEqual(before);
+      });
+
+      for (const cleanup of ["archive", "abandon"] as const) {
+        it(`${direction}: IW2 ${cleanup} tombstone follows a move without machine fields`, async () => {
+          const { source, target } = workspaces(reverse);
+          const auth = await credentials(source, target);
+          const { issue, runtime } = issueWorkspace(source);
+          const task = await completedTask(issue.id, source);
+          db.run("UPDATE multiremi_issue_workspaces SET last_task_id = ? WHERE issue_id = ?", [task.id, issue.id]);
+          if (cleanup === "archive") {
+            store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id,
+              ...readyArchiveBinding(store, issue.id, runtime.id) });
+          } else {
+            db.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issue.id]);
+            expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/workspace/abandon`, "POST", {})).status).toBe(200);
+          }
+          const before = store.getIssueWorkspace(issue.id)!;
+          const response = await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target });
+          expect(response.status, await response.clone().text()).toBe(200);
+          const moved = store.getIssue(issue.id)!;
+          const tombstone = store.getIssueWorkspace(issue.id)!;
+          expect(tombstone).not.toBeNull();
+          expect(tombstone).toMatchObject({ workspaceId: target, issueKey: moved.key, runtimeId: null,
+            lastTaskId: null, rootPath: "", branchName: "", repos: [], status: "cleaned" });
+          for (const field of ["status", "cleanedAt", "cleanedArchiveId", "cleanedArchiveSourceRevision", "cleanedArchiveSha256", "createdAt"] as const) {
+            expect(tombstone[field]).toBe(before[field]);
+          }
+          if (before.cleanedArchiveId) {
+            expect(store.getSessionArchive(before.cleanedArchiveId)?.workspaceId).toBe(source);
+          }
+          assertWorkspaceInvariant(issue.id);
+          const bundle = await read(auth, auth.targetOnly, `/api/issues/${issue.id}/workspace`);
+          expect(bundle.workspace).toMatchObject({ status: "cleaned", runtime_id: null, runtime_name: null,
+            runtime_status: null, runtime_provider: null, runtime_mode: null, runtime_device_info: null,
+            runtime_daemon_id: null, runtime_machine_name: null, root_path: "", branch_name: "", repos: [] });
+          expect(JSON.stringify(bundle)).not.toContain(`/PRIVATE/${source}`);
+          expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/workspace`, "GET")).status).toBe(404);
+        });
+      }
+
+      it(`${direction}: IW3 source Runtime deletion cannot disclose a legacy moved Issue's title`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        store.updateWorkspaceMember(auth.sourceMember, { role: "admin" });
+        const { issue, runtime } = issueWorkspace(source, `PRIVATE target title ${target}`);
+        store.registerRuntime({ id: `${runtime.id}_sibling`, name: "Keep daemon alive", provider: "claude",
+          workspaceId: source, daemonId: runtime.daemonId! });
+        db.run("UPDATE multiremi_issues SET workspace_id = ?, issue_number = 999, issue_key = 'MUL-999' WHERE id = ?", [target, issue.id]);
+        expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}`, "GET")).status).toBe(404);
+        for (const token of [auth.sourceOnly, auth.targetOnly]) {
+          const abandoned = await auth.request(token, `/api/issues/${issue.id}/workspace/abandon`, "POST", {});
+          expect(abandoned.status).toBe(404);
+          expect(await abandoned.text()).not.toContain(issue.title);
+        }
+        const response = await auth.request(auth.sourceOnly, `/api/runtimes/${runtime.id}`, "DELETE");
+        expect(response.status).toBe(409);
+        const body = await response.json();
+        expect(body).toMatchObject({ code: "runtime_has_active_issue_workspaces",
+          issues: [{ id: issue.id, key: issue.key, title: issue.key, status: "ready" }] });
+        expect(JSON.stringify(body)).not.toContain(issue.title);
+        expect(JSON.stringify(body)).not.toContain("MUL-999");
+        const deleted = await auth.request(auth.sourceOnly, `/api/runtimes/${runtime.id}?abandon_issue_workspaces=true`, "DELETE");
+        expect(deleted.status, await deleted.clone().text()).toBe(200);
+        expect(store.getRuntime(runtime.id)).toBeNull();
+        expect(db.query("SELECT status, runtime_id FROM multiremi_issue_workspaces WHERE issue_id = ?").get(issue.id))
+          .toEqual({ status: "cleaned", runtime_id: null });
+      });
+
+      for (const status of ["ready", "cleaned"] as const) {
+        it(`${direction}: IW4 ${status} legacy records are absent from workspace and public share reads`, async () => {
+          const { source, target } = workspaces(reverse);
+          const auth = await credentials(source, target);
+          const { issue, runtime } = issueWorkspace(source, "Issue workspace", auth.bothUser);
+          db.run("UPDATE multiremi_issue_workspaces SET status = ? WHERE issue_id = ?", [status, issue.id]);
+          db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, issue.id]);
+          expect(store.getIssueWorkspace(issue.id)).toBeNull();
+          const workspace = await read(auth, auth.targetOnly, `/api/issues/${issue.id}/workspace`);
+          expect(workspace.workspace).toBeNull();
+          const shared = await shareBundle(auth, auth.targetOnly, issue.id);
+          expect(shared.issue_workspace).toBeNull();
+          for (const result of [workspace, shared]) {
+            const encoded = JSON.stringify(result);
+            for (const secret of [`/PRIVATE/${source}`, `private.example/${source}`, runtime.id, runtime.name,
+              runtime.daemonId!, `PRIVATE machine ${source}`]) {
+              expect(encoded).not.toContain(secret);
+            }
+          }
+          expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/workspace`, "GET")).status).toBe(404);
+          expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/share`, "POST", {})).status).toBe(404);
+        });
+      }
+
+      it(`${direction}: IW5 target Runtime report takes over a legacy record and refreshes its key`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const { issue, runtime } = issueWorkspace(source);
+        db.run("UPDATE multiremi_issues SET workspace_id = ?, issue_number = 999, issue_key = 'MUL-999' WHERE id = ?", [target, issue.id]);
+        expect(() => store.initSessionArchive({ workspaceId: target, issueId: issue.id, runtimeId: runtime.id,
+          daemonId: runtime.daemonId!, sourceRevision: "foreign-runtime", sha256: "f".repeat(64), sizeBytes: 0 },
+          `sar_foreign_${issue.id}`, "foreign.tar.gz")).toThrow("Issue is deleting or its workspace has already been cleaned");
+        expect(store.listSessionArchives(issue.id)).toEqual([]);
+        const targetRuntime = store.registerRuntime({ id: `rt_target_${target}`, name: "Target Runtime", provider: "codex",
+          workspaceId: target, daemonId: `dmn_target_${target}` });
+        const input = { issueId: issue.id, runtimeId: targetRuntime.id, status: "ready" as const,
+          rootPath: `/target/${target}`, branchName: "agent/MUL-999" };
+        expect(store.reportIssueWorkspace(input)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id });
+        assertWorkspaceInvariant(issue.id);
+        expect(() => store.reportIssueWorkspace({ ...input, runtimeId: runtime.id })).toThrow("runtime belongs to another workspace");
+        const daemon = (await store.createAccessToken({ type: "daemon", purpose: "daemon", workspaceId: source,
+          daemonId: runtime.daemonId!, name: "Source daemon" })).token;
+        const cleaned = await auth.request(daemon, `/api/daemon/runtimes/${runtime.id}/issues/${issue.id}/workspace/cleaned`, "POST", {});
+        expect([403, 404]).toContain(cleaned.status);
+        expect(store.getIssueWorkspace(issue.id)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id, status: "ready" });
+      });
+
+      it(`${direction}: IW6 legacy machine affinity does not pin a target workspace task`, () => {
+        const { source, target } = workspaces(reverse);
+        const { issue } = issueWorkspace(source);
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, issue.id]);
+        const targetRuntime = store.registerRuntime({ id: `rt_claim_${target}`, name: "Target machine", provider: "codex",
+          workspaceId: target, daemonId: `dmn_claim_${target}`, metadata: { issue_workspaces: 1, parallel_execution: 1 } });
+        const agent = store.createAgent({ name: "Target worker", provider: "codex", workspaceId: target });
+        const session = store.createIssueSession(issue.id, { title: "Target work", holdsWorkspace: true });
+        const task = store.createTask({ issueId: issue.id, issueSessionId: session.id,
+          agentId: agent.id, workspaceId: target, prompt: "Use target machine" });
+        const now = Date.now();
+        db.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+        store.refreshQueuedCapabilityWaitReasons(now);
+        expect(store.getTask(task.id)?.waitReason).toBeNull();
+        expect(store.claimTask(targetRuntime.id)?.id).toBe(task.id);
+        expect(store.getTask(task.id)?.runtimeId).toBe(targetRuntime.id);
+      });
+
+      for (const evidence of ["archive", "abandon", "missing"] as const) {
+        it(`${direction}: IW7 ${evidence} deletion gate gives the same result before and after moving`, async () => {
+          const { source, target } = workspaces(reverse);
+          const auth = await credentials(source, target);
+          store.updateWorkspaceMember(auth.sourceMember, { role: "admin" });
+          store.updateWorkspaceMember(auth.targetMember, { role: "admin" });
+          async function prepared() {
+            const { issue, runtime } = issueWorkspace(source);
+            await completedTask(issue.id, source);
+            if (evidence === "archive") {
+              store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id,
+                ...await physicalArchive(issue.id, runtime.id) });
+            } else if (evidence === "abandon") {
+              db.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issue.id]);
+              expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/workspace/abandon`, "POST", {})).status).toBe(200);
+            } else {
+              db.run("DELETE FROM multiremi_issue_workspaces WHERE issue_id = ?", [issue.id]);
+            }
+            return issue;
+          }
+          // Use equivalent Issues: a successful source deletion consumes its fixture.
+          const original = await prepared();
+          const before = await auth.request(auth.sourceOnly, `/api/issues/${original.id}`, "DELETE");
+          const beforeBody = before.status === 204 ? {} : await before.json();
+          const issue = await prepared();
+          const moved = await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target });
+          expect(moved.status, await moved.clone().text()).toBe(200);
+          const after = await auth.request(auth.targetOnly, `/api/issues/${issue.id}`, "DELETE");
+          const afterBody = after.status === 204 ? {} : await after.json();
+          expect(after.status).toBe(before.status);
+          expect(afterBody.code).toBe(beforeBody.code);
+          if (evidence === "archive") {
+            expect(after.status, JSON.stringify(afterBody)).toBe(204);
+            expect(store.getIssue(issue.id)).toBeNull();
+            expect(db.query("SELECT issue_id FROM multiremi_issue_workspaces WHERE issue_id = ?").get(issue.id)).toBeNull();
+            expect(db.query("SELECT id FROM multiremi_session_archives WHERE issue_id = ?").all(issue.id)).toEqual([]);
+          } else {
+            expect(after.status).toBe(409);
+            expect(afterBody.code).toBe(evidence === "abandon" ? "issue_workspace_archive_invalid" : "issue_workspace_not_cleaned");
+            expect(store.getIssue(issue.id)?.workspaceId).toBe(target);
+          }
+        });
+      }
+
+      it(`${direction}: IW7 legacy cleanup in a foreign workspace cannot authorize hard deletion`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        store.updateWorkspaceMember(auth.targetMember, { role: "admin" });
+        const { issue, runtime } = issueWorkspace(source);
+        store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id,
+          ...await physicalArchive(issue.id, runtime.id) });
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, issue.id]);
+        const response = await auth.request(auth.targetOnly, `/api/issues/${issue.id}`, "DELETE");
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "issue_workspace_not_cleaned" });
+        expect(store.getIssue(issue.id)?.workspaceId).toBe(target);
+        expect(store.listSessionArchives(issue.id)).toHaveLength(1);
+      });
+
+      it(`${direction}: IW8 abandoning an orphan workspace unblocks its move`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const { issue } = issueWorkspace(source);
+        db.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issue.id]);
+        expect((await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target })).status).toBe(409);
+        expect((await auth.request(auth.sourceOnly, `/api/issues/${issue.id}/workspace/abandon`, "POST", {})).status).toBe(200);
+        expect((await auth.request(auth.both, `/api/issues/${issue.id}`, "PATCH", { workspace_id: target })).status).toBe(200);
+        expect(store.getIssueWorkspace(issue.id)).toMatchObject({ workspaceId: target, status: "cleaned", runtimeId: null, rootPath: "" });
+        assertWorkspaceInvariant(issue.id);
+      });
 
       it(`${direction}: refuses moving a parent with five children and a child with a parent`, () => {
         const { source, target } = workspaces(reverse);
@@ -179,9 +461,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         store.createIssueDependency(child.id, { dependsOnIssueId: other.id, type: "related" });
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id IN (?, ?)", [target, parent.id, other.id]);
         const childError = moveError(() => store.updateIssue(child.id, { workspaceId: target }));
-        expect(childError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], hidden: 2 });
+        expect(childError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], issue_workspace: null, hidden: 2 });
         const parentError = moveError(() => store.updateIssue(parent.id, { workspaceId: source }));
-        expect(parentError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], hidden: 1 });
+        expect(parentError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], issue_workspace: null, hidden: 1 });
         expect(store.getIssue(child.id)?.workspaceId).toBe(source);
       });
 

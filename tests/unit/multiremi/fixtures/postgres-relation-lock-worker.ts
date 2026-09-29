@@ -5,8 +5,8 @@ import { MultiremiStore } from "@multiremi/store.js";
 
 export interface RelationLockInput {
   databaseUrl: string;
-  mode: "hold-move" | "hold-child" | "hold-reparent" | "hold-number" | "race";
-  role: "move" | "create" | "reparent" | "dependency" | "reopen" | "assign" | "task";
+  mode: "hold-move" | "hold-child" | "hold-reparent" | "hold-number" | "hold-report" | "race";
+  role: "move" | "create" | "reparent" | "dependency" | "reopen" | "assign" | "task" | "runtime-delete";
   issueId: string;
   otherId: string;
   ownerId?: string;
@@ -36,6 +36,22 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
       if (gate) {
         self.postMessage({ phase: "ready" });
         if (Atomics.wait(gate, 0, 0, 15_000) === "timed-out") throw new Error("relation gate timeout");
+      }
+      if (input.mode === "hold-report") {
+        const originalRun = db.run.bind(db);
+        db.run = (sql, params = []) => {
+          const result = originalRun(sql, params);
+          if (/INSERT INTO multiremi_issue_workspaces/.test(sql)) {
+            self.postMessage({ phase: "locked" });
+            waitForBlockedPeer(db);
+          }
+          return result;
+        };
+        const issue = store.getIssue(input.issueId)!;
+        store.reportIssueWorkspace({ issueId: issue.id, runtimeId: input.ownerId!,
+          rootPath: `/worker/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+        self.postMessage({ phase: "done", ok: true, maxTransactionDepth: db.maxTransactionDepth });
+        return;
       }
       db.transaction(() => {
         if (input.mode === "hold-number") {
@@ -90,6 +106,10 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
       if (input.role === "reopen") store.updateIssue(input.issueId, { status: "in_progress" });
       if (input.role === "assign") store.assignIssue(input.issueId, { assigneeType: "agent", assigneeId: input.ownerId! });
       if (input.role === "task") store.createTask({ agentId: input.ownerId!, issueId: input.issueId, workspaceId: input.sourceWorkspace, prompt: "Racing task" });
+      if (input.role === "runtime-delete") {
+        const result = store.deleteRuntimeWithArchivedAgentCleanup(input.ownerId!, { abandonIssueWorkspaces: true });
+        if (result.status !== "deleted") throw new Error(`Runtime delete refused: ${result.status}`);
+      }
       self.postMessage({ phase: "done", ok: true, maxTransactionDepth: db.maxTransactionDepth });
     } catch (error) {
       const failure = error as Error & { code?: string };

@@ -238,7 +238,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const { task } = store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id });
       const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
       expect(error.code).toBe("workspace_move_blocked");
-      expect(error.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [{ id: task!.id, status: "queued" }], hidden: 0 });
+      expect(error.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [{ id: task!.id, status: "queued" }], issue_workspace: null, hidden: 0 });
       const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
       const response = await app.request(`/api/multiremi/issues/${f.child.id}`, {
         method: "PATCH",
@@ -611,6 +611,65 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           }
         }, 120_000);
       }
+    }
+
+    for (const reverse of [false, true]) {
+      const direction = reverse ? "B -> A" : "A -> B";
+      function workspaceInvariant(issueId: string) {
+        expect(db.query(`SELECT iw.issue_id FROM multiremi_issue_workspaces iw
+          JOIN multiremi_issues i ON i.id = iw.issue_id
+          WHERE iw.issue_id = ? AND iw.workspace_id <> i.workspace_id`).all(issueId)).toEqual([]);
+      }
+
+      it(`PG-L11 ${direction}: report waits on a move and refuses the moved Issue`, async () => {
+        const f = fixture(reverse);
+        const runtime = store.registerRuntime({ id: `rt_report_${f.tag}`, name: "Source Runtime", provider: "codex", workspaceId: f.source });
+        resetDepth();
+        await hold({ mode: "hold-move", role: "move", issueId: f.child.id, otherId: f.parent.id,
+          sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
+          expect(thrown(() => store.reportIssueWorkspace({ issueId: f.child.id, runtimeId: runtime.id,
+            rootPath: `/worker/${f.child.key}`, branchName: `agent/${f.child.key}`, status: "ready" })).message)
+            .toBe(`Issue not found: ${f.child.id}`);
+        });
+        expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
+        expect(db.query("SELECT issue_id FROM multiremi_issue_workspaces WHERE issue_id = ?").get(f.child.id)).toBeNull();
+        workspaceInvariant(f.child.id);
+        expectDepthOne();
+      }, 30_000);
+
+      it(`PG-L11 ${direction}: move waits on a real report and sees its workspace blocker`, async () => {
+        const f = fixture(reverse);
+        const runtime = store.registerRuntime({ id: `rt_report_${f.tag}`, name: "Source Runtime", provider: "codex", workspaceId: f.source });
+        resetDepth();
+        await hold({ mode: "hold-report", role: "move", ownerId: runtime.id, issueId: f.child.id, otherId: f.parent.id,
+          sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
+          const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+          expect(error).toBeInstanceOf(IssueWorkspaceMoveError);
+          expect(error.relations.issue_workspace).toEqual({ status: "ready", runtime_id: runtime.id });
+        });
+        expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
+        expect(store.getIssueWorkspace(f.child.id)).toMatchObject({ workspaceId: f.source, runtimeId: runtime.id, status: "ready" });
+        workspaceInvariant(f.child.id);
+        expectDepthOne();
+      }, 30_000);
+
+      it(`PG-L12 ${direction}: move vs Runtime deletion has no deadlock (10 rounds)`, async () => {
+        for (let round = 0; round < 10; round++) {
+          const f = fixture(reverse);
+          const runtime = store.registerRuntime({ id: `rt_delete_${f.tag}`, name: "Source Runtime", provider: "codex", workspaceId: f.source });
+          store.reportIssueWorkspace({ issueId: f.child.id, runtimeId: runtime.id,
+            rootPath: `/worker/${f.child.key}`, branchName: `agent/${f.child.key}`, status: "ready" });
+          db.run("UPDATE multiremi_issue_workspaces SET status = 'cleaned' WHERE issue_id = ?", [f.child.id]);
+          const common = { sourceWorkspace: f.source, targetWorkspace: f.target, issueId: f.child.id,
+            otherId: f.parent.id, ownerId: runtime.id };
+          const results = await race([{ ...common, role: "move" }, { ...common, role: "runtime-delete" }]);
+          expect(results.every((result) => result.ok), JSON.stringify(results)).toBe(true);
+          expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
+          expect(store.getRuntime(runtime.id)).toBeNull();
+          expect(store.getIssueWorkspace(f.child.id)).toMatchObject({ workspaceId: f.target, status: "cleaned", runtimeId: null, rootPath: "" });
+          workspaceInvariant(f.child.id);
+        }
+      }, 120_000);
     }
 
     for (const action of ["reopen", "assign"] as const) {

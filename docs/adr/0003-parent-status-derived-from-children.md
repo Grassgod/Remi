@@ -138,7 +138,8 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    still locks its parent; a child that is re-parented locks the new parent;
    creation locks the parent and every `blocked_by` endpoint; a dependency locks
    both endpoints; a workspace move locks only itself, is blocked by active
-   tasks as well as relations, and takes the target's next number (number and
+   tasks, relations and an uncleaned Issue workspace record; a cleaned record
+   follows the move with its machine fields cleared. The move takes the target's next number (number and
    key change in the same UPDATE, because MUL-405's unique index rejects the
    old number there); task creation locks its Issue before checking
    the Issue's workspace, so it and a move serialize. If the post-lock re-read
@@ -146,8 +147,10 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    while it waited, or the Issue now moves and its N was not taken), the
    transaction owner rolls back and retries once with a
    fresh set; a second miss, or a caller-owned transaction, raises 409
-   `issue_relation_changed`. A late lock is never taken. A parent's guarded
-   decision still reads children without locking their rows. A write serialized after parent closure may still introduce an
+   `issue_relation_changed`. A late lock is never taken.
+   `lockIssueArchiveLifecycle` and `lockIssueRowWithinTransaction` take the same
+   Issue row lock; workspace reports, abandonment and cleanup serialize with moves.
+   A parent's guarded decision still reads children without locking their rows. A write serialized after parent closure may still introduce an
    unfinished child under that closed parent; the closed-parent policy above
    remains in effect. The guarantee is a current count at the parent's decision,
    not a prohibition on later child writes.

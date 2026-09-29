@@ -85,6 +85,7 @@ import type {
   MultiremiIssueSearchResult,
   MultiremiIssueSubscriber,
   MultiremiIssueWithTasks,
+  MultiremiIssueWorkspaceStatus,
   MultiremiLabel,
   MultiremiSubscriptionReason,
   MultiremiSystemEvent,
@@ -218,6 +219,7 @@ export interface IssueWorkspaceMoveRelations {
   dependencies: Array<{ id: string; key: string; type: MultiremiIssueDependencyType }>;
   /** Active tasks keep writing to the Issue from their own workspace. */
   tasks: Array<{ id: string; status: MultiremiTaskStatus }>;
+  issue_workspace: { status: MultiremiIssueWorkspaceStatus; runtime_id: string | null } | null;
   hidden: number;
 }
 
@@ -228,7 +230,7 @@ export class IssueWorkspaceMoveError extends Error {
     readonly relations: IssueWorkspaceMoveRelations,
     readonly issueIds?: string[],
   ) {
-    super("Detach parent, child and dependency relationships, and cancel or finish its tasks, before moving an issue to another workspace");
+    super("Detach parent, child and dependency relationships, cancel or finish its tasks, and clean or abandon its Issue workspace before moving an issue to another workspace");
   }
 }
 
@@ -1502,6 +1504,10 @@ export class IssuesRepo {
       `SELECT id, issue_key, workspace_id FROM multiremi_issues
        WHERE parent_issue_id = ? ORDER BY id`,
     ).all(current.id) as Row[];
+    const issueWorkspace = this.ctx.db.query(
+      "SELECT workspace_id, status, runtime_id FROM multiremi_issue_workspaces WHERE issue_id = ?",
+    ).get(current.id) as Row | null;
+    const uncleanedWorkspace = issueWorkspace && issueWorkspace.status !== "cleaned" ? issueWorkspace : null;
     const dependencies = this.ctx.db.query(
       `SELECT d.id, d.type, other.issue_key AS other_key
        FROM multiremi_issue_dependencies d
@@ -1529,12 +1535,17 @@ export class IssuesRepo {
         id: String(row.id), key: String(row.other_key), type: String(row.type) as MultiremiIssueDependencyType,
       })),
       tasks: visibleTasks.map((row) => ({ id: String(row.id), status: String(row.status) as MultiremiTaskStatus })),
+      issue_workspace: uncleanedWorkspace?.workspace_id === current.workspaceId
+        ? { status: String(uncleanedWorkspace.status) as MultiremiIssueWorkspaceStatus,
+          runtime_id: nullableString(uncleanedWorkspace.runtime_id) }
+        : null,
       hidden: (current.parentIssueId && !visibleParent ? 1 : 0)
         + children.length - visibleChildren.length
         + dependencies.length - visibleDependencies.length
-        + tasks.length - visibleTasks.length,
+        + tasks.length - visibleTasks.length
+        + (uncleanedWorkspace && uncleanedWorkspace.workspace_id !== current.workspaceId ? 1 : 0),
     };
-    if (current.parentIssueId || children.length || dependencies.length || tasks.length) {
+    if (current.parentIssueId || children.length || dependencies.length || tasks.length || uncleanedWorkspace) {
       throw new IssueWorkspaceMoveError(relations);
     }
   }
@@ -1694,8 +1705,8 @@ export class IssuesRepo {
     const workspace = this.ctx.db.query(
       `SELECT status, cleaned_archive_id, cleaned_archive_source_revision,
               cleaned_archive_sha256
-       FROM multiremi_issue_workspaces WHERE issue_id = ?`,
-    ).get(id) as { status?: unknown } | null;
+       FROM multiremi_issue_workspaces WHERE issue_id = ? AND workspace_id = ?`,
+    ).get(id, this.getIssue(id)!.workspaceId) as { status?: unknown } | null;
     if (workspace) {
       if (String(workspace.status) !== "cleaned") {
         return {
@@ -1725,6 +1736,7 @@ export class IssuesRepo {
     // Missing workspace state is safe only for an Issue that was never
     // materialized. Any task/session/archive proves a Runtime touched it, so
     // absence of the cleanup acknowledgement must fail closed.
+    // cmt_v70r9qrr49uc: global evidence keeps the deletion gate unchanged by a move.
     const hasTask = Boolean(this.ctx.db.query(
       "SELECT 1 AS present FROM multiremi_tasks WHERE issue_id = ? LIMIT 1",
     ).get(id));
@@ -2764,6 +2776,15 @@ export class IssuesRepo {
       id,
       ],
     );
+    if (moving) {
+      this.ctx.db.run(
+        `UPDATE multiremi_issue_workspaces
+         SET workspace_id = ?, issue_key = ?, runtime_id = NULL, root_path = '', branch_name = '',
+             repos = '[]', last_task_id = NULL, updated_at = ?
+         WHERE issue_id = ? AND status = 'cleaned'`,
+        [nextWorkspaceId, formatIssueKey(movedNumber!), updatedAt, id],
+      );
+    }
     if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
       && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
       cancelledTasks = this.unassignIssueWithinTransaction(id, {

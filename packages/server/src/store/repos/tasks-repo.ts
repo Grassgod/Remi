@@ -414,6 +414,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
              )
              OR EXISTS (
@@ -421,6 +422,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
                LEFT JOIN multiremi_runtimes issue_workspace_runtime
                  ON issue_workspace_runtime.id = issue_workspace.runtime_id
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
                  AND (
                    issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
@@ -882,8 +884,9 @@ function liveIssueWorkspaceMachines(
   const cached = cache?.issueWorkspaces.get(issueId);
   if (cached) return cached;
   const rows = ctx.db.query(
-    `SELECT runtime_id FROM multiremi_issue_workspaces
-      WHERE issue_id = ? AND status <> 'cleaned'`,
+    `SELECT iw.runtime_id FROM multiremi_issue_workspaces iw
+      JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
+      WHERE iw.issue_id = ? AND iw.status <> 'cleaned'`,
   ).all(issueId) as Array<{ runtime_id?: unknown }>;
   const aliases = new Set<string>();
   for (const row of rows) {
