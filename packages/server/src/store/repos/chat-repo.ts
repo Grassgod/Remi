@@ -268,7 +268,7 @@ export class ChatRepo {
 
   listQueuedChatTasks(chatSessionId: string): QueuedChatTask[] {
     if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
-    return this.pendingTasks(chatSessionId).slice(1).filter((task) => task.status === "queued")
+    return this.pendingTasks(chatSessionId).slice(1).filter((task) => task.status === "queued" && !task.wakeSource)
       .map((task) => this.queuedTaskResponse(task));
   }
 
@@ -281,7 +281,7 @@ export class ChatRepo {
   }
 
   private requireQueuedTask(chatSessionId: string, taskId: string): MultiremiTask {
-    const task = this.pendingTasks(chatSessionId).slice(1).find((entry) => entry.id === taskId && entry.status === "queued");
+    const task = this.pendingTasks(chatSessionId).slice(1).find((entry) => entry.id === taskId && entry.status === "queued" && !entry.wakeSource);
     if (!task) throw new ChatConflictError("Task is no longer queued in this chat");
     return task;
   }

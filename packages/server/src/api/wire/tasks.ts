@@ -658,7 +658,7 @@ function appendDaemonClaimExecutionContext(
   appendDaemonClaimWorkspaceContext(store, task, response);
   appendDaemonClaimChatContext(store, task, response);
   appendDaemonClaimBoundIssue(store, task, response);
-  appendDaemonClaimBoundIssueUpdates(store, task, response);
+  appendDaemonClaimBoundIssueLog(store, task, response);
   appendDaemonClaimAutopilotContext(store, task, response);
 
   const quickCreatePrompt = daemonQuickCreatePrompt(task);
@@ -728,23 +728,29 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
   }
 }
 
-function appendDaemonClaimBoundIssueUpdates(
+function appendDaemonClaimBoundIssueLog(
   store: MultiremiStore,
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId || !response.bound_issue) return;
+  if (!task.chatSessionId || !task.issueId || !response.bound_issue || task.projectionToSeq == null) return;
   try {
-    const pending = store.preparePendingAgentIssueUpdatesForTask(task.chatSessionId, task.id);
-    if (pending.messages.length) {
-      response.bound_issue_updates = pending.messages.map((message) => message.body);
-    }
-    if (pending.omittedCount > 0) {
-      response.bound_issue_updates_omitted_count = pending.omittedCount;
-    }
+    const session = store.getOrCreateDefaultIssueSession(task.issueId);
+    const lane = store.getSessionAgentLane(session.id, task.agentId, `relay:${task.chatSessionId}`);
+    const fromSeq = lane?.cursorSeq ?? 0;
+    const toSeq = task.projectionToSeq;
+    const shown = store.listConversationLogShown(session.id, { sinceSeq: fromSeq, toSeq, limit: 101 });
+    response.bound_issue_log = {
+      session_id: session.id,
+      from_seq: fromSeq,
+      to_seq: toSeq,
+      entries: shown.slice(0, 100).map(({ seq, id, kind, author_type, task_id, body_md, metadata }) =>
+        ({ seq, id, kind, author_type, task_id, body_md, metadata })),
+      has_more: shown.length > 100,
+    };
   } catch (error) {
     log.debug(
-      `Failed to load bound Issue updates for claimed task ${task.id}: `
+      `Failed to load bound Issue log for claimed task ${task.id}: `
       + `${error instanceof Error ? error.message : String(error)}`,
     );
   }

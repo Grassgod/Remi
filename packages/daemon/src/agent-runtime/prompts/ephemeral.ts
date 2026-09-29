@@ -383,25 +383,22 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     appendPromptAttachments(sections, chatAttachments, false);
   }
 
-  const boundIssueUpdates = arrayField(task, "boundIssueUpdates", "bound_issue_updates")
-    .flatMap((value) => typeof value === "string" && value.trim() ? [value.trim()] : []);
-  const omittedBoundIssueUpdates = numberField(
-    task,
-    "boundIssueUpdatesOmittedCount",
-    "bound_issue_updates_omitted_count",
-  ) ?? 0;
+  const boundIssueLog = task.boundIssueLog ?? task.bound_issue_log ?? null;
   const boundIssue = task.chatSessionId ? task.boundIssue ?? task.bound_issue ?? null : null;
-  if (boundIssue && (boundIssueUpdates.length || omittedBoundIssueUpdates > 0)) {
+  if (boundIssue && boundIssueLog) {
     sections.push("");
-    sections.push("## Bound Issue Updates");
-    if (omittedBoundIssueUpdates > 0) {
-      sections.push(`${omittedBoundIssueUpdates} earlier bound Issue update(s) omitted.`);
-    }
-    boundIssueUpdates.forEach((update, index) => {
+    sections.push("## Bound Issue Log");
+    sections.push(`Session ${boundIssueLog.session_id}, seq (${boundIssueLog.from_seq}, ${boundIssueLog.to_seq}].`);
+    sections.push("Directory:");
+    for (const entry of boundIssueLog.entries) sections.push(`- ${entry.seq} ${entry.kind} ${entry.id}`);
+    for (const entry of boundIssueLog.entries) {
       sections.push("");
-      sections.push(`Update ${index + 1}:`);
-      sections.push(update);
-    });
+      sections.push(`### seq ${entry.seq} | ${entry.kind} | ${entry.author_type}`);
+      const finalReply = entry.metadata && typeof entry.metadata.final_reply_md === "string"
+        ? entry.metadata.final_reply_md : "";
+      sections.push(entry.body_md || finalReply || "(no text)");
+    }
+    if (boundIssueLog.has_more) sections.push(`More entries remain. Use remi session log window ${boundIssueLog.session_id} --since-seq ${boundIssueLog.entries.at(-1)?.seq ?? boundIssueLog.from_seq} --to-seq ${boundIssueLog.to_seq}, then remi session log get for full entries.`);
   }
 
   if (boundIssue) {
@@ -409,7 +406,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("## Bound Issue");
     sections.push(`This Feishu topic is bound to ${boundIssue.key} — ${boundIssue.title} (status: ${boundIssue.status}).`);
     sections.push("");
-    sections.push("Bound Issue Updates are an incremental digest: each batch keeps only the latest body, is capped at 12 entries, and is never re-sent. Do not treat these updates as the full picture.");
+    sections.push("The Bound Issue Log covers the interval shown above. Write the summary from the log; read further entries when the directory says more remain.");
     sections.push("");
     sections.push("Before answering progress questions, read the current Issue and its recent comments:");
     sections.push(`  remi issue get ${boundIssue.id} --output json`);

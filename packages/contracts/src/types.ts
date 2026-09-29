@@ -6,6 +6,7 @@
 
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
+import type { ConversationLogEntry } from "./conversation-log.js";
 
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
@@ -1531,6 +1532,8 @@ export interface MultiremiTask {
   auth_token?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  boundIssueLog?: MultiremiBoundIssueLog;
+  bound_issue_log?: MultiremiBoundIssueLog;
   boundIssueUpdates?: string[];
   bound_issue_updates?: string[];
   boundIssueUpdatesOmittedCount?: number;
@@ -1658,6 +1661,14 @@ export interface MultiremiTask {
   completedAt: string | null;
   failedAt: string | null;
   cancelledAt: string | null;
+}
+
+export interface MultiremiBoundIssueLog {
+  session_id: string;
+  from_seq: number;
+  to_seq: number;
+  entries: Pick<ConversationLogEntry, "seq" | "id" | "kind" | "author_type" | "task_id" | "body_md" | "metadata">[];
+  has_more: boolean;
 }
 
 export type MultiremiTaskQueueBlockerReason =

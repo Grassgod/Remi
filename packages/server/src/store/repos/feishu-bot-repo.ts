@@ -46,6 +46,7 @@ import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/co
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
   buildIssueDecisionCard,
@@ -2416,6 +2417,7 @@ export class FeishuBotRepo {
   prepareIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: EnvelopeDelivery[];
     /** Caller-owned collector for Issue transitions these fresh rounds produce. */
     childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector;
     /** Caller-owned queue for the realtime pushes these rounds would emit. */
@@ -2460,37 +2462,28 @@ export class FeishuBotRepo {
       if (wakeTask && (wakeTask.issueId !== input.issue.id
         || wakeTask.workspaceId !== input.issue.workspaceId
         || wakeTask.agentId !== binding.agent_id)) wakeTask = null;
-      let deliveryMode: "inbound" | "proactive";
-      if (wakeTask) {
-        const proactive = this.ctx.db.query(
-          `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
-           WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
-        ).get(wakeTask.id) as Row | null;
-        deliveryMode = proactive ? "proactive" : "inbound";
-        const pending = wakeTask.status === "queued"
-          ? { messages: [], omittedCount: 0 }
-          : this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, wakeTask.id);
-        this.ctx.tasks().createTaskSteerMessageWithinTransaction({
-          taskId: wakeTask.id,
-          kind: "steer",
-          content: roundPushPrompt(input.issue, pending.messages.map((message) => message.body), pending.omittedCount),
-          authorType: "system",
-          authorId: null,
-        });
-      } else {
-        deliveryMode = "proactive";
-        wakeTask = this.ctx.tasks().createTaskWithinTransaction({
-          agentId: String(binding.agent_id),
-          chatSessionId,
-          issueId: input.issue.id,
-          workspaceId: input.issue.workspaceId,
-          holdsWorkspace: false,
-          prompt: roundPushPrompt(input.issue),
+      const delivered = input.envelopeDeliveries?.find((item) => item.recipient.chatSessionId === chatSessionId && item.task);
+      const priorTask = wakeTask;
+      const turn = delivered ?? this.ctx.tasks().ensurePendingTurnWithinTransaction({
+        lane: { kind: "chat", chatSessionId, agentId: String(binding.agent_id), issueId: input.issue.id },
+        wake: { reason: "relay", seq: null },
+        steerBody: roundPushPrompt(input.issue),
+        create: () => this.ctx.tasks().createTaskWithinWorkspaceLock({
+          agentId: String(binding.agent_id), chatSessionId, issueId: input.issue.id,
+          workspaceId: input.issue.workspaceId, holdsWorkspace: false,
+          prompt: roundPushPrompt(input.issue), wakeSource: "relay",
           requestingUserName: "Multiremi",
-          requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",
-        }, childStatusChanges, deferredEvents);
-        enqueued.push(wakeTask);
-      }
+          requestingUserProfileDescription: "System-triggered summary for an Issue work round.",
+        }, childStatusChanges, deferredEvents),
+      });
+      wakeTask = turn.task;
+      if (!wakeTask) continue;
+      if (!delivered && turn.action === "created") enqueued.push(wakeTask);
+      const proactive = priorTask && this.ctx.db.query(
+        `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
+         WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
+      ).get(priorTask.id) as Row | null;
+      const deliveryMode: "inbound" | "proactive" = turn.action === "created" || proactive ? "proactive" : "inbound";
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_round_pushes (
@@ -3991,8 +3984,8 @@ function roundPushPrompt(
   omittedCount = 0,
 ): string {
   const lines = [
-    `The responsible agent completed a work round for ${issue.key} - ${issue.title}.`,
-    "Report the current result to the users in this Feishu topic. Use the Bound Issue Updates context below when present.",
+    `${issue.key} - ${issue.title} has a new work-round result in its Issue log.`,
+    "Read the Bound Issue Log and report the current result to the users in this Feishu topic.",
   ];
   if (updates.length) {
     lines.push("", "Updates delivered while the current Chat task was already active:", ...updates);
