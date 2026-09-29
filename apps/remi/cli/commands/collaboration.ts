@@ -407,6 +407,10 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.workspace", ["issue", "workspace"], "Show issue worktree state", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/workspace`);
     }),
+    nativeSpec("issue.workspace.abandon", ["issue", "workspace", "abandon"], "Abandon an Issue workspace whose Runtime is gone; retain local files", "destructive", HUMAN_TASK, [refPositional("issue")], [YES_OPTION], async (invocation) => {
+      requireConfirmation(invocation);
+      await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/workspace/abandon`, {});
+    }),
     nativeSpec("issue.decision.request", ["issue", "decision", "request"], "Record a non-blocking decision request", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "kind", type: "string", valueName: "kind", description: "permission|merge|production_change|question|criteria|other" },
       { name: "title", type: "string", valueName: "title", description: "Decision title" },

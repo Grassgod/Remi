@@ -1220,6 +1220,7 @@ export class TasksRepo {
       const reason = placementWaitReason({
         constraints: probe.constraints,
         workspaceRuntimeMissing: probe.workspaceRuntimeMissing,
+        issueId: row.issue_id,
         frozenRetry: probe.frozenRetry,
         agentBound: probe.agentBound,
         codeSnapshot: probe.codeSnapshot,

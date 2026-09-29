@@ -11,6 +11,11 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export type AbandonIssueWorkspaceResult =
+  | { status: "not_found" }
+  | { status: "runtime_attached"; runtimeId: string }
+  | { status: "abandoned"; workspace: MultiremiIssueWorkspace; issueWorkspacesAbandoned: number };
+
 export class IssueWorkspacesRepo {
   constructor(private readonly ctx: StoreContext) {}
 
@@ -27,6 +32,32 @@ export class IssueWorkspacesRepo {
        WHERE iw.issue_id = ?`,
     ).get(issueId) as Row | null;
     return row ? toIssueWorkspace(row) : null;
+  }
+
+  abandon(issueId: string, workspaceId: string): AbandonIssueWorkspaceResult {
+    return this.ctx.db.transaction((): AbandonIssueWorkspaceResult => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.ctx.lockIssueArchiveLifecycle(issueId);
+      const issue = this.ctx.db.query(
+        "SELECT workspace_id FROM multiremi_issues WHERE id = ?",
+      ).get(issueId) as Row | null;
+      const current = this.get(issueId);
+      if (!issue || String(issue.workspace_id ?? "local") !== workspaceId || !current || current.workspaceId !== workspaceId) {
+        return { status: "not_found" };
+      }
+      if (current.runtimeId !== null) return { status: "runtime_attached", runtimeId: current.runtimeId };
+      if (current.status === "cleaned") {
+        return { status: "abandoned", workspace: current, issueWorkspacesAbandoned: 0 };
+      }
+      const now = nowIso();
+      const abandoned = this.ctx.db.run(
+        `UPDATE multiremi_issue_workspaces
+         SET status = 'cleaned', cleaned_at = ?, updated_at = ?
+         WHERE issue_id = ? AND workspace_id = ? AND runtime_id IS NULL AND status != 'cleaned'`,
+        [now, now, issueId, workspaceId],
+      ).changes;
+      return { status: "abandoned", workspace: this.get(issueId)!, issueWorkspacesAbandoned: abandoned };
+    })();
   }
 
   report(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {

@@ -225,6 +225,13 @@ managed by `remi workspace`. Use `--runtime-workspace <id>` on `chat create` or
 `issue create|update` to select it. See the [runtime workspace contract](dev/runtime-workspaces.md)
 for local context, directory lifetime, and the immutable execution binding.
 
+`remi runtime delete <runtime> --yes` and `runtime archive-agents-and-delete`
+block on uncleaned Issue workspaces. Add `--abandon-issue-workspaces` only after
+reviewing the affected Issue list. For historical records with no Runtime,
+`remi issue workspace abandon <issue> --yes` releases their task affinity and
+retains local files. Records still attached to a Runtime must use deletion or
+retirement instead. `remi issue workspace <issue>` remains the read command.
+
 `remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
 and Agent dependencies, verifying executables and ACP initialization without
 switching a running daemon. Without `--provider` it prepares the configured or
