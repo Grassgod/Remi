@@ -65,6 +65,7 @@ export interface FeishuChannelHandle {
   /** MUL-407: server-built decision cards, sent and rewritten in place. */
   sendProactiveCard: FeishuConnector["sendProactiveCard"];
   updateProactiveCard: FeishuConnector["updateProactiveCard"];
+  sendProactiveReceipt?: FeishuConnector["sendProactiveReceipt"];
 }
 
 export async function waitForFeishuConnectorStart(
@@ -124,5 +125,6 @@ export async function bootFeishuChannel(
     sendProactiveAttachment: input => connector.sendProactiveAttachment(input),
     sendProactiveCard: input => connector.sendProactiveCard(input),
     updateProactiveCard: (messageId, card) => connector.updateProactiveCard(messageId, card),
+    sendProactiveReceipt: (...args) => connector.sendProactiveReceipt(...args),
   };
 }

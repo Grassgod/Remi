@@ -56,6 +56,7 @@ export interface HandleStreamOpts {
 }
 
 export interface HandleTaskStreamOpts {
+  lane?: "cot";
   receiptMessageIds?: string[];
   replyToMessageId?: string;
   mentionOpenId?: string;
@@ -263,6 +264,7 @@ export class FeishuChannel {
     if (!opts.durable?.messageId || opts.durable.presentation) {
       const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
         appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
+        lane: opts.lane,
         mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
         receiptMessageIds: opts.receiptMessageIds,
         displayName: opts.displayName ?? meta.displayName,

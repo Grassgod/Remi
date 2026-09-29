@@ -280,13 +280,26 @@ export interface SharedIssueBundle {
   timeline: TimelineEntry[];
   sessions: Array<IssueSession & {
     events: SessionEvent[];
-    tasks: Array<AgentTask & { messages?: Array<Record<string, unknown>> }>;
+    tasks: AgentTask[];
   }>;
   session_results: SessionResult[];
-  tasks: Array<AgentTask & { messages?: Array<Record<string, unknown>> }>;
+  tasks: AgentTask[];
   issue_workspace: IssueWorkspace | null;
   usage: IssueUsageSummary;
   actors: SharedIssueActor[];
+}
+
+export interface SharedTaskTracePage {
+  events: Array<Record<string, unknown> & { seq: number; type: string; ts: string; truncated?: true; original_bytes?: number; truncated_fields?: string[] }>;
+  next_after_seq: number;
+  head: number;
+  eof: boolean;
+  closed: boolean;
+  source: "daemon" | "archive" | null;
+  state: "ok" | "unreachable" | "not_found" | "backfilling" | "lost";
+  runtime_name?: string | null;
+  reason?: string;
+  retryable?: boolean;
 }
 
 // Pagination

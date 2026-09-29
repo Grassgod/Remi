@@ -199,6 +199,13 @@ describe("api route golden snapshot", () => {
     const getRoutes = golden.routes.filter((route) => route.startsWith("GET "));
     const covered = new Set(golden.coveredRoutes);
     for (const route of getRoutes) expect(covered.has(route)).toBe(true);
-    expect(golden.meta.statusOnlyRoutes).toEqual(["GET /api/daemon/ws", "GET /api/realtime/ws", "GET /ws"]);
+    // MUL-438 adds the browser trace socket: it is a WebSocket upgrade route like
+    // the other three, so it is recorded status-only rather than driven.
+    expect(golden.meta.statusOnlyRoutes).toEqual([
+      "GET /api/daemon/ws",
+      "GET /api/realtime/ws",
+      "GET /api/trace/ws",
+      "GET /ws",
+    ]);
   });
 });
