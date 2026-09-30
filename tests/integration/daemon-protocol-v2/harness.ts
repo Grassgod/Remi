@@ -115,6 +115,13 @@ export class DaemonProtocolHarness {
       h.peerChannel = options.peerChannel ?? null;
       h.peerSecret = options.peerSecret ?? "";
       h.onRoundCard = options.onRoundCard ?? null;
+      if (h.onRoundCard) {
+        const recordCard = h.store.recordTurnCardCompletionFieldsWithinTransaction.bind(h.store);
+        h.store.recordTurnCardCompletionFieldsWithinTransaction = (taskId, fields) => {
+          h.onRoundCard?.(taskId);
+          return recordCard(taskId, fields);
+        };
+      }
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
       h.createDaemons = () => {
@@ -171,9 +178,6 @@ export class DaemonProtocolHarness {
       peerChannel: this.peerChannel, peerSecret: this.peerSecret,
       onDaemonProtocol: layer => {
         this.layer = layer;
-        if (this.onRoundCard) {
-          registerDaemonReportHandlers(layer, this.store, undefined, taskId => this.onRoundCard?.(taskId));
-        }
         // Observe persisted business fields after successful handlers, not ingress or ACK receipt.
         const handlers = (layer as any).eventHandlers as Map<string, DaemonProtocolRpcHandler>;
         for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {

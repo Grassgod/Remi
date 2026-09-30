@@ -4390,16 +4390,12 @@ runMigrations(this.db);
    * write path. `null` — a daemon that sent no fields, or malformed ones —
    * writes nothing.
    *
-   * The frame seam runs once, after the terminal transition commits, so this
-   * owns its own transaction under the same workspace lock as that path, and
-   * is idempotent per task: a card that already carries the values keeps its
-   * revision. No card (a chat turn whose reply did not land) is skipped.
+   * The terminal task transaction owns this write. A card that already carries
+   * the values keeps its revision; a missing card is skipped.
    * Returns whether the card changed.
    */
-  recordTurnCardCompletionFields(taskId: string, fields: DaemonTaskCompletionFields | null): boolean {
+  recordTurnCardCompletionFieldsWithinTransaction(taskId: string, fields: DaemonTaskCompletionFields | null): boolean {
     if (!fields) return false;
-    const task = this.getTask(taskId);
-    if (!task) return false;
     const summary: TraceBackfillTurnSummary = {
       taskId,
       eventCount: fields.trace.event_count,
@@ -4407,10 +4403,7 @@ runMigrations(this.db);
       typeHistogram: fields.trace.type_histogram.map(({ type, tool, count }) => ({ type, tool, count })),
       model: fields.model ? { provider: fields.model.provider, model: fields.model.model } : null,
     };
-    return this.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
-      return this.traceBackfillProgress.fillTurnCards([summary]).updated === 1;
-    })();
+    return this.traceBackfillProgress.fillTurnCards([summary]).updated === 1;
   }
 
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
@@ -5678,6 +5671,7 @@ runMigrations(this.db);
   completeTask(taskId: string, input: {
     output: string;
     traceEventCount?: number;
+    completionFields?: DaemonTaskCompletionFields | null;
     branchName?: string | null;
     sessionId?: string | null;
     workDir?: string | null;
@@ -5688,6 +5682,7 @@ runMigrations(this.db);
   failTask(taskId: string, input: {
     error: string;
     traceEventCount?: number;
+    completionFields?: DaemonTaskCompletionFields | null;
     sessionId?: string | null;
     workDir?: string | null;
     failureReason?: string | null;

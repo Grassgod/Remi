@@ -111,8 +111,7 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
 export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
-  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void,
-  onRoundCard: (taskId: string, fields: DaemonTaskCompletionFields | null) => void = () => {}): void {
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -122,7 +121,6 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const task = authorizeReportTask(store, session, taskId, frame.rt);
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
-        let terminalTransitioned = false;
         switch (frame.type) {
           case "task.start":
             if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
@@ -184,27 +182,21 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             if (task.status === "running") {
               try { store.completeTask(taskId, { output: string(p.output), branchName: nullable(p.pr_url),
                 sessionId: nullable(p.session_id), workDir: nullable(p.work_dir),
-                traceEventCount: completionTraceEventCount(p.trace, taskId) }); }
+                traceEventCount: completionTraceEventCount(p.trace, taskId), completionFields: fields }); }
               catch (error) {
                 if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
                 throw error;
               }
-              terminalTransitioned = true;
             }
             break;
           case "task.fail":
             if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
               store.failTask(taskId, {
                 error: string(p.error) || "Task failed", sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason),
-                traceEventCount: completionTraceEventCount(p.trace, taskId) });
-              terminalTransitioned = true;
+                traceEventCount: completionTraceEventCount(p.trace, taskId), completionFields: fields });
             }
             break;
           default: reject();
-        }
-        if (terminalTransitioned) {
-          // MUL-402: 写轮次卡。只在首次终态转换时调用；接入写卡时须与终态转换同事务，或自行按 task 幂等。
-          onRoundCard(taskId, fields);
         }
         if (isCompletion && fields?.trace) {
           onTraceClosed?.(taskId, fields.trace.head, task.runtimeId!);

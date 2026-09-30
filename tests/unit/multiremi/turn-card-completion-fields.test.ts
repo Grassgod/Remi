@@ -1,18 +1,18 @@
 /**
  * MUL-432 segment 2 item 5: the live `turn` card takes the round-card fields
  * of a daemon's `task.complete` / `task.fail` frame through A's seam, wired in
- * the real server. Only `trace.event_count`, `tool_call_count`,
+ * the real server's terminal transaction. Only `trace.event_count`, `tool_call_count`,
  * `type_histogram` and `model` are written (ruling (z)); the frame's
  * `final_reply_md` is not, so the chat card keeps its assistant message and the
  * Issue card its `final_entry_id`. The card stays the one persisted at reply
  * completion (B1 deviation B). A daemon that sends no fields writes nothing and
- * fails nothing. On SQLite and Postgres.
+ * fails nothing. A card write failure rolls back the terminal transition and
+ * the daemon can replay the report. On SQLite and Postgres.
  */
 import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { DAEMON_MIN_CLI_VERSION, type DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { log } from "@multiremi/api/helpers/common.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -130,7 +130,7 @@ function expectNoFrameFields(entry: ConversationLogEntry) {
 /**
  * Record the seam's card writes: the patches the conversation-log write hook
  * sees for `taskId`'s card, whether each ran inside a transaction, and the
- * deepest `transaction()` nesting of each `recordTurnCardCompletionFields` call.
+ * `transaction()` depth when each card write starts.
  */
 function watchSeam(world: World) {
   const patches: Array<{ patch: ConversationLogPatch; inTransaction: boolean }> = [];
@@ -142,12 +142,10 @@ function watchSeam(world: World) {
   const target = world.db as unknown as { transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown };
   const original = target.transaction;
   let depth = 0;
-  let max = 0;
   target.transaction = (fn) => {
     const run = original.call(target, fn);
     return (...args: unknown[]) => {
       depth += 1;
-      max = Math.max(max, depth);
       try {
         return run(...args);
       } finally {
@@ -156,11 +154,10 @@ function watchSeam(world: World) {
     };
   };
   const calls: Array<{ taskId: string; fields: unknown; changed: boolean; depth: number }> = [];
-  const record = world.store.recordTurnCardCompletionFields.bind(world.store);
-  const spy = spyOn(world.store, "recordTurnCardCompletionFields").mockImplementation((taskId, fields) => {
-    max = 0;
+  const record = world.store.recordTurnCardCompletionFieldsWithinTransaction.bind(world.store);
+  const spy = spyOn(world.store, "recordTurnCardCompletionFieldsWithinTransaction").mockImplementation((taskId, fields) => {
     const changed = record(taskId, fields);
-    calls.push({ taskId, fields, changed, depth: max });
+    calls.push({ taskId, fields, changed, depth });
     return changed;
   });
   return {
@@ -197,21 +194,18 @@ for (const backend of backends) {
         const reply = world.store.getConversationLogEntryById(String(after.metadata.final_entry_id));
         expect(reply).toMatchObject({ task_id: task.id, body_md: "issue answer" });
 
-        // One seam call, at transaction depth 1, whose write the hook sees
-        // inside that transaction as the card's last patch.
+        // One card write in the terminal transaction, before the reply comment.
         expect(seam.calls).toEqual([{ taskId: task.id, fields: FIELDS, changed: true, depth: 1 }]);
-        const last = seam.patches.filter(({ patch }) => patch.target_seq === after.seq).at(-1)!;
-        expect(last.inTransaction).toBe(true);
-        expect(last.patch.revision).toBe(after.revision);
-        expect(last.patch.fields.metadata).toMatchObject(CARD_FIELDS);
+        const fieldPatch = seam.patches.find(({ patch }) => patch.target_seq === after.seq
+          && patch.fields.metadata?.event_count === CARD_FIELDS.event_count)!;
+        expect(fieldPatch.inTransaction).toBe(true);
+        expect(fieldPatch.patch.fields.metadata).toMatchObject(CARD_FIELDS);
 
         // A replayed frame is absorbed by the terminal state and rewrites nothing.
         const replay = await serverReport(world.store, world.runtimeId, "task.complete",
           { task_id: task.id, output: "issue answer", ...FIELDS });
         expect(replay.ok).toBe(true);
         expect(card(world, task.id).revision).toBe(after.revision);
-        // The write itself is idempotent per task.
-        expect(world.store.recordTurnCardCompletionFields(task.id, FIELDS)).toBe(false);
         expect(card(world, task.id).revision).toBe(after.revision);
       });
     }, TIMEOUT);
@@ -256,13 +250,26 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
+    it("completes a one-shot task without a turn card", async () => {
+      await withWorld(backend, async (world) => {
+        const task = world.store.createTask({ agentId: world.agentId, workspaceId: "local", prompt: "One-shot" });
+        expect(world.store.claimTask(world.runtimeId)?.id).toBe(task.id);
+        world.store.startTask(task.id);
+        expect(world.store.findTurnEntry(task.id)).toBeNull();
+        const reply = await serverReport(world.store, world.runtimeId, "task.complete",
+          { task_id: task.id, output: "done", ...FIELDS });
+        expect(reply).toEqual({ ok: true });
+        expect(world.store.getTask(task.id)?.status).toBe("completed");
+        expect(world.store.findTurnEntry(task.id)).toBeNull();
+      });
+    }, TIMEOUT);
+
     it("an old daemon without the fields writes nothing, reports no error and changes nothing else", async () => {
       await withWorld(backend, async (world) => {
         // The twin runs on its own runtime and Agent: this fixture's runtime
         // claims one task.
         const twinRuntime = world.store.registerRuntime({ name: "Twin daemon", provider: "claude", workspaceId: "local" });
         const twin = world.store.createAgent({ name: "Twin agent", provider: "claude", workspaceId: "local", runtimeId: twinRuntime.id });
-        const warn = spyOn(log, "warn");
         const seam = watchSeam(world);
         let old: ConversationLogEntry;
         let current: ConversationLogEntry;
@@ -279,7 +286,7 @@ for (const backend of backends) {
           expect(old.metadata.status).toBe("completed");
           expect(world.store.getConversationLogEntryById(String(old.metadata.final_entry_id)))
             .toMatchObject({ body_md: "old answer" });
-          expect(seam.calls).toEqual([{ taskId: oldTask.id, fields: null, changed: false, depth: 0 }]);
+          expect(seam.calls).toEqual([{ taskId: oldTask.id, fields: null, changed: false, depth: 1 }]);
 
           // The same path with the fields differs by exactly the seam's one write.
           await serverReport(world.store, twinRuntime.id, "task.complete",
@@ -287,33 +294,34 @@ for (const backend of backends) {
           current = card(world, newTask.id);
         } finally {
           seam.restore();
-          warn.mockRestore();
         }
         expect(current.revision).toBe(old.revision + 1);
-        expect(warn.mock.calls.filter(([message]) => String(message).startsWith("Round-card write"))).toEqual([]);
       });
     }, TIMEOUT);
 
-    it("a failed card write is logged and never fails the terminal report", async () => {
+    it.each(["task.complete", "task.fail"])("a failed %s card write rolls back and replays with all four fields", async (type) => {
       await withWorld(backend, async (world) => {
         const task = runIssueTask(world, "Card write failure");
-        const warn = spyOn(log, "warn");
-        const write = spyOn(world.store, "recordTurnCardCompletionFields").mockImplementation(() => {
+        const before = card(world, task.id);
+        const write = spyOn(world.store, "recordTurnCardCompletionFieldsWithinTransaction").mockImplementation(() => {
           throw new Error("injected card write failure");
         });
         try {
-          const reply = await serverReport(world.store, world.runtimeId, "task.complete",
-            { task_id: task.id, output: "answer", ...FIELDS });
-          expect(reply).toEqual({ ok: true });
+          const reply = await serverReport(world.store, world.runtimeId, type,
+            { task_id: task.id, output: "answer", error: "failed", ...FIELDS });
+          expect(reply).toMatchObject({ ok: false, code: "server_error", retryable: true });
           expect(write).toHaveBeenCalledTimes(1);
-          expect(warn).toHaveBeenCalledWith("Round-card write from the terminal report failed",
-            { taskId: task.id, error: "injected card write failure" });
         } finally {
           write.mockRestore();
-          warn.mockRestore();
         }
-        expect(world.store.getTask(task.id)?.status).toBe("completed");
+        expect(world.store.getTask(task.id)?.status).toBe("running");
+        expect(card(world, task.id).revision).toBe(before.revision);
         expectNoFrameFields(card(world, task.id));
+        const replay = await serverReport(world.store, world.runtimeId, type,
+          { task_id: task.id, output: "answer", error: "failed", ...FIELDS });
+        expect(replay).toEqual({ ok: true });
+        expect(world.store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+        expect(card(world, task.id).metadata).toMatchObject(CARD_FIELDS);
       });
     }, TIMEOUT);
   });

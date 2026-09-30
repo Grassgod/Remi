@@ -662,6 +662,10 @@ export interface ChatSurface {
 }
 
 export interface ConversationLogSurface {
+  recordTurnCardCompletionFieldsWithinTransaction(
+    taskId: string,
+    fields: import("@multiremi/contracts/daemon-protocol.js").DaemonTaskCompletionFields | null,
+  ): boolean;
   /** Allocates the next seq for a session; the caller owns the transaction. */
   nextSeqWithinTransaction(sessionId: string): number;
   /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */

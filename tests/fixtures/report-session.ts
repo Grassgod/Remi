@@ -52,7 +52,7 @@ export async function reportFrame(
   options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
     headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void;
     capabilities?: DaemonRuntimeCapabilities;
-    onRoundCard?: Parameters<typeof registerDaemonReportHandlers>[3];
+    onRoundCard?: (taskId: string, fields: import("@multiremi/contracts/daemon-protocol.js").DaemonTaskCompletionFields | null) => void;
     onTraceClosed?: Parameters<typeof registerDaemonReportHandlers>[2] } = {},
 ): Promise<Record<string, any>> {
   const layer = new DaemonProtocolLayer({ store });
@@ -69,11 +69,16 @@ export async function reportFrame(
     ?? runtimes.find(runtime => !token || (runtime.daemonId === token.daemonId && runtime.workspaceId === token.workspaceId))?.id;
   const runtime = runtimeId ? store.getRuntimeLite(runtimeId) : null;
   const daemonId = token?.daemonId ?? runtime?.daemonId ?? "fixture-reports";
+  const recordCard = store.recordTurnCardCompletionFieldsWithinTransaction;
+  if (options.onRoundCard) store.recordTurnCardCompletionFieldsWithinTransaction = (taskId, fields) => {
+    options.onRoundCard?.(taskId, fields);
+    return recordCard.call(store, taskId, fields);
+  };
   const trace = registerDaemonTraceHandlers(layer, store, reportTraceSink(store));
   registerDaemonReportHandlers(layer, store, (taskId, head, rt) => {
     options.onTraceClosed?.(taskId, head, rt);
     trace.close(taskId, head, rt);
-  }, options.onRoundCard);
+  });
   registerDaemonMaintenanceHandlers(layer, store, options.archives ?? new SessionArchiveService(store));
   const frames: Array<Record<string, any>> = [];
   let closed: number | undefined;
@@ -102,6 +107,7 @@ export async function reportFrame(
     if (!reply) throw new Error(`No res for ${type}: ${JSON.stringify(frames)}`);
     return reply.p;
   } finally {
+    if (options.onRoundCard) store.recordTurnCardCompletionFieldsWithinTransaction = recordCard;
     session.handleSocketClose();
     layer.stop();
   }
