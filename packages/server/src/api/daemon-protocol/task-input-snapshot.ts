@@ -10,9 +10,7 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
   const entities: DaemonDownlinkEntity[] = [];
   for (const id of ids) {
     const task = store.getTaskIdentity(id);
-    if (!task || task.runtimeId !== runtimeId || task.workspaceId !== host?.workspaceId) {
-      forget(id); continue;
-    }
+    if (!task || task.runtimeId !== runtimeId) { forget(id); continue; }
     if (["completed", "failed", "cancelled"].includes(task.status)) {
       entities.push({ key: `cancel:${id}:${task.status}`, type: "task.cancelled",
         payload: { task_id: id, status: task.status }, claimed: () => forget(id), discard: () => forget(id) });
