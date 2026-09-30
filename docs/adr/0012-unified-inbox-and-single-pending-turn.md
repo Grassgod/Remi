@@ -65,9 +65,20 @@ notification wakes to this decision.
    Standalone comments and caller-owned comments (including Organizer audit
    comments) write mention envelopes and non-split assignee wakes in the
    comment's frame. A failed wake rolls back the comment and its queued events.
-   The split assignee auto-response still opens its own transaction after COMMIT;
-   this accepted gap remains a follow-up. Member notifications and realtime
-   pushes also remain after COMMIT.
+   Classify comment dispatch by who can receive an error and retry, rather than
+   by caller name. HTTP/CLI clients, Organizer action callers, delegation terminal
+   reports retried by the daemon outbox, and Feishu retries deduped by
+   `external_message_id` have a retry owner and use D1: dispatch and comment
+   writes share one transaction and fail atomically. Platform-written replies
+   under a must-not-fail contract without a retry owner (currently only the two
+   call sites of `postAgentReplyComment`) use 402 F1: the reply and `final_entry_id`
+   commit together, but mention dispatch and member notifications run after
+   COMMIT. A dispatch SQL failure keeps the reply and completes the task with
+   one warning. If automatic replies move into the `task.complete` report with
+   outbox retries, switch them back to D1. The split assignee auto-response also
+   opens its own transaction after COMMIT. A process exit between the two commits
+   can lose either wake; both accepted gaps remain follow-ups. Member
+   notifications and realtime pushes also remain after COMMIT.
 5. **`wake` has three meanings.** `now`: ensure a pending turn; if the turn ends
    with such entries still unread, ring again (re-ring). `next_turn`: no turn is
    created while one is queued or running; the entry rides along and never

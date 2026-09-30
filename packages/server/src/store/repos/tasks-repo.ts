@@ -6410,14 +6410,16 @@ ${placementAfter.sql}
         parentId: parent && parent.issueId === task.issueId ? parent.id : null,
         body,
       };
-      // Ruling (ab) item 2: the reply (comment, Session event, log row) and the
-      // turn card's `final_entry_id` and any mention inbox wake commit together.
-      // The reply's pushes and member notifications follow that COMMIT.
+      // 402 F1: the automatic reply (comment, Session event, log row) and the
+      // turn card's `final_entry_id` commit together. Mention dispatch, pushes
+      // and member notifications follow COMMIT: a dispatch SQL failure must
+      // keep the reply and complete the task, since no client can retry it.
       const deferredEvents = createCommitEventQueue();
       const created = this.ctx.db.transaction(() => {
         const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
           withinTransaction: true,
           deferredEvents,
+          deferDispatch: true,
         });
         this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
         return created;

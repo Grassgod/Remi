@@ -4624,8 +4624,10 @@ export class IssuesRepo {
   ): MultiremiIssueComment {
     // The comment, its Session event and its log row commit together (B1).
     // Mention envelopes and pending turns share the comment's transaction (D1),
-    // including standalone comments. Only the split assignee auto-response and
-    // member notification side effects run after COMMIT.
+    // including standalone comments. Automatic replies defer mention dispatch
+    // until after COMMIT (402 F1), keeping the reply on dispatch failure; the
+    // split assignee auto-response and member notifications also follow COMMIT.
+    // The automatic-reply and split-assignee commit gaps remain follow-ups.
     // Realtime pushes always follow the owning COMMIT.
     //
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is

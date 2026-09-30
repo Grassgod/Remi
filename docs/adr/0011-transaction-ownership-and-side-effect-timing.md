@@ -84,6 +84,19 @@ transaction, so what is left reaching the `catch` is a real SQL error — a brok
 schema — which should fail the write.
 
 Inbox envelopes and pending turns are part of the mutation itself, not §3 side effects.
+Comment dispatch transaction ownership is classified by who can receive an error
+and retry, rather than by caller name. Callers with a retry owner — HTTP/CLI
+clients, Organizer action callers, delegation terminal reports retried by the
+daemon outbox, and Feishu retries deduped by `external_message_id` — use D1:
+dispatch and comment writes share one transaction and fail atomically.
+When the platform writes for an agent under a must-not-fail contract with no
+retry owner (currently only the two call sites of `postAgentReplyComment`),
+402 F1 applies: the reply and its turn card's `final_entry_id` commit together,
+while mention dispatch and member notifications run after COMMIT. A dispatch SQL
+failure keeps the reply, completes the task and logs one warning. If automatic
+replies move into the `task.complete` report with outbox retries, switch them
+back to D1. Like the split assignee auto-response, a process exit between the
+two commits can lose that wake; both gaps remain follow-ups.
 
 ### 4. A swallowed statement failure must surface before COMMIT
 

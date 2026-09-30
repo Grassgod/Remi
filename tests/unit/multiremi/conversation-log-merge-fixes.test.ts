@@ -374,10 +374,10 @@ describe("MUL-427 merge rulings", () => {
         expect(store.getConversationLogHead(session.id)?.headSeq).toBe(events.length);
       });
     }, 30_000);
-    // Ruling (ab) item 2: `postAgentReplyComment` owns one transaction for the
+    // 402 F1: `postAgentReplyComment` owns one transaction for the
     // reply (comment, Session event, log row) and its turn card's
-    // `final_entry_id` and inbox wake; pushes and notifications follow COMMIT.
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply commits its inbox wake atomically and notifies only after COMMIT`, async () => {
+    // `final_entry_id`; mention dispatch, pushes and notifications follow COMMIT.
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply pushes and dispatches only after its own COMMIT`, async () => {
       await withStore(backend, (store, db) => {
         const runtime = store.registerRuntime({ id: "rt_reply_after_commit", name: "Reply runtime", provider: "codex", workspaceId: "local" });
         const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
@@ -409,7 +409,7 @@ describe("MUL-427 merge rulings", () => {
           expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
             .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
           expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
-          expect(dispatchFrames).toEqual([true]);
+          expect(dispatchFrames).toEqual([false]);
           expect(events.map((event) => event.type)).toContain("comment:created");
           expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
         } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
