@@ -2297,6 +2297,18 @@ export class FeishuBotRepo {
   listSettledHumanRequestCandidates(workspaceId: string, runtimeId: string, daemonId?: string):
     Array<{ requestId: string; taskId: string; request?: MultiremiTaskHumanRequest }> {
     const chatCutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const audienceFilter = daemonId === undefined ? "" : `WHERE
+        bot_daemon_id = ? AND bot_workspace_id = ?
+        AND (task_runtime_id IS NULL OR task_runtime_id <> ?)
+        AND (
+          EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.chat_session_id = task_chat_session_id AND b.agent_id = task_agent_id)
+          OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.issue_id IS NOT NULL AND b.issue_id = task_issue_id)
+        )`;
     const rows = this.ctx.db.query(`
       WITH candidates AS (
       SELECT request.*, task.runtime_id AS task_runtime_id,
@@ -2333,21 +2345,10 @@ export class FeishuBotRepo {
       LIMIT 1024
       )
       SELECT candidates.* FROM candidates
-      WHERE ? IS NULL OR (
-        bot_daemon_id = ? AND bot_workspace_id = ?
-        AND (task_runtime_id IS NULL OR task_runtime_id <> ?)
-        AND (
-          EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
-            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
-              AND b.chat_session_id = task_chat_session_id AND b.agent_id = task_agent_id)
-          OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
-            JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
-            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
-              AND b.issue_id IS NOT NULL AND b.issue_id = task_issue_id)
-        )
-      )
+      ${audienceFilter}
       ORDER BY responded_at DESC, id DESC
-    `).all(workspaceId, runtimeId, chatCutoff, daemonId ?? null, daemonId ?? null, workspaceId, runtimeId) as Row[];
+    `).all(workspaceId, runtimeId, chatCutoff,
+      ...(daemonId === undefined ? [] : [daemonId, workspaceId, runtimeId])) as Row[];
     return rows.map(row => daemonId === undefined
       ? { requestId: String(row.id), taskId: String(row.task_id) }
       : { requestId: String(row.id), taskId: String(row.task_id), request: toTaskHumanRequest(row) });
