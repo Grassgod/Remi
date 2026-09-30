@@ -3416,6 +3416,10 @@ runMigrations(this.db);
     return this.issues.getIssueDecisionAnywhere(decisionId);
   }
 
+  isIssueDecisionRecordedInWorkspace(workspaceId: string, issueId: string, decisionId: string): boolean {
+    return this.issues.isIssueDecisionRecordedInWorkspace(workspaceId, issueId, decisionId);
+  }
+
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
     return this.issues.listIssueDecisions(issueId);
   }

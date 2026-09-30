@@ -865,7 +865,7 @@ export class RuntimesRepo {
       `SELECT iw.issue_id AS id, iw.issue_key AS key,
               COALESCE(i.title, iw.issue_key) AS title, iw.status
        FROM multiremi_issue_workspaces iw
-       LEFT JOIN multiremi_issues i ON i.id = iw.issue_id
+       LEFT JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
        WHERE iw.runtime_id = ? AND iw.status != 'cleaned'
        ORDER BY iw.issue_key, iw.issue_id`,
     ).all(runtimeId) as RuntimeIssueWorkspaceImpact[];

@@ -1,0 +1,719 @@
+# MUL-398 C-1: observe by default, enforce explicitly
+
+This report implements Senior ruling B (`cmt_q2m2lomd48pm`) and the continuation steering. It supersedes the earlier rejection-default validation. PR #318 stays Draft. No production access, configuration change, deployment or browser verification was performed.
+
+## Implementation and merge
+
+- Archive `84101310` preserves HEAD-to-GET lookup and the 15 QA messaging exceptions. The exception set is frozen there: 418 HTTP keys plus one independent background key. Workspace context, source allowlist and MUL-487 human-request card findings are not added.
+- Archived the current 57-column probe work in `a03b2d0a`, then merged main `57f42dec5db6a03fb555ba5a764aa3b5a099c2bb` in `1b1a0392`. The only conflict was the blank line after `MeteredDb`'s constructor in `bench-repository-wikis-a2-scale.ts`; its delegated dialect marker and main's SQLite factory migration both remain. MUL-460's `markSqliteDialect(getDb())` change affects the SQLite branch, not the PostgreSQL policy or parse guard.
+- Subsequently archived the route evidence in `1765ecd4` and merged main `8492617cf743e7300b25d711e969653baf3efcd5` (MUL-467) in `dbb0998f`, without conflicts. The new POST `/api/issues/:id/workspace/abandon` reaches the whole issue and issue-workspace row; runtime deletion guards/cancellation also read runtime/task rows. These are C-2 projection/budget candidates, not exception additions. All bridge calls still share the same policy; neither product guardrail file changed in this main update.
+- Product edits remain in `request-metrics.ts` and `postgres.ts`. No repo projection or pagination algorithm was changed.
+- `MULTIREMI_PG_REPLY_MAX_BYTES`: unset/empty = 8,388,608; 0 disables the configured threshold; invalid values fall back and warn with only the raw value as variable information.
+- `MULTIREMI_PG_REPLY_ENFORCE`: unset/empty/0 = observe; 1 = enforce; invalid = observe and one warning at cached resolution. Production default is off. C-2 needs fresh authorization to change that default.
+- Effective ceiling is 64 MiB when exempt, observing, or threshold=0; otherwise min(threshold, 64 MiB). The bridge and `postgresReplyMaxBytes()` share this calculation, and MUL-462 uses that value. Observe mode therefore retains eight-row pages everywhere. Configuration is cached; each SQL reads context and checks the frozen Set once.
+- `api_large_db_reply` retains one line per >1 MiB reply, without throttling or a new event. Added fields are `limit_bytes`, `exempt`, `enforced`; no SQL, parameters or request values. `api_db_reply_rejected` appears only for actual enforced rejection, before decode/parse. The worker's 64 MiB physical limit remains in all modes.
+- Hermetic preload explicitly uses 8 MiB and ENFORCE=1. Guards assert equal thresholds and the enforced test default. Production observes to preserve current HTTP behavior; tests still expose unbounded reads.
+- HEAD continues to dispatch through GET keys, metrics=0 still creates request context, and the two pagination caller guard remains. Request-started detached async work inherits the route context; timer-started work has background context.
+
+## Reproduction
+
+Use a self-owned loopback PostgreSQL instance. Supply its admin target through the existing `MULTIREMI_TEST_POSTGRES_URL` input; do not print it or persist it. A locked detached worktree supplies main's source/dependencies. Each run creates and drops its own database. Requests use a 20-second timeout and no external service.
+
+```bash
+env -u MULTIREMI_TOKEN bun tests/manual/probe-pg-reply-c1-routes.ts --root <main-worktree> --out reports/performance/MUL-398-c1-b-main-routes.json
+env -u MULTIREMI_TOKEN bun tests/manual/probe-pg-reply-c1-routes.ts --out reports/performance/MUL-398-c1-b-observe-routes.json
+env -u MULTIREMI_TOKEN bun tests/manual/probe-pg-reply-c1-routes.ts --enforce --out reports/performance/MUL-398-c1-b-enforced-routes.json
+env -u MULTIREMI_TOKEN bun tests/manual/probe-pg-reply-c1-matrix.ts --root <main-worktree> --out reports/performance/MUL-398-c1-b-main-matrix.json
+env -u MULTIREMI_TOKEN bun tests/manual/probe-pg-reply-c1-matrix.ts --enforce --out reports/performance/MUL-398-c1-b-enforced-matrix.json
+env -u MULTIREMI_TOKEN bun tests/manual/report-pg-reply-c1-probe.ts
+```
+
+The full fixture populates 57 representative payload columns at >=9 MiB; task transcript is 96 x 256 KiB = 24 MiB, within its writer's row cap. An isolated matrix reruns every GET/HEAD per column to attribute failures to a root instead of hiding later reads behind workspace context. Actual app registration is used, including template messaging routes. This is coverage of payload categories, not a claim that every one of 1,562 schema columns (including identifiers, enums, credentials and internal records) has a reachable long row.
+
+The final three complete-fixture runs compare merged source against main `8492617c`. The supplementary isolated matrix and writer line references were collected at `57f42dec`; MUL-467 changes deletion/abandonment writes, with no change to the 329 GET patterns or the readers exercised by that matrix. On the final merge the runtime/schema audit reports 777 routes, 776 source handlers, 132 schema tables, 724 conservative callers, 309 unreviewed candidates, four unmapped loop registrations and zero stale source routes. It remains a report, not a completeness gate.
+
+`maxReplyBytes` is the largest single bridge reply while a request runs. Successful statements use the same `JSON.stringify({rows,count})` serialization as the worker; rejected statements use the exact logged bridge length. This is neither HTTP body length nor aggregate request `db_bytes`. Raw attachments contain patterns, statuses, byte counts and reasons; no bodies, real IDs, SQL, credentials or connection strings.
+
+## Column risks and recommended C-2 work
+
+- `WorkspacesRepo.getWorkspace/listWorkspaces` selects the context/settings row before many handlers and access guards. Project only required workspace columns for guards/config/list consumers; bound context writes when the full context is required. The initial stop measured 21 affected patterns from context alone.
+- `MessagingRepo.listSources/getSource` selects allowlist/name even for connection/conversation consumers. Project metadata, separately fetch the needed allowlist, and bound each entry plus total serialized bytes. The initial stop measured eight additional patterns; these are not exception additions.
+- MUL-487 `getTaskHumanRequest` reads payload/response whole-row for card delivery. Read only the card fields or give payload/response an explicit writer budget. That POST is statically reviewed, not included in the GET/HEAD probe.
+- For capped writes C and bounded reads L, reason about L x C and JSON escaping; capped writes with unbounded collection reads still need paging/projection. Single 9 MiB rows that bypass an application cap are contract stress tests, not evidence ordinary clients can store that row.
+- The runtime/schema audit remains manual report-only: classification has unresolved conservative candidates. Its green smoke guard does not prove the frozen exception table complete. The enforced matrix is a C-2 seed, not production rejection authorization.
+
+## Background withdrawal list
+
+Nine reader classes remain: scheduled target runs; SCM polling; issue-title scheduling; messaging scheduling; outbound-dispatcher sweep; task-capability monitor; repository-wiki storage jobs; WebSocket message processing (subscribe scope and daemon heartbeat); startup migrations. Queued runs must be bounded before removing background, and production single-reply observations after an instrumented version is deployed must remain below 6 MiB. The 20 x 512 KiB queued sample demonstrates the contract, not production size (Senior reported about 4.6 KiB average run rows). A background reply at or beyond 64 MiB is an existing physical-limit failure and is not repaired here.
+
+Rollback the final PR merge with `git revert -m 1 <merge>`. If enforcement was explicitly enabled, ENFORCE=0 or MAX_BYTES=0 disables configured rejection. Production edits remain the maintainer's decision; C-1 neither changes production settings nor claims a deployment time.
+
+## Verification
+
+- Real PostgreSQL C-1 and request-metrics directional checks: 43 pass / 0 fail, including observe 9 MiB, enforced rejection before parse, metrics off, every GET exception's HEAD, frozen messaging and queued background sample.
+- Mutations were made in an owned locked detached worktree. Removing `!policy.enforced` made the formal real-PG observe case fail: `GET enforce=undefined metrics=true; Expected: 200; Received: 500`. Changing only the unset ENFORCE default to true caused the same failure. Each was restored immediately; the identical case then passed (1 pass / 0 fail, 52 assertions), and worktree `git diff --exit-code` was empty.
+- The first post-merge arch run failed on legacy SQLite construction in `pg-reply-c1.test.ts` and the manual audit. Both were adapted to MUL-460's canonical `openSqliteDatabase`; the guard was preserved without exemptions or relaxation.
+- The first PG full run had 4,571 pass / 2 fail: both MUL-473 hotspot cases exceeded 20 seconds. The isolated file rerun had 9 pass / 1 fail; pure main `57f42dec` under identical settings also had 9 pass / 1 fail (the 200-chat case: main 23.07 s, head 25.63 s). Only the owned disposable PG cluster was then changed to `synchronous_commit=off`, `fsync=off`, `full_page_writes=off`; no application policy or test timeout was relaxed. The identical file passed 10/10 on both main and head (200-chat case: 18.86 s and 19.64 s). These latency results are host-dependent, not a C-1 performance claim.
+- The subsequent full PG run was interrupted after 3,882 pass / 0 fail / 0 unexpected lock-order errors because origin/main advanced to `8492617c` (MUL-467). It is not counted as a completed full-suite validation; final validation follows the new merge.
+- Final merged-source PostgreSQL full suite at `0843cbb143c612f19edc75f3ad79c2f74ad17d5f`: 4,630 pass / 0 fail, 66,541 assertions, 322 files, 2,258.86 seconds; zero unexpected lock-order errors. It uses the hermetic threshold/enforcement/sentinel defaults with no extra overrides. The disposable cluster's reduced durability waits described above do not validate crash durability.
+- Merged-source checks: root and frontend typechecking passed; arch 198 pass / 0 fail, 4,484 assertions across 13 files; dev-context passed; docs tests 13/13 and docs check passed; CLI 680 mapped / 97 exempt / 0 missing across 777 routes; route snapshot matches. Final delivery records the pushed SHA and its CI checks.
+- The first isolated-network SQLite full run had 4,232 pass / 438 skip / 1 fail, 57,174 assertions, 322 files, 858.43 seconds. The failure was `gateway-read-path-no-probe.test.ts`'s explicit probe: its real DNS query outlasted the endpoint's eight-second wait, leaving the old `ready` snapshot instead of the asserted `error`. The identical file was 5 pass / 1 fail on both head (14.02 s) and pure main `8492617c` (12.84 s), under the same isolated network.
+- A private mount namespace now maps only the test's `gateway.invalid` name to loopback. The real gateway transport then rejects its resolved private address promptly. The original file passes all six cases and 52 assertions on main (1.467 s) and head (1.409 s). No host DNS/hosts configuration, test source, assertion or timeout changed; this checks the real transport's failure path, not external HTTP availability.
+- Final SQLite full suite: 4,233 pass / 438 PostgreSQL-specific skips / 0 fail, 57,179 assertions, 322 files, 855.81 seconds; zero unexpected lock-order errors. The skipped PostgreSQL paths are covered by the separate full PostgreSQL run. No threshold, enforcement or sentinel override was added.
+- AST comparison verifies all 418 HTTP exception keys and the independent background key, including their order, are identical to `84101310`.
+
+The SQLite suite runs with an isolated loopback network, the private hosts mount above and no PostgreSQL target, so legacy optional PostgreSQL probes cannot reach another agent's server. These full suites validate source commit `0843cbb143c612f19edc75f3ad79c2f74ad17d5f`; the subsequent delivery commit only updates reports. Page checks are waived by ruling B; no browser session or messaging write-action probe is claimed. All full suites use the hermetic 8 MiB/ENFORCE=1 defaults and the default-on lock-order sentinel. Owned PostgreSQL and detached worktrees have been removed; private namespaces have exited, and transport scratch files are removed after delivery comments.
+
+## Probe Results
+
+Complete runtime fixture: 329 GET patterns, GET plus HEAD = 658 requests per run. Main versus observe: **0 status differences**. Main versus enforced: 156 status differences, including 138 main 2xx -> 5xx requests (69 patterns).
+Enforced mode changes 140 successful requests (70 patterns) to non-2xx. SCM events list maps its bridge rejection to 400; this is also a C-2 candidate.
+
+| Full fixture mode | Requested | 2xx | Skipped | Status counts |
+|---|---:|---:|---:|---|
+| main | 658 | 582 | 0 | {"200":580,"204":2,"302":6,"400":8,"403":10,"404":43,"405":1,"426":6,"503":2} |
+| observe | 658 | 582 | 0 | {"200":580,"204":2,"302":6,"400":8,"403":10,"404":43,"405":1,"426":6,"503":2} |
+| enforced | 658 | 442 | 0 | {"200":440,"204":2,"302":6,"400":4,"403":10,"404":33,"405":1,"426":6,"500":154,"503":2} |
+
+All runtime GET patterns were requested. Non-2xx rows were exercised, not silently skipped; they are not claims of successful fixture coverage. Each reason and each route's maximum single reply is retained in the raw attachment. Baseline Lark-login 503 is expected without integration configuration.
+
+### Transcript Floor
+
+| Pattern | Method | Main / observe | Largest main / observe single reply bytes |
+|---|---|---|---:|
+| `/api/daemon/tasks/:taskId/messages` | GET | 200 / 200 | 25185987 / 25185987 |
+| `/api/daemon/tasks/:taskId/messages` | HEAD | 200 / 200 | 25185987 / 25185987 |
+| `/api/issues/:id/sessions/:sessionId/events` | GET | 200 / 200 | 37749245 / 37749245 |
+| `/api/issues/:id/sessions/:sessionId/events` | HEAD | 200 / 200 | 37749245 / 37749245 |
+| `/api/shares/:token` | GET | 200 / 200 | 37749245 / 37749245 |
+| `/api/shares/:token` | HEAD | 200 / 200 | 37749245 / 37749245 |
+| `/api/chat/sessions/:sessionId/messages` | GET | 200 / 200 | 9437825 / 9437825 |
+| `/api/chat/sessions/:sessionId/messages` | HEAD | 200 / 200 | 9437825 / 9437825 |
+| `/api/multiremi/tasks/:id/messages` | GET | 200 / 200 | 28313525 / 28313525 |
+| `/api/multiremi/tasks/:id/messages` | HEAD | 200 / 200 | 28313525 / 28313525 |
+| `/api/tasks/:taskId/messages` | GET | 200 / 200 | 28313525 / 28313525 |
+| `/api/tasks/:taskId/messages` | HEAD | 200 / 200 | 28313525 / 28313525 |
+
+### Non-Success Coverage And Reasons
+
+| Pattern | Method | Main / observe / enforced | Reason on main |
+|---|---|---|---|
+| `/auth/lark/url` | GET | 503 / 503 / 503 | integration configuration absent |
+| `/auth/lark/url` | HEAD | 503 / 503 / 503 | integration configuration absent |
+| `/api/remi/releases/latest/version` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/remi/releases/latest/version` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/remi/releases/latest/:filename` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/remi/releases/latest/:filename` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/remi/releases/download/:tag/:filename` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/remi/releases/download/:tag/:filename` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot` | GET | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot` | HEAD | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards` | GET | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards` | HEAD | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId` | GET | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId` | HEAD | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/ssh-mesh/config` | GET | 400 / 400 / 400 | fixture lacks required request fields |
+| `/api/daemon/ssh-mesh/config` | HEAD | 400 / 400 / 400 | fixture lacks required request fields |
+| `/api/daemon/chat-sessions/:sessionId/gc-check` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/chat-sessions/:sessionId/gc-check` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content` | GET | 405 / 405 / 405 | route does not accept this method |
+| `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/daemon/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/realtime/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/realtime/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/workspaces/:id/runtime-provisions/:provisionId` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/runtime-provisions/:provisionId` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/runtime-provisions/:provisionId/states` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/runtime-provisions/:provisionId/states` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/bot-menu/publish/:requestId` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/bot-menu/publish/:requestId` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId` | GET | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId` | HEAD | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations` | GET | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations` | HEAD | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats` | GET | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats` | HEAD | 400 / 400 / 500 | fixture lacks required request fields |
+| `/api/workspaces/:id/feishu-bot/chats` | GET | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/workspaces/:id/feishu-bot/chats` | HEAD | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/workspaces/:id/feishu-bot/registration/:sessionId` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/workspaces/:id/feishu-bot/registration/:sessionId` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/members/:id` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/members/:id` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/invitations/:id` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/invitations/:id` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/agent-templates/:slug` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/agent-templates/:slug` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/agent-templates/:slug` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/agent-templates/:slug` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/daemon/runtimes/:id/codex-profile-key` | GET | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:id/codex-profile-key` | HEAD | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:id/claude-profile-key` | GET | 403 / 403 / 403 | requires scoped actor |
+| `/api/daemon/runtimes/:id/claude-profile-key` | HEAD | 403 / 403 / 403 | requires scoped actor |
+| `/api/multiremi/runtimes/:id/local-skills/:requestId` | GET | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/multiremi/runtimes/:id/local-skills/:requestId` | HEAD | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/runtimes/:id/local-skills/:requestId` | GET | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/runtimes/:id/local-skills/:requestId` | HEAD | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/multiremi/runtimes/:id/local-skills/import/:requestId` | GET | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/multiremi/runtimes/:id/local-skills/import/:requestId` | HEAD | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/runtimes/:id/local-skills/import/:requestId` | GET | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/runtimes/:id/local-skills/import/:requestId` | HEAD | 404 / 404 / 500 | fixture id absent or route not found |
+| `/api/runtime-workspaces/:id` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/runtime-workspaces/:id` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/labels/:id` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/multiremi/labels/:id` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/labels/:id` | GET | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/labels/:id` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
+| `/api/shares/:token/attachments/:attachmentId/content` | GET | 302 / 302 / 302 | route redirects or has another non-2xx result |
+| `/api/shares/:token/attachments/:attachmentId/content` | HEAD | 302 / 302 / 302 | route redirects or has another non-2xx result |
+| `/api/attachments/:id/download` | GET | 302 / 302 / 302 | route redirects or has another non-2xx result |
+| `/api/attachments/:id/download` | HEAD | 302 / 302 / 302 | route redirects or has another non-2xx result |
+| `/api/attachments/:id/content` | GET | 302 / 302 / 302 | route redirects or has another non-2xx result |
+| `/api/attachments/:id/content` | HEAD | 302 / 302 / 302 | route redirects or has another non-2xx result |
+
+### Full-Fixture Status Differences With Enforcement
+
+| Pattern | Method | Main -> enforced | Largest main / enforced single reply bytes |
+|---|---|---|---:|
+| `/api/daemon/workspaces/:workspaceId/repos` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/daemon/workspaces/:workspaceId/repos` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/daemon/runtimes/:runtimeId/tasks/pending` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemon/runtimes/:runtimeId/tasks/pending` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemon/tasks/:taskId/human-requests/:requestId` | GET | 200 -> 500 | 18874716 / 18874716 |
+| `/api/daemon/tasks/:taskId/human-requests/:requestId` | HEAD | 200 -> 500 | 18874716 / 18874716 |
+| `/api/workspaces` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/organizer` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/organizer` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/issue-topics` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/issue-topics` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/bot-menu` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/bot-menu` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/prompts` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/prompts` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/prompt-template` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/prompt-template` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/repos` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/repos` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/env` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/env` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/ssh-mesh` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/ssh-mesh` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/relay-config` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/relay-config` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:workspaceId/scm/events` | GET | 200 -> 400 | 9437759 / 9437759 |
+| `/api/workspaces/:workspaceId/scm/events` | HEAD | 200 -> 400 | 9437759 / 9437759 |
+| `/api/workspaces/:workspaceId/scm/events/:eventId` | GET | 200 -> 500 | 9437759 / 9437759 |
+| `/api/workspaces/:workspaceId/scm/events/:eventId` | HEAD | 200 -> 500 | 9437759 / 9437759 |
+| `/api/workspaces/:workspaceId/messaging/connections` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/connections` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId` | GET | 200 -> 500 | 9437548 / 9437548 |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId` | HEAD | 200 -> 500 | 9437548 / 9437548 |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId` | GET | 400 -> 500 | 9437548 / 9437548 |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId` | HEAD | 400 -> 500 | 9437548 / 9437548 |
+| `/api/workspaces/:workspaceId/messaging/sources` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/status` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/status` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations` | GET | 400 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations` | HEAD | 400 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/endpoints` | GET | 200 -> 500 | 18875017 / 9437548 |
+| `/api/workspaces/:workspaceId/feishu/endpoints` | HEAD | 200 -> 500 | 18875017 / 9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources` | GET | 200 -> 500 | 18875017 / 9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources` | HEAD | 200 -> 500 | 18875017 / 9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/status` | GET | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/status` | HEAD | 200 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats` | GET | 400 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats` | HEAD | 400 -> 500 | 18875017 / 18875017 |
+| `/api/workspaces/:id/feishu-bot/status` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/status` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/routes` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/routes` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/chats` | GET | 404 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/chats` | HEAD | 404 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/senders` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/feishu-bot/senders` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/members` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/members` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/invitations` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/invitations` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/agent-plugins/:id/runtimes` | GET | 200 -> 500 | 9437728 / 9437728 |
+| `/api/multiremi/agent-plugins/:id/runtimes` | HEAD | 200 -> 500 | 9437728 / 9437728 |
+| `/api/multiremi/runtimes/:runtimeId/agent-plugins` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:runtimeId/agent-plugins` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemon/runtimes/:runtimeId/agent-plugins/desired` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemon/runtimes/:runtimeId/agent-plugins/desired` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemon/agent-plugin-artifacts/:digest` | GET | 200 -> 500 | 9437260 / 9437260 |
+| `/api/daemon/agent-plugin-artifacts/:digest` | HEAD | 200 -> 500 | 9437260 / 9437260 |
+| `/api/runtimes/:id/codex-profile` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/codex-profile` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/claude-profile` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/claude-profile` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/models` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/models` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/models/:requestId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/models/:requestId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/models` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/models` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/models/:requestId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/models/:requestId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/update/:updateId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/update/:updateId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/update/:updateId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/update/:updateId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/commands/:requestId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/commands/:requestId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/local-skills/:requestId` | GET | 404 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/local-skills/:requestId` | HEAD | 404 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/local-skills/:requestId` | GET | 404 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/local-skills/:requestId` | HEAD | 404 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/local-skills/import/:requestId` | GET | 404 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/local-skills/import/:requestId` | HEAD | 404 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/local-skills/import/:requestId` | GET | 404 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/local-skills/import/:requestId` | HEAD | 404 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/directory-scans/:requestId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/directory-scans/:requestId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/directory-scans/:requestId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/directory-scans/:requestId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-agent` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-agent` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-hour` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-hour` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/task-activity` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/runtimes/:id/task-activity` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage/by-agent` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage/by-agent` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage/by-hour` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/usage/by-hour` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/task-activity` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/task-activity` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/activity` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/runtimes/:id/activity` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemons/:daemonId` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/daemons/:daemonId` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/daemons/:daemonId/retirement-plan` | GET | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/daemons/:daemonId/retirement-plan` | HEAD | 200 -> 500 | 9437755 / 9437755 |
+| `/api/multiremi/platform/config` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/platform/config` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/platform/status` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/platform/status` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/platform/operations` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/platform/operations` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+| `/api/multiremi/squads` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/multiremi/squads` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/multiremi/squads/:id` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/multiremi/squads/:id` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/multiremi/squads/:id/members` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/multiremi/squads/:id/members` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads/:id` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads/:id` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads/:id/members` | GET | 200 -> 500 | 9437493 / 9437493 |
+| `/api/squads/:id/members` | HEAD | 200 -> 500 | 9437493 / 9437493 |
+| `/api/workspaces/:id/issue-archive` | GET | 200 -> 500 | 18874718 / 18874718 |
+| `/api/workspaces/:id/issue-archive` | HEAD | 200 -> 500 | 18874718 / 18874718 |
+
+### Isolated Column Matrix
+
+57 isolated column scenarios, 37506 GET/HEAD requests per version (75012 total). Across scenarios: 286 main 2xx -> enforced 5xx observations, 69 distinct patterns. Including the SCM 400 gives 70 successful patterns blocked. These are C-2 candidates, not exception additions. A path appearing under several roots remains in each root group.
+
+| Root column | Reader | GET patterns with main 2xx -> enforced non-2xx | Observed maximum reply bytes |
+|---|---|---|---:|
+| `multiremi_workspaces.context` | WorkspacesRepo.getWorkspace/listWorkspaces | 21 | 9437542 |
+| `multiremi_agents.instructions` | AgentsSkillsRepo.getAgent/listAgents | 0 | 9437825 |
+| `multiremi_projects.instructions` | ProjectsRepo.getProject/listProjects | 0 | 9437733 |
+| `multiremi_issues.description` | IssuesRepo.getIssue/listIssues | 0 | 9437903 |
+| `multiremi_skills.content` | AgentsSkillsRepo.getSkill/listSkills | 0 | 9437440 |
+| `multiremi_skill_files.content` | AgentsSkillsRepo.getSkillFiles | 0 | 9437383 |
+| `multiremi_task_messages.content` | TasksRepo.listTaskMessages | 0 | 25185987 |
+| `multiremi_task_prompts.prompt` | TasksRepo.getTaskPrompt | 0 | 9437325 |
+| `multiremi_tasks.prompt` | TasksRepo.getTask/listTasks/listTasksForIssue | 0 | 9439173 |
+| `multiremi_tasks.result` | TasksRepo.getTask/listTasks/listTasksForIssue | 0 | 9439173 |
+| `multiremi_tasks.usage` | TasksRepo.getTask/listTasks/listTasksForIssue | 0 | 9439173 |
+| `multiremi_session_events.body` | IssueSessionsRepo.listSessionEvents | 0 | 18874893 |
+| `multiremi_session_events.metadata` | IssueSessionsRepo.listSessionEvents | 0 | 18874893 |
+| `multiremi_issue_comments.body` | IssuesRepo.listIssueComments/listIssueTimeline | 0 | 9437533 |
+| `multiremi_chat_messages.body` | ChatRepo.listChatMessages | 0 | 9437451 |
+| `multiremi_message_messages.searchable_text` | MessagingRepo.listMessages/getMessage/listConversations | 0 | 9437982 |
+| `multiremi_message_messages.raw` | MessagingRepo.listMessages/getMessage/listConversations | 0 | 9437981 |
+| `multiremi_message_messages.conversation_name` | MessagingRepo.listMessages/getMessage/listConversations | 0 | 9437981 |
+| `multiremi_message_sources.allowlist` | MessagingRepo.listSources/getSource | 8 | 9437841 |
+| `multiremi_message_sources.name` | MessagingRepo.listSources/getSource | 8 | 9437848 |
+| `multiremi_knowledge_submissions.body` | KnowledgeRepo.getSubmission/listSubmissions | 0 | 9437654 |
+| `multiremi_knowledge_submissions.patch` | KnowledgeRepo.getSubmission/listSubmissions | 0 | 9437654 |
+| `multiremi_project_docs.body` | ProjectsRepo.listProjectDocs/getProjectDoc | 0 | 9437806 |
+| `multiremi_repository_wiki_docs.body` | RepositoryWikiRepo.getByRef/list/listWorkspace | 0 | 9437788 |
+| `multiremi_gateway_models.models` | WorkspacesRepo.getGatewayModels | 0 | 9437425 |
+| `multiremi_autopilot_runs.payload` | AutopilotsRepo.listAutopilotRuns/getAutopilotRun | 0 | 9437723 |
+| `multiremi_autopilot_runs.result` | AutopilotsRepo.listAutopilotRuns/getAutopilotRun | 0 | 9437723 |
+| `multiremi_autopilot_runs.schedule_prompt` | AutopilotsRepo.listAutopilotRuns/getAutopilotRun | 0 | 9437723 |
+| `multiremi_session_results.body` | IssueSessionsRepo.listIssueSessionResults/getSessionResult | 0 | 9437422 |
+| `multiremi_issue_activity.body` | IssuesRepo.listIssueActivity/listIssueTimeline | 0 | 18874777 |
+| `multiremi_issue_activity.data` | IssuesRepo.listIssueActivity/listIssueTimeline | 0 | 18874777 |
+| `multiremi_task_human_requests.payload` | TasksRepo.getTaskHumanRequest/listTaskHumanRequests | 1 | 9437540 |
+| `multiremi_task_human_requests.response` | TasksRepo.getTaskHumanRequest/listTaskHumanRequests | 1 | 9437540 |
+| `multiremi_issue_decisions.body` | IssuesRepo.getIssueDecision/listIssueDecisions | 0 | 9437725 |
+| `multiremi_issue_decisions.options` | IssuesRepo.getIssueDecision/listIssueDecisions | 0 | 9437725 |
+| `multiremi_task_steer_messages.content` | TasksRepo.listTaskSteerMessages/listPendingTaskSteerMessages | 0 | 9437406 |
+| `multiremi_knowledge_compilation_runs.result_summary` | KnowledgeRepo.getRun/listRunsPage | 0 | 9437520 |
+| `multiremi_project_doc_revisions.body` | ProjectsRepo.listProjectDocRevisions | 0 | 9437459 |
+| `multiremi_repository_wiki_doc_revisions.body` | MultiremiStore.listRepositoryWikiDocRevisions -> RepositoryWikiRepo.revisions | 0 | 9437503 |
+| `multiremi_agent_plugin_versions.artifact_json` | AgentPluginsRepo.getAgentPluginArtifactByDigest | 1 | 9437260 |
+| `multiremi_runtimes.metadata` | RuntimesRepo.getRuntime/listRuntimes | 30 | 9437755 |
+| `multiremi_runtime_models.catalog` | RuntimesRepo.listRuntimeModels | 29 | 9437448 |
+| `multiremi_runtime_model_list_requests.models` | RuntimesRepo.getRuntimeModelListRequest | 2 | 9437443 |
+| `multiremi_runtime_update_requests.output` | RuntimesRepo.getRuntimeUpdateRequest | 2 | 9437435 |
+| `multiremi_runtime_command_requests.stdout` | RuntimesRepo.getRuntimeCommandRequest | 1 | 9437582 |
+| `multiremi_runtime_directory_scan_requests.candidates` | RuntimesRepo.getRuntimeDirectoryScanRequest | 2 | 9437428 |
+| `multiremi_scm_change_requests.body` | ScmRepo.listChangeRequestsForIssue/getChangeRequest | 0 | 9437835 |
+| `multiremi_scm_events.payload` | ScmRepo.getCanonicalEvent/listCanonicalEvents | 2 | 9437759 |
+| `multiremi_scm_event_evidence.raw_body` | ScmRepo.listEventEvidence | 1 | 9437422 |
+| `multiremi_webhook_deliveries.raw_body` | AutopilotsRepo.getWebhookDelivery/listWebhookDeliveries | 0 | 9437765 |
+| `multiremi_platform_operations.output` | PlatformOperationsRepo.list/get | 2 | 9437620 |
+| `multiremi_attachments.filename` | IssuesRepo.getAttachment/listAttachmentsForIssue | 0 | 9437532 |
+| `multiremi_session_archives.metadata` | SessionArchivesRepo.list/get | 0 | 9437689 |
+| `multiremi_squads.instructions` | SquadsRepo.getSquad/listSquads | 6 | 9437493 |
+| `multiremi_message_connections.config` | MessagingRepo.getConnection/listConnections | 6 | 9437548 |
+| `multiremi_workspaces.settings` | WorkspacesRepo.getWorkspace/listWorkspaces | 21 | 9437542 |
+| `multiremi_projects.delta_instructions` | ProjectsRepo.getProject/listProjects | 0 | 9437733 |
+
+### multiremi_workspaces.context
+
+Read path: WorkspacesRepo.getWorkspace/listWorkspaces.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/workspaces/:workspaceId/repos` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/organizer` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/issue-topics` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/bot-menu` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/prompts` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/prompt-template` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/repos` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/env` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/ssh-mesh` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/relay-config` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/status` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/routes` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/senders` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/members` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/invitations` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/config` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/status` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/operations` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/issue-archive` | 200/200 | 500/500 | 9437542/9437542 |
+
+### multiremi_message_sources.allowlist
+
+Read path: MessagingRepo.listSources/getSource.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/workspaces/:workspaceId/messaging/connections` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/messaging/sources` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/status` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/feishu/endpoints` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/feishu/sources` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId` | 200/200 | 500/500 | 9437841/9437841 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/status` | 200/200 | 500/500 | 9437841/9437841 |
+
+### multiremi_message_sources.name
+
+Read path: MessagingRepo.listSources/getSource.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/workspaces/:workspaceId/messaging/connections` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/messaging/sources` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/messaging/sources/:sourceId/status` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/feishu/endpoints` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/feishu/sources` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId` | 200/200 | 500/500 | 9437848/9437848 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/status` | 200/200 | 500/500 | 9437848/9437848 |
+
+### multiremi_task_human_requests.payload
+
+Read path: TasksRepo.getTaskHumanRequest/listTaskHumanRequests.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/tasks/:taskId/human-requests/:requestId` | 200/200 | 500/500 | 9437540/9437540 |
+
+### multiremi_task_human_requests.response
+
+Read path: TasksRepo.getTaskHumanRequest/listTaskHumanRequests.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/tasks/:taskId/human-requests/:requestId` | 200/200 | 500/500 | 9437540/9437540 |
+
+### multiremi_agent_plugin_versions.artifact_json
+
+Read path: AgentPluginsRepo.getAgentPluginArtifactByDigest.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/agent-plugin-artifacts/:digest` | 200/200 | 500/500 | 9437260/9437260 |
+
+### multiremi_runtimes.metadata
+
+Read path: RuntimesRepo.getRuntime/listRuntimes.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/runtimes/:runtimeId/tasks/pending` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/agent-plugins/:id/runtimes` | 200/200 | 500/500 | 9437728/9437728 |
+| `/api/multiremi/runtimes/:runtimeId/agent-plugins` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/daemon/runtimes/:runtimeId/agent-plugins/desired` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/codex-profile` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/claude-profile` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/models` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/models` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/commands/:requestId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/usage` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-agent` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/usage/by-hour` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/runtimes/:id/task-activity` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/usage` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/usage/by-agent` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/usage/by-hour` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/task-activity` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/runtimes/:id/activity` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/daemons/:daemonId` | 200/200 | 500/500 | 9437755/9437755 |
+| `/api/multiremi/daemons/:daemonId/retirement-plan` | 200/200 | 500/500 | 9437755/9437755 |
+
+### multiremi_runtime_models.catalog
+
+Read path: RuntimesRepo.listRuntimeModels.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/runtimes/:runtimeId/tasks/pending` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:runtimeId/agent-plugins` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/daemon/runtimes/:runtimeId/agent-plugins/desired` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/codex-profile` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/claude-profile` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/models` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/models` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/commands/:requestId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/usage` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/usage/by-agent` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/usage/by-hour` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/runtimes/:id/task-activity` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/usage` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/usage/by-agent` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/usage/by-hour` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/task-activity` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/runtimes/:id/activity` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/daemons/:daemonId` | 200/200 | 500/500 | 9437448/9437448 |
+| `/api/multiremi/daemons/:daemonId/retirement-plan` | 200/200 | 500/500 | 9437448/9437448 |
+
+### multiremi_runtime_model_list_requests.models
+
+Read path: RuntimesRepo.getRuntimeModelListRequest.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/multiremi/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437443/9437443 |
+| `/api/runtimes/:id/models/:requestId` | 200/200 | 500/500 | 9437443/9437443 |
+
+### multiremi_runtime_update_requests.output
+
+Read path: RuntimesRepo.getRuntimeUpdateRequest.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/multiremi/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437435/9437435 |
+| `/api/runtimes/:id/update/:updateId` | 200/200 | 500/500 | 9437435/9437435 |
+
+### multiremi_runtime_command_requests.stdout
+
+Read path: RuntimesRepo.getRuntimeCommandRequest.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/runtimes/:id/commands/:requestId` | 200/200 | 500/500 | 9437582/9437582 |
+
+### multiremi_runtime_directory_scan_requests.candidates
+
+Read path: RuntimesRepo.getRuntimeDirectoryScanRequest.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/multiremi/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437428/9437428 |
+| `/api/runtimes/:id/directory-scans/:requestId` | 200/200 | 500/500 | 9437428/9437428 |
+
+### multiremi_scm_events.payload
+
+Read path: ScmRepo.getCanonicalEvent/listCanonicalEvents.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/workspaces/:workspaceId/scm/events` | 200/200 | 400/400 | 9437759/9437759 |
+| `/api/workspaces/:workspaceId/scm/events/:eventId` | 200/200 | 500/500 | 9437759/9437759 |
+
+### multiremi_scm_event_evidence.raw_body
+
+Read path: ScmRepo.listEventEvidence.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/workspaces/:workspaceId/scm/events/:eventId` | 200/200 | 500/500 | 9437422/9437422 |
+
+### multiremi_platform_operations.output
+
+Read path: PlatformOperationsRepo.list/get.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/multiremi/platform/status` | 200/200 | 500/500 | 9437620/9437620 |
+| `/api/multiremi/platform/operations` | 200/200 | 500/500 | 9437620/9437620 |
+
+### multiremi_squads.instructions
+
+Read path: SquadsRepo.getSquad/listSquads.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/multiremi/squads` | 200/200 | 500/500 | 9437493/9437493 |
+| `/api/squads` | 200/200 | 500/500 | 9437493/9437493 |
+| `/api/multiremi/squads/:id` | 200/200 | 500/500 | 9437493/9437493 |
+| `/api/multiremi/squads/:id/members` | 200/200 | 500/500 | 9437493/9437493 |
+| `/api/squads/:id` | 200/200 | 500/500 | 9437493/9437493 |
+| `/api/squads/:id/members` | 200/200 | 500/500 | 9437493/9437493 |
+
+### multiremi_message_connections.config
+
+Read path: MessagingRepo.getConnection/listConnections.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/workspaces/:workspaceId/messaging/connections` | 200/200 | 500/500 | 9437548/9437548 |
+| `/api/workspaces/:workspaceId/messaging/connections/:connectionId` | 200/200 | 500/500 | 9437548/9437548 |
+| `/api/workspaces/:workspaceId/feishu/endpoints` | 200/200 | 500/500 | 9437548/9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources` | 200/200 | 500/500 | 9437548/9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId` | 200/200 | 500/500 | 9437548/9437548 |
+| `/api/workspaces/:workspaceId/feishu/sources/:sourceId/status` | 200/200 | 500/500 | 9437548/9437548 |
+
+### multiremi_workspaces.settings
+
+Read path: WorkspacesRepo.getWorkspace/listWorkspaces.
+
+| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |
+|---|---|---|---:|
+| `/api/daemon/workspaces/:workspaceId/repos` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/organizer` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/issue-topics` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/bot-menu` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/prompts` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/prompt-template` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/repos` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/env` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/ssh-mesh` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/relay-config` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/status` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/routes` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/feishu-bot/senders` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/members` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/invitations` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/config` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/status` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/multiremi/platform/operations` | 200/200 | 500/500 | 9437542/9437542 |
+| `/api/workspaces/:id/issue-archive` | 200/200 | 500/500 | 9437542/9437542 |
+
+## Writer Bounds
+
+The CLI forwards these text fields to their API guards. Limits below were reviewed read-only; SQL seeding bypasses writer caps. Uncapped workspace context is writable through ordinary API/CLI calls within the transport's body limit. Polling message ingest also bypasses the webhook-only 256 KiB ingress cap.
+
+| Root column(s) | Application write path | Application length limit |
+|---|---|---|
+| `workspaces.context` | `PUT /api/workspaces/:id` -> `WorkspacesRepo.updateWorkspace` | None; direct assignment (`workspaces-repo.ts:575`). A 9 MiB context is application-reachable. |
+| `agents.instructions` | agent create/update -> `AgentsSkillsRepo.updateAgent` | No instruction byte cap found; description alone is limited to 255 chars (`api/helpers/agents.ts:48`). |
+| `projects.instructions` | project create/update -> `validateProjectInstructions` | 4,000 Unicode characters (`api/helpers/projects.ts:16-23`); the 9 MiB direct-SQL row is writer-inaccessible. |
+| `issues.description` | issue create/update -> `IssuesRepo` | No description byte cap found; metadata has a separate 8 KiB cap (`issues-repo.ts:7032`). |
+| `skills.content`, `skill_files.content` | skill create/update -> `AgentsSkillsRepo`, `normalizeSkillFiles` | Path and encoding checked, no content byte cap (`agents-skills-repo.ts:871-890`). |
+| `task_messages.content/input/output/meta` | daemon POST messages -> `TasksRepo.appendTaskMessages` | 256 rows per request; repo truncates content/input to 256 KiB each and output/meta to 64 KiB each (`tasks-repo.ts:4279-4288,6758-6769`). A 24 MiB collection remains reachable through 96 content rows of 256 KiB. |
+| `tasks.prompt/result/usage` | task creation; daemon complete / usage -> `TasksRepo` | No prompt/result byte cap on these task-row fields; usage numbers are normalized but model/provider strings and total entries have no byte cap (`api/helpers/tasks.ts:21-38`). This is distinct from the bounded assembled prompt artifact below. |
+| `task_prompts.prompt` | `TasksRepo.recordTaskPrompt` | 2 MiB UTF-8 bytes (`tasks-repo.ts:174,4340`); 9 MiB direct-SQL row is writer-inaccessible. |
+| `session_events.body/metadata` | `IssueSessionsRepo.appendSessionEventWithinTransaction` | No body/metadata byte cap (`issue-sessions-repo.ts:376-401`). |
+| `issue_comments.body` | `IssuesRepo.createIssueComment` | Requires nonblank text; no byte cap (`issues-repo.ts:4556-4595`). |
+| `chat_messages.body` | `ChatRepo.appendChatMessageWithinTransaction` | No body byte cap (`chat-repo.ts:437-475`). |
+| `message_messages.searchable_text/raw/conversation_name` | messaging ingest and Feishu compatibility -> `MessagingRepo.ingestMessages` | No stored-field byte cap found (`messaging-repo.ts:363-365,953-986`); webhook ingress alone caps its whole body at 256 KiB (`api/helpers/webhooks.ts:14`), polling/other ingest paths are separate. |
+| `message_sources.allowlist/name` | messaging source create/update -> `normalizeAllowlist`, `MessagingRepo.upsertSource` | Checks array shape and dedupes ids, no entry or total byte cap (`api/routers/messaging.ts:764-787`). |
+| `knowledge_submissions.body/patch` | knowledge submit -> `KnowledgeRepo.createSubmission` | No body/patch byte cap (`knowledge-repo.ts:113-153`). |
+| `project_docs.body` | project doc create/update -> `ProjectsRepo` | No per-doc body byte cap found (`projects-repo.ts:953`). |
+| `repository_wiki_docs.body` | wiki create/update/batch -> `RepositoryWikiRepo` | Batch/read row count is bounded, but no per-doc body byte cap (`repository-wiki-repo.ts:248`). |
+| `gateway_models.models` | relay discovery -> `WorkspacesRepo.saveGatewayModels` | Default gateway HTTP response is capped at 1,000,000 bytes (`relay/discovery.ts:10,35`); the 9 MiB direct-SQL snapshot is not reachable through default discovery. Store writer itself has no independent cap. |
+| `autopilot_runs.payload/result/schedule_prompt` | autopilot enqueue/finish -> `AutopilotsRepo` | No JSON/prompt byte cap found (`autopilots-repo.ts:440`); failure message alone is truncated to 1,000 chars (`autopilots-repo.ts:990`). |
+| `task_human_requests.payload/response` | daemon human request/response, new card read | No per-field byte cap found (`tasks-repo.ts:3968`); GET reads are measured in the final matrix, while the new card POST is deferred. |
+| `workspaces.settings` | workspace update -> `WorkspacesRepo.updateWorkspace` | JSON serialization without a total byte cap (`workspaces-repo.ts:579-581`). API sanitizes specific progress/auto-title settings, not total JSON size. |
+| `projects.delta_instructions` | project update -> `validateProjectInstructions` | Same 4,000-Unicode-character API guard as instructions (`api/helpers/projects.ts:30-31`). |
+| `session_results.body` | `IssueSessionsRepo.publishSessionResult` | No body byte cap (`issue-sessions-repo.ts:669-720`). |
+| `issue_activity.body/data` | `IssuesRepo.appendIssueActivity` | No total body/JSON byte cap (`issues-repo.ts:5942`). |
+| `issue_decisions.body/options` | decision create -> `IssuesRepo.createIssueDecision` | Title <=500 chars; options must be strings; no body/option byte cap (`issues-repo.ts:583-606`). |
+| `task_steer_messages.content` | task steer -> `TasksRepo` | No stored content byte cap found (`tasks-repo.ts`, steer insertion). |
+| `knowledge_compilation_runs.result_summary` | `KnowledgeRepo.completeRun` | No summary byte cap (`knowledge-repo.ts:244-257`). |
+| `project_doc_revisions.body`, `repository_wiki_doc_revisions.body` | doc/wiki revision creation | No per-revision body byte cap; revision count limits do not limit bytes. |
+| `agent_plugin_versions.artifact_json` | `buildAgentPluginArtifact` -> version insert | Artifact files <=2,000 and decoded bytes <=25 MiB (`agent-plugins/import.ts:9-10,113-115`), so a 9 MiB artifact is possible. JSON/base64 encoding can increase stored size. |
+| `runtimes.metadata` | runtime register/update -> `normalizeRuntimeMetadata` | 8 KiB serialized JSON (`runtimes-repo.ts:2610-2617`); 9 MiB direct-SQL row is writer-inaccessible. |
+| `runtime_models.catalog` | `normalizeRuntimeModelCatalog` | Ready is only a status object; error text <=200 chars (`runtimes-repo.ts:2682-2686`); 9 MiB direct-SQL catalog is writer-inaccessible. |
+| `runtime_model_list_requests.models` | daemon model report -> `reportRuntimeModelListResult` | Models normalized, but array and model/label/reasoning strings have no aggregate byte cap (`runtimes-repo.ts:1295-1327,2663-2678`). |
+| `runtime_update_requests.output` | daemon update report -> `reportRuntimeUpdateResult` | Direct assignment, no output byte cap (`runtimes-repo.ts:1460-1481`). |
+| `runtime_command_requests.stdout` | daemon command report -> `normalizeRuntimeCommandOutput` | 64 KiB stored output (`runtime-command-safety.ts:1,31-34`); 9 MiB direct-SQL output is writer-inaccessible. |
+| `runtime_directory_scan_requests.candidates` | daemon directory report -> `RuntimesRepo` | No aggregate candidate JSON byte cap found; input/path shape validation is separate. |
+| `scm_change_requests.body`, `scm_events.payload`, `scm_event_evidence.raw_body` | SCM snapshot/change/event ingest -> `ScmRepo` | Stored payload/raw body have no repo byte cap (`scm-repo.ts:898,1079,1108`). Webhook ingress limits and external provider limits are separate; provider limits were not audited. |
+| `webhook_deliveries.raw_body` | webhook ingest -> `AutopilotsRepo` | HTTP webhook ingress <=256 KiB (`api/helpers/webhooks.ts:14,111`); store has no independent per-field cap. The 9 MiB HTTP-ingress sample is writer-inaccessible. |
+| `platform_operations.output` | `PlatformOperationsRepo.report` | Direct output assignment, no byte cap (`platform-operations-repo.ts:277-303`). |
+| `attachments.filename` | attachment reference/create -> `IssuesRepo.createAttachment` | Repo requires nonblank filename, no byte cap (`issues-repo.ts:5694-5734`). Upload path sanitization/file limits are separate. |
+| `session_archives.metadata` | archive metadata registration -> `SessionArchivesRepo` | No total JSON byte cap in repo registration (`session-archives-repo.ts:315`); archive content lives outside SQL. |
+| `squads.instructions` | squad create/update -> `SquadsRepo` | No instruction byte cap found (`squads-repo.ts:21`). |
+| `message_connections.config` | messaging connection upsert -> `MessagingRepo.upsertConnection` | No total config JSON byte cap found; provider configuration validation is separate. |
