@@ -847,6 +847,82 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(new Set(candidates.map(candidate => candidate.requestId)).size).toBe(1024);
   });
 
+  it("keeps bot host snapshot SELECTs constant with 1024 settled candidates", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_budget",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    const database = db!;
+    const originalQuery = database.query.bind(database);
+    const selectCounts: number[] = [];
+    const snapshotCount = () => {
+      let selects = 0;
+      Object.defineProperty(database, "query", { configurable: true, value: (sql: string) => {
+        if (/^\s*(?:SELECT|WITH)\b/i.test(sql)) selects += 1;
+        return originalQuery(sql);
+      } });
+      try {
+        const frames = taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {});
+        selectCounts.push(selects);
+        return frames;
+      } finally {
+        delete (database as unknown as { query?: typeof database.query }).query;
+      }
+    };
+    expect(snapshotCount()).toHaveLength(1);
+    db!.transaction(() => {
+      for (let index = 0; index < 1023; index++) {
+        const id = `hrq_budget_${index}`;
+        db!.run(`INSERT INTO multiremi_task_human_requests
+          (id, task_id, kind, payload, status, created_at, responded_at)
+          SELECT ?, task_id, kind, payload, 'responded', created_at, responded_at
+          FROM multiremi_task_human_requests WHERE id = ?`, [id, request.id]);
+        db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
+           created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
+          SELECT ?, workspace_id, binding_id, NULL, chat_id, body, 'sent', available_at,
+                 created_at, updated_at, 'decision_card', ?, ?, ?
+          FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
+        [`fbo_budget_${index}`, id, taskId, `om_budget_${index}`, card.id]);
+      }
+    })();
+    expect(snapshotCount()).toHaveLength(1024);
+    expect(selectCounts).toEqual([3, 3]);
+  });
+
+  it("excludes an archived topic, removed binding and same-workspace non-host runtime", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_audience",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    const settled = (runtimeId: string, daemonId: string) => taskInputSnapshot(store, runtimeId, daemonId,
+      new Set(), () => {}).filter(entity => entity.type === "task.human_request.settled");
+    expect(settled("rt_bot", "bot-host")).toHaveLength(1);
+    store.registerRuntime({ id: "rt_not_host", name: "Other runtime", provider: "claude",
+      workspaceId: "local", daemonId: "not-host" });
+    expect(settled("rt_not_host", "not-host")).toEqual([]);
+    const binding = db!.query("SELECT id, chat_session_id FROM multiremi_feishu_bot_chat_bindings WHERE issue_id = ?")
+      .get(issue.id) as { id: string; chat_session_id: string };
+    db!.run("UPDATE multiremi_chat_sessions SET status = 'archived' WHERE id = ?", [binding.chat_session_id]);
+    expect(settled("rt_bot", "bot-host")).toEqual([]);
+    db!.run("UPDATE multiremi_chat_sessions SET status = 'active' WHERE id = ?", [binding.chat_session_id]);
+    expect(settled("rt_bot", "bot-host")).toHaveLength(1);
+    db!.run("DELETE FROM multiremi_feishu_bot_chat_bindings WHERE id = ?", [binding.id]);
+    expect(settled("rt_bot", "bot-host")).toEqual([]);
+  });
+
   it("publishes respond, timeout and cancelled wakes only after the outer commit", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);

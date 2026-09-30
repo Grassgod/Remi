@@ -1986,8 +1986,8 @@ runMigrations(this.db);
     return this.feishuBot.listLiveDecisionCards(workspaceId, runtimeId);
   }
 
-  listFeishuBotSettledHumanRequestCandidates(workspaceId: string, runtimeId: string) {
-    return this.feishuBot.listSettledHumanRequestCandidates(workspaceId, runtimeId);
+  listFeishuBotSettledHumanRequestCandidates(workspaceId: string, runtimeId: string, daemonId?: string) {
+    return this.feishuBot.listSettledHumanRequestCandidates(workspaceId, runtimeId, daemonId);
   }
 
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {

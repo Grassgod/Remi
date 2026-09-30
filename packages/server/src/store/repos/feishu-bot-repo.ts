@@ -34,6 +34,7 @@ import {
 } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
+import { toTaskHumanRequest } from "@multiremi/store/repos/tasks-repo.js";
 import {
   IssueTopicConfigError,
   readWorkspaceIssueTopics,
@@ -2293,10 +2294,15 @@ export class FeishuBotRepo {
   }
 
   /** Bounded recovery for sent cards and recent Chat transport requests. */
-  listSettledHumanRequestCandidates(workspaceId: string, runtimeId: string): Array<{ requestId: string; taskId: string }> {
+  listSettledHumanRequestCandidates(workspaceId: string, runtimeId: string, daemonId?: string):
+    Array<{ requestId: string; taskId: string; request?: MultiremiTaskHumanRequest }> {
     const chatCutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
     const rows = this.ctx.db.query(`
-      SELECT request.id AS request_id, request.task_id
+      WITH candidates AS (
+      SELECT request.*, task.runtime_id AS task_runtime_id,
+        task.chat_session_id AS task_chat_session_id, task.issue_id AS task_issue_id,
+        task.agent_id AS task_agent_id, c.workspace_id AS bot_workspace_id,
+        c.app_id AS bot_app_id, host.daemon_id AS bot_daemon_id
       FROM multiremi_task_human_requests request
       JOIN multiremi_tasks task ON task.id = request.task_id
       JOIN multiremi_feishu_bot_configs c ON c.workspace_id = task.workspace_id
@@ -2325,8 +2331,26 @@ export class FeishuBotRepo {
         )
       ORDER BY request.responded_at DESC, request.id DESC
       LIMIT 1024
-    `).all(workspaceId, runtimeId, chatCutoff) as Row[];
-    return rows.map(row => ({ requestId: String(row.request_id), taskId: String(row.task_id) }));
+      )
+      SELECT candidates.* FROM candidates
+      WHERE ? IS NULL OR (
+        bot_daemon_id = ? AND bot_workspace_id = ?
+        AND (task_runtime_id IS NULL OR task_runtime_id <> ?)
+        AND (
+          EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.chat_session_id = task_chat_session_id AND b.agent_id = task_agent_id)
+          OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.issue_id IS NOT NULL AND b.issue_id = task_issue_id)
+        )
+      )
+      ORDER BY responded_at DESC, id DESC
+    `).all(workspaceId, runtimeId, chatCutoff, daemonId ?? null, daemonId ?? null, workspaceId, runtimeId) as Row[];
+    return rows.map(row => daemonId === undefined
+      ? { requestId: String(row.id), taskId: String(row.task_id) }
+      : { requestId: String(row.id), taskId: String(row.task_id), request: toTaskHumanRequest(row) });
   }
 
   /**

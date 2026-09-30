@@ -6851,7 +6851,7 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
  */
 const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 
-function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
+export function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
   return {
     id: String(row.id),
     taskId: String(row.task_id),

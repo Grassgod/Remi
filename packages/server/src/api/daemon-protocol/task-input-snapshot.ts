@@ -26,15 +26,10 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
     }
   }
   if (host?.daemonId === daemonId && host.workspaceId) {
-    for (const candidate of store.listFeishuBotSettledHumanRequestCandidates(host.workspaceId, runtimeId)) {
-      const task = store.getTaskIdentity(candidate.taskId);
-      if (!task || task.workspaceId !== host.workspaceId || task.runtimeId === runtimeId) continue;
-      if (!store.canFeishuBotDaemonAccessTask(host.workspaceId, daemonId, task.id)
-        && !store.canFeishuBotDaemonAccessIssueTaskHumanRequest(host.workspaceId, daemonId, task.id)) continue;
-      const request = store.getTaskHumanRequest(candidate.requestId);
-      if (!request || request.taskId !== task.id || request.status === "pending") continue;
+    for (const candidate of store.listFeishuBotSettledHumanRequestCandidates(host.workspaceId, runtimeId, daemonId)) {
+      const request = candidate.request!;
       entities.push({ key: `human:${request.id}`, type: "task.human_request.settled",
-        payload: { task_id: task.id, request } });
+        payload: { task_id: candidate.taskId, request } });
     }
   }
   return entities;
