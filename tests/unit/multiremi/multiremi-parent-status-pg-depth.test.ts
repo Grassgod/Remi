@@ -831,9 +831,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeId: agent,
     });
 
-    // Break the hook the way a DB or comment failure would. The task-terminal
-    // path reaches it through the store facade (`ctx.issues()`), which is the
-    // seam this override sits on.
+    // Break the notification hook after the terminal transaction has committed.
+    // The task-terminal path reaches it through the store facade (`ctx.issues()`),
+    // which is the seam this override sits on.
     const original = store.notifyChildStatusChange.bind(store);
     let calls = 0;
     store.notifyChildStatusChange = ((..._args: Parameters<typeof original>) => {
@@ -858,9 +858,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     const other = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
     const otherStore = new MultiremiStore(other);
     try {
-      // ADR 0003: the task terminal state and the child's own transition were
-      // committed before the hook ran, so the notification failure cannot undo
-      // them — and it left no round behind either.
+      // The terminal transaction committed the task, the child's transition,
+      // and the parent's pending round plus inbox comment before this hook ran.
+      // A later notification failure cannot undo any of those durable writes.
       expect(otherStore.getTask(task.id)?.status).toBe("failed");
       expect(otherStore.getIssue(child.id)?.status).toBe("blocked");
       expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(1);
