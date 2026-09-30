@@ -399,11 +399,12 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // (l): GET /api/tasks/:id/trace and /api/shares/:token/tasks/:task_id/trace
     // add two served reads. MUL-479's context-window PUT adds one served
     // browser route. MUL-487's native card mint adds a refused route.
-    // MUL-467's workspace abandonment POST is browser/CLI traffic served by ui,
-    // bringing the swept inventory to 792 without moving these totals.
-    expect(statuses.size).toBe(792);
+    // MUL-467's workspace abandonment POST and MUL-485's Session log entry
+    // read are browser/CLI traffic served by ui, bringing the sweep to 793.
+    expect(statuses.size).toBe(793);
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
+    expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
     expect(misdirected, routeCountHint("ui")).toHaveLength(87);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(88);
   });
@@ -435,16 +436,17 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // (l): the two exact trace-read patterns join the runtime allowlist. Both
     // are also ui reads; unlike other browser routes they do not add refusals.
     // MUL-479's context-window PUT adds one browser-only refusal.
-    expect(statuses.size).toBe(792);
+    expect(statuses.size).toBe(793);
     // MUL-467's abandonment POST and MUL-479's context-window PUT are outside
-    // the runtime allowlist; the abandonment POST adds one refusal.
+    // the runtime allowlist; MUL-485's log entry read adds another refusal.
     // The native card mint is served by runtime and leaves these totals unchanged.
     const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
     expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(696);
-    expect(refused + 2, routeCountHint("runtime")).toBe(698);
+    expect(statuses.get("GET /api/sessions/:sessionId/log/entry")).toBe(421);
+    expect(refused, routeCountHint("runtime")).toBe(697);
+    expect(refused + 2, routeCountHint("runtime")).toBe(699);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

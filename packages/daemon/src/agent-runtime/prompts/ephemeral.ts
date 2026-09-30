@@ -487,6 +487,30 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("", "## Side Conversation Boundary", SIDE_CONVERSATION_INSTRUCTIONS);
   }
   if (projection?.jsonl?.trim()) {
+    const inbox = projection.jsonl.split("\n", 2)[1];
+    if (inbox) {
+      try {
+        const toc = JSON.parse(inbox) as { type?: string; entries?: Array<{
+          seq: number; priority: number; author_name: string | null; created_at: string;
+          title: string; chars: number; folded: boolean;
+        }> };
+        if (toc.type === "inbox_toc" && Array.isArray(toc.entries) && toc.entries.length) {
+          sections.push("", "## Inbox");
+          const labels = ["人的决定", "失败·卡住", "完成", "知会"];
+          for (let priority = 1; priority <= 4; priority++) {
+            const entries = toc.entries.filter((entry) => entry.priority === priority);
+            if (!entries.length) continue;
+            sections.push("", `### ${labels[priority - 1]}`);
+            for (const entry of entries) {
+              const expand = `remi session log get ${projection.sessionId ?? projection.session_id} ${entry.seq}`;
+              sections.push(`${entry.seq} · ${entry.author_name ?? "Unknown"} · ${entry.created_at} · ${entry.title} · ${entry.chars} 字${entry.folded ? `（已折叠，展开：${expand}）` : ""}`);
+            }
+          }
+        }
+      } catch {
+        // Older servers and malformed optional directory lines leave the canonical JSONL usable.
+      }
+    }
     sections.push("");
     sections.push("## Current Session Context");
     if (issueSession?.title) sections.push(`Session: ${issueSession.title}`);

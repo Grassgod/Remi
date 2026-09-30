@@ -580,14 +580,20 @@ export class ChatRepo {
       if (!session) return null;
       const agent = this.ctx.agents().getAgent(task.agentId);
       const currentLineageTaskIds = chatTaskLineageIds(this.ctx, task);
-      const messages = this.ctx.conversationLog().listConversationLogEntries(session.id)
+      const entries = this.ctx.conversationLog().listConversationLogEntries(session.id);
+      const messages = entries
         .filter((entry) => entry.kind !== "head" && entry.deleted_at === null)
-        .map(conversationLogChatMessage).filter((message) => {
+        .map((entry) => ({ ...conversationLogChatMessage(entry), seq: entry.seq, metadata: entry.metadata })).filter((message) => {
         if (message.role !== "user" || !message.taskId || currentLineageTaskIds.has(message.taskId)) return true;
         const source = this.ctx.tasks().getTask(message.taskId);
         return source?.status !== "queued";
       });
       const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
+      const entriesBySeq = new Map(entries.map((entry) => [entry.seq, entry]));
+      const expandableSeqs = new Set(events.filter((event) => {
+        const entry = entriesBySeq.get(event.seq);
+        return entry?.visibility === "shown" && entry.deleted_at === null && event.body === entry.body_md;
+      }).map((event) => event.seq));
       const detachedChatIssue = (task.issueId && topicIssueId !== task.issueId)
         || (task.issueSessionId && !topicIssueId);
       // Workspace validation may reject an active lease's old directory without
@@ -603,10 +609,11 @@ export class ChatRepo {
         sessionId: session.id,
         targetAgentId: task.agentId,
         events,
+        expandableSeqs,
         // createTask persists session_id only when resolveTaskAffinity concluded
         // that this exact provider lineage is resumable. Stored Chat messages are
         // already in that lineage; the current request is rendered separately.
-        cursorSeq: warmProviderSessionId ? events.length : 0,
+        cursorSeq: warmProviderSessionId ? events.at(-1)?.seq ?? 0 : 0,
         providerSessionId: warmProviderSessionId,
         tokenBudget,
         currentTaskId: task.id,
@@ -836,12 +843,12 @@ function chatTaskLineageIds(ctx: StoreContext, task: MultiremiTask): Set<string>
 }
 
 function chatMessagesAsSessionEvents(
-  messages: MultiremiChatMessage[],
+  messages: Array<MultiremiChatMessage & { seq: number; metadata: Record<string, unknown> }>,
   session: MultiremiChatSession,
   currentTaskId: string,
   currentLineageTaskIds: Set<string>,
 ): MultiremiSessionEvent[] {
-  return messages.map((message, index) => {
+  return messages.map((message) => {
     const currentRequest = message.role === "user"
       && !!message.taskId
       && currentLineageTaskIds.has(message.taskId);
@@ -853,7 +860,7 @@ function chatMessagesAsSessionEvents(
     return {
       id: message.id,
       sessionId: session.id,
-      seq: index + 1,
+      seq: message.seq,
       authorType,
       authorId: message.role === "assistant"
         ? session.agentId
@@ -864,7 +871,7 @@ function chatMessagesAsSessionEvents(
       body: message.body,
       taskId: currentRequest ? currentTaskId : message.taskId,
       sourceCommentId: null,
-      metadata: { role: message.role },
+      metadata: { role: message.role, ...(message.metadata.envelope ? { envelope: message.metadata.envelope } : {}) },
       createdAt: message.createdAt,
     };
   });

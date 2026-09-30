@@ -4312,6 +4312,10 @@ runMigrations(this.db);
     return this.sessions.getSessionAgentLane(sessionId, agentId, executionScope);
   }
 
+  getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
+    return this.sessions.getSessionAgentMaxCursorSeq(sessionId, agentId);
+  }
+
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     const task = this.tasks.getTask(taskId);
     if (task?.chatSessionId && !this.feishuBot.getIssueIdForChatSession(task.chatSessionId)) {
