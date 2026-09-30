@@ -78,6 +78,8 @@ export interface RealtimeFanoutOptions {
   registries: RealtimeFanoutRegistries;
   /** Absent/null means "no peer": local delivery only, nothing is forwarded. */
   peer?: PeerChannel | null;
+  /** Receives queued/waiting tasks on runtime/all, from either store or peer. */
+  onDaemonTask?: (event: { type: string; task: MultiremiTask }) => void;
 }
 
 export interface RealtimeFanout {
@@ -92,6 +94,8 @@ export interface RealtimeFanout {
 export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFanout {
   const { role, store, registries } = options;
   const peer = options.peer ?? null;
+  // MUL-419: 接 kick
+  const onDaemonTask = options.onDaemonTask ?? (() => {});
 
   const deliversToBrowser = role === "ui" || role === "all";
 

@@ -12,6 +12,13 @@ events and delivers locally by the effective API role. A configured
 [peer channel](../../packages/server/src/api/peer/peer-channel.ts). Remote events
 only deliver locally. Both processes must share the database.
 
+Daemon delivery uses the optional `onDaemonTask({type, task})` hook in fanout
+options, not the removed v1 WebSocket registry. Runtime/all roles call it for
+queued and waiting-local-directory tasks from either store or peer; UI never
+calls it. The default is empty until MUL-419 connects the v2 kick. The server's
+`createRealtimeFanout` injection point can supply the hook without adding store
+subscriptions or changing browser delivery.
+
 ## Wire And Ordering
 
 [The contract](../../packages/contracts/src/peer-events.ts) defines envelopes

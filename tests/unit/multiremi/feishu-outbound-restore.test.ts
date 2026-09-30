@@ -21,9 +21,6 @@ async function renderedSql(dialect: "sqlite" | "postgres"): Promise<string> {
 
 function seed(db: SqlDatabase): void {
   runMigrations(db, { dialect: db.dialect });
-  // This branch predates main's decision columns; the release schema includes them.
-  db.exec(`ALTER TABLE ${table} ADD COLUMN decision_id TEXT;
-    ALTER TABLE ${table} ADD COLUMN decision_issue_id TEXT;`);
   db.run(`INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
     VALUES ('agent', 'Restore drill', 'codex', '2026-09-30', '2026-09-30')`);
   db.run(`INSERT INTO multiremi_chat_sessions (id, agent_id, title, created_at, updated_at)

@@ -1,6 +1,6 @@
 // MUL-74 outbox invariants: per-task seq ordering across an API outage,
 // durable restart recovery, permanent-error blocking, droppable-kind
-// tolerance, and the "terminal events are never dropped" size-cap rule.
+// tolerance, and safe compaction of overwritten rows at the soft size cap.
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -11,6 +11,7 @@ import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client
 import { outboxRecordBytes } from "@multiremi/worker/report-frames.js";
 import {
   MultiremiTaskReportOutbox,
+  type MultiremiOutboxKind,
   type MultiremiOutboxRecord,
 } from "@multiremi/worker/outbox.js";
 
@@ -234,30 +235,73 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(delivered).toEqual(["complete:3"]);
   });
 
-  it("enforces the size cap by dropping oldest non-terminal rows but never terminal events", async () => {
-    let apiDown = true;
-    const delivered: string[] = [];
+  it("retains reliable results and starts under a soft cap, compacting only each task's overwritten progress", async () => {
+    let online = false;
+    const delivered: MultiremiOutboxRecord[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({
       path: tempPath(),
-      maxBytes: 200_000,
-      backoffScheduleMs: [5, 5],
-      deliver: async (record) => {
-        if (apiDown) throw new Error("connection refused");
-        delivered.push(`${record.kind}:${record.seq}`);
-      },
+      maxBytes: 4096,
+      canSend: () => online,
+      deliver: async (record) => { delivered.push(record); },
     }));
-    const bigChunk = "x".repeat(10_000);
-    outbox.enqueue("tsk_cap", "complete", { output: "terminal early" });
-    for (let index = 0; index < 60; index += 1) {
-      outbox.enqueue("tsk_cap2", "messages", { messages: [{ seq: index + 1, type: "text", content: bigChunk }] });
+    const result = outbox.enqueue("rt:one", "feishu.outbound_result", { status: "sent" })!;
+    expect(result).toBe(1);
+    expect(outbox.stats()).toMatchObject({ pending: 1, droppedTotal: 0 });
+    const command = outbox.enqueue("rt:one", "runtime.command_result", { status: "completed", request_id: "command" })!;
+    const start = outbox.enqueue("tsk_cap", "start", {})!;
+    for (let index = 0; index < 20; index++) {
+      for (const taskId of ["tsk_cap", "tsk_other"]) {
+        outbox.enqueue(taskId, "progress", { summary: `step-${index}`, padding: "x".repeat(10_000) });
+      }
     }
     const stats = outbox.stats();
-    expect(stats.droppedTotal).toBeGreaterThan(0);
-    // The terminal event survived the cap.
-    expect(stats.pendingTerminal).toBe(1);
-    apiDown = false;
-    expect(await outbox.waitForTaskDrain("tsk_cap")).toBe("delivered");
-    expect(delivered).toContain("complete:1");
+    expect(stats).toMatchObject({ pending: 5, blocked: 0, droppedTotal: 38 });
+    expect(stats.overCapBytes).toBeGreaterThan(0);
+    expect(stats.overCapBytes).toBe(stats.fileBytes - 4096);
+    online = true;
+    await outbox.flushAll();
+    expect(delivered.filter((record) => record.kind !== "progress").map((record) => record.id).sort((a, b) => a - b)).toEqual([result, command, start]);
+    expect(delivered.filter((record) => record.kind === "progress").sort((a, b) => a.taskId.localeCompare(b.taskId))
+      .map((record) => [record.taskId, record.payload.summary])).toEqual([
+      ["tsk_cap", "step-19"], ["tsk_other", "step-19"],
+    ]);
+    expect(outbox.stats().pending).toBe(0);
+  });
+
+  it.each(["progress", "session_pin", "workspace"] as const)("compacts only covered %s rows in the same partition and type", async (kind) => {
+    let online = false;
+    const delivered: MultiremiOutboxRecord[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: tempPath(), maxBytes: 4096, deliveryBatchSize: 1,
+      canSend: () => online, deliver: async (record) => { delivered.push(record); } }));
+    outbox.enqueue("task-a", kind, { value: "old" });
+    const otherPartition = outbox.enqueue("task-b", kind, { value: "other partition" })!;
+    const otherType = outbox.enqueue("task-a", kind === "workspace" ? "session_pin" : "workspace", { value: "other type" })!;
+    const latest = outbox.enqueue("task-a", kind, { value: "latest" })!;
+    expect(outbox.stats()).toMatchObject({ pending: 3, droppedTotal: 1 });
+    online = true;
+    await outbox.flushAll();
+    expect(delivered.map((record) => record.id).sort((a, b) => a - b)).toEqual([otherPartition, otherType, latest]);
+  });
+
+  it("never evicts other reliable kinds or a final progress row under capacity pressure", async () => {
+    const kinds: MultiremiOutboxKind[] = ["start", "prompt", "usage", "messages", "complete", "fail",
+      "runtime.update_result", "runtime.command_result", "runtime.model_list_result", "runtime.local_skills_result",
+      "runtime.directory_scan_result", "runtime.local_skill_import_result", "runtime.bot_menu_result",
+      "feishu.outbound_result", "plugin.state"];
+    let online = false;
+    const delivered: MultiremiOutboxRecord[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: tempPath(), maxBytes: 4096, deliveryBatchSize: 1,
+      canSend: () => online, deliver: async (record) => { delivered.push(record); } }));
+    const ids: number[] = [];
+    for (const kind of kinds) {
+      for (let index = 0; index < 2; index++) ids.push(outbox.enqueue(kind, kind, { index })!);
+    }
+    ids.push(outbox.enqueue("final", "progress", { summary: "final", final: true })!);
+    ids.push(outbox.enqueue("final", "progress", { summary: "later" })!);
+    expect(outbox.stats()).toMatchObject({ pending: ids.length, droppedTotal: 0, blocked: 0 });
+    online = true;
+    await outbox.flushAll();
+    expect(delivered.map((record) => record.id).sort((a, b) => a - b)).toEqual(ids);
   });
 
   it("purges a task, wakes its retry backoff, and settles drain waiters", async () => {

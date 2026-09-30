@@ -1131,7 +1131,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
-  // is exactly the two deliveries that used to live inline here.
+  // retains browser delivery; daemon delivery is the hook MUL-419 will connect.
   const buildFanout = options.createRealtimeFanout ?? createRealtimeFanout;
   const realtimeFanout = buildFanout({
     role: effectiveApiRole,

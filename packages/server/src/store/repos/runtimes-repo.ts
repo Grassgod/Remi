@@ -583,12 +583,10 @@ export class RuntimesRepo {
        WHERE COALESCE(runtime.workspace_id, 'local') = ?
        ORDER BY runtime.updated_at DESC, runtime.id DESC`,
     ).all(workspaceId, workspaceId) as Row[];
-    return this.hydrateRuntimes(rows.map((row) => {
-      const runtime = toRuntime(row);
-      return { ...runtime, protocol: this.runtimeProtocol(runtime, row.protocol_upgrade_status == null ? null : {
-        status: String(row.protocol_upgrade_status), error: row.protocol_upgrade_error == null ? null : String(row.protocol_upgrade_error),
-      }) };
-    }), workspaceId);
+    const latestUpdateByRuntime = new Map(rows.map((row) => [String(row.id), row.protocol_upgrade_status == null
+      ? null
+      : { status: String(row.protocol_upgrade_status), error: row.protocol_upgrade_error == null ? null : String(row.protocol_upgrade_error) }]));
+    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId, latestUpdateByRuntime);
   }
 
   /**
@@ -597,7 +595,10 @@ export class RuntimesRepo {
    * List usage uses the existing parser on one workspace-scoped task read.
    * Single-runtime reads keep their existing PostgreSQL settled-usage cache.
    */
-  private hydrateRuntimes(runtimes: MultiremiRuntime[], workspaceId: string): MultiremiRuntime[] {
+  private hydrateRuntimes(
+    runtimes: MultiremiRuntime[], workspaceId: string,
+    latestUpdateByRuntime: Map<string, { status: string; error: string | null } | null>,
+  ): MultiremiRuntime[] {
     if (!runtimes.length) return [];
     const groupsByRuntime = new Map<string, string[]>();
     const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
@@ -647,6 +648,7 @@ export class RuntimesRepo {
         taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
       }),
+      protocol: this.runtimeProtocolStatus(runtime, latestUpdateByRuntime.get(runtime.id) ?? null),
       executionGroupIds: groupsByRuntime.get(runtime.id) ?? [],
       models: modelsByRuntime.get(runtime.id) ?? [],
     }));
@@ -2376,6 +2378,11 @@ export class RuntimesRepo {
        ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
                 created_at DESC, updated_at DESC, id DESC LIMIT 1`,
     ).get(runtime.id) as { status: string; error: string | null } | null;
+    return this.runtimeProtocolStatus(runtime, latest);
+  }
+
+  private runtimeProtocolStatus(runtime: MultiremiRuntime, latest: { status: string; error: string | null } | null): RuntimeProtocolStatus {
+    const version = runtime.daemonProtocolVersion ?? 1;
     // A successfully negotiated current daemon is healthy even if an old upgrade failed.
     const compatible = version === DAEMON_PROTOCOL_VERSION && meetsDaemonMinCliVersion(runtimeCliVersion(runtime));
     const state = compatible ? "ok"

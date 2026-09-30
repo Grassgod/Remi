@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
@@ -57,6 +59,80 @@ describe("daemon protocol v2 real connection", () => {
     await h.stopDaemon();
     expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
     expect(h.clock.pendingTimerCount).toBe(0);
+  });
+
+  it("settles exchanges and subsequent lane callbacks from their completion promises", async () => {
+    const h = await fixture();
+    await h.startDaemon(); await h.settleHeartbeat();
+    let releaseExchange!: () => void;
+    let exchangeStarted!: () => void;
+    let releaseCallback!: () => void;
+    let callbackStarted!: () => void;
+    const exchangeReady = new Promise<void>(resolve => { exchangeStarted = resolve; });
+    const callbackReady = new Promise<void>(resolve => { callbackStarted = resolve; });
+    const exchangeGate = new Promise<void>(resolve => { releaseExchange = resolve; });
+    const callbackGate = new Promise<void>(resolve => { releaseCallback = resolve; });
+    h.layer.registerRpcHandler("gc.check_task", async () => {
+      exchangeStarted(); await exchangeGate; return { ok: true };
+    });
+    const callback = spyOn((h.daemon as any).protocolLane, "onHeartbeatAck").mockImplementation(async () => {
+      callbackStarted(); await callbackGate;
+    });
+    try {
+      h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+      const exchange = h.client.rpc("gc.check_task", {});
+      await exchangeReady;
+      let settled = false;
+      const settlement = h.settleHeartbeat().then(() => { settled = true; });
+      await Bun.sleep(0);
+      expect(settled).toBe(false);
+      releaseExchange(); await exchange; await callbackReady;
+      expect(settled).toBe(false);
+      releaseCallback(); await settlement;
+      expect(h.client.diagnostics()).toMatchObject({ pending_rpcs: 0, background: 0 });
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally { releaseExchange(); releaseCallback(); callback.mockRestore(); }
+  });
+
+  it("keeps a bounded diagnostic deadline when an exchange has not replied", async () => {
+    const h = await fixture();
+    await h.startDaemon(); await h.settleHeartbeat();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    h.layer.registerRpcHandler("gc.check_task", async () => { await gate; return { ok: true }; });
+    const exchange = h.client.rpc("gc.check_task", {});
+    try {
+      await expect(h.settleHeartbeat(25)).rejects.toThrow("Timed out waiting for heartbeat and runtime callbacks");
+      expect(h.client.diagnostics().pending_rpcs).toBe(1);
+    } finally { release(); await exchange; await h.settleHeartbeat(); }
+  });
+
+  it("registers inert providers without probing installed agent or ACP binaries", async () => {
+    const h = await fixture();
+    const prototype = Object.getPrototypeOf(h.daemon);
+    const bridge = spyOn(prototype, "acpVersion").mockImplementation(() => { throw new Error("Unexpected local ACP version probe"); });
+    const agent = spyOn(prototype, "agentVersion").mockImplementation(() => { throw new Error("Unexpected local agent version probe"); });
+    try {
+      await h.startDaemon(); await h.settleHeartbeat();
+      expect(bridge).not.toHaveBeenCalled();
+      expect(agent).not.toHaveBeenCalled();
+      expect(h.store.listRuntimes()).toHaveLength(1);
+      expect(h.client.connectionState()).toBe("connected");
+    } finally { bridge.mockRestore(); agent.mockRestore(); }
+  });
+
+  it("commits fixture initialization without reducing file-backed SQLite durability", async () => {
+    const h = await fixture();
+    expect(h.db.inTransaction).toBe(false);
+    expect(h.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+    expect(h.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    await h.startDaemon(); await h.settleHeartbeat();
+    const persisted = new Database(join(h.root, "server.db"), { readonly: true });
+    try {
+      expect(persisted.query("SELECT id FROM multiremi_runtimes").all()).toEqual([
+        { id: h.store.listRuntimes()[0]!.id },
+      ]);
+    } finally { persisted.close(); }
   });
 
   it("records task and runtime partition keys with sequence numbers at real API ingress", async () => {

@@ -150,7 +150,7 @@ describe("peer real store serialized burst bound", () => {
       });
       const registries = (client: typeof local) => ({
         browser: new Map([["local", new Set([client.client])]]),
-        browserScope: new Map(), browserUser: new Map(), daemon: new Map(),
+        browserScope: new Map(), browserUser: new Map(),
       });
       const localFanout = createRealtimeFanout({ store, role: "ui", peer: sender, registries: registries(local) });
       const receiverStore = new MultiremiStore(db);

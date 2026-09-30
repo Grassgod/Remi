@@ -4008,6 +4008,9 @@ export class MultiremiDaemon {
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",
         report: async (result, { final }) => {
+          // An in-flight periodic summary can finish after the terminal report was queued.
+          if (!final && (this.traceStore().head(task.id)?.closed
+            || this.ensureOutbox().taskIdsWithPendingTerminal().includes(task.id))) return;
           await this.client.reportProgress(task.id, result.summary, result.step, result.total, { final });
         },
       });

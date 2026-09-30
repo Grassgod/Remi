@@ -84,10 +84,9 @@ function roleSpy() {
   };
 }
 
-/** Records the frames a browser- or daemon-registry client is handed. */
+/** Records browser frames; daemon delivery is observed through the fanout hook. */
 function registries() {
   const browserFrames: string[] = [];
-  const daemonFrames: string[] = [];
   const browser = {
     data: {
       kind: "browser" as const,
@@ -101,23 +100,9 @@ function registries() {
     sendText: (frame: string) => browserFrames.push(frame),
     close: () => {},
   };
-  const daemon = {
-    data: {
-      kind: "daemon" as const,
-      connectedAt: new Date().toISOString(),
-      runtimeId: "rt_role",
-      runtimeIds: ["rt_role"],
-      accessToken: null,
-      canReportAgentPluginProtocol: true,
-    },
-    sendText: (frame: string) => daemonFrames.push(frame),
-    close: () => {},
-  };
   return {
     browserFrames,
-    daemonFrames,
     registries: {
-      daemon: new Map([["rt_role", new Set([daemon])]]),
       browser: new Map([["local", new Set([browser])]]) as any,
       browserUser: new Map([["local", new Set([browser])]]) as any,
       browserScope: new Map() as any,
@@ -134,14 +119,15 @@ function fanoutDelivery(role: LocalRealtimeRole) {
   const agent = store.createAgent({ name: `role-${role}`, provider: "codex" });
   const runtime = store.registerRuntime({ id: "rt_role", name: "Role runtime", provider: "codex" });
   const mounts = registries();
-  const fanout = createRealtimeFanout({ role, store, registries: mounts.registries });
+  const daemonEvents: Array<{ type: string }> = [];
+  const fanout = createRealtimeFanout({ role, store, registries: mounts.registries, onDaemonTask: event => { daemonEvents.push(event); } });
   try {
     store.createTask({ agentId: agent.id, prompt: "role delivery", runtimeId: runtime.id });
     return {
       browser: mounts.browserFrames.length,
-      daemon: mounts.daemonFrames.length,
+      daemon: daemonEvents.length,
       browserTypes: mounts.browserFrames.map((frame) => (JSON.parse(frame) as { type: string }).type),
-      daemonTypes: mounts.daemonFrames.map((frame) => (JSON.parse(frame) as { type: string }).type),
+      daemonTypes: daemonEvents.map(event => event.type),
     };
   } finally {
     fanout.close();

@@ -5470,6 +5470,7 @@ runMigrations(this.db);
     return this.tasks.pinTaskSession(taskId, sessionId, workDir);
   }
 
+  /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     return this.tasks.appendTaskMessages(taskId, messages);
   }

@@ -11,6 +11,7 @@ import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { runWorkspaceGcOnce } from "@daemon/agent-runtime/workspace/gc.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { legacyGcHttp } from "../../fixtures/legacy-gc-http.js";
+import { buildArchiveFixture } from "../multiremi/session-archive-fixtures.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -32,12 +33,11 @@ async function fixture(code: string) {
   }
   if (code === "issue_workspace_archive_invalid") {
     workspace(runtime.id);
-    const bytes = Buffer.from("physically verified GC archive");
-    const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id } });
     const initialized = archives.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id, issueId: issue.id, runtimeId: runtime.id,
-      daemonId: "daemon-gc", sourceRevision: "physical", sha256, sizeBytes: bytes.length }).archive;
+      daemonId: "daemon-gc", sourceRevision: fixture.sourceRevision, sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
     const claimed = await archives.claimUploadAttempt(runtime.id, issue.id, initialized.id);
-    await archives.upload(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!, new Response(bytes).body);
+    await archives.upload(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!, new Response(fixture.bytes).body);
     await archives.complete(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!);
     archive = { archiveId: initialized.id, sourceRevision: "physical", sha256: "b".repeat(64) };
   }

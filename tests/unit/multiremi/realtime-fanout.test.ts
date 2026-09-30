@@ -27,6 +27,7 @@ import {
 import {
   createRealtimeFanout,
   type LocalRealtimeRole,
+  type RealtimeFanoutOptions,
 } from "../../../packages/server/src/api/realtime-fanout.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, nextWebSocketMessage, resetMultiremiTestEnv, waitWebSocketOpen } from "./helpers.js";
@@ -53,34 +54,19 @@ function fakeBrowserClient(frames: string[], options: { workspaceId?: string; us
   };
 }
 
-/** A daemon-registry client keyed by runtime. */
-function fakeDaemonClient(frames: string[], runtimeId: string) {
-  return {
-    data: {
-      kind: "daemon" as const,
-      connectedAt: new Date().toISOString(),
-      runtimeId,
-      runtimeIds: [runtimeId],
-      accessToken: null,
-      canReportAgentPluginProtocol: true,
-    },
-    sendText: (frame: string) => frames.push(frame),
-    close: () => {},
-  };
-}
+type DaemonTaskEvent = Parameters<NonNullable<RealtimeFanoutOptions["onDaemonTask"]>>[0];
 
 function registriesFor(workspaceId = "local") {
   const browserFrames: string[] = [];
   const userFrames: string[] = [];
   const scopeFrames: string[] = [];
-  const daemonFrames: string[] = [];
+  const daemonEvents: DaemonTaskEvent[] = [];
   const browserClient = fakeBrowserClient(browserFrames, { workspaceId });
-  const daemonClient = fakeDaemonClient(daemonFrames, "rt_fanout");
   return {
     browserFrames,
-    daemonFrames,
+    daemonEvents,
+    onDaemonTask: (event: DaemonTaskEvent) => { daemonEvents.push(event); },
     registries: {
-      daemon: new Map([["rt_fanout", new Set([daemonClient])]]),
       browser: new Map([[workspaceId, new Set([browserClient])]]) as any,
       browserUser: new Map([["local", new Set([fakeBrowserClient(userFrames)])]]) as any,
       browserScope: new Map() as any,
@@ -93,13 +79,13 @@ describe("realtime fanout — role routing", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Fanout agent", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "all", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "all", store, registries, onDaemonTask });
 
     try {
       const task = store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:queued", payload: { task_id: task.id } });
-      expect(daemonFrames).toEqual([]);
+      expect(daemonEvents).toEqual([]);
     } finally {
       fanout.close();
     }
@@ -113,12 +99,13 @@ describe("realtime fanout — role routing", () => {
       const store = createStore();
       const agent = store.createAgent({ name: `Fanout ${role}`, provider: "codex" });
       const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
-      const { registries, browserFrames, daemonFrames } = registriesFor();
-      const fanout = createRealtimeFanout({ role, store, registries });
+      const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+      const fanout = createRealtimeFanout({ role, store, registries, onDaemonTask });
       try {
-        store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
+        const task = store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
         expect(browserFrames, role).toHaveLength(expectBrowser);
-        expect(daemonFrames, role).toHaveLength(expectDaemon);
+        expect(daemonEvents, role).toHaveLength(expectDaemon);
+        if (expectDaemon) expect(daemonEvents[0]).toEqual({ type: "task:queued", task });
       } finally {
         fanout.close();
       }
@@ -130,8 +117,8 @@ describe("realtime fanout — role routing", () => {
     const agent = store.createAgent({ name: "Fanout remote", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "remote", runtimeId: runtime.id });
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "runtime", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "runtime", store, registries, onDaemonTask });
 
     try {
       // Daemon v2 obtains pending tasks through its own protocol, not this registry.
@@ -142,7 +129,7 @@ describe("realtime fanout — role routing", () => {
         payload: { task, task_id: task.id },
       });
       expect(browserFrames).toHaveLength(0);
-      expect(daemonFrames).toEqual([]);
+      expect(daemonEvents).toEqual([]);
     } finally {
       fanout.close();
     }
@@ -154,8 +141,8 @@ describe("realtime fanout — role routing", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "messages" });
     store.appendTaskMessages(task.id, [{ type: "assistant", content: "hello" }]);
     const messages = store.listTaskMessages(task.id);
-    const { registries, browserFrames, daemonFrames } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "ui", store, registries });
+    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
+    const fanout = createRealtimeFanout({ role: "ui", store, registries, onDaemonTask });
 
     try {
       fanout.deliverRemote({
@@ -164,7 +151,7 @@ describe("realtime fanout — role routing", () => {
         kind: "task_messages",
         payload: { task: store.getTask(task.id)!, task_id: task.id, messages },
       });
-      expect(daemonFrames).toHaveLength(0);
+      expect(daemonEvents).toHaveLength(0);
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:message", payload: { seq: 1 } });
     } finally {
       fanout.close();
@@ -239,6 +226,7 @@ describe("realtime fanout — two servers over one database", () => {
     storeB: MultiremiStore;
     /** POST attempts each process made: `a` = A→B, `b` = B→A. */
     postCounts: { a: number; b: number };
+    daemonEvents: { a: DaemonTaskEvent[]; b: DaemonTaskEvent[] };
     /** Simulate the other machine being unreachable, or coming back. */
     setLink(direction: "a" | "b", open: boolean): void;
     cleanup: () => void;
@@ -267,6 +255,7 @@ describe("realtime fanout — two servers over one database", () => {
 
     const secret = "peer-secret-under-test";
     const postCounts = { a: 0, b: 0 };
+    const daemonEvents = { a: [] as DaemonTaskEvent[], b: [] as DaemonTaskEvent[] };
     const linkOpen = { a: true, b: true };
     // Each server's sender is a real HTTP client to the other server's port,
     // counted so the loop test can prove an inbound event is not re-sent and
@@ -308,6 +297,7 @@ describe("realtime fanout — two servers over one database", () => {
       apiRole: options.roles?.a,
       peerChannel: peerA,
       peerSecret: secret,
+      createRealtimeFanout: options => createRealtimeFanout({ ...options, onDaemonTask: event => { daemonEvents.a.push(event); } }),
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
         bufferCapacity: 16, role: options.roles?.a ?? "all",
@@ -321,6 +311,7 @@ describe("realtime fanout — two servers over one database", () => {
       apiRole: options.roles?.b,
       peerChannel: peerB,
       peerSecret: secret,
+      createRealtimeFanout: options => createRealtimeFanout({ ...options, onDaemonTask: event => { daemonEvents.b.push(event); } }),
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
         bufferCapacity: 16, role: options.roles?.b ?? "all",
@@ -333,6 +324,7 @@ describe("realtime fanout — two servers over one database", () => {
       storeA,
       storeB,
       postCounts,
+      daemonEvents,
       setLink: (direction, open) => { linkOpen[direction] = open; },
       cleanup: () => {
         try { serverA!.stop(true); } catch { /* already stopped */ }
@@ -580,10 +572,10 @@ describe("realtime fanout — two servers over one database", () => {
     }
   }, 60_000);
 
-  it("wakes a daemon socket on B for a task created on A", async () => {
+  it("makes a task created on A visible on B without a v1 wakeup socket", async () => {
     const two = shared!;
     {
-      const { storeA, storeB, serverA, serverB } = two;
+      const { storeA, storeB, serverB } = two;
       const runtime = storeA.registerRuntime({ id: "rt_peer_wakeup", name: "Peer runtime", provider: "codex" });
       const agent = storeA.createAgent({ name: "Peer wakeup agent", provider: "codex", runtimeId: runtime.id });
 

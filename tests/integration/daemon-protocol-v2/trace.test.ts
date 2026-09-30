@@ -32,7 +32,11 @@ describe("memory trace over the real protocol", () => {
     it(`reconciles dense trace exactly once over 20 ${injection} injections`, async () => {
       let interrupt: string | null = null;
       const h = await fixture({ beforeSend(frame, socket) {
-        if (frame.t === "trace.append") socket.native.send(JSON.stringify(frame));
+        if (frame.t === "trace.append") {
+          expect(frame.id).toEqual(expect.any(String));
+          expect(frame.seq).toBeUndefined();
+          socket.native.send(JSON.stringify(frame));
+        }
         if (injection === "socket" && frame.t === "trace.append" && frame.p.task_id === interrupt) {
           interrupt = null; socket.close(4001); return false;
         }
@@ -57,6 +61,20 @@ describe("memory trace over the real protocol", () => {
       expect(h.errors).toEqual([]);
     }, 40_000);
   }
+
+  it("rejects trace.append carrying an outer seq instead of an RPC id", async () => {
+    const h = await fixture(); const t = task(h);
+    h.sockets.at(-1)!.native.send(JSON.stringify({ v: 2, t: "trace.append", seq: 999_003,
+      rt: rt(h), ts: Date.now(), p: { task_id: t.id, closed: false,
+        events: [{ seq: 1, type: "text", ts: "2026-09-28T00:00:00Z", content: "invalid envelope" }] } }));
+    await waitFor(() => h.sockets.at(-1)!.frames.some(frame => frame.t === "res"
+      && frame.p?.code === "protocol_violation"), "RPC misuse rejection");
+    expect(snapshot(h, t.id).head).toBe(0);
+    expect(h.client.connectionState()).toBe("connected");
+    trace(h).append(t.id, rt(h), [{ type: "text", content: "valid RPC" }]);
+    await waitFor(() => daemonTraceService(h.layer).sink.head(t.id) === 1, "valid trace RPC after rejection");
+    expect(snapshot(h, t.id).events.map(event => event.content)).toEqual(["valid RPC"]);
+  });
 
   it("migrates both providers' legacy messages and completes their owned traces", async () => {
     const tasks: string[] = [];

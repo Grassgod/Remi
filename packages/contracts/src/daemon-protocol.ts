@@ -22,7 +22,7 @@
  *   handshake     hello / welcome / reject - one exchange per connection
  *   best_effort   dropped when the socket is gone; no `seq`, no replay
  *   event         reliable, carries `seq`, replayed until acknowledged
- *   rpc           request, paired with a reply through `id` / `re`
+ *   rpc           request, paired through `id` / `re`; trace resumes by head
  *   reply         `res`, the answer to an rpc frame
  *   ack           cumulative acknowledgement on its own
  *
@@ -31,8 +31,8 @@
  * code: a reply has a different validation path than a request, and
  * `runtime.ready` / `concierge.status` are best effort for exactly the same
  * reason `hb` is - each is recomputed from local state, so losing one costs
- * nothing. A frame's category decides both its transport and its replay story,
- * so the classification lives here as data rather than in a comment.
+ * nothing. Category decides the envelope; trace-head reliability is separate
+ * from the event sequence and window, so the classification lives here as data.
  */
 
 import type { TraceEvent } from "./trace.js";
@@ -100,9 +100,9 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
 ] as const;
 
 /**
- * daemon -> server trace stream. Reliable and resumable, but deliberately NOT in
- * the outbox: the daemon's trace file is the only buffer, and the client resumes
- * from the head the server reports. See `docs/daemon-protocol-v2.md` §5.
+ * daemon -> server trace RPC. Paired by id/re, reliable through task trace heads,
+ * and deliberately NOT in the outbox or the sequence window. The daemon's trace
+ * file is the buffer. See `docs/daemon-protocol-v2.md` §5.
  */
 export const DAEMON_UPLINK_TRACE_FRAMES = [
   "trace.append",
@@ -118,7 +118,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
   "concierge.status",
 ] as const;
 
-/** daemon -> server RPC requests, paired with a `res` by `id`. */
+/** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
 export const DAEMON_UPLINK_RPC_FRAMES = [
   "steer.consume",
   "human_request.create",
@@ -176,7 +176,7 @@ export const DAEMON_DOWNLINK_TRACE_FRAMES = [
 export type DaemonUplinkEventFrame = (typeof DAEMON_UPLINK_EVENT_FRAMES)[number];
 export type DaemonUplinkTraceFrame = (typeof DAEMON_UPLINK_TRACE_FRAMES)[number];
 export type DaemonUplinkBestEffortFrame = (typeof DAEMON_UPLINK_BEST_EFFORT_FRAMES)[number];
-export type DaemonUplinkRpcFrame = (typeof DAEMON_UPLINK_RPC_FRAMES)[number];
+export type DaemonUplinkRpcFrame = (typeof DAEMON_UPLINK_RPC_FRAMES)[number] | DaemonUplinkTraceFrame;
 export type DaemonDownlinkEventFrame = (typeof DAEMON_DOWNLINK_EVENT_FRAMES)[number];
 export type DaemonDownlinkRpcFrame = (typeof DAEMON_DOWNLINK_RPC_FRAMES)[number];
 export type DaemonDownlinkTraceFrame = (typeof DAEMON_DOWNLINK_TRACE_FRAMES)[number];
@@ -225,7 +225,8 @@ export function daemonFrameCategory(type: string): DaemonProtocolFrameCategory |
   if (type === "res") return "reply";
   if (type === "ack") return "ack";
   if (UPLINK_EVENT_TYPES.has(type) || DOWNLINK_EVENT_TYPES.has(type)) return "event";
-  if (UPLINK_TRACE_TYPES.has(type) || DOWNLINK_TRACE_TYPES.has(type)) return "event";
+  if (DOWNLINK_TRACE_TYPES.has(type)) return "event";
+  if (UPLINK_TRACE_TYPES.has(type)) return "rpc";
   if (UPLINK_RPC_TYPES.has(type) || DOWNLINK_RPC_TYPES.has(type)) return "rpc";
   return null;
 }
@@ -233,9 +234,8 @@ export function daemonFrameCategory(type: string): DaemonProtocolFrameCategory |
 /**
  * Whether a frame must be replayed until the peer acknowledges it.
  *
- * `trace.append` and `trace.push` are reliable too, but they resume from a trace
- * head instead of a sliding window, so they are not window-managed; see
- * {@link daemonFrameUsesOutboxWindow}.
+ * `trace.append` resumes through task trace heads, not its RPC envelope. It is
+ * reliable without a sender sequence; `trace.push` remains a sequenced event.
  */
 export function daemonFrameIsReliable(type: string): boolean {
   return UPLINK_EVENT_TYPES.has(type)
@@ -246,7 +246,7 @@ export function daemonFrameIsReliable(type: string): boolean {
 
 /** Whether the frame carries a sender-assigned `seq`. */
 export function daemonFrameUsesSeq(type: string): boolean {
-  return daemonFrameIsReliable(type);
+  return UPLINK_EVENT_TYPES.has(type) || DOWNLINK_EVENT_TYPES.has(type) || DOWNLINK_TRACE_TYPES.has(type);
 }
 
 /**
@@ -389,7 +389,11 @@ export interface DaemonTaskCompletionModel {
   model: string;
 }
 
-/** Fields `task.complete` and `task.fail` add to the existing report payloads. */
+/**
+ * Fields `task.complete` and `task.fail` add to the existing report payloads.
+ * Daemons must send them; servers tolerate missing or malformed card metadata
+ * with a blank card so that it can never block the terminal state transition.
+ */
 export interface DaemonTaskCompletionFields {
   trace: DaemonTaskCompletionTrace;
   /** Markdown of the turn's final answer, or null when the turn produced none. */

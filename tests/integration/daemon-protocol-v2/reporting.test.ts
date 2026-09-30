@@ -24,54 +24,83 @@ describe("v2 report reconciliation with real sockets and DB", () => {
   for (const injection of ["socket", "daemon", "server"] as const) {
     it(`reconciles all emitted report keys exactly once over 20 ${injection} injections`, async () => {
       let interruptTask: string | null = null;
-      const h = await fixture({ beforeSend(frame, socket) {
-        if (frame.t === "task.complete") socket.native.send(JSON.stringify(frame));
-        if (injection === "socket" && frame.t === "task.progress" && frame.p.task_id === interruptTask) {
-          interruptTask = null;
-          socket.native.send(JSON.stringify(frame));
-          socket.close(4001);
-          return false;
+      const faultReplies: Array<ReturnType<typeof spyOn>> = [];
+      const h = await fixture({ beforeSend(frame, socket, harness) {
+        if (["task.start", "task.progress", "task.usage", "task.complete"].includes(frame.t)) socket.native.send(JSON.stringify(frame));
+        if (frame.t === "task.usage" && frame.p.task_id === interruptTask) {
+          const session = harness.sessions.at(-1)!;
+          const real = session.sendReply.bind(session);
+          faultReplies.push(spyOn(session, "sendReply").mockImplementation((re, payload) => {
+            if (re === String(frame.seq) && (payload as { ok?: unknown }).ok === true && interruptTask === frame.p.task_id) {
+              interruptTask = null;
+              socket.close(4001);
+              return false;
+            }
+            return real(re, payload);
+          }));
         }
       } });
       await h.startDaemon();
       const sent = new Set<string>();
-      const applied = new Set<string>();
+      const arrived = new Set<string>();
       const completed = new Map<string, number>();
       const realComplete = h.store.completeTask.bind(h.store);
       const complete = spyOn(h.store, "completeTask").mockImplementation((id, input) => {
         completed.set(id, (completed.get(id) ?? 0) + 1);
         return realComplete(id, input);
       });
+      const progress = spyOn(h.store, "reportProgress");
+      const usageReport = spyOn(h.store, "reportTaskUsage");
       try {
         for (let round = 0; round < 20; round++) {
           const t = task(h);
           const box = outbox(h);
-          if (injection !== "socket") await h.disconnect();
           interruptTask = t.id;
           const payload = { runtime_id: runtime(h) };
-          const rows = [box.enqueue(t.id, "start", payload), box.enqueue(t.id, "progress", { ...payload, summary: `step-${round}`, step: 1, total: 1 }),
-            box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture", input_tokens: 5 }] }),
+          const rows = [box.enqueue(t.id, "start", payload),
+            box.enqueue(t.id, "progress", { ...payload, summary: `early-${round}`, step: 1, total: 2 }),
+            box.enqueue(t.id, "progress", { ...payload, summary: `step-${round}`, step: 2, total: 2 }),
+            box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-a", inputTokens: 5, outputTokens: 2 }] }),
+            box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-b", inputTokens: 7, outputTokens: 3 }] }),
             box.enqueue(t.id, "complete", { ...payload, output: `result-${round}` })];
           rows.forEach(id => sent.add(`${t.id}:${id}`));
+          await waitFor(() => h.client.connectionState() === "disconnected" && h.store.getTask(t.id)?.usage?.length === 1,
+            "usage committed without ACK", 5_000);
           if (injection === "daemon") await h.restartDaemon();
           else if (injection === "server") await h.restartServer();
-          else {
-            await waitFor(() => h.client.connectionState() === "disconnected", "injected socket loss");
-            await h.reconnect();
-          }
+          else await h.reconnect();
           await waitFor(() => h.store.getTask(t.id)?.status === "completed" && outbox(h).stats().pending === 0, "terminal report and res", 5_000);
           expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: `result-${round}`, progressSummary: `step-${round}` });
-          expect(h.store.getTask(t.id)?.usage).toHaveLength(1);
+          const usage = h.store.getTask(t.id)!.usage!;
+          expect(usage).toHaveLength(2);
+          expect(usage.reduce((sum, entry) => sum + entry.inputTokens, 0)).toBe(12);
+          expect(usage.reduce((sum, entry) => sum + entry.outputTokens, 0)).toBe(5);
           expect(completed.get(t.id)).toBe(1);
+          expect(progress.mock.calls.filter(([id]) => id === t.id)).toHaveLength(2);
+          expect(usageReport.mock.calls.filter(([id]) => id === t.id)).toHaveLength(2);
           const entries = h.ledger.filter(entry => entry.partition === t.id && entry.seq !== null);
-          entries.forEach(entry => applied.add(`${t.id}:${entry.seq}`));
+          entries.forEach(entry => arrived.add(`${t.id}:${entry.seq}`));
           const unique = [...new Map(entries.map(entry => [entry.seq, entry])).values()];
           expect(unique.at(-1)?.type).toBe("task.complete");
+          const effects = h.effectiveLedger.filter(entry => entry.partition === t.id);
+          for (const seq of rows) expect(effects.filter(entry => entry.seq === seq)).toHaveLength(1);
+          expect(effects.at(-1)?.type).toBe("task.complete");
+          expect(entries.length).toBeGreaterThan(effects.length);
         }
-        expect([...applied].sort()).toEqual([...sent].sort());
-        expect(sent.size).toBe(80);
+        expect([...arrived].sort()).toEqual([...sent].sort());
+        const applied = h.effectiveLedger.filter(entry => sent.has(`${entry.partition}:${entry.seq}`))
+          .map(entry => `${entry.partition}:${entry.seq}`);
+        expect(applied.sort()).toEqual([...sent].sort());
+        expect(sent.size).toBe(120);
         expect(h.errors).toEqual([]);
-      } finally { complete.mockRestore(); }
+        const reads = [...h.snapshotReadMs].sort((a, b) => a - b);
+        console.info("Report Store snapshot read timings (ms)", JSON.stringify({ injection, count: reads.length,
+          min: reads[0], p50: reads[Math.floor(reads.length * 0.5)], p95: reads[Math.floor(reads.length * 0.95)],
+          max: reads.at(-1), total: reads.reduce((sum, ms) => sum + ms, 0) }));
+      } finally {
+        complete.mockRestore(); progress.mockRestore(); usageReport.mockRestore();
+        for (const reply of faultReplies) reply.mockRestore();
+      }
     }, 30_000);
   }
 
