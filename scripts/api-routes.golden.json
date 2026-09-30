@@ -13695,7 +13695,7 @@
       "body": {
         "waiting_on_human": [
           {
-            "id": "hrq_snapshot",
+            "id": "hrq_snapshot_waiting",
             "bucket": "waiting_on_human",
             "type": "human_request",
             "kind": "permission",
@@ -13704,7 +13704,7 @@
             "status": "pending",
             "issueId": "iss_snapshot",
             "sourceIssueId": "iss_snapshot",
-            "sourceTaskId": "tsk_snapshot",
+            "sourceTaskId": "tsk_uj5ra15g3kjw",
             "options": null,
             "payload": {
               "tool": "Bash",
@@ -21417,11 +21417,11 @@
               "tool": "Bash",
               "command": "ls"
             },
-            "status": "pending",
+            "status": "cancelled",
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null,
+            "respondedAt": "<timestamp>",
             "expiresAt": "<timestamp>"
           }
         ]
@@ -21464,16 +21464,16 @@
           ],
           "human_requests": {
             "counts": {
-              "pending": 1,
+              "pending": 0,
               "responded": 0,
               "timeout": 0,
-              "cancelled": 0
+              "cancelled": 1
             },
             "latest": {
               "kind": "permission",
-              "status": "pending",
+              "status": "cancelled",
               "created_at": "<timestamp>",
-              "responded_at": null
+              "responded_at": "<timestamp>"
             }
           },
           "runtime": {
@@ -22691,11 +22691,11 @@
               "tool": "Bash",
               "command": "ls"
             },
-            "status": "pending",
+            "status": "cancelled",
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null,
+            "respondedAt": "<timestamp>",
             "expiresAt": "<timestamp>"
           }
         ]
@@ -22738,16 +22738,16 @@
           ],
           "human_requests": {
             "counts": {
-              "pending": 1,
+              "pending": 0,
               "responded": 0,
               "timeout": 0,
-              "cancelled": 0
+              "cancelled": 1
             },
             "latest": {
               "kind": "permission",
-              "status": "pending",
+              "status": "cancelled",
               "created_at": "<timestamp>",
-              "responded_at": null
+              "responded_at": "<timestamp>"
             }
           },
           "runtime": {

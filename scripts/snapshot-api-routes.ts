@@ -740,6 +740,16 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     authorId: member.id,
     body: "Snapshot comment body",
   });
+  // The comment queues another issue task, so its request remains pending
+  // while the completed task's request exercises terminal cancellation.
+  const waitingTask = store.listTasksForIssue(issue.id).find((entry) => entry.id !== task.id && entry.status === "queued");
+  if (!waitingTask) throw new Error("Snapshot comment did not queue a task");
+  store.createTaskHumanRequest({
+    id: "hrq_snapshot_waiting",
+    taskId: waitingTask.id,
+    kind: "permission",
+    payload: { tool: "Bash", command: "ls" },
+  });
   store.addCommentReaction(comment.id, { actorType: "member", actorId: member.id, emoji: "eyes" });
 
   const attachment = store.createAttachment({
