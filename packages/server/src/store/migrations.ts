@@ -14,6 +14,7 @@ import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/dae
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
+import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -2854,6 +2855,10 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, TASK_TRACE_POINTERS_MIGRATION, () => {
     createTaskTracePointers(db);
   });
+  // MUL-432 P1: which writer produced an archive pointer ('daemon' or
+  // 'trace_backfill'); the swap rule only compares head_seq within one source.
+  // NULL on an existing archive pointer means daemon, the only writer before this.
+  addColumnIfMissing(db, "multiremi_task_traces", "source TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
@@ -3027,6 +3032,8 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "offered_at TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "accepted_at TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");
@@ -3436,6 +3443,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+  runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
+    backfillConversationLogWithinTransaction(db);
+  });
+  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
+  // the task_messages trace backfill. Plain idempotent DDL rather than
+  // `runMigrationOnce`, for the same clock-read reason as the MUL-407 (E5) block
+  // above. Ordered after the MUL-427 conversation backfill.
+  createTraceBackfillProgress(db);
+  // MUL-432 segment 2 (ADR 0006 decision 8): on-demand session archive
+  // requests. Plain idempotent DDL, same reason as above.
+  createSessionArchiveRequests(db);
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
@@ -5381,7 +5399,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       SELECT push.workspace_id, push.binding_id, push.issue_id, retry.id, push.delivery_mode, push.source
       FROM push_lineage push
       JOIN multiremi_tasks parent ON parent.id = push.wake_task_id
-      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent")}
+      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent", "legacy")}
     )
     SELECT push.*, task.chat_session_id FROM push_lineage push
     LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id
@@ -5946,6 +5964,71 @@ function createTaskTracePointers(db: SqlDatabase): void {
       ON multiremi_task_traces(location, updated_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_archive
       ON multiremi_task_traces(archive_id);
+  `);
+}
+
+/**
+ * One row per backfilled subject. `running` marks a subject whose archive is
+ * being built, so a restart knows to discard its staging files and redo it;
+ * `done` is written in the transaction that makes the archive `ready`.
+ *
+ * `multiremi_trace_backfill_tasks` holds the per-task digests of the last
+ * completed run, replaced in that same transaction; `cross_switch` marks the
+ * tasks that run acknowledged as cross-switch (MUL-432 P1).
+ */
+function createTraceBackfillProgress(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_progress (
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      task_count INTEGER NOT NULL DEFAULT 0,
+      row_count BIGINT NOT NULL DEFAULT 0,
+      digest TEXT,
+      archive_id TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(subject_kind, subject_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_tasks (
+      task_id TEXT PRIMARY KEY,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      archive_id TEXT NOT NULL,
+      row_count BIGINT NOT NULL,
+      head_seq BIGINT NOT NULL,
+      digest TEXT NOT NULL,
+      cross_switch INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_trace_backfill_tasks_subject
+      ON multiremi_trace_backfill_tasks(subject_kind, subject_id);
+  `);
+}
+
+/**
+ * One row per request asking a daemon to archive one session subject, delivered
+ * as the `runtime.archive_sessions` frame. `status` only moves forward:
+ * pending → sent → acked → completed | failed.
+ */
+function createSessionArchiveRequests(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_session_archive_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_runtime
+      ON multiremi_session_archive_requests(runtime_id, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_subject
+      ON multiremi_session_archive_requests(runtime_id, subject_kind, subject_id);
   `);
 }
 

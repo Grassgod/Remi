@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-input-snapshot.js";
 import { dispatch } from "../../../apps/remi/cli/index.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -88,7 +89,7 @@ describe("gateway context declarations", () => {
     expect(store.listGatewayModelContext("local", "claude")).toEqual([]);
   });
 
-  it("delivers current declarations on register, heartbeat and repository refresh", async () => {
+  it("delivers current declarations on register, v2 workspace relay and repository refresh", async () => {
     const { store } = setup();
     store.saveGatewayModelContext("local", "claude", { modelId: "claude-opus-5" });
     const credential = await store.createAccessToken({ workspaceId: "local", type: "daemon", name: "daemon", userId: "local", daemonId: "context-daemon" });
@@ -101,15 +102,14 @@ describe("gateway context declarations", () => {
     expect(registered.status).toBe(200);
     const registration = await registered.json();
     expect(registration.relay.claude.one_million_models).toEqual(["claude-opus-5"]);
-    const beat = () => app.request("/api/daemon/heartbeat", {
-      method: "POST", headers: daemonHeaders, body: JSON.stringify({ runtime_id: registration.runtimes[0].id }),
-    });
-    expect((await (await beat()).json()).relay.claude.one_million_models).toEqual(["claude-opus-5"]);
+    const relay = () => runtimeInputSnapshot(store, registration.runtimes[0].id)
+      .find(entity => entity.type === "workspace.relay")?.payload.relay as { claude: { one_million_models: string[] } };
+    expect(relay().claude.one_million_models).toEqual(["claude-opus-5"]);
     const repos = await app.request("/api/daemon/workspaces/local/repos", { headers: daemonHeaders });
     expect(repos.status).toBe(200);
     expect((await repos.json()).relay.claude.one_million_models).toEqual(["claude-opus-5"]);
     store.deleteGatewayModelContext("local", "claude", "claude-opus-5");
-    expect((await (await beat()).json()).relay.claude.one_million_models).toEqual([]);
+    expect(relay().claude.one_million_models).toEqual([]);
   });
 
   it("exposes working CLI enable/clear flags and rejects ambiguous requests", async () => {

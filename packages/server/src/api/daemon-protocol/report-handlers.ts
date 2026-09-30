@@ -42,19 +42,6 @@ const string = (value: unknown): string => typeof value === "string" ? value : "
 const nullable = (value: unknown): string | null => string(value).trim() || null;
 const terminal = (status: string): boolean => ["completed", "failed", "cancelled"].includes(status);
 
-function completionTraceEventCount(trace: unknown, taskId: string): number | undefined {
-  if (trace === undefined) return undefined;
-  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
-    const eventCount = (trace as Record<string, unknown>).event_count;
-    if (eventCount === undefined) return undefined;
-    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
-      return eventCount;
-    }
-  }
-  apiLog.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
-  return undefined;
-}
-
 function completionFields(p: Record<string, unknown>, taskId: string): DaemonTaskCompletionFields | null {
   const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
   const malformed = (field: keyof DaemonTaskCompletionFields): null => {
@@ -85,6 +72,25 @@ function completionFields(p: Record<string, unknown>, taskId: string): DaemonTas
   return { trace: p.trace, final_reply_md: p.final_reply_md, model: p.model } as DaemonTaskCompletionFields;
 }
 
+/**
+ * MUL-429 (B5): only an explicit `trace.event_count === 0` marks the hot trace
+ * `none`. Read on its own, not from `completionFields`, so a frame that lacks
+ * the other card fields still reports its count; an invalid count is ignored.
+ * Logged on the API logger, as the retired HTTP completion routes did.
+ */
+function completionTraceEventCount(trace: unknown, taskId: string): number | undefined {
+  if (trace === undefined) return undefined;
+  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
+    const eventCount = (trace as Record<string, unknown>).event_count;
+    if (eventCount === undefined) return undefined;
+    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
+      return eventCount;
+    }
+  }
+  apiLog.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
+  return undefined;
+}
+
 export function authorizeReportRuntime(store: MultiremiStore, session: DaemonProtocolSession, runtimeId: string): void {
   const runtime = store.getRuntimeLite(runtimeId);
   const token = session.ownerAccessToken;
@@ -106,8 +112,7 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
 export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
-  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void,
-  onRoundCard: (taskId: string, fields: DaemonTaskCompletionFields | null) => void = () => {}): void {
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -118,7 +123,6 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
         const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
-        let terminalTransitioned = false;
         switch (frame.type) {
           case "task.start":
             if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
@@ -179,27 +183,21 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           case "task.complete":
             if (task.status === "running") {
               try { store.completeTask(taskId, { output: string(p.output), traceEventCount, branchName: nullable(p.pr_url),
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir) }); }
+                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), completionFields: fields }); }
               catch (error) {
                 if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
                 throw error;
               }
-              terminalTransitioned = true;
             }
             break;
           case "task.fail":
             if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
               store.failTask(taskId, {
                 error: string(p.error) || "Task failed", traceEventCount,
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
-              terminalTransitioned = true;
+                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason), completionFields: fields });
             }
             break;
           default: reject();
-        }
-        if (terminalTransitioned) {
-          // MUL-402: 写轮次卡。只在首次终态转换时调用；接入写卡时须与终态转换同事务，或自行按 task 幂等。
-          onRoundCard(taskId, fields);
         }
         if (isCompletion && fields?.trace) {
           onTraceClosed?.(taskId, fields.trace.head, task.runtimeId!);

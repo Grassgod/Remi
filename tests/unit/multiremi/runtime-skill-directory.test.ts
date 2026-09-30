@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -33,15 +34,13 @@ function fixture() {
 }
 
 describe("Runtime skill directories", () => {
-  it("binds selected skills to the resolved scan root through heartbeat, report and import", async () => {
+  it("binds selected skills to the resolved scan root through v2 push, report and import", async () => {
     const { store, runtime, app, post } = fixture();
     const response = await post(`/api/runtimes/${runtime.id}/local-skills`, { root: "~/.agents/custom-skills" });
     expect(response.status).toBe(200);
     const scan = await response.json();
     expect(scan.root).toBe("~/.agents/custom-skills");
-    const heartbeat = await (await post("/api/daemon/heartbeat", {
-      runtime_id: runtime.id, supports_skill_directory: true,
-    })).json();
+    const heartbeat = await receiveRuntimeInputs(store, runtime.id);
     expect(heartbeat.pending_local_skills).toEqual({ id: scan.id, root: "~/.agents/custom-skills" });
     expect((await reportFrame(store, "runtime.local_skills_result", { runtime_id: runtime.id, request_id: scan.id, status: "completed",
       root: "/home/me/.agents/custom-skills",
@@ -58,11 +57,9 @@ describe("Runtime skill directories", () => {
       scan_request_id: scan.id, skill_key: ".", root: "/untrusted/request/root",
     })).json();
     expect(imported.root).toBe("/home/me/.agents/custom-skills");
-    const importHeartbeat = await (await post("/api/daemon/heartbeat", {
-      runtime_id: runtime.id, supports_skill_directory: true, supports_batch_import: true,
-    })).json();
+    const importHeartbeat = await receiveRuntimeInputs(store, runtime.id);
     expect(importHeartbeat.pending_local_skill_import).toEqual({ id: imported.id, skill_key: ".", root: imported.root });
-    expect(importHeartbeat.pending_local_skill_imports).toEqual([importHeartbeat.pending_local_skill_import]);
+    expect(importHeartbeat.pending_local_skill_imports).toEqual([importHeartbeat.pending_local_skill_import!]);
     expect((await reportFrame(store, "runtime.local_skill_import_result", { runtime_id: runtime.id, request_id: imported.id, status: "completed",
       skill: { name: summary.name, content: "# Directory helper", source_path: imported.root, files: [{ path: "notes.md", content: "# Directory notes" }] }, }, { headers: undefined, authToken: "" })).ok).toBe(true);
     const importResult = store.getRuntimeLocalSkillImportRequest(runtime.id, imported.id)!;
@@ -127,9 +124,12 @@ describe("Runtime skill directories", () => {
     const customPending = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/custom/next" });
     const defaultList = store.createRuntimeLocalSkillListRequest(runtime.id);
     const defaultImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "legacy" });
-    const heartbeat = await (await post("/api/daemon/heartbeat", { runtime_id: runtime.id })).json();
-    expect(heartbeat.pending_local_skills).toEqual({ id: defaultList.id });
-    expect(heartbeat.pending_local_skill_import).toEqual({ id: defaultImport.id, skill_key: "legacy" });
+    const claimedList = store.claimRuntimeLocalSkillListRequest(runtime.id, false);
+    const claimedImport = store.claimRuntimeLocalSkillImportRequests(runtime.id, 1, false)[0];
+    expect(claimedList?.id).toBe(defaultList.id);
+    expect(claimedList?.root).toBeUndefined();
+    expect(claimedImport).toMatchObject({ id: defaultImport.id, skillKey: "legacy" });
+    expect(claimedImport?.root).toBeUndefined();
     for (const request of [
       store.getRuntimeLocalSkillListRequest(runtime.id, customPending.id)!,
       store.getRuntimeLocalSkillImportRequest(runtime.id, customImport.id)!,
@@ -190,10 +190,8 @@ describe("Runtime skill directories", () => {
     });
     expect(imported.status).toBe(200);
     expect((await imported.json()).root).toBe(root);
-    const heartbeat = await (await post("/api/daemon/heartbeat", {
-      runtime_id: runtime.id, supports_skill_directory: true,
-    })).json();
-    expect(heartbeat.pending_local_skill_import.root).toBe(root);
+    const heartbeat = await receiveRuntimeInputs(store, runtime.id);
+    expect(heartbeat.pending_local_skill_import!.root).toBe(root);
   });
 
   it("keeps private skill directories restricted to the runtime owner within a workspace", async () => {
@@ -238,11 +236,12 @@ describe("Runtime skill directories", () => {
     }
   });
 
-  it("recognizes the capability on the legacy HTTP heartbeat", async () => {
+  it("keeps the legacy heartbeat upgrade-only and delivers custom directories through v2", async () => {
     const { store, runtime, post } = fixture();
     const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/custom/skills" });
     const response = await (await post(`/api/multiremi/runtimes/${runtime.id}/heartbeat?supports_skill_directory=true`)).json();
-    expect(response.pending_local_skills).toEqual({ id: scan.id, root: "/custom/skills" });
+    expect(response.pending_local_skills).toBeUndefined();
+    expect((await receiveRuntimeInputs(store, runtime.id)).pending_local_skills).toEqual({ id: scan.id, root: "/custom/skills" });
   });
 
   it("upgrades existing request tables while retaining queued legacy requests", () => {

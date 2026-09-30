@@ -6,6 +6,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { conversationLogKindForSessionEvent } from "@multiremi/store/conversation-log-mirror.js";
+import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 
 // MUL-402: main's cross-issue `delegation_report` session event (ADR 0005) is
@@ -70,6 +71,10 @@ async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: Mul
   });
   expect(response.status).toBe(201);
   return store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+}
+
+function rawDb(store: MultiremiStore) {
+  return (store as unknown as { ctx: { db: { run: (sql: string, params: unknown[]) => { changes: number } } } }).ctx.db;
 }
 
 /** Every session-event seq has a log row at the same seq, and nothing else is in the log. */
@@ -152,6 +157,162 @@ for (const backend of ["sqlite", "postgres"] as const) {
           expectNoSeqHole(store, childTask.issueSessionId!);
         }));
     }
+  });
+}
+
+// --- The delegation drain reads the log, not session_events ------------------
+//
+// MUL-427 moved the drain's three reads (`drainDelegationReturnsWithinWorkspaceLock`:
+// the terminal-report gate, the terminal seq and the bridge's metadata) onto the
+// log. The two tables mirror each other one for one, so only a fixture that
+// rewrites the legacy bridge row alone can tell which table the drain reads
+// (ruling ae). Each case rewrites one thing on that row, leaves the log alone,
+// then cancels the unclaimed return so the drain rebuilds it from history.
+
+type LegacyBridgeRewrite = {
+  read: string;
+  change: string;
+  sql: string;
+  params: (bridge: ConversationLogEntry) => unknown[];
+};
+
+const LEGACY_BRIDGE_REWRITES: LegacyBridgeRewrite[] = [
+  {
+    read: "the bridge's result comment",
+    change: "names another comment",
+    sql: "UPDATE multiremi_session_events SET metadata = ? WHERE session_id = ? AND seq = ?",
+    params: (bridge) => [JSON.stringify({ ...bridge.metadata, result_comment_id: "cmt_legacy_row_only" }),
+      bridge.session_id, bridge.seq],
+  },
+  {
+    read: "the terminal seq",
+    change: "sits at a later seq",
+    sql: "UPDATE multiremi_session_events SET seq = seq + 1000 WHERE session_id = ? AND seq = ?",
+    params: (bridge) => [bridge.session_id, bridge.seq],
+  },
+  {
+    read: "the terminal report",
+    change: "no longer names the source task",
+    sql: "UPDATE multiremi_session_events SET task_id = NULL WHERE session_id = ? AND seq = ?",
+    params: (bridge) => [bridge.session_id, bridge.seq],
+  },
+];
+
+for (const backend of ["sqlite", "postgres"] as const) {
+  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-427 delegation drain follows the log (${backend})`, () => {
+    for (const rewrite of LEGACY_BRIDGE_REWRITES) {
+      it(`takes ${rewrite.read} from the log when the legacy bridge ${rewrite.change}`,
+        async () => withStore(backend, async (store) => {
+          const f = fixture(store);
+          const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+          expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+          store.buildTaskSessionProjection(f.leaderTask.id);
+          store.startTask(f.leaderTask.id);
+          store.completeTask(f.leaderTask.id, { output: "Dispatched." });
+          expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+          store.buildTaskSessionProjection(childTask.id);
+          store.startTask(childTask.id);
+          const result = store.createIssueComment(f.child.id, { authorType: "agent", authorId: f.worker.id,
+            taskId: childTask.id, issueSessionId: childTask.issueSessionId, body: "Result details" });
+          store.completeTask(childTask.id, { output: "Result details" });
+          const firstReturnId = store.getTask(childTask.id)!.delegationReturnTaskId!;
+          expect(firstReturnId).toEqual(expect.any(String));
+          const log = store.listConversationLogEntries(f.leaderSession.id);
+          const bridge = log.find((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id)!;
+          expect(bridge.metadata.result_comment_id).toBe(result.id);
+
+          expect(rawDb(store).run(rewrite.sql, rewrite.params(bridge)).changes).toBe(1);
+          expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+          store.cancelTask(firstReturnId);
+
+          const replacementId = store.getTask(childTask.id)!.delegationReturnTaskId;
+          expect(replacementId).toEqual(expect.any(String));
+          expect(replacementId).not.toBe(firstReturnId);
+          expect(store.getTask(replacementId!)!.prompt).toContain(`Result comment: ${result.id}`);
+          const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
+            activity.type === "delegation_return_triggered"
+            && (activity.data as Record<string, unknown>).returnTaskId === replacementId);
+          expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
+            .toEqual([bridge.seq]);
+        }));
+    }
+  });
+}
+
+// --- The bridge dedupe reads the log, not session_events ---------------------
+//
+// Before it appends a cross-issue bridge, `ensureDelegationWakeupWithinWorkspaceLock`
+// looks for a `delegation_report` the return session already holds for the
+// source. MUL-427 moved that lookup onto the log as well (ruling am). As with the
+// drain above, each case rewrites the legacy table alone and leaves the log as it is.
+
+async function startDelegatedChild(store: MultiremiStore, f: ReturnType<typeof fixture>): Promise<MultiremiTask> {
+  const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+  expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+  store.buildTaskSessionProjection(f.leaderTask.id);
+  store.startTask(f.leaderTask.id);
+  store.completeTask(f.leaderTask.id, { output: "Dispatched." });
+  expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+  store.buildTaskSessionProjection(childTask.id);
+  store.startTask(childTask.id);
+  return childTask;
+}
+
+for (const backend of ["sqlite", "postgres"] as const) {
+  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-427 bridge dedupe follows the log (${backend})`, () => {
+    it("reuses the log's bridge when the legacy row no longer names the source",
+      async () => withStore(backend, async (store) => {
+        const f = fixture(store);
+        const childTask = await startDelegatedChild(store, f);
+        store.completeTask(childTask.id, { output: "Result details" });
+        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId!;
+        expect(returnId).toEqual(expect.any(String));
+        const log = store.listConversationLogEntries(f.leaderSession.id);
+        const bridge = log.find((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id)!;
+
+        expect(rawDb(store).run("UPDATE multiremi_session_events SET task_id = NULL WHERE session_id = ? AND seq = ?",
+          [bridge.session_id, bridge.seq]).changes).toBe(1);
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        const duplicate = store.ensureDelegationWakeup({ sourceTaskId: childTask.id, requiredEventSeq: 1,
+          terminalStatus: "completed", terminalBody: "Result details" });
+
+        expect(duplicate).toMatchObject({ created: false, covered: true });
+        expect(duplicate.task?.id).toBe(returnId);
+        // No second bridge, and the skip is pinned to the log bridge's seq.
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        const skipped = store.listIssueActivity(f.child.id).filter((activity) =>
+          activity.type === "delegation_return_skipped"
+          && (activity.data as Record<string, unknown>).reason === "already_covered");
+        expect(skipped.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
+          .toEqual([bridge.seq]);
+      }));
+
+    it("appends a bridge when only the legacy table names the source",
+      async () => withStore(backend, async (store) => {
+        const f = fixture(store);
+        const childTask = await startDelegatedChild(store, f);
+        const log = store.listConversationLogEntries(f.leaderSession.id);
+        const newest = log.filter((entry) => entry.kind !== "head").at(-1)!;
+        expect(newest.kind).not.toBe("delegation_report");
+
+        expect(rawDb(store).run(
+          "UPDATE multiremi_session_events SET kind = 'delegation_report', task_id = ? WHERE session_id = ? AND seq = ?",
+          [childTask.id, newest.session_id, newest.seq]).changes).toBe(1);
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        store.completeTask(childTask.id, { output: "Result details" });
+
+        const bridges = store.listConversationLogEntries(f.leaderSession.id)
+          .filter((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id);
+        expect(bridges).toHaveLength(1);
+        expect(bridges[0]!.seq).toBeGreaterThan(newest.seq);
+        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId;
+        expect(returnId).toEqual(expect.any(String));
+        const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
+          activity.type === "delegation_return_triggered"
+          && (activity.data as Record<string, unknown>).returnTaskId === returnId);
+        expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
+          .toEqual([bridges[0]!.seq]);
+      }));
   });
 }
 

@@ -101,6 +101,21 @@ An inner savepoint `ROLLBACK` clears the mark for depths deeper than the
 savepoint it rolled back to. `ROLLBACK TO SAVEPOINT` ends that level as it does
 on main; no `RELEASE` follows it.
 
+### 5. SQLite takes the writer lock at the outer transaction boundary
+
+The SQLite `transaction()` proxy uses bun:sqlite's `immediate` variant for the
+outermost frame; nested calls remain savepoints. A deferred transaction can
+read, then fail immediately on its first write if another connection writes in
+between: SQLite calls the busy handler only while no transaction is open, and a
+WAL read snapshot cannot be upgraded after another writer commits
+(`SQLITE_BUSY_SNAPSHOT`). `busy_timeout` does not make that upgrade wait.
+
+Taking the writer lock at `BEGIN IMMEDIATE` makes SQLite's no-op advisory locks
+safe for cross-process read-then-write paths throughout the Store. It does not
+add a transaction frame or change the depth-1 contract. PostgreSQL's
+transaction function has no `immediate` variant and keeps its existing `BEGIN`
+and savepoint behavior.
+
 ## Consequences
 
 - The guarded entry points stay a single atomic unit at every nesting depth, and
@@ -118,3 +133,6 @@ on main; no `RELEASE` follows it.
   guards count every transaction frame, a `SAVEPOINT` included, on both
   backends; a guard that counted only the outer `BEGIN` would pass a helper's
   extra frame as depth 1 (MUL-402 QA F2/F3, `cmt_1khg3kqww3q5`).
+- On multi-process SQLite, even a read-only outer transaction holds the writer
+  lock for its synchronous callback. Other writers may wait up to their
+  `busy_timeout`; keep these callbacks short. PostgreSQL is unaffected.

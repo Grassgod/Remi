@@ -592,6 +592,7 @@ export class FeishuBotRepo {
       now,
       cleanOptionalString(input.actor),
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId)!;
   }
 
@@ -602,6 +603,7 @@ export class FeishuBotRepo {
     // Reported states are intentionally kept: a Runtime that is still hosting
     // the connector must keep appearing here until it confirms it stopped, so
     // `directiveForRuntime` can go on telling it to stop after the row is gone.
+    this.publishDownlinkChange(workspaceId);
     return true;
   }
 
@@ -622,6 +624,7 @@ export class FeishuBotRepo {
       cleanOptionalString(actor),
       workspaceId,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId);
   }
 
@@ -640,6 +643,7 @@ export class FeishuBotRepo {
       cleanOptionalString(actor),
       workspaceId,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId);
   }
 
@@ -1070,6 +1074,9 @@ export class FeishuBotRepo {
     this.ctx.tasks().runCollectedChildStatusChanges(submitChanges);
     this.ctx.emitCommitEvents(submitEvents);
     this.materializeTaskDeliveries(result.taskId);
+    // The steer primitive emits nothing inside the transaction; without this
+    // kick the daemon would not see the steer until some other downlink change.
+    if (result.steered && !result.duplicate) this.ctx.tasks().publishTaskInputChanged(result.taskId);
     return result;
   }
 
@@ -2784,6 +2791,7 @@ export class FeishuBotRepo {
     supportsNativeCot = false,
     supportsAttachments = false,
     supportsKinds = false,
+    downlink?: "peek" | { id: string; claimToken: string },
   ): MultiremiFeishuBotOutboundDelivery | null {
     if (!backgroundJobsEnabled()) return null;
     const now = nowInput instanceof Date ? new Date(nowInput) : new Date(nowInput ?? Date.now());
@@ -2887,10 +2895,12 @@ export class FeishuBotRepo {
              SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries previous
              WHERE previous.id = o.previous_delivery_id AND previous.workspace_id = o.workspace_id
                AND (previous.status = 'sent' OR (o.cascade_failure = 0 AND previous.status = 'failed'))))
+           ${typeof downlink === "object" ? "AND o.id = ?" : ""}
            AND ((o.status = 'pending' AND o.available_at <= ?)
              OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
-      ).get(workspaceId, config.appId, supportsKinds ? 1 : 0, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0, supportsAttachments ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
+      ).get(workspaceId, config.appId, supportsKinds ? 1 : 0, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0,
+        supportsAttachments ? 1 : 0, ...(typeof downlink === "object" ? [downlink.id] : []), nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
       const carrier = row.task_id && (!row.kind || row.kind === 'cot') && row.unit_key === '';
       const presentationState = parseFeishuPresentation(parseJson(row.presentation_checkpoint, null));
@@ -2925,12 +2935,25 @@ export class FeishuBotRepo {
           };
         }
       }
-      const claimToken = createId("foc");
+      const claimToken = typeof downlink === "object" ? downlink.claimToken
+        : downlink === "peek" && row.status === "pending" && row.claim_token
+          ? String(row.claim_token) : createId("foc");
       const presentation = parseFeishuPresentation(parseJson(row.presentation_checkpoint, null))
         ?? (supportsNativeCot && row.task_id && !row.external_message_id
           ? { version: "native_cot_v1" as const, startedAt: now.getTime(), throughSeq: 0, interactions: {} } : null);
       const leasedUntil = new Date(now.getTime() + (supportsTaskStream ? 120_000 : 30_000)).toISOString();
-      const updated = this.ctx.db.run(
+      // Freeze the offered epoch without claiming it. A reconnect must carry
+      // the same token/checkpoint until ACK; expired leases start a new epoch.
+      const updated = downlink === "peek" ? this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = 'pending', claim_token = ?, leased_until = NULL,
+             mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?)
+         WHERE id = ? AND workspace_id = ?
+           AND ((status = 'pending' AND available_at <= ?)
+             OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
+        [claimToken, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null,
+          String(row.id), workspaceId, nowIsoValue, nowIsoValue],
+      ) : this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = 'sending', claim_token = ?, leased_until = ?,
              attempt_count = attempt_count + 1, updated_at = ?,
@@ -2991,6 +3014,42 @@ export class FeishuBotRepo {
           OR (status = 'sending' AND leased_until <= ?))
       RETURNING id, kind, attempt_count`
     ).all(nowIsoValue, workspaceId, ...ids, nowIsoValue, nowIsoValue) as Row[];
+  }
+
+  discardPendingOutbound(workspaceId: string, runtimeId: string, deliveryId: string): void {
+    if (this.getConfig(workspaceId)?.runtimeId !== runtimeId) return;
+    this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries
+      SET status = 'failed', last_error = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND status = 'pending'`,
+      ["feishu.outbound exceeds the 1 MiB daemon protocol frame limit", nowIso(), deliveryId, workspaceId]);
+  }
+
+  nextOutboundWakeAt(workspaceId: string, runtimeId: string): number | null {
+    const config = this.getConfig(workspaceId);
+    if (!config?.enabled || config.runtimeId !== runtimeId) return null;
+    const now = Date.now();
+    const row = this.ctx.db.query(`SELECT MIN(wake_at) AS wake_at FROM (
+      SELECT available_at AS wake_at FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE workspace_id = ? AND status = 'pending' AND available_at > ?
+      UNION ALL
+      SELECT leased_until AS wake_at FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE workspace_id = ? AND status = 'sending' AND leased_until > ?
+    ) deadlines`).get(workspaceId, new Date(now).toISOString(), workspaceId, new Date(now).toISOString()) as Row | null;
+    let next = row?.wake_at ? Date.parse(String(row.wake_at)) : Number.POSITIVE_INFINITY;
+    const requests = this.ctx.db.query(`SELECT request.created_at, request.expires_at
+      FROM multiremi_task_human_requests request JOIN multiremi_tasks task ON task.id = request.task_id
+      WHERE task.workspace_id = ? AND task.issue_id IS NOT NULL AND request.status = 'pending'
+        AND request.reminder_sent_at IS NULL AND request.expires_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries delivery
+          WHERE delivery.human_request_id = request.id AND delivery.kind = 'decision_card'
+            AND delivery.status = 'sent' AND delivery.external_message_id IS NOT NULL AND delivery.degraded IS NULL)`)
+      .all(workspaceId) as Row[];
+    for (const request of requests) {
+      const expires = String(request.expires_at);
+      const due = Date.parse(expires) - decisionReminderLeadMs(expires, String(request.created_at));
+      if (due > now) next = Math.min(next, due);
+    }
+    return Number.isFinite(next) ? next : null;
   }
 
   /** Checkpoint before the first send, under the existing delivery lease. */
@@ -3196,9 +3255,10 @@ export class FeishuBotRepo {
         return true;
       })();
       this.ctx.emitCommitEvents(deferredEvents);
+      if (sent) this.publishDownlinkChange(workspaceId);
       return sent;
     }
-    return this.ctx.db.transaction(() => {
+    const failed = this.ctx.db.transaction(() => {
       const row = this.ctx.db.query(
         `SELECT attempt_count, kind, body FROM multiremi_feishu_bot_outbound_deliveries
          WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
@@ -3255,6 +3315,8 @@ export class FeishuBotRepo {
       }
       return true;
     })();
+    if (failed) this.publishDownlinkChange(workspaceId);
+    return failed;
   }
 
   private recordReceiptFailure(workspaceId: string, runtimeId: string, deliveryId: string, attempts: number): void {
@@ -3623,7 +3685,13 @@ export class FeishuBotRepo {
       cleanOptionalString(input.errorMessage),
       now,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
+  }
+
+  private publishDownlinkChange(workspaceId: string): void {
+    this.ctx.emitWorkspaceEvent({ type: "daemon:feishu_changed", workspaceId,
+      actorType: "system", actorId: null, payload: {} });
   }
 
   /**

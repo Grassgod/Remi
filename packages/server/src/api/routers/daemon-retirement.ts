@@ -128,6 +128,9 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
     if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
     const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
     if (access instanceof Response) return access;
+    // Entering retirement asks the daemon to archive its hot traces first; the
+    // plan then shows the requests as the archive progress.
+    store.requestDaemonRetirementArchives(workspaceId, daemonId, currentRequestUserId(c));
     const plan = store.getDaemonRetirementPlan(workspaceId, daemonId);
     if (!plan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
     return c.json({ plan: retirementPlanResponse(plan) });
@@ -369,6 +372,13 @@ function retirementPlanResponse(plan: DaemonRetirementPlan) {
       runtime_id: workspace.runtimeId,
       root_path: workspace.rootPath,
     })),
+    unarchived_hot_traces: plan.unarchivedHotTraces.map((trace) => ({
+      task_id: trace.taskId,
+      runtime_id: trace.runtimeId,
+      subject_kind: trace.subjectKind,
+      subject_id: trace.subjectId,
+    })),
+    archive_requests: plan.archiveRequests,
     impact: retirementImpactResponse(plan.impact),
   };
 }

@@ -158,8 +158,14 @@ import {
   DaemonProtocolLayer,
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
+import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
+import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
+import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
+import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
+import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
 import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "./daemon-protocol/report-handlers.js";
+import { registerSessionArchiveRequestHandlers, sessionArchiveRequestSnapshot } from "./daemon-protocol/session-archive-requests.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
@@ -1063,6 +1069,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
+  if (backgroundJobs) sessionArchives.startOrphanedArchiveFileSweep();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   if (backgroundJobs) repositoryWiki.startStorageWorker?.();
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
@@ -1104,10 +1111,21 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
   });
+  const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
+  const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
+    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki),
+    onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
+  const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
+    nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
+    snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
+      ...sessionArchiveRequestSnapshot(store, rt),
+      ...taskInputSnapshot(store, rt, activeIds, id => downlinks.forgetTask(rt, id))] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store);
   registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
+  registerSessionArchiveRequestHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const streamAuth: StreamAuthReader = options.streamAuth
@@ -1126,7 +1144,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
-  // retains browser delivery; daemon delivery is the hook MUL-419 will connect.
+  // retains both browser and daemon delivery.
   const buildFanout = options.createRealtimeFanout ?? createRealtimeFanout;
   const realtimeFanout = buildFanout({
     role: effectiveApiRole,
@@ -1135,6 +1153,25 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     registries: {
       browser: browserWebSockets,
       browserUser: browserUserWebSockets,
+    },
+    onDaemonTask: ({ type, task }) => {
+      if (type === "task:queued") {
+        offers.enqueued(task);
+        return;
+      }
+      downlinks.taskChanged(task.runtimeId, task.id);
+      if (["task:completed", "task:failed", "task:cancelled"].includes(type)) {
+        offers.terminal(task.id, task.runtimeId);
+        downlinks.kickWorkspace(task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      }
+    },
+    onDaemonWorkspaceEvent: (event) => {
+      downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      if (event.type === "daemon:models_updated") {
+        offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
+      } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
+        offers.kickWorkspace(event.workspaceId);
+      }
     },
   });
   const server = Bun.serve<MultiremiWebSocketData>({
@@ -1345,6 +1382,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     daemonProtocol.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
+    if (backgroundJobs) sessionArchives.stopOrphanedArchiveFileSweep();
     controlPlaneSshMesh?.stop();
     // Closes the four store subscriptions and the peer channel (queue flush +
     // its timers), so a stopped server stops POSTing to its peer.

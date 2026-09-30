@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { createStore, resetMultiremiTestEnv, db } from "./helpers.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
+import { traceBackfillBackends, type OpenedStore } from "./trace-backfill-backends.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
@@ -140,6 +141,7 @@ describe("Session archive v2 subject migration", () => {
       "head_seq",
       "closed",
       "updated_at",
+      "source",
     ]);
   });
 });
@@ -1170,8 +1172,21 @@ describe("Session archive QA round 1", () => {
       headSeq: 2,
       closed: true,
       runtimeId: runtime.id,
-    }]);
-    expect(refused).toBe(0);
+    }], "daemon");
+    expect(refused).toEqual({
+      written: 0,
+      rejected: [{
+        taskId: "tsk_concurrent",
+        archiveId: short.id,
+        incomingSource: "daemon",
+        incomingHeadSeq: 2,
+        reason: "newer_head_same_source",
+        currentLocation: "archive",
+        currentSource: "daemon",
+        currentArchiveId: long.id,
+        currentHeadSeq: 7,
+      }],
+    });
     expect(store.getTaskTrace("tsk_concurrent")).toMatchObject({
       archiveId: long.id,
       headSeq: 7,
@@ -1593,3 +1608,351 @@ describe("Session archive trace member authorization", () => {
     });
   }
 });
+
+const orphanBackends = await traceBackfillBackends("archive_orphan");
+/** PostgreSQL clones a database for every case and migrates the file's template on the first one. */
+const ORPHAN_CASE_TIMEOUT_MS = 30_000;
+
+afterAll(async () => {
+  for (const backend of orphanBackends) await backend.dispose();
+});
+
+for (const backend of orphanBackends) {
+  describe.skipIf(!backend.available)(`Session archive orphaned final files (${backend.name})`, () => {
+    type OrphanFixture = Awaited<ReturnType<typeof orphanFixture>>;
+
+    async function orphanFixture(opened: OpenedStore, label: string) {
+      const root = mkdtempSync(join(tmpdir(), `multiremi-archive-orphan-${label}-`));
+      dirs.push(root);
+      const { store, db: database } = opened;
+      const runtime = store.registerRuntime({ id: `rt_orphan_${label}`, name: label, provider: "codex",
+        daemonId: `dmn_orphan_${label}`, workspaceId: "local" });
+      const issue = store.createIssue({ title: label, workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+        issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+      const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+      await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+      return { root, database, store, runtime, issue, fixture, service, archive, a: claim.uploadAttempt!,
+        finalPath: join(root, archive.relativePath), manifestPath: join(root, archive.relativePath, "..", "manifest.json") };
+    }
+
+    /** One store per case: the sweep scans every archive row in it. */
+    async function withFixture(label: string, body: (f: OrphanFixture) => Promise<void>): Promise<void> {
+      const opened = await backend.open();
+      try {
+        await body(await orphanFixture(opened, label));
+      } finally {
+        await opened.close();
+      }
+    }
+
+    /** Promote the attempt and stop before `ready`, as a Server that dies right there would. */
+    async function promoteThenCrash(f: OrphanFixture, attempt: number): Promise<void> {
+      const internal = f.service as unknown as { syncDirectory: (path: string) => Promise<void> };
+      let promoted!: () => void;
+      const reached = new Promise<void>((resolve) => { promoted = resolve; });
+      internal.syncDirectory = () => { promoted(); return new Promise<void>(() => {}); };
+      void f.service.complete(f.runtime.id, f.issue.id, f.archive.id, attempt);
+      await reached;
+    }
+
+    /** Fail attempt A after promotion and retry before B4's cleanup runs, so A's pair stays behind. */
+    async function retryBeforeCleanup(f: OrphanFixture): Promise<void> {
+      const originalComplete = f.store.completeSessionArchiveWithTracePointers.bind(f.store);
+      f.store.completeSessionArchiveWithTracePointers = () => {
+        f.store.completeSessionArchiveWithTracePointers = originalComplete;
+        throw new Error("A ready failed");
+      };
+      const internal = f.service as unknown as { cleanupFailedPromotion: (...args: unknown[]) => Promise<void> };
+      const cleanup = internal.cleanupFailedPromotion.bind(f.service);
+      let reachedA!: () => void;
+      let releaseA!: () => void;
+      const aPaused = new Promise<void>((resolve) => { reachedA = resolve; });
+      const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+      internal.cleanupFailedPromotion = async (...args) => { reachedA(); await aGate; return cleanup(...args); };
+      const oldCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+      await aPaused;
+      await f.service.retry(f.archive.id);
+      releaseA();
+      await expect(oldCompletion).rejects.toThrow("A ready failed");
+      internal.cleanupFailedPromotion = cleanup;
+      // B4 found the row pending again, so attempt A's pair stayed.
+      expect(f.store.getSessionArchive(f.archive.id)).toMatchObject({ status: "pending", attemptCount: f.a });
+      expect(existsSync(f.finalPath)).toBe(true);
+      expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+    }
+
+    async function claimAndUpload(f: OrphanFixture): Promise<number> {
+      const attempt = (await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id)).uploadAttempt!;
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, attempt, new Response(f.fixture.bytes).body);
+      return attempt;
+    }
+
+    function manifestAttempt(path: string): unknown {
+      return (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>).attempt_count;
+    }
+
+    function isCandidate(f: OrphanFixture): boolean {
+      return f.store.listOrphanCandidateSessionArchives().some((archive) => archive.id === f.archive.id);
+    }
+
+    for (const endedBy of ["stalled", "superseded"] as const) {
+      it(`removes the pair a crash left between promotion and ready once its attempt is ${endedBy}`, async () => {
+        await withFixture(`crash_${endedBy}`, async (f) => {
+          await promoteThenCrash(f, f.a);
+          const restarted = new SessionArchiveService(f.store, { root: f.root, minFreeBytes: 0 });
+          expect(f.store.getSessionArchive(f.archive.id)).toMatchObject({ status: "uploading", attemptCount: f.a });
+          expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+          // Still uploading: a re-sent complete of this attempt publishes exactly these files.
+          expect(await restarted.sweepOrphanedArchiveFiles()).toEqual([]);
+          expect(existsSync(f.finalPath)).toBe(true);
+          expect(existsSync(f.manifestPath)).toBe(true);
+
+          if (endedBy === "stalled") {
+            f.store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "upload stalled after 1ms");
+          } else {
+            restarted.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: f.issue.id, issueId: f.issue.id,
+              runtimeId: f.runtime.id, daemonId: f.runtime.daemonId!, sourceRevision: "newer-snapshot",
+              sha256: "e".repeat(64), sizeBytes: 1 });
+          }
+          expect(f.store.getSessionArchive(f.archive.id)).toMatchObject({
+            status: endedBy === "stalled" ? "failed" : "superseded", attemptCount: f.a,
+          });
+          expect(await restarted.sweepOrphanedArchiveFiles()).toHaveLength(2);
+          expect(existsSync(f.finalPath)).toBe(false);
+          expect(existsSync(f.manifestPath)).toBe(false);
+        });
+      }, ORPHAN_CASE_TIMEOUT_MS);
+    }
+
+    it("removes the older attempt's pair that B4 skipped after a manual retry while the row is pending", async () => {
+      await withFixture("retried_pending", async (f) => {
+        await retryBeforeCleanup(f);
+        expect(await f.service.sweepOrphanedArchiveFiles()).toHaveLength(2);
+        expect(existsSync(f.finalPath)).toBe(false);
+        expect(existsSync(f.manifestPath)).toBe(false);
+        // The next attempt uploads and publishes as usual.
+        const b = await claimAndUpload(f);
+        expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b)).status).toBe("ready");
+        expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+        expect(manifestAttempt(f.manifestPath)).toBe(b);
+      });
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    for (const outcome of ["stalls", "publishes"] as const) {
+      it(`keeps that pair while the next attempt uploads, then ${outcome === "stalls"
+        ? "removes it once the attempt stalls"
+        : "leaves the pair the attempt publishes over it"}`, async () => {
+        await withFixture(`retried_${outcome}`, async (f) => {
+          await retryBeforeCleanup(f);
+          const b = await claimAndUpload(f);
+          expect(f.store.getSessionArchive(f.archive.id)).toMatchObject({ status: "uploading", attemptCount: b });
+          expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+          expect(existsSync(f.finalPath)).toBe(true);
+          expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+          expect(existsSync(`${f.finalPath}.${b}.partial`)).toBe(true);
+
+          if (outcome === "stalls") {
+            f.store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, b, "upload stalled after 1ms");
+            expect(await f.service.sweepOrphanedArchiveFiles()).toHaveLength(2);
+            expect(existsSync(f.finalPath)).toBe(false);
+            expect(existsSync(f.manifestPath)).toBe(false);
+            // Attempt partials stay with B4's own cleanup.
+            expect(existsSync(`${f.finalPath}.${b}.partial`)).toBe(true);
+          } else {
+            expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b)).status).toBe("ready");
+            expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+            expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+            expect(manifestAttempt(f.manifestPath)).toBe(b);
+          }
+        });
+      }, ORPHAN_CASE_TIMEOUT_MS);
+    }
+
+    it("decides under the lock from the row as it stands, not as it was listed", async () => {
+      await withFixture("relisted", async (f) => {
+        await retryBeforeCleanup(f);
+        const listed = f.store.listOrphanCandidateSessionArchives.bind(f.store);
+        // Listed pending at attempt A; a claim bumps the raw attempt before the sweep takes the lock.
+        const atRetry = listed();
+        const b = (await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id)).uploadAttempt!;
+        f.store.listOrphanCandidateSessionArchives = () => atRetry;
+        expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+        // Listed pending at B; its upload begins, same raw attempt, before the sweep takes the lock.
+        const atClaim = listed();
+        expect(atClaim.find((archive) => archive.id === f.archive.id)).toMatchObject({ status: "pending", attemptCount: b });
+        await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b, new Response(f.fixture.bytes).body);
+        f.store.listOrphanCandidateSessionArchives = () => atClaim;
+        expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+        expect(existsSync(f.finalPath)).toBe(true);
+        expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+        f.store.listOrphanCandidateSessionArchives = listed;
+        expect(isCandidate(f)).toBe(false);
+      });
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    it("keeps the pair of an uploading row, even beside an older attempt's manifest, and of a ready archive", async () => {
+      await withFixture("live", async (f) => {
+        // A crash between the live attempt's two renames leaves its ZIP beside an older manifest.
+        writeFileSync(f.finalPath, f.fixture.bytes);
+        writeFileSync(f.manifestPath, JSON.stringify({ archive_id: f.archive.id, attempt_count: f.a - 1 }));
+        expect(isCandidate(f)).toBe(false);
+        expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+        expect(existsSync(f.finalPath)).toBe(true);
+        expect(manifestAttempt(f.manifestPath)).toBe(f.a - 1);
+
+        const internal = f.service as unknown as { syncDirectory: (path: string) => Promise<void> };
+        const sync = internal.syncDirectory.bind(f.service);
+        let reached!: () => void;
+        let release!: () => void;
+        const promoted = new Promise<void>((resolve) => { reached = resolve; });
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        internal.syncDirectory = async (path) => { reached(); await gate; return sync(path); };
+        const completion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+        await promoted;
+        expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+        expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+        release();
+        expect((await completion).status).toBe("ready");
+
+        expect(isCandidate(f)).toBe(false);
+        expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+        expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+        expect(manifestAttempt(f.manifestPath)).toBe(f.a);
+      });
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    it("removes a failed row's pair or lone ZIP but leaves files beside another archive's or an unreadable manifest", async () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await withFixture("manifests", async (f) => {
+          f.store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "failed");
+          for (const [manifest, reason] of [
+            [JSON.stringify({ archive_id: "sar_someone_else", attempt_count: f.a }), /manifest of another archive/],
+            ["{\"archive_id\":", /unreadable manifest/],
+          ] as const) {
+            writeFileSync(f.finalPath, f.fixture.bytes);
+            writeFileSync(f.manifestPath, manifest);
+            warn.mockClear();
+            expect(await f.service.sweepOrphanedArchiveFiles()).toEqual([]);
+            expect(existsSync(f.finalPath)).toBe(true);
+            expect(readFileSync(f.manifestPath, "utf8")).toBe(manifest);
+            expect(warn.mock.calls.some(([message]) => reason.test(String(message)))).toBe(true);
+          }
+          writeFileSync(f.manifestPath, JSON.stringify({ archive_id: f.archive.id, attempt_count: f.a }));
+          expect(await f.service.sweepOrphanedArchiveFiles()).toHaveLength(2);
+          writeFileSync(f.finalPath, f.fixture.bytes);
+          expect(await f.service.sweepOrphanedArchiveFiles()).toHaveLength(1);
+          expect(existsSync(f.finalPath)).toBe(false);
+          expect(existsSync(f.manifestPath)).toBe(false);
+        });
+      } finally {
+        warn.mockRestore();
+      }
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    it("sweeps on its own timer until stopped", async () => {
+      await withFixture("timer", async (f) => {
+        f.store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "failed");
+        writeFileSync(f.finalPath, f.fixture.bytes);
+        f.service.startOrphanedArchiveFileSweep(10);
+        try {
+          for (let i = 0; i < 200 && existsSync(f.finalPath); i += 1) await Bun.sleep(10);
+          expect(existsSync(f.finalPath)).toBe(false);
+        } finally {
+          f.service.stopOrphanedArchiveFileSweep();
+        }
+        // Drain a pass that may still be running, then nothing sweeps any more.
+        await f.service.sweepOrphanedArchiveFiles();
+        writeFileSync(f.finalPath, f.fixture.bytes);
+        await Bun.sleep(60);
+        expect(existsSync(f.finalPath)).toBe(true);
+      });
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    it("refuses withLockedSharedPaths when the raw attempt, the Runtime or the status alone is wrong", async () => {
+      await withFixture("lock_conditions", async (f) => {
+        // Called on the store directly: no service fence runs first. `other` is a
+        // registered Runtime that only the row's own runtime_id tells apart.
+        const other = f.store.registerRuntime({ id: "rt_orphan_lock_other", name: "other", provider: "codex",
+          daemonId: "dmn_orphan_lock_other", workspaceId: "local" });
+        // Raw attempt 3 with a retry budget based at 2: the budget-relative attempt 1 must not pass.
+        f.database.run("UPDATE multiremi_session_archives SET attempt_count = 3, retry_budget_base_attempt = 2 WHERE id = ?",
+          [f.archive.id]);
+        const accepted = {
+          promote: ["uploading"],
+          cleanup: ["failed"],
+          orphan: ["pending", "failed", "superseded"],
+        } as const;
+        const seen: Array<{ mode: string; status: string; runtimeId: string; attempt: number; ran: boolean }> = [];
+        const expected: typeof seen = [];
+        for (const mode of ["promote", "cleanup", "orphan"] as const) {
+          for (const status of ["pending", "uploading", "failed", "superseded", "ready"] as const) {
+            f.database.run("UPDATE multiremi_session_archives SET status = ? WHERE id = ?", [status, f.archive.id]);
+            const statusAccepted = (accepted[mode] as readonly string[]).includes(status);
+            for (const [runtimeId, attempt] of [[f.runtime.id, 3], [f.runtime.id, 1], [f.runtime.id, 2],
+              [f.runtime.id, 4], [other.id, 3]] as const) {
+              let ran = false;
+              const result = f.store.withLockedSessionArchiveSharedPaths(f.archive.id, runtimeId, attempt, mode, () => {
+                ran = true;
+                return "ran";
+              });
+              expect(result).toBe(ran ? "ran" : null);
+              seen.push({ mode, status, runtimeId, attempt, ran });
+              expected.push({ mode, status, runtimeId, attempt,
+                ran: statusAccepted && runtimeId === f.runtime.id && attempt === 3 });
+            }
+          }
+        }
+        expect(seen).toEqual(expected);
+        expect(seen.filter((entry) => entry.ran)).toHaveLength(5);
+      });
+    }, ORPHAN_CASE_TIMEOUT_MS);
+
+    it("warns when filesystem work under the shared-path lock passes the threshold", async () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        for (const thresholdMs of [5, 10_000]) {
+          await withFixture(`slow_${thresholdMs}`, async (f) => {
+            const internal = f.service as unknown as {
+              lockedFsWarnMs: number; fileIdentitySync: (path: string) => unknown;
+            };
+            internal.lockedFsWarnMs = thresholdMs;
+            // Only locked work stats final and partial files, so this slows promote, cleanup and orphan alike.
+            const identity = internal.fileIdentitySync.bind(f.service);
+            internal.fileIdentitySync = (path) => { Bun.sleepSync(30); return identity(path); };
+            warn.mockClear();
+            const originalComplete = f.store.completeSessionArchiveWithTracePointers.bind(f.store);
+            f.store.completeSessionArchiveWithTracePointers = () => { throw new Error("ready failed"); };
+            await expect(f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a)).rejects.toThrow("ready failed");
+            f.store.completeSessionArchiveWithTracePointers = originalComplete;
+            writeFileSync(f.finalPath, f.fixture.bytes);
+            writeFileSync(f.manifestPath, JSON.stringify({ archive_id: f.archive.id, attempt_count: f.a }));
+            expect(await f.service.sweepOrphanedArchiveFiles()).toHaveLength(2);
+            const slow = warn.mock.calls.map(([message]) => String(message))
+              .filter((message) => message.includes("held the shared-path lock"));
+            const held = (mode: string) => slow.filter((message) => new RegExp(
+              `${mode} held the shared-path lock for \\d+ms of filesystem work `
+              + `\\(archive ${f.archive.id}, attempt ${f.a}, threshold ${thresholdMs}ms\\)`,
+            ).test(message));
+            if (thresholdMs === 5) {
+              expect(held("promote")).toHaveLength(1);
+              expect(held("cleanup")).toHaveLength(1);
+              expect(held("orphan")).toHaveLength(1);
+              expect(slow).toHaveLength(3);
+            } else {
+              expect(slow).toEqual([]);
+            }
+          });
+        }
+      } finally {
+        warn.mockRestore();
+      }
+    }, ORPHAN_CASE_TIMEOUT_MS);
+  });
+}

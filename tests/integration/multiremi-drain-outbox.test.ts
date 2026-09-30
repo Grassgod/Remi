@@ -10,21 +10,36 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
-import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import type { MultiremiDaemonOptions, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
-const daemons: MultiremiDaemon[] = [];
-const servers: ReturnType<typeof startMultiremiServer>[] = [];
+const daemons: TestMultiremiDaemon[] = [];
+const servers: ReturnType<typeof startFixtureServer>[] = [];
+const layers: DaemonProtocolLayer[] = [];
+const proxies: Bun.Server<ProxySocketData>[] = [];
+
+class MultiremiDaemon extends TestMultiremiDaemon {
+  constructor(options: MultiremiDaemonOptions) { super(options); daemons.push(this); }
+}
+
+function startMultiremiServer(options: Parameters<typeof startFixtureServer>[0]) {
+  const server = startFixtureServer({ ...options, onDaemonProtocol: layer => { layers.push(layer); } });
+  servers.push(server);
+  return server;
+}
 
 afterEach(async () => {
   for (const daemon of daemons.splice(0)) await daemon.stopAndDrainTestWork();
+  for (const layer of layers) { layer.closeAll(); await layer.drain(); }
+  for (const proxy of proxies.splice(0)) proxy.stop(true);
   for (const server of servers.splice(0)) server.stop(true);
+  for (const layer of layers.splice(0)) await layer.drain();
   db?.close();
   db = null;
   if (workDir) {
@@ -34,15 +49,11 @@ afterEach(async () => {
 });
 
 function newDaemon(options: ConstructorParameters<typeof MultiremiDaemon>[0]): MultiremiDaemon {
-  const daemon = new MultiremiDaemon(options);
-  daemons.push(daemon);
-  return daemon;
+  return new MultiremiDaemon(options);
 }
 
 function newServer(options: Parameters<typeof startMultiremiServer>[0]): ReturnType<typeof startMultiremiServer> {
-  const server = startMultiremiServer({ ...options, backgroundJobs: false });
-  servers.push(server);
-  return server;
+  return startMultiremiServer({ ...options, backgroundJobs: false });
 }
 
 function testBed(prefix: string): { store: MultiremiStore; root: string } {
@@ -83,7 +94,7 @@ function apiProxy(
   frames?: FrameInterceptor,
 ): Bun.Server<ProxySocketData> {
   if (serverPort === undefined) throw new Error("test server did not bind a port");
-  return Bun.serve<ProxySocketData>({
+  const proxy = Bun.serve<ProxySocketData>({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request, proxy) {
@@ -126,6 +137,8 @@ function apiProxy(
       close(socket) { socket.data.upstream.close(); },
     },
   });
+  proxies.push(proxy);
+  return proxy;
 }
 
 function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof apiProxy> {
@@ -195,8 +208,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       outboxBackoffMs: [20, 20],
       providerFactory,
     });
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const run = daemon.start().catch(() => {});
     try {
       await until(() => daemon.daemonProtocolClient().connectionState() === "connected");
@@ -212,8 +223,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
       // Release restores claiming without a daemon restart.
       store.releasePlatformDrain("pop_e2e");
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await until(() => store.getTask(task.id)?.status === "completed", 8_000, "post-release completion");
       expect(ran).toBe(true);
     } finally {
@@ -268,8 +277,8 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Drain begins mid-task: the daemon acks but the gate stays closed while
       // the task is in flight, and the task is NOT interrupted.
       store.beginPlatformDrain({ operationId: "pop_running", ttlMs: 120_000 });
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
+      await until(() => (daemon as unknown as { serverDrainActive: boolean }).serverDrainActive,
+        5_000, "platform.drain applied");
       protocolClock.advance(15_000);
       await until(() => store.getPlatformDrainStatus().ackedDaemons === 1, 8_000, "drain ack");
       expect(store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 1, ready: false });
@@ -560,26 +569,23 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     }
   }, 10_000);
 
-  it("requires a second status check before a transient watcher 404 can purge reports", async () => {
+  it("does not probe status or purge reports after a transient connection loss", async () => {
     const { store, root } = testBed("multiremi-outbox-transient-404-");
     const agent = store.createAgent({ name: "Transient 404 Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "survive one missing response" });
     const daemonToken = await store.createAccessToken({ name: "transient 404 daemon", type: "daemon", workspaceId: "local" });
-    const server = newServer({ store, scheduler: null, authToken: "root-transient-404-secret", hostname: "127.0.0.1", port: 0 });
-    let returnMissingOnce = true;
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-transient-404-secret", hostname: "127.0.0.1", port: 0 });
     let statusReads = 0;
     const proxy = apiProxy(server.port, (request, url) => {
       if (request.method === "GET" && url.pathname === `/api/daemon/tasks/${task.id}/status`) {
         statusReads++;
-        if (returnMissingOnce) {
-          returnMissingOnce = false;
-          return new Response("task temporarily not routed", { status: 404 });
-        }
+        return new Response("task temporarily not routed", { status: 404 });
       }
       return null;
     });
     const providerStarted = gate();
-    const daemon = newDaemon({
+    const providerFinished = gate();
+    const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${proxy.port}`,
       token: daemonToken.token,
       daemonId: "daemon-transient-404",
@@ -595,10 +601,10 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       providerFactory: () => ({
         async *sendStream(_message, options) {
           providerStarted.release();
-          await new Promise<void>((resolve) => {
+          await Promise.race([providerFinished.yielded, new Promise<void>((resolve) => {
             if (options?.signal?.aborted) resolve();
             else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
-          });
+          })]);
           throw new Error("provider interrupted after transient 404");
         },
         getLastResponse: () => null,
@@ -608,8 +614,16 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     const daemonRun = daemon.start();
     try {
       await providerStarted.yielded;
+      await until(() => store.getTask(task.id)?.status === "running", 5_000, "task start report");
+      const layer = layers[layers.length - 1]!;
+      layer.closeAll("injected transient connection loss");
+      await until(() => daemon.daemonProtocolClient().connectionState() !== "connected", 5_000, "socket disconnected");
+      await until(() => daemon.daemonProtocolClient().connectionState() === "connected", 5_000, "socket reconnected");
+      expect(store.getTask(task.id)?.status).toBe("running");
+      expect((daemon as unknown as { activeTaskCount: number }).activeTaskCount).toBe(1);
+      providerFinished.release();
       await daemonRun;
-      expect(statusReads).toBeGreaterThanOrEqual(2);
+      expect(statusReads).toBe(0);
       expect(store.getTask(task.id)).toMatchObject({
         status: "failed",
         error: "provider interrupted after transient 404",
@@ -622,6 +636,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       await persisted.close();
     } finally {
       daemon.stop();
+      providerFinished.release();
       await daemonRun.catch(() => {});
       proxy.stop(true);
       server.stop(true);
@@ -887,8 +902,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
         getLastResponse: () => null,
       }),
     });
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const daemonRun = daemon.start();
     try {
       await until(async () => {

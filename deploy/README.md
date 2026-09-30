@@ -163,11 +163,16 @@ An archive belongs to one subject: an `issue`, a `chat` session, or a one-shot
 have none, so the ack binding for those is the Runtime that owns the subject's
 provider session.
 
-An archive's trace pointers are only moved forward: a pointer that already reads
-from an archive is replaced only when the incoming member's `head` is at least
-the old `head_seq`. A partial or stale archive still becomes `ready`, but it
-never takes a pointer away from a longer trace. The pointer table records
-`head_seq` and `closed` alongside the byte range.
+An archive's trace pointers are only moved forward, and only within their
+source: a pointer that already reads from a daemon archive is replaced only by
+another daemon archive whose member's `head` is at least the old `head_seq`. A
+daemon archive replaces a pointer that reads from a backfilled archive
+(`metadata.kind = "trace_backfill"`) whatever the heads, and a backfilled
+archive never replaces a daemon one, because old-table seqs and daemon trace
+seqs are not comparable. A partial or stale archive still becomes `ready`, but
+it never takes a pointer away from a longer trace of its source; the server log
+names each pointer it kept. The pointer table records `head_seq`, `closed` and
+the pointer's `source` alongside the byte range.
 
 Uploads are served per subject: `/api/daemon/runtimes/:runtimeId/issues/:issueId/…`,
 `…/chats/:sessionId/…` and `…/tasks/:taskId/…` speak the same protocol over that

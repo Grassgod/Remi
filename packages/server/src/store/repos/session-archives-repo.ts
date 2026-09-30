@@ -16,7 +16,10 @@ import {
   type SessionArchiveRetryPolicy,
 } from "@multiremi/session-archive/retry-policy.js";
 import type { StoreContext } from "@multiremi/store/context.js";
-import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type {
+  TaskTraceArchivePointer,
+  TaskTracePointerRejection,
+} from "@multiremi/store/repos/task-traces-repo.js";
 
 type Row = Record<string, unknown>;
 
@@ -27,6 +30,69 @@ export class SessionArchiveTraceOwnershipError extends Error {
     super(`trace task ${taskId} does not belong to this archive subject and Runtime`);
     this.name = "SessionArchiveTraceOwnershipError";
   }
+}
+
+/**
+ * A daemon member was refused by something other than a longer daemon archive
+ * or a `lost` pointer. The per-source swap rule lets a daemon member replace a
+ * `trace_backfill` archive unconditionally, so this means the rule itself was
+ * bypassed; the completion is rolled back instead of leaving the backfill's
+ * prefix in front of the daemon's trace.
+ */
+export class SessionArchivePointerInvariantError extends Error {
+  constructor(readonly rejections: readonly TaskTracePointerRejection[]) {
+    super(`daemon trace pointers refused by the swap rule: ${rejections
+      .map((rejection) => `${rejection.taskId} (${rejection.reason}, current ${rejection.currentLocation}`
+        + `${rejection.currentSource ? `/${rejection.currentSource}` : ""})`)
+      .join(", ")}`);
+    this.name = "SessionArchivePointerInvariantError";
+  }
+}
+
+/** The subject of a trace backfill can no longer take an archive. */
+export class TraceBackfillSubjectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TraceBackfillSubjectError";
+  }
+}
+
+/** A `trace_backfill` archive row, published `ready` by the MUL-432 backfill. */
+export interface TraceBackfillArchiveInput {
+  id: string;
+  runtimeId: string;
+  daemonId: string;
+  sourceRevision: string;
+  sha256: string;
+  sizeBytes: number;
+  fileCount: number;
+  relativePath: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface TraceBackfillCommitInput {
+  workspaceId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  /** Null when every task of the subject only receives a `none` pointer. */
+  archive: TraceBackfillArchiveInput | null;
+  pointers: readonly TaskTraceArchivePointer[];
+  noneTaskIds: readonly string[];
+}
+
+export interface TraceBackfillCommitResult {
+  archive: MultiremiSessionArchive | null;
+  /** Pointers the swap rule accepted; a daemon archive keeps its own. */
+  pointerCount: number;
+  /** Every member the swap rule refused, with the pointer it kept. */
+  rejectedPointers: TaskTracePointerRejection[];
+}
+
+/** A daemon upload that went `ready`; refused members stay on their pointer. */
+export interface TracePointerCompletionResult {
+  archive: MultiremiSessionArchive;
+  pointerCount: number;
+  rejectedPointers: TaskTracePointerRejection[];
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> {
@@ -498,6 +564,12 @@ export class SessionArchivesRepo {
    * a `ready` archive whose pointer table is missing, and a pointer must never
    * outlive the archive that backs it. The archive row is the transaction's
    * guard, so a superseded attempt writes neither half.
+   *
+   * A member refused by a longer daemon archive or a `lost` pointer leaves the
+   * archive `ready` and comes back in `rejectedPointers`. A refusal by a
+   * `trace_backfill` archive (or any other state) cannot happen under the swap
+   * rule, so it throws {@link SessionArchivePointerInvariantError} and rolls the
+   * whole completion back.
    */
   completeWithTracePointers(
     id: string,
@@ -505,7 +577,7 @@ export class SessionArchivesRepo {
     attemptCount: number,
     uploadedSizeBytes: number,
     pointers: readonly TaskTraceArchivePointer[],
-  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+  ): TracePointerCompletionResult | null {
     return this.withWritableArchive(id, runtimeId, () => {
       const now = nowIso();
       const result = this.ctx.db.run(
@@ -551,9 +623,141 @@ export class SessionArchivesRepo {
           throw new SessionArchiveTraceOwnershipError(pointer.taskId);
         }
       }
-      const pointerCount = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers);
-      return { archive, pointerCount };
+      const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers, "daemon");
+      const violations = written.rejected.filter((rejection) =>
+        rejection.reason !== "newer_head_same_source" && rejection.reason !== "lost");
+      if (violations.length > 0) throw new SessionArchivePointerInvariantError(violations);
+      return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
     });
+  }
+
+  /**
+   * Publish one subject's `trace_backfill` archive and its task pointers.
+   *
+   * The backfill is not an upload: no Runtime owns the attempt, so the row is
+   * inserted `ready` directly instead of walking pending → uploading. What stays
+   * the same as {@link completeWithTracePointers} is the pairing — the row, the
+   * pointers (through the one swap-rule implementation) and the `none`
+   * pointers land in the caller's transaction or not at all. Every task must
+   * still belong to the subject and its workspace; an Issue must be active.
+   *
+   * The caller owns the one transaction (ADR 0011); this opens no frame of its
+   * own. The store's `commitTraceBackfill` is that caller.
+   */
+  commitTraceBackfillWithinTransaction(input: TraceBackfillCommitInput): TraceBackfillCommitResult {
+    this.ctx.lockWorkspaceRuntimeLifecycle(input.workspaceId);
+    this.assertTraceBackfillSubject(input);
+    const taskIds = [...input.pointers.map((pointer) => pointer.taskId), ...input.noneTaskIds];
+    for (const taskId of taskIds) this.assertTraceBackfillTask(input, taskId);
+    let archive: MultiremiSessionArchive | null = null;
+    if (input.archive) {
+      for (const pointer of input.pointers) {
+        if (pointer.archiveId !== input.archive.id || pointer.runtimeId !== input.archive.runtimeId) {
+          throw new SessionArchiveTraceOwnershipError(pointer.taskId);
+        }
+      }
+      archive = this.insertTraceBackfillArchive(input, input.archive);
+    } else if (input.pointers.length > 0) {
+      throw new TraceBackfillSubjectError("trace pointers need an archive");
+    }
+    const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
+    for (const taskId of input.noneTaskIds) this.ctx.taskTraces().markTaskTraceNone(taskId);
+    return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
+  }
+
+  private assertTraceBackfillSubject(input: TraceBackfillCommitInput): void {
+    if (input.subjectKind === "issue") {
+      this.ctx.lockIssueArchiveLifecycle(input.subjectId);
+      const issue = this.ctx.db.query(
+        "SELECT workspace_id, lifecycle_state FROM multiremi_issues WHERE id = ?",
+      ).get(input.subjectId) as Row | null;
+      if (
+        !issue
+        || String(issue.workspace_id ?? "local") !== input.workspaceId
+        || String(issue.lifecycle_state ?? "active") !== "active"
+      ) throw new TraceBackfillSubjectError(`Issue ${input.subjectId} is not an active Issue of this workspace`);
+      return;
+    }
+    const table = input.subjectKind === "chat" ? "multiremi_chat_sessions" : "multiremi_tasks";
+    const row = this.ctx.db.query(`SELECT workspace_id FROM ${table} WHERE id = ?`)
+      .get(input.subjectId) as Row | null;
+    if (!row || String(row.workspace_id ?? "local") !== input.workspaceId) {
+      throw new TraceBackfillSubjectError(`${input.subjectKind} ${input.subjectId} is not in this workspace`);
+    }
+  }
+
+  /**
+   * The grouping the backfill uses: an Issue owns all of its tasks, a Chat
+   * Session the tasks that name it, and any other task is its own subject —
+   * including a task whose Chat Session no longer exists.
+   */
+  private assertTraceBackfillTask(input: TraceBackfillCommitInput, taskId: string): void {
+    const task = this.ctx.db.query(
+      `SELECT task.workspace_id, task.issue_id, task.chat_session_id, chat.id AS chat_exists
+       FROM multiremi_tasks task
+       LEFT JOIN multiremi_chat_sessions chat ON chat.id = task.chat_session_id
+       WHERE task.id = ?`,
+    ).get(taskId) as Row | null;
+    const belongs = input.subjectKind === "issue"
+      ? task?.issue_id === input.subjectId
+      : input.subjectKind === "chat"
+        ? task?.issue_id == null && task?.chat_session_id === input.subjectId
+        : taskId === input.subjectId && task?.issue_id == null
+          && (task?.chat_session_id == null || task?.chat_exists == null);
+    if (!task || !belongs || String(task.workspace_id ?? "local") !== input.workspaceId) {
+      throw new SessionArchiveTraceOwnershipError(taskId);
+    }
+  }
+
+  private insertTraceBackfillArchive(
+    input: TraceBackfillCommitInput,
+    archive: TraceBackfillArchiveInput,
+  ): MultiremiSessionArchive {
+    const existing = this.ctx.db.query(
+      `SELECT * FROM multiremi_session_archives
+       WHERE subject_kind = ? AND subject_id = ? AND source_revision = ? AND sha256 = ?`,
+    ).get(input.subjectKind, input.subjectId, archive.sourceRevision, archive.sha256) as Row | null;
+    if (existing) {
+      // Identical bytes from an earlier run: only that run's own ready row may
+      // be reused. A daemon upload with the same key is left alone.
+      const current = hydrate(existing);
+      if (current.id !== archive.id || current.status !== "ready" || current.metadata.kind !== "trace_backfill") {
+        throw new TraceBackfillSubjectError(`archive ${current.id} already holds this content`);
+      }
+      return current;
+    }
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_session_archives (
+         id, workspace_id, issue_id, subject_kind, subject_id, format,
+         runtime_id, daemon_id, source_revision, sha256, size_bytes,
+         uploaded_size_bytes, file_count, status, relative_path, metadata,
+         attempt_count, last_error, created_at, updated_at, completed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 1, NULL, ?, ?, ?)`,
+      [
+        archive.id,
+        input.workspaceId,
+        input.subjectKind === "issue" ? input.subjectId : null,
+        input.subjectKind,
+        input.subjectId,
+        SESSION_ARCHIVE_FORMAT_V2,
+        archive.runtimeId,
+        archive.daemonId,
+        archive.sourceRevision,
+        archive.sha256,
+        archive.sizeBytes,
+        archive.sizeBytes,
+        archive.fileCount,
+        archive.relativePath,
+        JSON.stringify(archive.metadata),
+        now,
+        now,
+        now,
+      ],
+    );
+    const inserted = this.get(archive.id);
+    if (!inserted) throw new Error("trace backfill archive was not persisted");
+    return inserted;
   }
 
   markFailedAttempt(
@@ -660,12 +864,18 @@ export class SessionArchivesRepo {
     return this.withWritableArchive(id, runtimeId, (archive) => archive);
   }
 
-  /** Serialize shared ZIP/manifest mutations with claim and retry, even after workspace ownership changes. */
+  /**
+   * Serialize shared ZIP/manifest mutations with claim and retry, even after workspace ownership changes.
+   *
+   * `promote` needs the attempt still uploading, `cleanup` needs it failed, and
+   * `orphan` (the unowned-file sweep) needs a row that is neither served
+   * (`ready`) nor able to promote any more (`uploading`).
+   */
   withLockedSharedPaths<T>(
     id: string,
     runtimeId: string,
     attemptCount: number,
-    mode: "promote" | "cleanup",
+    mode: "promote" | "cleanup" | "orphan",
     action: (archive: MultiremiSessionArchive) => T,
   ): T | null {
     const initial = this.get(id);
@@ -676,9 +886,20 @@ export class SessionArchivesRepo {
       this.ctx.db.run("UPDATE multiremi_session_archives SET updated_at = updated_at WHERE id = ?", [id]);
       const current = this.get(id);
       if (!current || current.attemptCount !== attemptCount || current.runtimeId !== runtimeId
-        || (mode === "promote" ? current.status !== "uploading" : current.status !== "failed")) return null;
+        || (mode === "promote" ? current.status !== "uploading"
+          : mode === "cleanup" ? current.status !== "failed"
+            : current.status === "ready" || current.status === "uploading")) return null;
       return action(current);
     })();
+  }
+
+  /** Rows the orphan sweep may act on: no reader serves them and no attempt of theirs can promote. */
+  listOrphanCandidates(): MultiremiSessionArchive[] {
+    return (this.ctx.db.query(
+      `SELECT * FROM multiremi_session_archives
+       WHERE status IN ('pending', 'failed', 'superseded')
+       ORDER BY updated_at, id`,
+    ).all() as Row[]).map(hydrate);
   }
 
   private normalizeStalledUploads(workspaceId: string): void {

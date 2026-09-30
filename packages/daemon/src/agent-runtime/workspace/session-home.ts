@@ -233,7 +233,7 @@ export function resolveTaskProviderHome(
   const execution = provider === "codex" || (provider === "claude" && task.claudeProfile) ? providerExecutionIdentity(task) : null;
   const chatSessionId = cleanString(task.chatSessionId);
   if (chatSessionId) {
-    const runtimeStateRoot = join(storageRoot, ".runtime", safePathSegment(chatSessionId));
+    const runtimeStateRoot = subjectRuntimeStateRoot(storageRoot, chatSessionId);
     const providerRoot = join(
       runtimeStateRoot,
       safePathSegment(agentId),
@@ -255,7 +255,7 @@ export function resolveTaskProviderHome(
     };
   }
 
-  const temporaryTaskRoot = join(storageRoot, ".runtime", safePathSegment(taskId));
+  const temporaryTaskRoot = subjectRuntimeStateRoot(storageRoot, taskId);
   const providerRoot = join(
     temporaryTaskRoot,
     safePathSegment(agentId),
@@ -276,6 +276,14 @@ export function resolveTaskProviderHome(
     runtimeStateRoot: temporaryTaskRoot,
     temporaryTaskRoot,
   };
+}
+
+/**
+ * The `.runtime/<id>` root a Chat or one-shot Task keeps its provider homes,
+ * traces and Plugin runtime in; the source of that subject's Session archive.
+ */
+export function subjectRuntimeStateRoot(workspacesRoot: string, subjectId: string): string {
+  return join(resolve(workspacesRoot), ".runtime", safePathSegment(subjectId));
 }
 
 /** Keep task configuration beside the provider home, never in shared repositories. */

@@ -6,14 +6,15 @@
  *      `tests/unit/multiremi/api-route-snapshot.test.ts` covers the byte-identical
  *      part; here the guard itself must be absent from the middleware chain);
  *   ② over the FULL golden route inventory: `ui` refuses every `/api/daemon/*`
- *      and nothing else, `runtime` is the mirror image, `all` refuses nothing;
+ *      and nothing else, `runtime` also serves B5's two trace reads (l), and
+ *      `all` refuses nothing;
  *   ③ WebSocket upgrades are refused with 421 rather than 426 — an upgrade never
  *      reaches Hono, so it is answered in `startMultiremiServer.fetch`, which is
  *      exactly the branch a middleware-only test would miss;
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`, 765 patterns) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -308,6 +309,10 @@ describe("MUL-461 api role — env resolution", () => {
       // A prefix sweep on "health" would have swallowed this browser route.
       "/api/cloud-runtime/healthz",
       "/api/cloud-runtime/readyz",
+      "/api/tasks/tsk_role_probe/trace/extra",
+      "/api/tasks/tsk_role_probe/messages",
+      "/api/shares/share_role_probe/tasks/tsk_role_probe/trace/extra",
+      "/api/shares/share_role_probe/trace",
     ]) {
       expect(isRuntimeAllowedPath(refused), refused).toBe(false);
       expect(expectedRefusal("runtime", refused), `oracle ${refused}`).toBe(true);

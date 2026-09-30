@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ElicitationCreateParams, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";

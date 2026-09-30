@@ -830,6 +830,33 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.listFeishuBotTaskReceiptMessageIds("local", first.taskId)).toEqual(["om_1", "om_2"]);
   });
 
+  it("kicks the daemon downlink after an inbound steer commits", () => {
+    const { store, agent, config } = scaffold();
+    store.updateAgent(agent.id, { runtimeId: "rt_bot" });
+    const submit = (externalMessageId: string, text: string) => store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision,
+      externalSessionKey: "oc_chat_kick",
+      externalMessageId,
+      senderOpenId: "ou_member",
+      senderUnionId: "on_owner",
+      text,
+    });
+    const first = submit("om_kick_1", "first message");
+    const db = (store as unknown as { db: { inTransaction: boolean } }).db;
+    const kicks: Array<{ payload: Record<string, unknown>; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "daemon:task_input") kicks.push({ payload: event.payload, inTransaction: db.inTransaction });
+    });
+    try {
+      expect(submit("om_kick_2", "add this while running")).toMatchObject({ steered: true, duplicate: false });
+      expect(kicks).toEqual([{ payload: { runtime_id: "rt_bot", task_id: first.taskId }, inTransaction: false }]);
+      expect(submit("om_kick_2", "redelivered payload")).toMatchObject({ duplicate: true });
+      expect(kicks).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("admits an unknown sender but checks Issue creation against the dynamic allowlist", () => {
     const { store, config } = scaffold();
     const submitted = store.submitFeishuBotMessage("local", "rt_bot", {

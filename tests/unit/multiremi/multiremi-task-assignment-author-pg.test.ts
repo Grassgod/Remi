@@ -98,9 +98,10 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
     };
   }
 
+  // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
   function assignmentEvents(sessionId: string, taskId: string) {
     return store.listSessionEvents(sessionId)
-      .filter((event) => event.kind === "task_assigned" && event.taskId === taskId);
+      .filter((event) => event.kind === "turn" && event.taskId === taskId);
   }
 
   it("keeps forged assignment authors out of the session ledger", async () => {

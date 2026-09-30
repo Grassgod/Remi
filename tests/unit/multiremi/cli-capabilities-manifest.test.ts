@@ -169,6 +169,8 @@ describe("CLI capabilities manifest", () => {
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
     // machine-to-server protocol, so they raise the exempt count with the total.
+    // Merge (v): retain main's routes and B5's two mapped trace reads. Main's
+    // MUL-395 status-pages route is mapped too: 679 + 1 + 2 = 682.
     expect(cliCoverageReport(manifest)).toEqual({
       // MUL-479's context-window PUT maps to `remi workspace relay context-window
       // update`, so it raises the mapped count with the total.

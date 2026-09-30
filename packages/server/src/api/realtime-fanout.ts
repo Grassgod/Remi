@@ -18,6 +18,8 @@
  * Events that arrive *from* the peer take the local-delivery path only and are
  * never forwarded again — that is what stops two processes echoing one event.
  * Daemon v2 owns its socket separately; A-2 removed the v1 wake-up registry.
+ * Peer-delivered task and workspace events call the same daemon hooks as local
+ * events, so the runtime process can wake offers and DB-derived downlinks.
  *
  * `MULTIREMI_PEER_URL` unset means `peer` is null: local delivery only, and no
  * envelope is even built — exactly the pre-split behaviour.
@@ -73,8 +75,10 @@ export interface RealtimeFanoutOptions {
   registries: RealtimeFanoutRegistries;
   /** Absent/null means "no peer": local delivery only, nothing is forwarded. */
   peer?: PeerChannel | null;
-  /** Receives queued/waiting tasks on runtime/all, from either store or peer. */
+  /** Receives task changes on runtime/all, from either store or peer. */
   onDaemonTask?: (event: { type: string; task: MultiremiTask }) => void;
+  /** Receives workspace changes on runtime/all, from either store or peer. */
+  onDaemonWorkspaceEvent?: (event: PeerWorkspaceEvent) => void;
 }
 
 export interface RealtimeFanout {
@@ -89,26 +93,29 @@ export interface RealtimeFanout {
 export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFanout {
   const { role, store, registries } = options;
   const peer = options.peer ?? null;
-  // MUL-419: 接 kick
   const onDaemonTask = options.onDaemonTask ?? (() => {});
 
   const deliversToBrowser = role === "ui" || role === "all";
+  const deliversToDaemon = role === "runtime" || role === "all";
 
   // Local delivery only. `forward` is the switch that separates "this process
   // wrote it" from "the peer wrote it"; there is no third case.
   const deliverTaskEnqueued = (task: MultiremiTask): void => {
+    if (deliversToDaemon) onDaemonTask({ type: "task:queued", task });
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserUser, store, "task:queued", task);
     }
   };
 
   const deliverTaskEvent = (event: { type: string; task: MultiremiTask }): void => {
+    if (deliversToDaemon) onDaemonTask(event);
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserUser, store, event.type, event.task);
     }
   };
 
   const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): void => {
+    if (deliversToDaemon) options.onDaemonWorkspaceEvent?.(event);
     if (!deliversToBrowser) return;
     notifyBrowserWorkspaceEvent(
       registries.browser,

@@ -147,6 +147,19 @@ function rawDb(store: MultiremiStore) {
   return (store as unknown as { ctx: { db: { run: (sql: string, ...p: unknown[]) => unknown } } }).ctx.db;
 }
 
+/**
+ * MUL-427 moved the reads these fixtures steer onto `multiremi_conversation_log`
+ * (`agentCommentedSince` reads the log row's `created_at`; the delegation drain
+ * reads the bridge's metadata from the log row at its seq). A fixture that
+ * rewrites history only on the legacy table no longer reaches the code under
+ * test, so each rewrite is mirrored onto the log row. The mirror must change
+ * exactly one row, so a mirror that misses fails here rather than silently
+ * leaving the fixture's timing unsimulated (ruling cmt_ffadwzab6cnb).
+ */
+function mirrorOntoConversationLog(store: MultiremiStore, sql: string, params: unknown[]): void {
+  expect((rawDb(store).run(sql, params) as { changes: number }).changes).toBe(1);
+}
+
 function countResultCommentSelectsForTask(store: MultiremiStore, taskId: string) {
   const db = (store as unknown as {
     ctx: { db: { query: (sql: string) => Record<string, unknown> } };
@@ -216,8 +229,10 @@ async function startThroughDaemon(
   task: MultiremiTask,
   runtimeId: string,
 ): Promise<void> {
-  const claimed = await requestJson(base, `/api/daemon/runtimes/${runtimeId}/tasks/claim`, daemonToken);
-  expect(claimed.task.id).toBe(task.id);
+  // The v2 offer pump claims through this same Store operation; this suite's
+  // subject is the result-comment lifecycle, not the removed HTTP claim route.
+  const claimed = store.claimTask(runtimeId);
+  expect(claimed?.id).toBe(task.id);
   await reportThroughDaemon(store, daemonToken, task.id, "start");
 }
 
@@ -274,6 +289,9 @@ async function runCancelledReturnSnapshotCase(
         "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
         [beforeDispatch, beforeDispatch, inRunCommentId],
       );
+      mirrorOntoConversationLog(store,
+        "UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
+        [beforeDispatch, beforeDispatch, inRunCommentId]);
     }
 
     const selects = countResultCommentSelectsForTask(store, childTask.id);
@@ -376,6 +394,9 @@ async function runMissingSnapshotCompatibilityCase(store: MultiremiStore): Promi
     rawDb(store).run("UPDATE multiremi_session_events SET metadata = ? WHERE id = ?", [
       JSON.stringify({ source_task_id: childTask.id }), bridge.id,
     ]);
+    mirrorOntoConversationLog(store, "UPDATE multiremi_conversation_log SET metadata = ? WHERE session_id = ? AND seq = ?", [
+      JSON.stringify({ source_task_id: childTask.id }), bridge.sessionId, bridge.seq,
+    ]);
     await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.prompt).toContain(`Result comment: ${automaticComment.id}`);
@@ -451,6 +472,9 @@ async function runSkippedManualWakeCancellationSnapshotCase(
         "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
         [beforeDispatch, beforeDispatch, inRunCommentId],
       );
+      mirrorOntoConversationLog(store,
+        "UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
+        [beforeDispatch, beforeDispatch, inRunCommentId]);
     }
     const manualResponse = await requestJson(base, "/api/multiremi/tasks", childToken.token, {
       agentId: f.leader.id,

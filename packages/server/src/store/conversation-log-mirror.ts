@@ -100,7 +100,7 @@ export function targetSeqForMarker(
 }
 
 /** A `session_events` row as a log append. */
-export function sessionEventToConversationLog(event: MirrorSessionEvent): {
+export function sessionEventToConversationLog(event: MirrorSessionEvent, commentTaskId: string | null = null): {
   sessionId: string;
   seq: number;
   id: string;
@@ -128,7 +128,7 @@ export function sessionEventToConversationLog(event: MirrorSessionEvent): {
     kind,
     authorType: event.author_type,
     authorId: event.author_id,
-    taskId: event.task_id,
+    taskId: event.source_comment_id ? commentTaskId : event.task_id,
     bodyMd: event.body ?? "",
     parentId,
     metadata: metadata as ConversationLogEntryMetadata,
