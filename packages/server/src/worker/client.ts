@@ -936,34 +936,6 @@ export class MultiremiDaemonClient {
     return response.allowed === true;
   }
 
-  async createTaskHumanRequest(taskId: string, input: {
-    kind: "permission" | "question";
-    payload: Record<string, unknown>;
-    /**
-     * MUL-407: the deadline the control plane records for this request. The
-     * daemon still decides when to expire it; the server publishes the time so
-     * the topic can remind the requester ten minutes before it elapses.
-     */
-    timeoutMs?: number;
-  }): Promise<MultiremiTaskHumanRequest> {
-    // The wire field is snake_case like every other daemon body; `timeoutMs` is
-    // only the ergonomic spelling at the call site.
-    const { timeoutMs, ...rest } = input;
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`,
-      timeoutMs === undefined ? rest : { ...rest, timeout_ms: timeoutMs });
-    return resp.request;
-  }
-
-  async getTaskHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.get<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`);
-    return resp.request ?? null;
-  }
-
-  async expireTaskHumanRequest(taskId: string, requestId: string, status: "timeout" | "cancelled"): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/expire`, { status });
-    return resp.request ?? null;
-  }
-
   async reportRuntimeUpdateResult(runtimeId: string, requestId: string, result: { status: string; output?: string; error?: string }): Promise<void> {
     if (!this.reportTransport || this.reportTransport.upgradeWaiting()) {
       await this.post(`/api/daemon/runtimes/${runtimeId}/update/${requestId}/result`, result);
@@ -1230,11 +1202,6 @@ export class MultiremiDaemonClient {
       input,
       taskToken,
     );
-  }
-
-  async getTaskStatus(taskId: string): Promise<MultiremiTaskStatus> {
-    const resp = await this.get<{ status: MultiremiTaskStatus }>(`/api/daemon/tasks/${taskId}/status`);
-    return resp.status;
   }
 
   async listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]> {

@@ -27,6 +27,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import { afterCommit } from "@multiremi/store/db/postgres.js";
 import { taskMessagePageRows } from "@multiremi/store/task-message-pagination.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
@@ -4082,7 +4083,8 @@ ${placementAfter.sql}
       resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
       return responded;
     })();
-    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    const taskToResume = resumedTask;
+    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     if (request) this.publishTaskInputChanged(request.taskId);
@@ -4106,7 +4108,8 @@ ${placementAfter.sql}
       resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(expired.taskId, childStatusChanges, deferredEvents);
       return expired;
     })();
-    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    const taskToResume = resumedTask;
+    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     if (request) this.publishTaskInputChanged(request.taskId);
@@ -4155,7 +4158,7 @@ ${placementAfter.sql}
     return message;
   }
 
-  /** Caller owns the transaction and any post-commit notifications. Emits no events. */
+  /** Caller owns the transaction. */
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     const content = String(input.content ?? "").trim();
     if (!content) throw new Error("steer content must not be empty");
@@ -4191,11 +4194,12 @@ ${placementAfter.sql}
         metadata: { steer_id: id, steer_kind: kind },
       });
     }
-    return this.getTaskSteerMessage(id)!;
+    const message = this.getTaskSteerMessage(id)!;
+    this.publishTaskInputChanged(input.taskId);
+    return message;
   }
 
-  /** Callers of the WithinTransaction steer call this after their COMMIT. */
-  publishTaskInputChanged(taskId: string): void {
+  private publishTaskInputChanged(taskId: string): void {
     const task = this.getTaskIdentity(taskId);
     if (!task) return;
     this.ctx.emitWorkspaceEvent({ type: "daemon:task_input", workspaceId: task.workspaceId,
@@ -4588,7 +4592,7 @@ ${placementAfter.sql}
     const deferredEvents = createCommitEventQueue();
     const terminal = this.ctx.db.transaction(() =>
       this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents))();
-    this.runChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
     this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminal.task;
@@ -4694,7 +4698,7 @@ ${placementAfter.sql}
       this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
       return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents));
     })();
-    this.runChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminals.length;
@@ -5617,6 +5621,7 @@ ${placementAfter.sql}
     deferredEvents: CommitEventQueue,
   ): TaskTerminalFollowUps {
     const now = nowIso();
+    this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.
     if (status !== "cancelled") {
@@ -6017,6 +6022,26 @@ ${placementAfter.sql}
     return { retry, delegationReturns, roundPushTasks };
   }
 
+  /** Terminal task writers call this inside their task transaction. */
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string = nowIso()): void {
+    const task = this.getTaskIdentity(taskId);
+    const pending = this.ctx.db.query(
+      "SELECT id FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
+    ).all(taskId) as Array<{ id: string }>;
+    if (pending.length === 0) return;
+    this.ctx.db.run(
+      `UPDATE multiremi_task_human_requests SET status = 'cancelled', responded_at = ?
+       WHERE task_id = ? AND status = 'pending'`,
+      [now, taskId],
+    );
+    for (const { id } of pending) {
+      const request = this.getTaskHumanRequest(id)!;
+      this.ctx.feishuBot().enqueueDecisionCardPatch(request);
+      if (task) this.ctx.notifyHumanRequest({ type: "cancelled", request, workspaceId: task.workspaceId });
+    }
+    this.publishTaskInputChanged(taskId);
+  }
+
   /**
    * Caller holds the task workspace lifecycle lock. `childStatusChanges` is the
    * caller's collector for the post-commit E1/E2 hook; the same lock is held by
@@ -6058,10 +6083,12 @@ ${placementAfter.sql}
   }
 
   notifyCancelledTask(terminal: CancelTaskResult): void {
-    for (const delegationReturn of terminal.followUps.delegationReturns) {
-      this.ctx.notifyTaskEnqueued(delegationReturn);
-    }
-    this.ctx.notifyTaskEvent("task:cancelled", terminal.task);
+    afterCommit(this.ctx.db, () => {
+      for (const delegationReturn of terminal.followUps.delegationReturns) {
+        this.ctx.notifyTaskEnqueued(delegationReturn);
+      }
+      this.ctx.notifyTaskEvent("task:cancelled", terminal.task);
+    });
   }
 
   /**
@@ -6897,7 +6924,7 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
  */
 const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 
-function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
+export function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
   return {
     id: String(row.id),
     taskId: String(row.task_id),

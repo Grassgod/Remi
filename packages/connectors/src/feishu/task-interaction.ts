@@ -140,14 +140,40 @@ export function registerIssueDecisionCardInteraction(
 
 interface PendingInteraction extends CardPatchMetadata {
   settled?: MultiremiTaskHumanRequest;
+  listeners?: Set<(request?: MultiremiTaskHumanRequest) => void>;
 }
 const pending = new Map<string, PendingInteraction>();
 
 /** Re-registered using the persisted message ID when a delivery is reclaimed. */
-export function registerTaskInteraction(entry: PendingInteraction): { current: () => MultiremiTaskHumanRequest | undefined; dispose: () => void } {
+export function registerTaskInteraction(entry: PendingInteraction): {
+  current: () => MultiremiTaskHumanRequest | undefined;
+  wait: (signal: AbortSignal) => Promise<MultiremiTaskHumanRequest | undefined>;
+  dispose: () => void;
+} {
   const key = `${entry.appId}:${entry.messageId}`;
   pending.set(key, entry);
-  return { current: () => entry.settled, dispose: () => { if (pending.get(key) === entry) pending.delete(key); } };
+  return {
+    current: () => entry.settled,
+    wait: signal => {
+      if (entry.settled || signal.aborted) return Promise.resolve(entry.settled);
+      return new Promise(resolve => {
+        const listeners = entry.listeners ??= new Set();
+        const finish = (request?: MultiremiTaskHumanRequest) => {
+          listeners.delete(finish);
+          signal.removeEventListener("abort", onAbort);
+          resolve(request);
+        };
+        const onAbort = () => finish();
+        listeners.add(finish);
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (entry.settled) finish(entry.settled);
+      });
+    },
+    dispose: () => {
+      if (pending.get(key) === entry) pending.delete(key);
+      for (const listener of entry.listeners ?? []) listener();
+    },
+  };
 }
 
 /** Recovered message ids provide receipt metadata only. */
@@ -296,7 +322,13 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
     }
     // Canonical server compare-and-set happens before acknowledging success.
     const submitting = client.respond(request.taskId, value.r, response, credential)
-      .then(result => { if (entry) entry.settled = result; return result; });
+      .then(result => {
+        if (entry) {
+          entry.settled = result;
+          for (const listener of entry.listeners ?? []) listener(result);
+        }
+        return result;
+      });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 2000); });
     const settled = await Promise.race([submitting, deadline]).finally(() => clearTimeout(timer));

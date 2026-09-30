@@ -303,7 +303,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(() => store.reportIssueWorkspace({ ...input, runtimeId: runtime.id })).toThrow("runtime belongs to another workspace");
         const cleaned = await reportFrame(store, "gc.workspace_cleaned", { issue_id: issue.id, runtime_id: runtime.id,
           archive_id: "sar_source", source_revision: "source-revision", sha256: "f".repeat(64) }, daemonOptions);
-        expect(cleaned.ok).toBe(false);
+        expect(cleaned).toMatchObject({ ok: false, code: "task_not_found", operation_error: { status: 404, code: "issue_not_found" } });
         expect(store.getIssueWorkspace(issue.id)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id, status: "ready" });
       });
 

@@ -241,7 +241,7 @@ async function reportThroughDaemon(store: MultiremiStore, token: string, taskId:
   const reply = await reportFrame(store, `task.${type}`, { task_id: taskId, ...body }, {
     headers: { Authorization: `Bearer ${token}` }, authToken: "result-comment-http-root",
   });
-  expect(reply.ok).toBe(true);
+  expect(reply).toEqual({ ok: true });
 }
 
 async function dispatchThroughHttp(

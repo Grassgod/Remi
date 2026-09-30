@@ -1,4 +1,4 @@
-# ADR 0005: One full-duplex socket per daemon, with a database-derived downlink
+# ADR 0012: One full-duplex socket per daemon, with a database-derived downlink
 
 ## Status
 

@@ -382,8 +382,13 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const terminalActivities: Array<{ index: number; inTransaction: boolean }> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string } | undefined)?.action === "task_completed") {
+          terminalActivities.push({ index: events.length - 1, inTransaction: db!.inTransaction });
+        }
       });
       const database = db!;
       const originalRun = database.run;
@@ -409,11 +414,16 @@ describe("Feishu Issue topics", () => {
         expect(store.getTask(leader.id)!.status).toBe("running");
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
         expect(events).toEqual([]);
+        expect(terminalActivities).toEqual([]);
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
-        expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
-        expect(events[0].type).toBe("activity:created");
-        expect(events[0].inTransaction).toBe(false);
+        expect(events.filter(event => event.type === "daemon:task_input")).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+        expect(terminalActivities).toHaveLength(1);
+        expect(terminalActivities[0].inTransaction).toBe(false);
+        expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(1);
+        const inputIndex = events.findIndex(event => event.type === "daemon:task_input");
+        expect(inputIndex).toBeGreaterThanOrEqual(0);
+        expect(terminalActivities[0].index).toBeGreaterThan(inputIndex);
       }
     });
   }

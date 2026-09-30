@@ -813,15 +813,22 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
   const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });
+  const waitAbort = new AbortController();
+  const waitSignal = AbortSignal.any([options.signal, waitAbort.signal]);
   try {
-    while (request.status === "pending") {
-      await sleep(750);
+    if (request.status === "pending") {
+      const settled = await Promise.race([
+        registration.wait(waitSignal).then(value => ({ source: "local" as const, value })),
+        daemon.waitFeishuBotHumanRequestSettled(requestId, waitSignal).then(value => ({ source: "daemon" as const, value })),
+      ]);
       options.signal.throwIfAborted();
-      request = registration.current() ?? await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+      if (settled.source === "local" && settled.value) request = settled.value;
+      else request = await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+      if (request.status === "pending") throw new FeishuDeliveryError("Interaction request has not settled", true);
     }
     await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName, sessionId, receipt: true }));
     return { messageId };
-  } finally { registration.dispose(); }
+  } finally { waitAbort.abort(); registration.dispose(); }
 }
 
 /**

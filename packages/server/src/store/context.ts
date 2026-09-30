@@ -580,10 +580,8 @@ export interface TasksSurface {
     deferredEvents: CommitEventQueue,
   ): MultiremiTask;
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
-  /** Caller owns the transaction and post-commit notifications; emits no events. */
+  /** Queues its downlink notification for the caller's outermost commit. */
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
-  /** Kicks the task's daemon downlink; call after the steer's transaction commits. */
-  publishTaskInputChanged(taskId: string): void;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
@@ -623,6 +621,7 @@ export interface TasksSurface {
   listTasksForIssue(issueId: string): MultiremiTask[];
   /** Read one human request without going through the facade (MUL-407). */
   getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
@@ -834,6 +833,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  enqueueDecisionCardPatch(request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest): void;
   getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
   isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
@@ -1218,18 +1218,18 @@ export class StoreContext {
   /**
    * Publish one human-request transition.
    *
-   * Called by the store facade right after each of the three write paths returns
-   * the row it changed, so the transition is reported exactly once and while the
-   * row is durable.
+   * Writers can call this inside a transaction; listeners only see committed rows.
    */
   notifyHumanRequest(transition: HumanRequestTransition): void {
-    for (const listener of [...this.humanRequestListeners]) {
-      try {
-        listener(transition);
-      } catch {
-        // Realtime listeners are best-effort and must not roll back the write.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.humanRequestListeners]) {
+        try {
+          listener(transition);
+        } catch {
+          // Realtime listeners are best-effort and must not roll back the write.
+        }
       }
-    }
+    });
   }
 
   notifyTaskEvent(type: string, task: MultiremiTask): void {

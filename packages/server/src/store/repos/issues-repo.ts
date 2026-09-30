@@ -6474,6 +6474,7 @@ export class IssuesRepo {
       [now, now, now, issueId],
     );
     for (const row of active) {
+      this.ctx.tasks().cancelPendingHumanRequestsWithinTransaction(String(row.id), now);
       this.ctx.appendIssueActivity(issueId, {
         actorType: "system",
         actorId: null,

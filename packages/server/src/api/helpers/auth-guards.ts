@@ -760,22 +760,20 @@ export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
 }
 
 /** Reads the bot host needs to present a Task, plus minting and answering cards.
- * Creating or expiring a human request stays with the executing daemon. */
+ * Creating or expiring a human request uses the executing daemon's v2 RPC lane. */
 function isFeishuBotTaskTransportRequest(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
-  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages|human-requests\/[^/]+)$/.test(path))
+  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages)$/.test(path))
     || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path));
 }
 
 /**
- * The Issue topic host may read, mint a card, and answer another machine's
- * task. Creating and expiring a human request are deliberately absent — the
- * executing daemon stays the only authority for those.
+ * The Issue topic host may mint a card and answer another machine's task.
+ * Creating and expiring a human request stay on the executing daemon's v2 lane.
  */
 function isFeishuBotIssueTaskRequestTransport(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
-  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+$/.test(path))
-    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path));
+  return c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path);
 }
 
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {

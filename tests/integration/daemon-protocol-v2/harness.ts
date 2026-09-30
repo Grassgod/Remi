@@ -93,7 +93,9 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
-    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs">;
+    daemonOptions?: Pick<MultiremiDaemonOptions,
+      "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs"
+      | "gcEnabled" | "gcIntervalMs" | "inProcessRuntimeModelDiscoveryEnabled" | "runtimeModelRefreshIntervalMs">;
     runtimeIds?: string[];
     outboxBackoffMs?: number[];
     providerFactory?: MultiremiDaemonProviderFactory;

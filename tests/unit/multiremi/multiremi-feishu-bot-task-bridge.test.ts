@@ -4,6 +4,7 @@ import { runMigrations } from "@multiremi/store/migrations.js";
 import { seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { IncomingMessage, TaskStreamMeta } from "@connectors/base.js";
 import { createFeishuTaskHandler } from "../../../apps/remi/cli/multiremi.js";
@@ -842,16 +843,23 @@ describe("Feishu bot standard Task bridge", () => {
       text,
     });
     const first = submit("om_kick_1", "first message");
-    const db = (store as unknown as { db: { inTransaction: boolean } }).db;
+    const storeDb = (store as unknown as { db: SqlDatabase }).db;
     const kicks: Array<{ payload: Record<string, unknown>; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
-      if (event.type === "daemon:task_input") kicks.push({ payload: event.payload, inTransaction: db.inTransaction });
+      if (event.type === "daemon:task_input") kicks.push({ payload: event.payload, inTransaction: storeDb.inTransaction === true });
     });
     try {
       expect(submit("om_kick_2", "add this while running")).toMatchObject({ steered: true, duplicate: false });
       expect(kicks).toEqual([{ payload: { runtime_id: "rt_bot", task_id: first.taskId }, inTransaction: false }]);
       expect(submit("om_kick_2", "redelivered payload")).toMatchObject({ duplicate: true });
       expect(kicks).toHaveLength(1);
+      expect(() => storeDb.transaction(() => {
+        expect(submit("om_kick_3", "rolled back input")).toMatchObject({ steered: true, duplicate: false });
+        expect(kicks).toHaveLength(1);
+        throw new Error("rollback Feishu steer");
+      })()).toThrow("rollback Feishu steer");
+      expect(kicks).toHaveLength(1);
+      expect(store.listPendingTaskSteerMessages(first.taskId)).toHaveLength(1);
     } finally {
       unsubscribe();
     }

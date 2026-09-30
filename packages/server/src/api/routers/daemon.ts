@@ -370,6 +370,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     deregisterDaemonRuntimes(c, store, runtimeIds.runtimeIds);
     return c.json({ status: "ok" });
   });
+  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", (c) => c.json({ task: null }));
   app.post("/api/daemon/heartbeat", async (c) => {
     const body = await readJsonStrict<{
       runtime_id?: string;
@@ -951,44 +952,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: (err as Error).message }, 400);
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown>; timeout_ms?: number }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
-    const kind = body.kind === "question" ? "question" : "permission";
-    const request = store.createTaskHumanRequest({
-      taskId,
-      kind,
-      payload: body.payload ?? {},
-      timeoutMs: body.timeout_ms,
-    });
-    return c.json({ request }, 201);
-  });
-  app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, c.req.param("taskId"));
-    if (identityDenied) return identityDenied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
-    return c.json({ request });
-  });
-  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/expire", async (c) => {
-    const body = await readJsonStrict<{ status?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    const status = body.status === "cancelled" ? "cancelled" : "timeout";
-    const expired = store.expireTaskHumanRequest(request.id, status);
-    // Lost the race to a human response: return the current row so the worker honors it.
-    return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
   app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/card", async (c) => {
     const taskId = c.req.param("taskId");

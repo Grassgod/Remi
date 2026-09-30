@@ -53,7 +53,7 @@ describe("SQLite outer transaction write lock", () => {
       db.exec("CREATE TABLE lock_probe (value TEXT NOT NULL)");
 
       const worker = `
-        import { Database } from "bun:sqlite";
+        import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
         const db = openSqliteDatabase(${JSON.stringify(file)});
         db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
         process.stdout.write("locked\\n");

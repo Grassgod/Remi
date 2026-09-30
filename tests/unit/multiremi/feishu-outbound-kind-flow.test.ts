@@ -176,6 +176,50 @@ describe("C5 full fake-channel delivery", () => {
     expect(f.store.getTaskHumanRequest(request.id)?.status).toBe("responded");
   });
 
+  for (const cached of [false, true]) {
+    it(`settles an interaction from ${cached ? "a cached" : "a live"} downlink without polling`, async () => {
+      const f = configureKindBot(createLocalStore());
+      const taskId = f.inbound(`settled_${cached}`).taskId;
+      for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) {
+        f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
+          { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
+      }
+      const request = f.store.createTaskHumanRequest({ taskId, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
+      const delivery = f.store.claimFeishuBotOutbounds("local", f.runtimeId).find(row => row.kind === "interaction_card")!;
+      const patches: unknown[] = [];
+      let cardSent!: () => void;
+      const sent = new Promise<void>(resolve => { cardSent = resolve; });
+      const handle = { appId: f.config.appId, resolveProactiveMention: async () => null,
+        sendProactiveCard: async () => { cardSent(); return { messageId: "om_settled" }; },
+        updateProactiveCard: async (_id: string, card: unknown) => { patches.push(card); },
+      } as unknown as FeishuChannelHandle;
+      let getCount = 0;
+      let release: (() => void) | undefined;
+      const settled = new Promise<void>(resolve => { release = resolve; });
+      const daemon = {
+        getFeishuBotHumanRequest: async () => { getCount += 1; return f.store.getTaskHumanRequest(request.id); },
+        getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
+        waitFeishuBotHumanRequestSettled: async () => { if (!cached) await settled; return f.store.getTaskHumanRequest(request.id); },
+      } as unknown as MultiremiDaemon;
+      const respond = () => f.store.respondTaskHumanRequest(request.id,
+        { response: { answers: { "Continue?": "Yes" } }, respondedBy: "test" });
+      const run = sendInteractionCardLane(handle, delivery, { signal: new AbortController().signal,
+        onStarted: async () => { if (cached) respond(); },
+      }, daemon);
+      await sent;
+      if (!cached) {
+        await Bun.sleep(30);
+        expect(getCount).toBe(1);
+        respond();
+        release!();
+      }
+      expect(await run).toEqual({ messageId: "om_settled" });
+      expect(getCount).toBe(2);
+      expect(patches).toHaveLength(1);
+      expect(JSON.stringify(patches[0])).toContain("Yes");
+    });
+  }
+
   it("records a permanently rejected native CoT as failed while the independent result handler still delivers", async () => {
     const f = flow();
     const taskId = f.inbound("cotrefusal").taskId;

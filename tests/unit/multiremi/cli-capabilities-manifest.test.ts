@@ -185,10 +185,10 @@ describe("CLI capabilities manifest", () => {
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
-      // The native card mint is daemon-only; workspace abandonment maps to CLI.
-      exempt: 87,
+      // The three retired human-request HTTP routes now use daemon RPC.
+      exempt: 86,
       missing: 0,
-      total: 769,
+      total: 768,
     });
     expect(manifest.aliases["remi chat message list"]?.command).toBe("session.log.window");
     expect(manifest.aliases["remi issue run-messages"]?.command).toBe("task.trace.read");
@@ -196,6 +196,12 @@ describe("CLI capabilities manifest", () => {
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
+    expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired"])
+      .toMatchObject({
+        cli_exempt: true,
+        category: "daemon_internal_protocol",
+        reason: "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command.",
+      });
     expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);

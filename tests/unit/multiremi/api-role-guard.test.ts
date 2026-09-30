@@ -14,7 +14,7 @@
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 765 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`, 768 patterns) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -382,12 +382,12 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // A-5/A-6 remove the old daemon HTTP paths. The native card mint adds one
-    // runtime-owned route; the daemon WS upgrade is checked separately below.
+    // The three human-request HTTP routes have moved to daemon RPC.
+    expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
-    expect(misdirected, routeCountHint("ui")).toHaveLength(64);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(65);
+    expect(misdirected, routeCountHint("ui")).toHaveLength(63);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(64);
   });
 
   it("refuses paths outside runtime's daemon, health, peer and trace routes", async () => {
@@ -398,7 +398,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 694 of the 765 swept patterns are refused; the two browser upgrade routes
+    // The two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
     // total is 696. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
@@ -420,6 +420,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // its 14 daemon archive routes and two trace reads are served by runtime.
     // MUL-479 adds one browser context-window PUT, bringing refusals to 695.
     // C12 removes two browser Chat GET routes; workspace abandonment adds one.
+    // The v2-A merge removes three daemon HTTP request routes and adds two
+    // runtime-only upgrade/claim routes; neither changes runtime refusals.
     const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);

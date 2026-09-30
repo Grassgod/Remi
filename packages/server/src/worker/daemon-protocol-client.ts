@@ -22,7 +22,7 @@ import {
   type DaemonWelcomePayload,
   type DaemonGcErrorReply,
 } from "@multiremi/contracts/daemon-protocol.js";
-import type { MultiremiDaemonHeartbeatAck } from "@multiremi/contracts/types.js";
+import type { MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "@multiremi/contracts/types.js";
 import { daemonAuthorizationCloseCode } from "../api/daemon-protocol/session.js";
 import { systemClock, type DaemonProtocolClock, type DaemonProtocolTimer } from "../api/daemon-protocol/clock.js";
 import {
@@ -46,7 +46,10 @@ export type DaemonProtocolClientState = "disconnected" | "connecting" | "connect
 /** A provider lane contributes to the single process connection. */
 export interface DaemonProtocolLane {
   runtime(): DaemonHelloRuntime | null;
-  heartbeat(): DaemonHeartbeatPayload;
+  heartbeat(): DaemonHeartbeatPayload & {
+    ssh_mesh_protocol?: number;
+    ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
+  };
   onHeartbeatAck(ack: MultiremiDaemonHeartbeatAck): Promise<void>;
   probeUpgrade(): Promise<void>;
   onTerminal(code: number): Promise<void>;
@@ -407,13 +410,21 @@ export class DaemonProtocolClient {
 
   private heartbeatTick(): void {
     if (this.state !== "connected") return;
+    if (this.hbTimer !== null) this.cancel(this.hbTimer);
+    this.hbTimer = null;
     const advertised = [...this.advertised];
     const generation = this.generation;
     const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 }, runtimes: [] };
     for (const { lane, runtimeId } of advertised) {
       const current = lane.heartbeat();
       const runtime = lane.runtime();
-      if (runtime?.runtime_id === runtimeId) payload.runtimes!.push({ runtime_id: runtimeId, capabilities: runtime.capabilities });
+      if (runtime?.runtime_id === runtimeId) payload.runtimes!.push({
+        runtime_id: runtimeId, capabilities: runtime.capabilities,
+        ...(current.ssh_mesh_protocol === undefined ? {} : {
+          ssh_mesh_protocol: current.ssh_mesh_protocol,
+          ssh_mesh_status: current.ssh_mesh_status,
+        }),
+      });
       payload.active_task_count += current.active_task_count;
       payload.outbox!.pending += current.outbox?.pending ?? 0;
       payload.outbox!.unacked += current.outbox?.unacked ?? 0;
@@ -436,6 +447,8 @@ export class DaemonProtocolClient {
     }));
     this.hbTimer = this.schedule(() => this.heartbeatTick(), DAEMON_HEARTBEAT_INTERVAL_MS);
   }
+
+  sendHeartbeatNow(): void { this.heartbeatTick(); }
 
   private ackTick(): void {
     if (this.state !== "connected") return;

@@ -1092,6 +1092,8 @@ export class MultiremiDaemon {
         active_task_count: this.activeTaskCount,
         outbox: { pending: this.outboxStats()?.pending ?? 0, unacked: 0 },
         drain_ack_generation: this.appliedDrainGeneration,
+        ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
+        ssh_mesh_status: this.sshMeshManager.getHeartbeatStatus(),
       }),
       onHeartbeatAck: async ack => {
         if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;
@@ -1229,6 +1231,10 @@ export class MultiremiDaemon {
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
     return this.readFeishuBotHumanRequest(taskId, requestId);
+  }
+
+  waitFeishuBotHumanRequestSettled(requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
+    return this.taskDownlinks.waitForHumanDecision(requestId, signal, 24 * 60 * 60 * 1000);
   }
 
   private async readFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest> {
@@ -1407,7 +1413,6 @@ export class MultiremiDaemon {
             this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
           }
-
           await this.waitForNextTick();
         } catch (err) {
           // A transient server/network blip (e.g. the server restarting) must not
@@ -1424,12 +1429,10 @@ export class MultiremiDaemon {
           }
           if (this.stopped) break;
           if (this.options.once) throw err;
-          // A failed claim or Plugin refresh delays the next attempt so a hard
-          // outage cannot turn the poll loop into a tight retry spin.
+          // A transient failure must not turn event-driven wakeups into a tight retry spin.
           const retryMs = Math.max(this.options.pollIntervalMs, DAEMON_HEARTBEAT_INTERVAL_MS);
-          this.nextPluginDesiredAt = Date.now() + retryMs;
           log.warn(`daemon poll loop error, retrying in ${retryMs}ms: ${err instanceof Error ? err.message : String(err)}`);
-          await this.waitForNextTick();
+          await this.waitForNextTick(retryMs);
         }
       }
     } catch (error) {
@@ -1488,20 +1491,21 @@ export class MultiremiDaemon {
   }
 
 
-  /** Business pushes wake this wait; its timer only forces the ten-minute snapshot. */
-  private async waitForNextTick(): Promise<void> {
+  /** Business pushes wake this wait; the timer retains the ten-minute RPC fallback. */
+  private async waitForNextTick(retryMs?: number): Promise<void> {
     if (this.stopped) return;
-    const delayMs = Math.max(0, this.nextPluginDesiredAt - Date.now());
+    const delayMs = retryMs ?? Math.max(0, this.nextPluginDesiredAt - Date.now());
     await new Promise<void>(resolveWait => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
         if (this.waitWake === finish) this.waitWake = null;
         resolveWait();
       };
-      const timer = setTimeout(finish, delayMs);
+      timer = setTimeout(finish, delayMs);
       this.waitWake = finish;
       if (this.stopped) finish();
     });
@@ -1523,7 +1527,10 @@ export class MultiremiDaemon {
   private releaseActiveTaskSlot(): void {
     const previous = this.activeTaskCount;
     this.activeTaskCount = Math.max(0, previous - 1);
-    if (this.activeTaskCount < previous) this.wakeClaim();
+    if (this.activeTaskCount < previous) {
+      this.protocolClient?.sendHeartbeatNow();
+      this.wakeClaim();
+    }
   }
 
   /** The process connection is shared by every co-resident provider. */

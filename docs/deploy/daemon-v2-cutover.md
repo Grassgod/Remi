@@ -73,6 +73,38 @@ runtime、请求 ID、核对结论及脱敏错误，不记录 token、凭据、�
 本 PR 上线就执行最终切换。升级请求/排队沿用现有表和空闲判定，失败后下次心跳会重建，
 每个失败请求 ID 和错误都应及时记下，不能只保留后来成功的一次。
 
+### 升级失败行增长监控
+
+升级失败后，下一次探测会重建请求；60s 探测持续失败时约增长 **60 行 / runtime / 小时**。
+失败历史必须保留，本清单不授权删行。切换期间每分钟核对，首次新增失败即告警；同 runtime
+10 分钟内新增失败 >= 10 行，或一小时 >= 60 行，升级为持续失败告警，暂停推进并在 MUL-401
+记录请求 ID、增长量及脱敏根因。不得以一条 pending 的唯一性推断失败历史不增长。
+
+`remi runtime release status` 只能读取已知请求 ID，CLI 暂无历史失败计数能力。下列命令仅供
+授权运维使用**预先配置的只读 PG 监控 service**；本段不执行生产 DB 查询、不创建 service 或
+复制凭据。不把带密码的 URL 放入命令、日志或评论；service/psql 不可用时记为未核对并停下，
+不能用当前 `protocol.state` 代替行增长统计。
+
+```bash
+PGOPTIONS='-c default_transaction_read_only=on' psql 'service=multiremi-monitor' -X --set ON_ERROR_STOP=1 <<'SQL'
+BEGIN READ ONLY;
+SELECT runtime_id,
+       COUNT(*) FILTER (WHERE updated_at::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '10 minutes') AS failed_10m,
+       COUNT(*) AS failed_1h,
+       MAX(updated_at) AS latest_failure_at
+FROM multiremi_runtime_update_requests
+WHERE scope = 'cli' AND status = 'failed'
+  AND updated_at::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+GROUP BY runtime_id
+ORDER BY failed_1h DESC, runtime_id;
+COMMIT;
+SQL
+```
+
+通过条件：命令退出 0，切换窗口内没有新增 CLI 升级失败；每分钟保存脱敏计数差值，历史已有
+失败不能被当成此次新增。出现任一告警先查对应 runtime 与失败请求，不清表、不重跑到无失败
+再覆盖记录。这里仅监控 CLI scope，ACP 更新失败另行调查。
+
 | daemon/主机 | 服务管理 | 路径与只读核对 |
 |---|---|---|
 | n37-066-008-hehuajie / 008 | systemd user unit | 先升级通道；`systemctl --user status <切换当天确认的-daemon-unit> --no-pager`、本地 daemon status 与两个 runtime get 核对。失败时负责人授权 SSH 兜底 |

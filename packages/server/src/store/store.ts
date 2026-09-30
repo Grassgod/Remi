@@ -2339,6 +2339,10 @@ runMigrations(this.db);
     return this.feishuBot.listLiveDecisionCards(workspaceId, runtimeId);
   }
 
+  listFeishuBotSettledHumanRequestCandidates(workspaceId: string, runtimeId: string, daemonId?: string) {
+    return this.feishuBot.listSettledHumanRequestCandidates(workspaceId, runtimeId, daemonId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -5585,6 +5589,10 @@ runMigrations(this.db);
     return this.tasks.getTaskHumanRequest(requestId);
   }
 
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void {
+    this.tasks.cancelPendingHumanRequestsWithinTransaction(taskId, now);
+  }
+
   prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
     return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
   }
@@ -5630,16 +5638,16 @@ runMigrations(this.db);
     this.ctx.notifyHumanRequest({ type, request, workspaceId: task.workspaceId });
   }
 
+  enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest): void {
+    this.feishuBot.enqueueDecisionCardPatch(request);
+  }
+
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     return this.tasks.createTaskSteerMessage(input);
   }
 
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     return this.tasks.createTaskSteerMessageWithinTransaction(input);
-  }
-
-  publishTaskInputChanged(taskId: string): void {
-    this.tasks.publishTaskInputChanged(taskId);
   }
 
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {

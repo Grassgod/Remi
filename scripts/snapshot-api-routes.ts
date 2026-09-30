@@ -44,7 +44,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { listAgentTemplates } from "@multiremi/api/agent-templates.js";
-import { createMultiremiApp } from "@multiremi/api.js";
+import { createMultiremiApp, retiredDaemonRouteHandler } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { VERSION } from "@shared/version.js";
 import { reportFrame } from "../tests/fixtures/report-session.js";
@@ -406,8 +406,9 @@ export interface RouteRef {
 export function snapshotRouteTable(app: any): RouteRef[] {
   const seen = new Set<string>();
   const out: RouteRef[] = [];
-  for (const route of app.routes as RouteRef[]) {
+  for (const route of app.routes as (RouteRef & { handler?: unknown })[]) {
     if (route.method === "ALL") continue; // middleware, not a route
+    if (route.handler === retiredDaemonRouteHandler) continue; // 426 compatibility, not a live API route
     const key = `${route.method} ${route.path}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -740,6 +741,16 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     authorType: "member",
     authorId: member.id,
     body: "Snapshot comment body",
+  });
+  // The comment queues another issue task, so its request remains pending
+  // while the completed task's request exercises terminal cancellation.
+  const waitingTask = store.listTasksForIssue(issue.id).find((entry) => entry.id !== task.id && entry.status === "queued");
+  if (!waitingTask) throw new Error("Snapshot comment did not queue a task");
+  store.createTaskHumanRequest({
+    id: "hrq_snapshot_waiting",
+    taskId: waitingTask.id,
+    kind: "permission",
+    payload: { tool: "Bash", command: "ls" },
   });
   store.addCommentReaction(comment.id, { actorType: "member", actorId: member.id, emoji: "eyes" });
 

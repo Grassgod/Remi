@@ -287,7 +287,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 | `task.offer` | `multiremi_tasks` 中 queued / dispatched 的行 |
 | `task.steer` | 未消费的 steer 行 |
 | `task.cancelled` | 任务已终态而 daemon 仍在跑 |
-| `task.human_request.settled` | human request 的状态 |
+| `task.human_request.settled` | 已结束的 human request 状态（`responded`、`timeout`、`cancelled`） |
 | `runtime.*` 各类待办 | 各自请求表 |
 | `platform.drain` | 平台维护状态行 |
 | `plugin.desired_revision` | `desiredRevision` |
@@ -296,6 +296,21 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、steer 的 `seen` 集合今天就有，
 补齐 update / command / skills 的同类集合即可）。服务端对每条下行可靠帧记发送时刻，15 s 未 ack
 即关连接（4000），由重连后的快照重推兜底。
+
+`task.human_request.settled` 的载荷固定为 `{task_id, request}`，`pending` 不发。
+服务端从已提交的请求状态推导快照，同时发给任务执行 runtime 和该 workspace 的飞书 bot host
+`config.runtimeId`；两者相同只发一次。bot host 候选来自当前应用绑定下已送达的决策卡
+（终态卡片补丁尚未报告 `sent`），或近 24 小时已结束的 Chat 绑定请求；任一终态补丁
+报告 `sent`、Chat 请求超过 24 小时后退出相应候选来源。按结束时间取最近 1024 条，
+避免重连推送无限历史。已发出的 Issue 决策卡有持久补丁出站队列，补丁重试不受上述
+时间窗限制。Chat 卡只有近 24 小时、最新 1024 条请求的有界恢复窗口：bot host 离线超过
+24 小时，或候选被挤出 1024 条后，卡片可能停在待处理。这是已知限制，持久恢复链路留待后续单。
+`human_request.get` 只能按已知请求 ID 读取，不提供窗口外候选发现。每个候选还须通过该 RPC
+对应的飞书任务权限校验；其他 runtime
+和 workspace 不接收。
+写入进程通过 workspace 事件跨进程唤醒持有 socket 的 runtime 进程；断线重连重新推快照，
+不新增帧或持久 seq。bot host 端最多缓存 1024 条已结束请求：释放执行任务时仍主动清理，
+长期不释放的外部任务按最早收到的顺序淘汰，避免内存随历史卡片无限增长。
 
 **trace 流：** 见 §5。
 
@@ -359,7 +374,11 @@ daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随�
 `binary_skill_files_unsupported`。
 
 reject、30 s 未应答、或连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
-（内存态）。`CLAIM_RESPONSE_RECOVERY_MS`（90 s）的重领逻辑保留为最终兜底。
+（内存态）。仅 `capacity` 拒绝可提前结束冷却：daemon 释放本地任务槽位后立即补发已有的
+`hb` 帧；服务端发现 `active_task_count` 变化且当前冷却原因为 `capacity` 时清理计时器并 kick。
+该补发使用常规 hb 负载（含 drain ACK 与运行时状态），同时重置正常 15 s 心跳计时；丢帧仍由
+30 s 冷却兜底。`claims_paused`、`draining`、超时和断线均保持 30 s，不用 `runtime.ready`
+作为槽位释放信号。`CLAIM_RESPONSE_RECOVERY_MS`（90 s）的重领逻辑保留为最终兜底。
 
 ### 3.2 并发上限、租约与断线
 
@@ -392,7 +411,9 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 ## 4. heartbeat 与 pending_*
 
 `hb` 上行每 15 s，载荷包含 `active_task_count`、outbox 统计、`drain_ack_generation`，
-以及各 runtime 的 `{ runtime_id, capabilities }`。能力字段与 HTTP heartbeat 同名同语义；
+以及各 runtime 的 `{ runtime_id, capabilities, ssh_mesh_protocol?, ssh_mesh_status? }`。
+SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议版本 0 按不支持处理，
+旧 v2 daemon 不带字段时不写 Mesh 状态。能力字段与 HTTP heartbeat 同名同语义；
 缺失的字段视为不支持，覆盖旧值。服务端更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS`
 5 分钟的规则不动，platform-maintenance 与 ssh-mesh 继续用它）、记录 drain ack，并在能力
 变化时更新 runtime metadata，不因无变化的心跳重写 metadata。`heartbeatRuntime` 里 7 类待办的
@@ -446,13 +467,19 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 | 今天 | v2 |
 |---|---|
 | heartbeat ack 捎带 `pending_update` / `pending_command` / `pending_model_list` / `pending_local_skills` / `pending_directory_scan` / `pending_bot_menu` / `pending_feishu_outbound` | 创建即推对应下行帧；`task.complete` 等结果走上行可靠帧 |
-| `GET agent-plugins/desired` 30 s 兜底 | 服务端推 `plugin.desired_revision`，daemon 用 rpc `plugin.desired` 拉快照；30 s 兜底取消 |
+| `GET agent-plugins/desired` 30 s 兜底 | v2 服务端推 `plugin.desired_revision`，daemon 用 rpc `plugin.desired` 拉快照；30 s 兜底取消。v1 的 GET 暂作升级桥，供旧进程完成启动并进入升级心跳，非 v2 稳态轮询。桥路由不接受客户端写入；读取时与 RPC 一样先 reconcile desired 状态，有漂移时可能更新业务状态，稳态无漂移时不改 desired 业务状态（既有工作区锁行更新仍会发生） |
 | desired 的 10 分钟强制刷新（ADR 0001 的「revision 定义漏字段」防御） | 保留，改为 WS rpc；不算轮询 |
 | `GET tasks/:id/steer` 2.5 s | 创建即推 `task.steer`，daemon 用 rpc `steer.consume` 标记消费 |
-| `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除 |
+| `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除。飞书 bot 的独立任务状态轮询仍按需使用此 GET，见下方条件 HTTP 清单 |
 | `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；读取走 `human_request.get`，创建 / 过期走 rpc |
 | `GET .../gc-check` ×4 与 `workspace/cleaned` | rpc（见 §1.5） |
 | 归档：退役流程要 daemon 打包会话 | 下行 `runtime.archive_sessions` + 上行 `runtime.archive_sessions_result`（见 §4.1）；**不**复用 `pending_command` |
+
+条件 HTTP 清单：`GET /api/daemon/tasks/:taskId/status` 仅在飞书 bot 轮询任务时出现，
+不是 daemon 空闲稳态轮询。15 分钟空闲窗口的 HTTP 请求数仍为 0；飞书任务活跃时
+该 GET 允许按其任务轮询节奏发出。将这条读取迁至 WS 留待单独处理。
+`POST /api/daemon/tasks/:taskId/human-requests/:requestId/card` 仅在飞书任务流需要
+为指定收件人展示交互卡片时调用，不走定时器；v2 保留此条件 HTTP 请求。
 
 ### 4.1 归档为什么不用 `pending_command`
 
@@ -756,7 +783,14 @@ server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
   pending，失败后每次心跳重建直到 daemon 空闲）；
 - ack 只含 `pending_update` 与 `drain: draining`；
 - claim 路由永远返回 `{task: null}`；
-- 其余 v1 路由返回 426 `{code: "daemon_protocol_upgrade_required", min_version}`。
+- 已退役的 v1 路由返回 426 `{code: "daemon_protocol_upgrade_required", min_version}`。
+
+v1 进程在 `upgrade_pending` 期间，每次心跳仍会重发 plugin state POST 并收到 426，
+直到升级完成。这是已接受的升级桥行为，不恢复任何 plugin state 写路由。
+
+只有退役路由表中精确匹配 method + path 的 `/api/daemon/*` 请求返回 426，`min_version` 为协议版本 `2`；
+从未存在的地址保持原有 404。现存按需 HTTP 路由、心跳升级通道和 `update/:id/result` 继续由原 handler
+处理；鉴权与角色 guard 仍在退役路由之前。回归用固定 v1 路由快照与当前活路由快照的差集校验退役表。
 
 v1 daemon 因此拿不到任何任务，但会走它自己的 `handleRuntimeUpdate` 升级并重启。**这不是兼容方案**：
 v1 在 v2 服务端上一件活都干不了，保留的唯一能力是「把自己换成 v2」。
