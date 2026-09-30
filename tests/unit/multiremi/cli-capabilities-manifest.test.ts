@@ -177,13 +177,21 @@ describe("CLI capabilities manifest", () => {
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
       // A-5/A-6 remove 25 daemon routes; MUL-412 keeps its two decision routes.
-      exempt: 68,
+      // The read-only v1 desired upgrade bridge is daemon-only, so it adds one
+      // daemon_internal_protocol exemption without changing user CLI mappings.
+      exempt: 70,
       missing: 0,
-      total: 746,
+      total: 748,
     });
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
+    expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired"])
+      .toMatchObject({
+        cli_exempt: true,
+        category: "daemon_internal_protocol",
+        reason: "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command.",
+      });
     expect(manifest.max_planned_routes).toBe(0);
     for (const [route, command] of [
       ["GET /api/issues/:id/decisions", "issue.decision.list"],

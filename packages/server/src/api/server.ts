@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Handler } from "hono";
 import { registerDaemonTraceHandlers } from "./daemon-protocol/trace-handlers.js";
 import { resolveRequestWorkspaceId } from "./helpers/workspace-context.js";
 import { cors } from "hono/cors";
@@ -199,6 +199,45 @@ import {
   type PeerChannel,
 } from "./peer/peer-channel.js";
 import { registerPeerRoutes } from "./peer/peer-routes.js";
+
+// Only routes removed from the v1 daemon API get the upgrade response. Unknown
+// method/path combinations remain not-found after these registrations.
+export const RETIRED_DAEMON_HTTP_ROUTES = [
+  { method: "GET", path: "/api/daemon/runtimes/:runtimeId/tasks/pending" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/human-requests/:requestId" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/messages" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/steer" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/commands/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/feishu-bot/status" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/local-skills/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/models/:requestId/result" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/complete" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/dispatch-lease" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/fail" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/human-requests" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/human-requests/:requestId/expire" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/messages" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/progress" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/prompt" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/session" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/steer/consume" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/usage" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/workspace" },
+  { method: "PUT", path: "/api/daemon/runtimes/:runtimeId/models" },
+] as const;
+
+// The snapshot excludes this handler by identity, while still recording any
+// live handler accidentally registered at the same method and path.
+export const retiredDaemonRouteHandler: Handler = c => {
+  // Hono dispatches HEAD as GET; no retired HEAD route exists in the v1 inventory.
+  if (c.req.method === "HEAD") return c.notFound();
+  return c.json({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN }, 426);
+};
 
 /**
  * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
@@ -817,6 +856,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerChatRoutes(app, deps);
 
   registerTaskRoutes(app, deps);
+
+  for (const { method, path } of RETIRED_DAEMON_HTTP_ROUTES) {
+    app.on(method, path, retiredDaemonRouteHandler);
+  }
 
   return app;
 }

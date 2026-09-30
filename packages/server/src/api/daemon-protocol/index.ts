@@ -31,6 +31,7 @@ import {
   FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
   type MultiremiAccessToken,
   type MultiremiDaemonHeartbeatAck,
+  type MultiremiDaemonSshMeshStatus,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
@@ -511,6 +512,11 @@ export class DaemonProtocolLayer {
         // do not resurrect the row - the daemon registers it again, or does not.
         acksByRuntime.set(runtimeId, ack);
         continue;
+      }
+      if (reported && Object.prototype.hasOwnProperty.call(reported, "ssh_mesh_protocol")) {
+        this.store.recordSshMeshHeartbeat(runtimeId,
+          readNonNegativeInteger(reported.ssh_mesh_protocol) ?? 0,
+          reported.ssh_mesh_status as MultiremiDaemonSshMeshStatus | undefined);
       }
       if (ackGeneration !== null) {
         this.store.recordRuntimeDrainAck(runtimeId, ackGeneration, activeTaskCount);

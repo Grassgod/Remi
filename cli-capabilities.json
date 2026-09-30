@@ -10303,6 +10303,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command."
+    },
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11458,6 +11463,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/recover-orphans": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/claim": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."

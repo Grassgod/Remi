@@ -100,7 +100,6 @@ function createLoopDaemon(options: {
     desiredFetchedAt: 0,
     lastDesiredRefreshAt: 0,
     lastDesired: null,
-    // `once` runs stay on the legacy single-timer behavior.
     nextPluginDesiredAt: 0,
     nextClaimAt: 0,
     waitWake: null,

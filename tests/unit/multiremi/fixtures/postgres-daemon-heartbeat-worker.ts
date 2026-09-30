@@ -6,10 +6,11 @@ self.onmessage = (message: MessageEvent<{ databaseUrl: string; runtimeId: string
   const { databaseUrl, runtimeId } = message.data;
   const db = new PostgresSyncDatabase(databaseUrl);
   const store = new MultiremiStore(db);
-  const app = createMultiremiApp({ store });
+  const authToken = "isolated-pg-heartbeat-fixture";
+  const app = createMultiremiApp({ store, authToken });
   self.onmessage = async () => {
     try {
-      const response = await app.request("/api/daemon/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runtime_id: runtimeId }) });
+      const response = await app.request("/api/daemon/heartbeat", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` }, body: JSON.stringify({ runtime_id: runtimeId }) });
       await response.text();
       self.postMessage({ phase: "done", status: response.status });
     } catch {

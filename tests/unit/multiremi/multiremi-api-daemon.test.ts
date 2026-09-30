@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
 import { daemonTaskWireResponse, daemonTaskMessageWireResponse } from "@multiremi/api/wire/index.js";
-import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -1066,7 +1066,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
     expect(store.getTask(task.id)?.acceptedAt).toBeString();
     const lease = await app.request(`/api/daemon/tasks/${task.id}/dispatch-lease`, { method: "POST" });
-    expect(lease.status).toBe(404);
+    expect(lease.status).toBe(426);
+    expect(await lease.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: 2 });
     expect(store.claimTask(runtime.id)).toBeNull();
 
     const start = await reportFrame(store, "task.start", { task_id: task.id,  }, { headers: undefined, authToken: "" });
@@ -1284,7 +1285,8 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(replayedMessage?.id).toBe(seqTwoId);
     expect(replayedMessage?.output).toBe("updated");
     const since = await app.request(`/api/daemon/tasks/${task.id}/messages?since_seq=1`);
-    expect(since.status).toBe(404);
+    expect(since.status).toBe(426);
+    expect(await since.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     // The remaining UI read path still exposes legacy rows during A/B/C rollout.
     const uiMessages = await (await app.request(`/api/tasks/${task.id}/messages`)).json();
     expect(uiMessages.map((message: any) => message.seq)).toEqual([1, 2]);
@@ -1293,14 +1295,16 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(sinceBody[0].task_id).toBe(task.id);
     expect(sinceBody[0].taskId).toBeUndefined();
     const invalidSince = await app.request(`/api/daemon/tasks/${task.id}/messages?since=bad`);
-    expect(invalidSince.status).toBe(404);
+    expect(invalidSince.status).toBe(426);
+    expect(await invalidSince.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
 
     const invalidMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
-    expect(invalidMessages.status).toBe(404);
+    expect(invalidMessages.status).toBe(426);
+    expect(await invalidMessages.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
 
     const usageFirst = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "codex", model: "gpt-5", inputTokens: 10, outputTokens: 5 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(usageFirst).toEqual({ ok: true });
@@ -1339,7 +1343,8 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.getTask(waitingTask.id)?.workDir).toBeNull();
 
     const missingMessages = await app.request("/api/daemon/tasks/missing/messages");
-    expect(missingMessages.status).toBe(404);
+    expect(missingMessages.status).toBe(426);
+    expect(await missingMessages.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
   });
 
   it("serves Go-compatible daemon GC checks with workspace anti-enumeration", async () => {

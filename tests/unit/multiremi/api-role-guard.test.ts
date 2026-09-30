@@ -357,8 +357,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // Fixed counts, derived from the literal rule above (not from the guard).
     // Every daemon route is checked above; the upgrade-only route is checked below.
     expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
-    expect(misdirected, routeCountHint("ui")).toHaveLength(44);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(45);
+    expect(misdirected, routeCountHint("ui")).toHaveLength(46);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(47);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
