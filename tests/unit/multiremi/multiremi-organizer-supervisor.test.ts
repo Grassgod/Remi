@@ -666,7 +666,7 @@ describe("Organizer supervisor privilege layer", () => {
     expect(events[0]?.inTransaction).toBe(false);
   });
 
-  it("dispatches rich organizer comment mentions only after the outer transaction commits", async () => {
+  it("dispatches rich organizer comment mentions within the outer transaction", async () => {
     const fixture = await setup();
     await grantSupervisor(fixture);
     await setMode(fixture, "act");
@@ -696,13 +696,13 @@ describe("Organizer supervisor privilege layer", () => {
       delegatedByAgentId: leader.id,
     });
     const supervisorToken = await fixture.store.createTaskAccessToken(delegatedSupervisorTask, "owner");
-    const originalEnsure = fixture.store.ensureDelegationWakeup.bind(fixture.store);
+    const originalEnsure = fixture.store.ensureDelegationWakeupWithinTransaction.bind(fixture.store);
     let ensureObservedInTransaction: boolean | null = null;
     const enqueueTransactionStates: boolean[] = [];
-    fixture.store.ensureDelegationWakeup = ((input) => {
+    fixture.store.ensureDelegationWakeupWithinTransaction = ((input, childStatusChanges, deferredEvents) => {
       ensureObservedInTransaction = db!.inTransaction;
-      return originalEnsure(input);
-    }) as typeof fixture.store.ensureDelegationWakeup;
+      return originalEnsure(input, childStatusChanges, deferredEvents);
+    }) as typeof fixture.store.ensureDelegationWakeupWithinTransaction;
     const unsubscribe = fixture.store.onTaskEnqueued((task) => {
       if (task.agentId === leader.id) {
         enqueueTransactionStates.push(db!.inTransaction);
@@ -719,12 +719,12 @@ describe("Organizer supervisor privilege layer", () => {
       });
       expect(response.status).toBe(202);
     } finally {
-      fixture.store.ensureDelegationWakeup = originalEnsure;
+      fixture.store.ensureDelegationWakeupWithinTransaction = originalEnsure;
       unsubscribe();
     }
 
     expect(ensureObservedInTransaction).not.toBeNull();
-    expect(Boolean(ensureObservedInTransaction)).toBeFalse();
+    expect(Boolean(ensureObservedInTransaction)).toBeTrue();
     expect(enqueueTransactionStates).toEqual([false]);
     expect(fixture.store.listTasksForIssue(delegatedIssue.id).find((task) =>
       task.agentId === leader.id && task.parentTaskId === delegatedSupervisorTask.id

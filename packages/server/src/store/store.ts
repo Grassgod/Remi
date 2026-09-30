@@ -5472,7 +5472,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
+      }, { withinTransaction: true, deferredEvents, childStatusChanges });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -5490,7 +5490,6 @@ runMigrations(this.db);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     // The transaction committed: publish everything it deferred.
     this.ctx.emitCommitEvents(deferredEvents);
-    this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
 

@@ -201,7 +201,8 @@ export function createCommitEventQueue(): CommitEventQueue {
  */
 export type CreateIssueCommentOptions =
   | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
-  | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
+  | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue;
+    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChangeCollector };
 
 /**
  * One human-request transition, as the store recorded it.
