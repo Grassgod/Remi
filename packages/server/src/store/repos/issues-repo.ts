@@ -428,6 +428,7 @@ type CreateIssueCommentOptions =
      * later ROLLBACK erases. The owner flushes the queue after it commits.
      */
     deferredEvents: CommitEventQueue;
+    childStatusChanges?: ChildStatusChangeCollector;
   };
 
 /**
@@ -4345,7 +4346,7 @@ export class IssuesRepo {
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
     if (options.withinTransaction) {
-      return this.createIssueCommentWithinTransaction(issueId, input, options);
+      return this.createIssueCommentWithinTransaction(issueId, input, options, options.childStatusChanges);
     }
     if (options.deferredEvents) {
       return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
