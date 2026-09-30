@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 
@@ -49,7 +49,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     function open(): void {
       db = backend === "PostgreSQL" ? new PostgresSyncDatabase(database)
-        : Object.assign(new Database(database), { dialect: "sqlite" as const });
+        : openSqliteDatabase(database);
       store = new MultiremiStore(db);
     }
 

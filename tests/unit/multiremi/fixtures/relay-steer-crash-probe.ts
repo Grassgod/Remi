@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -7,7 +7,7 @@ const [database, issueId, phase] = process.argv.slice(2);
 if (!database || !issueId || !["before-insert", "after-insert", "after-commit"].includes(phase ?? "")) process.exit(2);
 const db: SqlDatabase = /^postgres(?:ql)?:\/\//.test(database)
   ? new PostgresSyncDatabase(database)
-  : Object.assign(new Database(database), { dialect: "sqlite" as const });
+  : openSqliteDatabase(database);
 const store = new MultiremiStore(db);
 const originalRun = db.run.bind(db);
 const originalTransaction = db.transaction.bind(db);
