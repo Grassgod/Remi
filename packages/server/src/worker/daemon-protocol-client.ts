@@ -410,6 +410,8 @@ export class DaemonProtocolClient {
 
   private heartbeatTick(): void {
     if (this.state !== "connected") return;
+    if (this.hbTimer !== null) this.cancel(this.hbTimer);
+    this.hbTimer = null;
     const advertised = [...this.advertised];
     const generation = this.generation;
     const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 }, runtimes: [] };
@@ -445,6 +447,8 @@ export class DaemonProtocolClient {
     }));
     this.hbTimer = this.schedule(() => this.heartbeatTick(), DAEMON_HEARTBEAT_INTERVAL_MS);
   }
+
+  sendHeartbeatNow(): void { this.heartbeatTick(); }
 
   private ackTick(): void {
     if (this.state !== "connected") return;

@@ -39,6 +39,7 @@ interface RuntimePump {
   dirty: boolean;
   waiting: boolean;
   cooldownUntil: number;
+  cooldownReason: string | null;
   cooldownTimer: DaemonProtocolTimer | null;
   preparing: string | null;
   pending: { taskId: string; session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
@@ -87,7 +88,16 @@ export class DaemonTaskOffers {
         const count = hb.payload.active_task_count;
         if (typeof count !== "number" || this.heartbeatCounts.get(session.sessionId) === count) return;
         this.heartbeatCounts.set(session.sessionId, count);
-        for (const rt of session.runtimeIds) this.kick(rt);
+        for (const rt of session.runtimeIds) {
+          const pump = this.pumps.get(rt);
+          if (pump?.cooldownReason === "capacity" && this.clock.now() < pump.cooldownUntil) {
+            if (pump.cooldownTimer !== null) this.clock.clearTimeout(pump.cooldownTimer);
+            pump.cooldownTimer = null;
+            pump.cooldownUntil = 0;
+            pump.cooldownReason = null;
+          }
+          this.kick(rt);
+        }
       },
       reply: (session, frame) => this.reply(session, frame),
       ack: session => this.resume(session),
@@ -178,7 +188,7 @@ export class DaemonTaskOffers {
   private pump(runtimeId: string): RuntimePump {
     let pump = this.pumps.get(runtimeId);
     if (!pump) {
-      pump = { running: null, dirty: false, waiting: false, cooldownUntil: 0, cooldownTimer: null,
+      pump = { running: null, dirty: false, waiting: false, cooldownUntil: 0, cooldownReason: null, cooldownTimer: null,
         preparing: null, pending: null, accepted: new Set(), sweep: false };
       this.pumps.set(runtimeId, pump);
     }
@@ -240,7 +250,11 @@ export class DaemonTaskOffers {
       const pump = this.pumps.get(runtimeId);
       const pending = pump?.pending;
       if (!pump || !pending || pending.session !== session || String(pending.seq) !== frame.re) continue;
-      if (frame.payload.ok !== true) { this.rescind(runtimeId, pump, pending.taskId); return; }
+      if (frame.payload.ok !== true) {
+        const reason = frame.payload.reason ?? frame.payload.code;
+        this.rescind(runtimeId, pump, pending.taskId, typeof reason === "string" ? reason : null);
+        return;
+      }
       this.clock.clearTimeout(pending.timer);
       pump.pending = null;
       if (this.options.store.acceptTaskOffer(pending.taskId, runtimeId, new Date(this.clock.now()).toISOString())) {
@@ -251,15 +265,17 @@ export class DaemonTaskOffers {
     }
   }
 
-  private rescind(runtimeId: string, pump: RuntimePump, taskId: string): void {
+  private rescind(runtimeId: string, pump: RuntimePump, taskId: string, reason: string | null = null): void {
     if (pump.pending?.taskId === taskId) {
       this.clock.clearTimeout(pump.pending.timer);
       pump.pending = null;
     }
     if (pump.cooldownTimer !== null) this.clock.clearTimeout(pump.cooldownTimer);
+    pump.cooldownReason = reason;
     pump.cooldownUntil = this.clock.now() + DAEMON_OFFER_COOLDOWN_MS;
     pump.cooldownTimer = this.clock.setTimeout(() => {
       pump.cooldownTimer = null;
+      pump.cooldownReason = null;
       this.kick(runtimeId);
     }, DAEMON_OFFER_COOLDOWN_MS);
     (pump.cooldownTimer as ReturnType<typeof setTimeout>).unref?.();

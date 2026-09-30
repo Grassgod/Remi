@@ -359,7 +359,11 @@ daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随�
 `binary_skill_files_unsupported`。
 
 reject、30 s 未应答、或连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
-（内存态）。`CLAIM_RESPONSE_RECOVERY_MS`（90 s）的重领逻辑保留为最终兜底。
+（内存态）。仅 `capacity` 拒绝可提前结束冷却：daemon 释放本地任务槽位后立即补发已有的
+`hb` 帧；服务端发现 `active_task_count` 变化且当前冷却原因为 `capacity` 时清理计时器并 kick。
+该补发使用常规 hb 负载（含 drain ACK 与运行时状态），同时重置正常 15 s 心跳计时；丢帧仍由
+30 s 冷却兜底。`claims_paused`、`draining`、超时和断线均保持 30 s，不用 `runtime.ready`
+作为槽位释放信号。`CLAIM_RESPONSE_RECOVERY_MS`（90 s）的重领逻辑保留为最终兜底。
 
 ### 3.2 并发上限、租约与断线
 

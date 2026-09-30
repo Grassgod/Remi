@@ -1513,7 +1513,10 @@ export class MultiremiDaemon {
   private releaseActiveTaskSlot(): void {
     const previous = this.activeTaskCount;
     this.activeTaskCount = Math.max(0, previous - 1);
-    if (this.activeTaskCount < previous) this.wakeClaim();
+    if (this.activeTaskCount < previous) {
+      this.protocolClient.sendHeartbeatNow();
+      this.wakeClaim();
+    }
   }
 
   /** The process connection is shared by every co-resident provider. */
