@@ -13,7 +13,8 @@
  * store can show.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import {
   DAEMON_PROTOCOL_CLOSE_CODES,
@@ -62,7 +63,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const database = new Database(":memory:");
+  const database = openSqliteDatabase(":memory:");
   databases.push(database);
   const store = new MultiremiStore(database);
   store.ensureLocalWorkspace();

@@ -992,8 +992,8 @@ export class SessionArchivesRepo {
                   iw.status AS workspace_status, iw.runtime_id AS workspace_runtime_id
            FROM multiremi_issues i
            LEFT JOIN multiremi_issue_workspaces iw ON iw.issue_id = i.id AND iw.workspace_id = i.workspace_id
-           WHERE i.id = ?`,
-        ).get(issueId) as Row | null;
+           WHERE i.id = ? AND i.workspace_id = ?`,
+        ).get(issueId, input.workspaceId) as Row | null;
         if (
           !row
           || String(row.workspace_id ?? "local") !== input.workspaceId

@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -9,7 +10,7 @@ export async function withConversationLogStore(
   run: (store: MultiremiStore, db: SqlDatabase, target: string) => void | Promise<void>,
 ): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { await run(new MultiremiStore(db), db, ":memory:"); } finally { db.close(); }
     return;
   }

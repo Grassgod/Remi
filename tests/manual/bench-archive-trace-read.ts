@@ -53,7 +53,8 @@
  * Exit status: 0 ok; 3 a read failed validation, the reconcile sample found a
  * mismatch or a call broke the byte bound; 4 not enough disk.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, open, rm } from "node:fs/promises";
@@ -322,7 +323,7 @@ async function openBenchStore(name: string, backendDir: string): Promise<BenchSt
     const dir = join(backendDir, "sqlite");
     const path = join(dir, "remi.db");
     mkdirSync(dir, { recursive: true });
-    const raw = new Database(path, { create: true, readwrite: true });
+    const raw = openSqliteDatabase(path, { create: true, readwrite: true });
     raw.exec("PRAGMA journal_mode = WAL");
     const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
     const store = new MultiremiStore(db);

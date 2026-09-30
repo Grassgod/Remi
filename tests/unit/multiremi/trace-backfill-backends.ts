@@ -7,7 +7,8 @@
  * template migrated once per file, because the backfill scans the whole store
  * and cases must not see each other's subjects.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -61,7 +62,7 @@ function sqliteBackend(): StoreBackend {
     name: "sqlite",
     available: true,
     async open() {
-      const raw = new Database(":memory:");
+      const raw = openSqliteDatabase(":memory:");
       const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();

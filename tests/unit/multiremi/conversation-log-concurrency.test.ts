@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +58,7 @@ function assertContiguous(db: SqlDatabase): void {
 async function withSqlite(run: (db: Database, path: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mul426-sqlite-"));
   const path = join(dir, "test.sqlite");
-  const db = new Database(path);
+  const db = openSqliteDatabase(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 30000");
   new MultiremiStore(db);
   try { await run(db, path); } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }

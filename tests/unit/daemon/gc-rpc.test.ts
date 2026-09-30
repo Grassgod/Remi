@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ const GC_RPC_CASE_TIMEOUT_MS = 30_000;
 
 async function fixture(code: string) {
   const root = mkdtempSync(join(tmpdir(), "mul421-gc-rpc-"));
-  const db = new Database(join(root, "store.db"));
+  const db = openSqliteDatabase(join(root, "store.db"));
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "runtime", name: "GC", provider: "codex", daemonId: "daemon-gc" });

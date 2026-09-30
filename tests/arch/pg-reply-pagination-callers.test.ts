@@ -26,7 +26,6 @@ test("new message-page callers require a reply-limit exception or a bounded algo
     visit(source);
   }
   expect(calls.sort()).toEqual([
-    "server/src/api/realtime-fanout.ts: store.getTaskMessagePageRows",
     "server/src/store/repos/tasks-repo.ts: this.getTaskMessagePageRows",
     "server/src/store/store.ts: this.tasks.getTaskMessagePageRows",
   ].sort());

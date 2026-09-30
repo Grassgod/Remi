@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Local SQLite + real API + production Next + Chromium. No credential files or traces.
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Page } from "playwright-core";
@@ -36,7 +37,7 @@ async function waitHttp(url: string) {
   while (Date.now() < end) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise(r => setTimeout(r, 150)); }
   throw new Error("Local service did not start");
 }
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 const fixture = await seedZeroJumpFixture(store);
 const frozen = store.appendConversationLog({ sessionId: fixture.longDefaultSessionId, kind: "follow_frozen",

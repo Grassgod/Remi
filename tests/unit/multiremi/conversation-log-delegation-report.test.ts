@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
@@ -18,7 +19,7 @@ let sequence = 0;
 
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();

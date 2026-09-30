@@ -3,7 +3,8 @@
  * the trace backfill, as a seeded sample over every group and in full, run as
  * a separate process against SQLite and Postgres.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { afterAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -145,7 +146,7 @@ function fileSha(path: string): string {
 
 describe("reconcile sample selection", () => {
   it("spreads a seeded sample evenly over every group and replays it from the seed", () => {
-    const raw = new Database(":memory:");
+    const raw = openSqliteDatabase(":memory:");
     const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
     try {
       new MultiremiStore(db).ensureLocalWorkspace();
@@ -183,7 +184,7 @@ describe("reconcile sample selection", () => {
   it("takes fixed per-group quotas and draws a short group's shortfall from the others in group order", () => {
     expect(TRACE_RECONCILE_SAMPLE_QUOTAS).toEqual({ chat: 50, task: 50, issue_without_archive: 50, issue_with_archive: 50 });
     expect(TRACE_RECONCILE_SAMPLE_SEED).toBe("mul-432-reconcile-sample-v1");
-    const raw = new Database(":memory:");
+    const raw = openSqliteDatabase(":memory:");
     const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
     try {
       new MultiremiStore(db).ensureLocalWorkspace();
@@ -291,7 +292,7 @@ for (const backend of backends) {
 
 describe("read-only database handle", () => {
   it("refuses anything but a single SELECT before the backend sees it", () => {
-    const raw = new Database(":memory:");
+    const raw = openSqliteDatabase(":memory:");
     raw.exec("CREATE TABLE t (x INTEGER)");
     const db = readOnlySqlDatabase(Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const }));
     try {
@@ -329,7 +330,7 @@ for (const backend of backends) {
       try {
         if (backend.name === "sqlite") {
           // A file the CLI process can open; the in-memory backend is invisible to it.
-          const raw = new Database(sqlitePath);
+          const raw = openSqliteDatabase(sqlitePath);
           writable = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
           const store = new MultiremiStore(writable);
           store.ensureLocalWorkspace();

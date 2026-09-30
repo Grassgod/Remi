@@ -9,7 +9,8 @@ import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as wi
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { prepareConversationBackfillFixture } from "./fixtures/conversation-log-backfill.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

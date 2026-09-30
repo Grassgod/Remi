@@ -31,7 +31,8 @@
  *
  * Exit status: 0 no mismatch, 3 mismatches, 1 error.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -89,7 +90,7 @@ export function openReadOnlyTraceDatabase(options: { databaseUrl?: string | null
     return readOnlySqlDatabase(pg);
   }
   const path = resolve(options.sqlitePath ?? join(homedir(), ".remi", "remi.db"));
-  const raw = new Database(path, { readwrite: true, create: false });
+  const raw = openSqliteDatabase(path, { readwrite: true, create: false });
   raw.exec("PRAGMA query_only = ON");
   return readOnlySqlDatabase(Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const }));
 }

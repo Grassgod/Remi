@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 
 function freshDb(): Database {
-  return new Database(":memory:");
+  return openSqliteDatabase(":memory:");
 }
 
 function migrate(database: Database): void {
@@ -1198,7 +1199,7 @@ describe("Session archive trace member authorization", () => {
   async function fencingFixture(label: string, fileDatabase = false) {
     const root = mkdtempSync(join(tmpdir(), `multiremi-archive-${label}-`));
     dirs.push(root);
-    const database = fileDatabase ? new Database(join(root, "archive.sqlite")) : null;
+    const database = fileDatabase ? openSqliteDatabase(join(root, "archive.sqlite")) : null;
     const store = database ? new MultiremiStore(database) : createStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: `rt_${label}`, name: label, provider: "codex",
@@ -1271,7 +1272,7 @@ describe("Session archive trace member authorization", () => {
 
   it("holds the SQLite archive fence from ownership check through unlink", async () => {
     const f = await fencingFixture("sqlite_lock", true);
-    const secondaryDb = new Database(join(f.root, "archive.sqlite"));
+    const secondaryDb = openSqliteDatabase(join(f.root, "archive.sqlite"));
     secondaryDb.exec("PRAGMA busy_timeout = 0");
     const secondary = new MultiremiStore(secondaryDb);
     const originalComplete = f.store.completeSessionArchiveWithTracePointers.bind(f.store);

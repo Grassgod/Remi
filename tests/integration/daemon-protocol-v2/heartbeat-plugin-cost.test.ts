@@ -1,5 +1,6 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { DaemonHeartbeatPayload } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolHarness } from "./harness.js";

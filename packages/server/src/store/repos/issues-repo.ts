@@ -4922,7 +4922,7 @@ export class IssuesRepo {
     if (!rawBody.trim()) throw new Error("Comment body is required");
     // Lock before reading Issue/session state so concurrent first comments can
     // both reach the shared seq allocator on SQLite's deferred transactions.
-    if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
+    if (!lockIssueRowWithinTransaction(this.ctx.db, issueId)) {
       throw new Error(`Issue not found: ${issueId}`);
     }
     const authorType = input.authorType ?? "member";

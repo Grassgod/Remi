@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { openSqliteDatabase } from "../store/db/sqlite.js";
 import { dirname } from "node:path";
@@ -218,7 +218,7 @@ export class MultiremiTaskReportOutbox {
   /** Copy old provider queues once; their files remain recoverable. */
   importLegacy(path: string, runtimeId?: string): void {
     if (path === ":memory:") return;
-    const source = new Database(path, { readonly: true });
+    const source = openSqliteDatabase(path, { readonly: true });
     try {
       const prefix = createHash("sha256").update(path).digest("hex");
       const rows = source.query("SELECT * FROM outbox_events ORDER BY id").all() as Array<Record<string, unknown>>;

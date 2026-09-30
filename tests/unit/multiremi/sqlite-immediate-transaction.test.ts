@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,8 +14,8 @@ function temporaryDatabase(): { dir: string; file: string } {
 describe("SQLite outer transaction write lock", () => {
   it("shows why a deferred read cannot upgrade after another connection commits", () => {
     const { dir, file } = temporaryDatabase();
-    const first = new Database(file);
-    const second = new Database(file);
+    const first = openSqliteDatabase(file);
+    const second = openSqliteDatabase(file);
     try {
       first.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 200");
       second.exec("PRAGMA busy_timeout = 200");
@@ -42,7 +43,7 @@ describe("SQLite outer transaction write lock", () => {
 
   it("waits for a second process before a read-then-write Store update", async () => {
     const { dir, file } = temporaryDatabase();
-    const db = new Database(file);
+    const db = openSqliteDatabase(file);
     let child: ReturnType<typeof Bun.spawn> | null = null;
     try {
       db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000");
@@ -53,7 +54,7 @@ describe("SQLite outer transaction write lock", () => {
 
       const worker = `
         import { Database } from "bun:sqlite";
-        const db = new Database(${JSON.stringify(file)});
+        const db = openSqliteDatabase(${JSON.stringify(file)});
         db.exec("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE");
         process.stdout.write("locked\\n");
         await Bun.sleep(600);

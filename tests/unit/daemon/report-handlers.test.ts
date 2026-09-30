@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_ERROR_CODES, DAEMON_RETRYABLE_ERROR_CODES, DAEMON_TERMINAL_ERROR_CODES } from "@multiremi/contracts/daemon-protocol.js";
 import { reportFrame } from "../../fixtures/report-session.js";
@@ -15,7 +16,7 @@ const cardFields: DaemonTaskCompletionFields = {
 };
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
-  const db = new Database(":memory:"); databases.push(db);
+  const db = openSqliteDatabase(":memory:"); databases.push(db);
   const store = new MultiremiStore(db);
   const runtime = store.registerRuntime({ id: "runtime", name: "reports", provider: "claude", daemonId: "reports-daemon" });
   const agent = store.createAgent({ name: "Reports", provider: "claude", maxConcurrentTasks: 10 });
