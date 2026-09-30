@@ -14,7 +14,7 @@ import { DAEMON_MIN_CLI_VERSION, type DaemonArchiveSubject } from "@multiremi/co
 import { startMultiremiServer } from "@multiremi/api.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonParsedFrame } from "@multiremi/api/daemon-protocol/frames.js";
-import type { MultiremiStore } from "@multiremi/store.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import { SESSION_ARCHIVE_REQUEST_ACK_LEASE_MS } from "@multiremi/store/repos/session-archive-requests-repo.js";
 import { DaemonDownlinkDedupe } from "@multiremi/worker/daemon-protocol-client.js";
 import {
@@ -129,6 +129,26 @@ async function connectDaemon(store: MultiremiStore, runtimeId: string) {
 
 for (const backend of backends) {
   describe.skipIf(!backend.available)(`session archive request state machine (${backend.name})`, () => {
+    it("upgrades an old store without the request table twice and preserves a pending request", async () => {
+      await withWorld(backend, async (world) => {
+        const db = world.opened.db;
+        db.exec("DROP TABLE multiremi_session_archive_requests");
+        const upgraded = new MultiremiStore(db);
+        const columns = () => backend.name === "sqlite"
+          ? (db.query("PRAGMA table_info(multiremi_session_archive_requests)").all() as Array<{ name: string }>).map(row => row.name)
+          : (db.query(`SELECT column_name FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'multiremi_session_archive_requests'
+              ORDER BY ordinal_position`).all() as Array<{ column_name: string }>).map(row => row.column_name);
+        const expected = ["id", "runtime_id", "subject_kind", "subject_id", "status", "created_by", "created_at", "updated_at"];
+        expect(columns()).toEqual(expected);
+        const [request] = upgraded.requestSessionArchives(world.runtimeId, [ISSUE], "usr_admin");
+        expect(request?.status).toBe("pending");
+        const reopened = new MultiremiStore(db);
+        expect(columns()).toEqual(expected);
+        expect(reopened.getSessionArchiveRequest(world.runtimeId, request!.id)).toEqual(request!);
+      });
+    }, TIMEOUT);
+
     it("moves pending → sent → acked → completed, forward only", async () => {
       await withWorld(backend, async (world) => {
         const events: string[] = [];
