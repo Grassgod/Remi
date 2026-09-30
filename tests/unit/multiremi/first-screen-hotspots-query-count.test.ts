@@ -218,6 +218,7 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
 });
 
 describe("MUL-473 first-screen hotspot query counts", () => {
+  // CI runner jitter affects fixture setup; the contract is the statement count, not wall-clock time.
   it("keeps pending-tasks' statement count constant from 1 to 200 Chats", async () => {
     const measurements: Array<{ sessions: number; statements: number; bytes: number; tasks: number }> = [];
     for (const sessions of [1, 50, 200]) {
@@ -247,7 +248,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     expect(perTask[0]!).toBeGreaterThan(perTask[1]!);
     expect(perTask[1]!).toBeGreaterThanOrEqual(perTask[2]!);
     expect(twoHundred.bytes).toBeGreaterThan(one.bytes);
-  }, 20000);
+  }, 40000);
 
   it("reads no Chat message column for pending-tasks", async () => {
     const harness = await createHarness();
@@ -305,7 +306,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // QA workspace, because a `usr_` ref was probed against every Agent *with*
     // its Skill bodies. 9 is the cost of the exact historical search order.
     expect(Math.max(...byUserId)).toBeLessThanOrEqual(9);
-  }, 20000);
+  }, 30000);
 
   it("keeps the untyped fallback affordable for the shapes that reach it", async () => {
     // The three refs that cannot be prefix-locked, so all three kinds are read:
@@ -332,7 +333,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
         expect((measured.body as { total: number }).total > 0).toBe(budget === 9);
       }
     }
-  }, 20000);
+  }, 30000);
 
   it("does not hydrate Skills while resolving an assignee filter", async () => {
     const harness = await createHarness({ issues: 60, sessions: 1, inboxRows: 0, skillBodyBytes: 64_000 });
