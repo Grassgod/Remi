@@ -253,11 +253,19 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
     const chatEvents = events.filter(event => event.type === "chat:message");
+    const inputEvents = events.filter(event => event.type === "daemon:task_input");
+    const activityEvents = events.filter(event => event.type === "activity:created");
+    const terminalActivities = activityEvents.filter(event =>
+      (event.payload.entry as { action?: string } | undefined)?.action === "task_completed");
+    expect(inputEvents).toHaveLength(1);
     expect(chatEvents).toHaveLength(1);
+    expect(terminalActivities).toHaveLength(1);
+    expect(inputEvents[0].inTransaction).toBe(false);
     expect(chatEvents[0].inTransaction).toBe(false);
+    expect(activityEvents.every(event => !event.inTransaction)).toBe(true);
     expect(chatEvents[0].actorId).toBe(store.getChatSession(wake.chatSessionId!)!.creatorId);
-    expect(events[0]).toBe(chatEvents[0]);
-    expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+    expect(events.indexOf(inputEvents[0])).toBeLessThan(events.indexOf(chatEvents[0]));
+    expect(events.indexOf(chatEvents[0])).toBeLessThan(events.indexOf(terminalActivities[0]));
     expect(chatEvents[0].payload).toMatchObject({
       chat_session_id: wake.chatSessionId, role: "system", task_id: null,
       content: store.listChatMessages(wake.chatSessionId!)
@@ -328,14 +336,14 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     });
   }
 
-  it("keeps workspace before session locking and emits nothing in the steer primitive", () => {
+  it("keeps workspace before session locking and wakes only after the steer transaction commits", () => {
     const { workspaceId, agent } = freshAgent();
     const issue = store.createIssue({ title: "Steer lock order", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Steer me" });
     const locks: string[] = [];
-    const events: string[] = [];
-    const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
+    const events: Array<{ type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent(event => events.push({ type: event.type, inTransaction: db.inTransaction }));
     const originalRun = db.run;
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") locks.push("workspace");
@@ -344,17 +352,27 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     };
     maxDepth = 0;
     try {
-      db.transaction(() => store.createTaskSteerMessageWithinTransaction({
-        taskId: task.id, kind: "steer", content: "New input",
-      }))();
+      db.transaction(() => {
+        store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "New input" });
+        expect(events).toEqual([]);
+      })();
+      expect(events).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+      events.length = 0;
+      expect(() => db.transaction(() => {
+        store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "Rolled back" });
+        expect(events).toEqual([]);
+        throw new Error("rollback steer");
+      })()).toThrow("rollback steer");
+      expect(events).toEqual([]);
     } finally {
       db.run = originalRun;
       unsubscribe();
     }
-    expect(locks).toEqual(["workspace", "session", "session"]);
+    expect(locks).toEqual(["workspace", "session", "session", "workspace", "session", "session"]);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
     expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);
+    expect(store.listTaskSteerMessages(task.id).map(message => message.content)).toEqual(["New input"]);
   });
 
   function organizerFixture() {

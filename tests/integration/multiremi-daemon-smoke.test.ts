@@ -2422,7 +2422,9 @@ describe("Bun Multiremi daemon smoke", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
-      expect(gatewayRequests).toContain("/backend-api/codex/models");
+      expect(gatewayRequests).toContain("/v1/chat/completions");
+      expect(catalog.mock.calls.map(([url]) => new URL(url).pathname))
+        .toContain("/backend-api/codex/models");
       const expectedHome = join(
         workspacesRoot,
         ".runtime",
@@ -2439,7 +2441,6 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(captured?.codexHome).toBe(expectedHome);
       expect(existsSync(join(expectedHome, "auth.json"))).toBe(false);
       expect(existsSync(join(expectedHome, ".multiremi-session-home.json"))).toBe(true);
-      expect(catalog).toHaveBeenCalled();
     } finally {
       await daemon?.stopAndDrainTestWork();
       catalog.mockRestore();
