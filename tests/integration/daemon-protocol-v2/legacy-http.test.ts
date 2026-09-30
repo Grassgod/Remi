@@ -5,7 +5,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import baseline from "../../fixtures/daemon-v1-routes.json";
 import { snapshotRouteTable } from "../../../scripts/snapshot-api-routes.js";
-import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
+import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { waitFor } from "./harness.js";
 
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
@@ -45,7 +45,7 @@ it("keeps the retired method + path table equal to v1 minus live routes", () => 
   expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
 });
 
-it.each(["empty", "nonempty"] as const)("keeps v1 desired GET read-only and equal to plugin.desired RPC (%s)", async scenario => {
+it.each(["empty", "nonempty"] as const)("keeps reconciled v1 desired state unchanged at the same write cost as plugin.desired RPC (%s)", async scenario => {
   const db = new Database(":memory:");
   try {
     const store = new MultiremiStore(db);
@@ -67,20 +67,84 @@ it.each(["empty", "nonempty"] as const)("keeps v1 desired GET read-only and equa
     expect(rpc.ok).toBe(true);
     const expected = { runtime_id: rpc.runtime_id, revision: rpc.revision, plugins: rpc.plugins };
     expect(expected.plugins.length).toBe(scenario === "empty" ? 0 : 1);
+    const desiredRows = () => ({
+      states: db.query("SELECT * FROM multiremi_agent_plugin_runtime_states ORDER BY id").all(),
+      bindings: db.query("SELECT * FROM multiremi_agent_plugin_bindings ORDER BY id").all(),
+      plugins: db.query("SELECT * FROM multiremi_agent_plugins ORDER BY id").all(),
+    });
+    const totalChanges = () => db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count;
+    const downlinks = await openRuntimeDownlinks(store, runtime.id, { identity: {
+      accessToken: await store.verifyAccessToken(credential.token), masterToken: false,
+    } });
+    let rpcChangeCount: number;
+    try {
+      const rpcRowsBefore = desiredRows();
+      const rpcChangesBefore = totalChanges();
+      expect(await downlinks.rpc("plugin.desired", {})).toMatchObject({ ok: true });
+      rpcChangeCount = totalChanges() - rpcChangesBefore;
+      expect(desiredRows()).toEqual(rpcRowsBefore);
+    } finally { await downlinks.close(); }
     for (const apiRole of ["all", "runtime"] as const) {
       const app = createMultiremiApp({ store, authToken: "isolated-desired", apiRole });
       const unauthorized = await app.request(path);
       expect(unauthorized.status).toBe(401);
       const forbidden = await app.request(path, { headers: { Authorization: `Bearer ${foreign.token}` } });
       expect(forbidden.status).toBe(403);
-      const changesBefore = db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count;
+      const rowsBefore = desiredRows();
+      const changesBefore = totalChanges();
       const response = await app.request(path, { headers: { Authorization: `Bearer ${credential.token}` } });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(expected);
-      expect(db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count).toBe(changesBefore);
+      expect(desiredRows()).toEqual(rowsBefore);
+      expect(totalChanges() - changesBefore).toBe(rpcChangeCount);
     }
     const ui = createMultiremiApp({ store, authToken: "isolated-desired", apiRole: "ui" });
     expect((await ui.request(path, { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(421);
+  } finally { db.close(); }
+});
+
+it.each(["GET", "RPC"] as const)("reconciles completed-task plugin removal before either desired read (%s first)", async first => {
+  const db = new Database(":memory:");
+  try {
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: `rt_desired_removal_${first}`, name: "Desired removal",
+      provider: "claude", workspaceId: "local", daemonId: `dmn_desired_removal_${first}`,
+      metadata: { agent_plugin_protocol: 1 } });
+    const agent = store.createAgent({ name: "Desired removal agent", provider: "claude" });
+    const plugin = store.importAgentPlugin({ provider: "claude",
+      manifest: { name: "desired-removal-fixture", version: "1.0.0" } });
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtime.id);
+    expect(desired.plugins).toHaveLength(1);
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready", observedDigest: plugin.activeVersion!.artifactDigest,
+    });
+    const task = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "Keep plugin snapshot active" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    expect(store.deleteAgentPluginBinding(agent.id, binding.id)).toBe(true);
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })).toHaveLength(1);
+    store.completeTask(task.id, { output: "done" });
+
+    const credential = await store.createAccessToken({ name: "Desired removal daemon", type: "daemon",
+      workspaceId: "local", daemonId: runtime.daemonId });
+    const app = createMultiremiApp({ store, authToken: "isolated-desired-removal", apiRole: "runtime" });
+    const path = `/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`;
+    const get = async () => {
+      const response = await app.request(path, { headers: { Authorization: `Bearer ${credential.token}` } });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const rpc = async () => {
+      const reply = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, credential.token);
+      expect(reply.ok).toBe(true);
+      return { runtime_id: reply.runtime_id, revision: reply.revision, plugins: reply.plugins };
+    };
+    const firstBody = first === "GET" ? await get() : await rpc();
+    const secondBody = first === "GET" ? await rpc() : await get();
+    expect(firstBody.plugins).toHaveLength(0);
+    expect(firstBody).toEqual(secondBody);
   } finally { db.close(); }
 });
 

@@ -23,14 +23,14 @@ import type { RouterDeps } from "./deps.js";
 export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
 
-  // Remove after the fleet's minimum daemon version is v2; this read-only v1 bridge lets old daemons reach upgrade heartbeat.
+  // Remove after the fleet's minimum daemon version is v2; this v1 read bridge reconciles like plugin.desired without accepting writes.
   app.get("/api/daemon/runtimes/:runtimeId/agent-plugins/desired", (c) => {
     const runtimeId = c.req.param("runtimeId");
     const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
     if (denied) return denied;
     try {
       return c.json(daemonAgentPluginDesiredResponse(
-        store.getRuntimeAgentPluginDesiredSnapshot(runtimeId, { reconcile: false }),
+        store.getRuntimeAgentPluginDesiredSnapshot(runtimeId),
       ));
     } catch (error) {
       return pluginErrorResponse(c, error);
