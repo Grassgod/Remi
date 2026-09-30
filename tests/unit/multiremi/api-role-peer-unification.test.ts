@@ -148,6 +148,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -189,6 +190,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -220,6 +222,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {

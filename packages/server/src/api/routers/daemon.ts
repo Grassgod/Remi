@@ -380,6 +380,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       feishu_concierge_protocol?: number;
       feishu_decision_card?: number;
       feishu_issue_decision_card?: number;
+      feishu_outbound_kinds?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";

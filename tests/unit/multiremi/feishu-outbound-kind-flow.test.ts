@@ -161,6 +161,8 @@ describe("C5 full fake-channel delivery", () => {
     } as unknown as FeishuChannelHandle;
     const daemon = { getFeishuBotHumanRequest: async () => f.store.getTaskHumanRequest(request.id),
       getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
+      prepareTaskHumanRequestCard: async (_taskId: string, requestId: string, recipientOpenId: string) =>
+        f.store.prepareTaskStreamQuestionCard(requestId, recipientOpenId),
     } as unknown as MultiremiDaemon;
     await expect(sendInteractionCardLane(handle, delivery, { signal: new AbortController().signal,
       onStarted: async id => {
@@ -202,6 +204,8 @@ describe("C5 full fake-channel delivery", () => {
       const daemon = {
         getFeishuBotHumanRequest: async () => { getCount += 1; return f.store.getTaskHumanRequest(request.id); },
         getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
+        prepareTaskHumanRequestCard: async (_taskId: string, requestId: string, recipientOpenId: string) =>
+          f.store.prepareTaskStreamQuestionCard(requestId, recipientOpenId),
         waitFeishuBotHumanRequestSettled: async () => { if (!cached) await settled; return f.store.getTaskHumanRequest(request.id); },
       } as unknown as MultiremiDaemon;
       const respond = () => f.store.respondTaskHumanRequest(request.id,

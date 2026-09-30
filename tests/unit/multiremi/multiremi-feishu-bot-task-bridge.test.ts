@@ -410,18 +410,6 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.claimTask("rt_issue_workspace")?.id).toBe(leaderTask.id);
     store.startTask(leaderTask.id);
 
-    const taskCountBeforeComment = store.listTasks().length;
-    store.queueAgentIssueUpdate({
-      activityId: "act_round_progress",
-      issueId: issue.id,
-      actorType: "member",
-      actorId: "local",
-      type: "comment_created",
-      body: "Include the migration result in the final summary.",
-      createdAt: new Date().toISOString(),
-    });
-    expect(store.listTasks()).toHaveLength(taskCountBeforeComment);
-
     // The reply/retry scenario below expects a specific executor. Express that
     // as Agent placement now that the transport does not impose it.
     store.updateAgent(agent.id, { runtimeId: "rt_bot" });
@@ -448,9 +436,8 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.getTaskWithAgent(roundTask.id)?.repos).toEqual([]);
     expect(store.claimTask("rt_bot")?.id).toBe(roundTask.id);
     const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(roundTask.id)!);
-    expect(wire.bound_issue_updates).toEqual([
-      expect.stringContaining("The implementation and migration are complete."),
-    ]);
+    expect((wire.bound_issue_log as { content_jsonl: string } | undefined)?.content_jsonl)
+      .toContain("The implementation and migration are complete.");
     store.startTask(roundTask.id);
     store.failTask(roundTask.id, {
       error: "temporary provider timeout",
@@ -478,9 +465,8 @@ describe("Feishu bot standard Task bridge", () => {
     expect(retryTask).toMatchObject({ status: "queued", chatSessionId: inbound.chatSessionId });
     expect(store.claimTask("rt_bot")?.id).toBe(retryTask.id);
     const retryWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(retryTask.id)!);
-    expect(retryWire.bound_issue_updates).toEqual([
-      expect.stringContaining("The implementation and migration are complete."),
-    ]);
+    expect((retryWire.bound_issue_log as { content_jsonl: string } | undefined)?.content_jsonl)
+      .toContain("The implementation and migration are complete.");
     store.startTask(retryTask.id);
     store.completeTask(retryTask.id, {
       output: "MUL work is complete and ready for review.",
@@ -540,10 +526,12 @@ describe("Feishu bot standard Task bridge", () => {
       error: "final failure",
       failureReason: "agent_error",
     });
-    expect(store.listTasks()).toHaveLength(countBeforeFailure);
+    expect(store.listTasks()).toHaveLength(countBeforeFailure + 1);
+    expect(store.listChatMessages(inbound.chatSessionId).some(message =>
+      message.role === "system" && message.body.includes(`状态 failed`))).toBe(true);
   });
 
-  it("steers an existing inbound Chat task instead of creating a second round task", () => {
+  it("rides an existing queued inbound Chat task instead of creating a second round task", () => {
     const { store, agent, config } = scaffold();
     const initial = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision,
@@ -577,9 +565,7 @@ describe("Feishu bot standard Task bridge", () => {
 
     expect(created).toHaveLength(0);
     expect(store.listTasks()).toHaveLength(taskCount);
-    expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([
-      expect.objectContaining({ content: expect.stringContaining(`completed a work round for ${issue.key}`) }),
-    ]);
+    expect(store.listPendingTaskSteerMessages(inbound.taskId)).toEqual([]);
     store.cancelTask(leaderTask.id);
 
     expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
@@ -690,7 +676,9 @@ describe("Feishu bot standard Task bridge", () => {
       task.chatSessionId === inbound.chatSessionId && task.status === "queued"
     );
     expect(proactive).toHaveLength(1);
-    expect(proactive[0]?.prompt).toContain(`completed a work round for ${issue.key}`);
+    expect(proactive[0]?.wakeSource).toBe("relay");
+    expect(store.listChatMessages(inbound.chatSessionId).some(message =>
+      message.role === "system" && message.body.includes(issue.key))).toBe(true);
   });
 
   it("switches the bound Chat from bootstrap to delta after the provider session is promoted", () => {
@@ -731,10 +719,6 @@ describe("Feishu bot standard Task bridge", () => {
       authorId: "member_reviewer",
       body: "The Feishu reviewer approved the bound Issue.",
     });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
     expect(store.listTasks()).toHaveLength(taskCountBeforeIssueUpdate);
 
     const secondSubmission = store.submitFeishuBotMessage("local", "rt_bot", {
@@ -756,12 +740,11 @@ describe("Feishu bot standard Task bridge", () => {
       sessionProjection: secondWire.session_projection,
       chatMessage: secondWire.chat_message,
       boundIssue: secondWire.bound_issue,
-      boundIssueUpdates: secondWire.bound_issue_updates,
-      boundIssueUpdatesOmittedCount: secondWire.bound_issue_updates_omitted_count,
+      boundIssueLog: secondWire.bound_issue_log,
     } as any);
 
     expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
-    expect(secondPrompt).toContain("## Bound Issue Updates");
+    expect(secondPrompt).toContain("## Bound Issue Log");
     expect(secondPrompt).toContain("The Feishu reviewer approved the bound Issue.");
     expect(secondPrompt.match(/second Feishu request/g)).toHaveLength(1);
     expect(secondPrompt).not.toContain("## Agent Instructions");

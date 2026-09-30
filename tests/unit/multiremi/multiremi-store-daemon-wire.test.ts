@@ -954,7 +954,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     } as any);
     expect(boundPrompt).toContain("## Bound Issue");
     expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status: ${issue.status}).`);
-    expect(boundPrompt).toContain("Do not treat these updates as the full picture.");
+    expect(boundPrompt).toContain("The Bound Issue Log covers the interval shown above.");
     expect(boundPrompt).toContain(`remi issue get ${issue.id} --output json`);
     expect(boundPrompt).toContain(`remi comment list ${issue.id} --recent 30 --output json`);
     expect(boundPrompt).not.toContain("--tail");

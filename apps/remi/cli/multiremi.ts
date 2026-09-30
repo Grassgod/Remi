@@ -806,10 +806,12 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
-    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
-    idempotencyKey: delivery.idempotencyKey })).messageId;
+    card: card!,
+    idempotencyKey: questionCardIdempotencyKey(card!, delivery.idempotencyKey) })).messageId;
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
   const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });

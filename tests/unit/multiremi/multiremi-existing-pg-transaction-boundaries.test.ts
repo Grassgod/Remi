@@ -275,6 +275,11 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         events.push({ type: event.type, inTransaction: db.inTransaction, actorId: event.actorId, payload: event.payload });
       }
     });
+    const unsubscribeLog = store.subscribeConversationLog({ onEntry(sessionId, entry) {
+      if (sessionId === wake.chatSessionId && "author_type" in entry && entry.author_type === "system") {
+        events.push({ type: "log:entry", inTransaction: db.inTransaction, actorId: null, payload: { entry } });
+      }
+    } });
     const priorSystemMessages = store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system").length;
     const originalRun = db.run;
     db.run = function run(sql, ...params) {
@@ -290,21 +295,24 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     } finally {
       db.run = originalRun;
       unsubscribe();
+      unsubscribeLog();
     }
-    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+    expect(store.getPendingChatTask(wake.chatSessionId!)?.id).toBe(wake.id);
+    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
     expect(workspaceLocks.length).toBeGreaterThanOrEqual(2);
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
-    const inputEvents = events.filter(event => event.type === "daemon:task_input");
+    // The queued wake consumes its inbox envelope; it no longer needs a steer kick.
+    const logEvents = events.filter(event => event.type === "log:entry");
     const activityEvents = events.filter(event => event.type === "activity:created");
     const terminalActivities = activityEvents.filter(event =>
       (event.payload.entry as { action?: string } | undefined)?.action === "task_completed");
-    expect(inputEvents).toHaveLength(1);
+    expect(logEvents).toHaveLength(1);
     expect(terminalActivities).toHaveLength(1);
-    expect(inputEvents[0].inTransaction).toBe(false);
+    expect(logEvents[0].inTransaction).toBe(false);
     expect(activityEvents.every(event => !event.inTransaction)).toBe(true);
     expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(priorSystemMessages + 1);
-    expect(events.indexOf(inputEvents[0])).toBeLessThan(events.indexOf(terminalActivities[0]));
+    expect(events.indexOf(logEvents[0])).toBeLessThan(events.indexOf(terminalActivities[0]));
   });
 
   const roleUpdates = [
@@ -388,8 +396,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     // with the conversation-head counter, so the second lock moved to
     // `multiremi_conversation_heads`; it is the same session-domain lock in the
     // same seat of the W-before-S order. Counting it keeps this assertion
-    // pinning order *and* count — a third session-domain lock appearing here
-    // still fails, which is the regression this array exists to catch.
+    // pinning order *and* count. D also locks the legacy Session event row
+    // before allocation, so each steer has barrier, event-row and head locks.
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") locks.push("workspace");
       if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") locks.push("session");
@@ -420,7 +428,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       db.query = originalQuery;
       unsubscribe();
     }
-    expect(locks).toEqual(["workspace", "session", "session", "workspace", "session", "session"]);
+    expect(locks).toEqual(["workspace", "session", "session", "session", "workspace", "session", "session", "session"]);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
     expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);

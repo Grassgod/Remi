@@ -92,6 +92,7 @@ function countingDatabase(raw: Database, counter: { statements: number }): SqlDa
     },
   });
   return markSqliteDialect<SqlDatabase>({
+    get inTransaction() { return raw.inTransaction; },
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {

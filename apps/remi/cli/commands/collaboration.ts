@@ -322,8 +322,34 @@ function sessionCommandSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${sessionPath(invocation)}/participants/${encodePath(positional(invocation, 2, "type"))}/${encodePath(positional(invocation, 3, "participant"))}`);
     }),
-    nativeSpec("session.event.list", ["session", "event", "list"], "List Session events", "read", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [], async (invocation) => {
-      await getAndRender(invocation, `${sessionPath(invocation)}/events`, ["events"]);
+    nativeSpec("session.event.list", ["session", "event", "list"], "List Session events", "read", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [
+      { name: "since-seq", type: "integer", valueName: "seq", description: "Events after this sequence" },
+      { name: "to-seq", type: "integer", valueName: "seq", description: "Last sequence to include" },
+    ], async (invocation) => {
+      await getAndRender(invocation, `${sessionPath(invocation)}/events`, ["events"], {
+        since_seq: integerOption(invocation, "since-seq"), to_seq: integerOption(invocation, "to-seq"),
+      });
+    }),
+    nativeSpec("session.log.get", ["session", "log", "get"], "Read a complete Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
+      const entry = positional(invocation, 1, "entry");
+      const client = await clientFor(invocation);
+      const response = await client.request<{
+        session_id: string; seq: number; id: string; body_md: string;
+        metadata: Record<string, unknown>; delivered: boolean | null;
+      }>({
+        method: "GET",
+        path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/entry`,
+        query: /^(0|[1-9]\d*)$/.test(entry) ? { seq: entry } : { id: entry },
+      });
+      const mode = outputMode(invocation);
+      if (mode !== "table") {
+        new CliRenderer().render(response.data, { mode });
+        return;
+      }
+      const logEntry = response.data;
+      console.log(`Session: ${logEntry.session_id}\nSeq: ${logEntry.seq}\nID: ${logEntry.id}`);
+      console.log(`Delivered: ${logEntry.delivered === null ? "未知（旧条目无收件人）" : logEntry.delivered ? "是" : "否"}`);
+      console.log(`Metadata: ${JSON.stringify(logEntry.metadata, null, 2)}\n\nBody:\n${logEntry.body_md}`);
     }),
     nativeSpec("session.log.window", ["session", "log", "window"], "Read a Session log window", "read", HUMAN_TASK, [refPositional("session")], [
       { name: "anchor", type: "integer", valueName: "seq", description: "Anchor sequence" },

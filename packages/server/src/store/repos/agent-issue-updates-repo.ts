@@ -122,6 +122,7 @@ export class AgentIssueUpdatesRepo {
        ORDER BY c.created_at ASC, c.id ASC`,
     ).all(issue.id) as Row[];
     const seenChats = new Set<string>();
+    const targets: Array<{ chat: ReturnType<typeof toBoundChat>; channelId: string }> = [];
     for (const row of chats) {
       const chat = toBoundChat(row);
       if (seenChats.has(chat.id)) continue;
@@ -130,8 +131,14 @@ export class AgentIssueUpdatesRepo {
       if (!channel?.enabled) continue;
       if (!channel.eventTypes.includes("*") && !channel.eventTypes.includes(input.type)) continue;
       if (this.isTargetChatEvent(chat.id, input)) continue;
-      this.upsertPending(chat, channel.id, input);
+      targets.push({ chat, channelId: channel.id });
     }
+    if (targets.length === 0) return;
+    const write = () => {
+      for (const { chat, channelId } of targets) this.upsertPending(chat, channelId, input);
+    };
+    if (this.ctx.db.inTransaction) write();
+    else this.ctx.db.transaction(write)();
   }
 
   flushDue(nowInput: string | Date = new Date()): AgentIssueUpdateFlushResult {

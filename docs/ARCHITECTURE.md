@@ -57,7 +57,7 @@ HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
-Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加 Issue 与增量摘要。详见 [Chat 契约](chat.md)。
+Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加按 `relay:<chat_session_id>` 游标读取的 Issue 日志（最多 100 条，并给出续读位置）；转述任务完成才推进游标。详见 [Chat 契约](chat.md)。
 
 **飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
 工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；
@@ -77,8 +77,17 @@ SQLite 最外层事务以 `BEGIN IMMEDIATE` 取得写锁，嵌套事务仍用 sa
 PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packages/server/src/store/db/pg-worker.ts)，worker 使用单连接。
 这是真实实现约束，不应被“整体 async/await”概述掩盖。
 嵌套 `transaction()` 在 PostgreSQL 使用 savepoint；外层提交前会拒绝未恢复的语句失败。
-事务回调里凡是允许失败并继续的写入，必须包在嵌套 `transaction()` 里，不得裸 `try/catch`：
-SQLite 裸 catch 后其余写入仍可提交，而 PostgreSQL 的事务会进入 aborted 状态。
+活动记录随主事务提交；可选的活动通知聚合、广播查表在提交后执行，避免给深度 1 的入口增加 savepoint。
+可选聚合写入使用独立事务，失败时仅回滚聚合；轮次结束时的聚合及 flush 仍使用调用方事务。
+没有接收者时不启动聚合事务。事务代理在原 runner 返回、读缓存事务结束后执行提交后回调；
+外层回滚会丢弃这些回调。不能在 PostgreSQL 事务内用裸 `try/catch` 吞掉 SQL 错误，否则事务会进入 aborted 状态。
+调用方事件队列先保留活动位置，提交后补齐路由；路由失败时移除该活动，保持其余评论事件的顺序。
+
+[InboxRepo](../packages/server/src/store/repos/inbox-repo.ts)将 E2、E3 通知、E4 和委派回报写成接收会话的系统评论，
+`metadata.envelope` 保留寻址与去重信息。状态、日志条目与 `wake_seq` 在同一深度 1 的事务提交；评论 @ 复用原日志条目。
+平台种下的 queued 行由部分唯一索引约束，人的 Chat 队列、评论轮和续接排除在索引外；
+人的评论按 Q-B 常量并入 queued，编辑触发评论时在同一事务补种 `re_ring`。实现和迁移入口见
+[pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

@@ -390,6 +390,10 @@ describe("Feishu Issue topics", () => {
           terminalActivities.push({ index: events.length - 1, inTransaction: db!.inTransaction });
         }
       });
+      const logEvents: Array<{ id: string; inTransaction: boolean }> = [];
+      store.setConversationLogListener({ onEntry: (sessionId, entry) => {
+        if (sessionId === wake.chatSessionId && "kind" in entry && entry.author_type === "system") logEvents.push({ id: entry.id, inTransaction: db!.inTransaction });
+      } });
       const database = db!;
       const originalRun = database.run;
       let injected = false;
@@ -408,22 +412,26 @@ describe("Feishu Issue topics", () => {
       } finally {
         database.run = originalRun;
         unsubscribe();
+        store.setConversationLogListener(null);
       }
       if (rollback) {
         expect(injected).toBe(true);
         expect(store.getTask(leader.id)!.status).toBe("running");
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
         expect(events).toEqual([]);
+        expect(logEvents).toEqual([]);
         expect(terminalActivities).toEqual([]);
       } else {
-        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
-        expect(events.filter(event => event.type === "daemon:task_input")).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
+        expect(logEvents).toHaveLength(1);
+        expect(logEvents[0].inTransaction).toBe(false);
+        const message = store.getConversationLogEntryById(logEvents[0].id)!;
+        expect(message.kind).toBe("message");
+        expect(message.author_type).toBe("system");
+        expect(message.body_md).toContain(leader.id);
         expect(terminalActivities).toHaveLength(1);
         expect(terminalActivities[0].inTransaction).toBe(false);
         expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(1);
-        const inputIndex = events.findIndex(event => event.type === "daemon:task_input");
-        expect(inputIndex).toBeGreaterThanOrEqual(0);
-        expect(terminalActivities[0].index).toBeGreaterThan(inputIndex);
       }
     });
   }
@@ -686,8 +694,12 @@ describe("Feishu Issue topics", () => {
     expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBe(issue.id);
     expect(store.getChatSession(inbound.chatSessionId)).not.toHaveProperty("issueId");
     store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Verify topic update delivery" });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
-    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain("Verify topic update delivery");
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const round = store.createSessionTask(session.id, { agentId: store.getFeishuBotConfig("local")!.agentId, prompt: "Report progress" });
+    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [round.id]);
+    store.completeTask(round.id, { output: "Round complete" });
+    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain(`会话 ${session.id}`);
+    expect(store.listConversationLogShown(session.id).some(entry => entry.body_md === "Verify topic update delivery")).toBe(true);
   });
 
   it("wakes the bound topic Agent when an Issue task asks a human", () => {

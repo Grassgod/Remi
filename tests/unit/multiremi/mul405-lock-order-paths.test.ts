@@ -711,7 +711,7 @@ describe("MUL-405 per-path lock order", () => {
     store.updateIssue(prereq.id, { status: "done" });
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
-    assertFrames("MUL-409 automatic start", recorder, [["D"], ["W", "D"]]);
+    assertFrames("MUL-409 automatic start", recorder, [["W", "D"], ["W", "D"]]);
     assertPath("MUL-409 automatic start", recorder, ["W", "D"]);
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
   });
@@ -809,7 +809,7 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     clear(recorder);
     pg.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });
-    assertFrames("PG automatic start", recorder, [["D"], ["W", "D"]]);
+    assertFrames("PG automatic start", recorder, [["W", "D"], ["W", "D"]]);
     expect(pg.maxTransactionDepth).toBe(1);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);

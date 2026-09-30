@@ -47,6 +47,7 @@ import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/co
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
   buildIssueDecisionCard,
@@ -102,6 +103,10 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export type IssueDecisionOperatorMemberResolution =
+  | { status: "resolved"; member: MultiremiWorkspaceMember }
+  | { status: "unmapped" }
+  | { status: "ambiguous" };
 type DeferredOutboundOperation =
   | { kind: "topic"; issue: MultiremiIssue }
   | { kind: "human_request" | "decision_patch"; request: MultiremiTaskHumanRequest }
@@ -111,10 +116,6 @@ type DeferredOutboundOperation =
   | { kind: "attachments"; bindingId: string; chatId: string; threadId: string | null;
       replyToMessageId: string | null; deliveries: Array<{ id: string; body: string;
         attachment: { id: string; filename: string; contentType: string; sizeBytes: number } }> };
-export type IssueDecisionOperatorMemberResolution =
-  | { status: "resolved"; member: MultiremiWorkspaceMember }
-  | { status: "unmapped" }
-  | { status: "ambiguous" };
 
 const log = createLogger("multiremi-store");
 
@@ -1817,13 +1818,9 @@ export class FeishuBotRepo {
    * `reminder_sent_at` on the decision row is the single compare-and-set that
    * makes it once-only. A decision answered a second earlier produces nothing.
    */
-  private materializeIssueDecisionRemindersWithinTransaction(
-    workspaceId: string,
-    now: Date,
-    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
-  ): void {
+  private findDueIssueDecisionReminders(workspaceId: string, now: Date): Row[] {
     const threshold = new Date(now.getTime() - ISSUE_DECISION_CARD_REMINDER_DELAY_MS).toISOString();
-    const due = this.ctx.db.query(
+    return this.ctx.db.query(
       `SELECT decision.id, decision.issue_id
        FROM multiremi_issue_decisions decision
        JOIN multiremi_issues issue ON issue.id = decision.issue_id
@@ -1838,6 +1835,14 @@ export class FeishuBotRepo {
          ) <= ?
        ORDER BY decision.id ASC`,
     ).all(workspaceId, threshold) as Row[];
+  }
+
+  private materializeIssueDecisionRemindersWithinTransaction(
+    workspaceId: string,
+    now: Date,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+    due: Row[],
+  ): void {
     for (const row of due) {
       const decision = this.ctx.issues().getIssueDecision(String(row.issue_id), String(row.id));
       if (!decision || decision.status !== "escalated") continue;
@@ -2500,6 +2505,7 @@ export class FeishuBotRepo {
   prepareIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: EnvelopeDelivery[];
     /** Caller-owned collector for Issue transitions these fresh rounds produce. */
     childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector;
     /** Caller-owned queue for the realtime pushes these rounds would emit. */
@@ -2544,37 +2550,28 @@ export class FeishuBotRepo {
       if (wakeTask && (wakeTask.issueId !== input.issue.id
         || wakeTask.workspaceId !== input.issue.workspaceId
         || wakeTask.agentId !== binding.agent_id)) wakeTask = null;
-      let deliveryMode: "inbound" | "proactive";
-      if (wakeTask) {
-        const proactive = this.ctx.db.query(
-          `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
-           WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
-        ).get(wakeTask.id) as Row | null;
-        deliveryMode = proactive ? "proactive" : "inbound";
-        const pending = wakeTask.status === "queued"
-          ? { messages: [], omittedCount: 0 }
-          : this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, wakeTask.id);
-        this.ctx.tasks().createTaskSteerMessageWithinTransaction({
-          taskId: wakeTask.id,
-          kind: "steer",
-          content: roundPushPrompt(input.issue, pending.messages.map((message) => message.body), pending.omittedCount),
-          authorType: "system",
-          authorId: null,
-        });
-      } else {
-        deliveryMode = "proactive";
-        wakeTask = this.ctx.tasks().createTaskWithinTransaction({
-          agentId: String(binding.agent_id),
-          chatSessionId,
-          issueId: input.issue.id,
-          workspaceId: input.issue.workspaceId,
-          holdsWorkspace: false,
-          prompt: roundPushPrompt(input.issue),
+      const delivered = input.envelopeDeliveries?.find((item) => item.recipient.chatSessionId === chatSessionId && item.task);
+      const priorTask = wakeTask;
+      const turn = delivered ?? this.ctx.tasks().ensurePendingTurnWithinTransaction({
+        lane: { kind: "chat", chatSessionId, agentId: String(binding.agent_id), issueId: input.issue.id },
+        wake: { reason: "relay", seq: null },
+        steerBody: roundPushPrompt(input.issue),
+        create: () => this.ctx.tasks().createTaskWithinWorkspaceLock({
+          agentId: String(binding.agent_id), chatSessionId, issueId: input.issue.id,
+          workspaceId: input.issue.workspaceId, holdsWorkspace: false,
+          prompt: roundPushPrompt(input.issue), wakeSource: "relay",
           requestingUserName: "Multiremi",
-          requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",
-        }, childStatusChanges, deferredEvents);
-        enqueued.push(wakeTask);
-      }
+          requestingUserProfileDescription: "System-triggered summary for an Issue work round.",
+        }, childStatusChanges, deferredEvents),
+      });
+      wakeTask = turn.task;
+      if (!wakeTask) continue;
+      if (!delivered && turn.action === "created") enqueued.push(wakeTask);
+      const proactive = priorTask && this.ctx.db.query(
+        `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
+         WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
+      ).get(priorTask.id) as Row | null;
+      const deliveryMode: "inbound" | "proactive" = turn.action === "created" || proactive ? "proactive" : "inbound";
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_round_pushes (
@@ -2869,6 +2866,11 @@ export class FeishuBotRepo {
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      // Read candidates before taking write locks. Each row is revalidated and
+      // claimed by CAS below, so concurrent pollers can share this snapshot.
+      const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const nowIsoValue = now.toISOString();
       const exhaustedCandidates = this.ctx.db.query(`SELECT id, kind FROM multiremi_feishu_bot_outbound_deliveries
         WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
@@ -2884,7 +2886,7 @@ export class FeishuBotRepo {
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
       // transaction means a host that polls continuously still queues one nudge.
       this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
-      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
+      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents, dueIssueDecisions);
       this.reconcileTaskDeliveriesWithinTransaction(workspaceId);
       const exhausted = this.sweepExhaustedWithinTransaction(
         workspaceId, exhaustedCandidates.map((row) => String(row.id)), nowIsoValue,
@@ -3324,6 +3326,8 @@ export class FeishuBotRepo {
            AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
       ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
       if (!row) return false;
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
       if (terminal && row.kind === 'receipt') {
@@ -4173,8 +4177,8 @@ function roundPushPrompt(
   omittedCount = 0,
 ): string {
   const lines = [
-    `The responsible agent completed a work round for ${issue.key} - ${issue.title}.`,
-    "Report the current result to the users in this Feishu topic. Use the Bound Issue Updates context below when present.",
+    `${issue.key} - ${issue.title} has a new work-round result in its Issue log.`,
+    "Read the Bound Issue Log and report the current result to the users in this Feishu topic.",
   ];
   if (updates.length) {
     lines.push("", "Updates delivered while the current Chat task was already active:", ...updates);

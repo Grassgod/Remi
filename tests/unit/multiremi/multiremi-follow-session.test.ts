@@ -163,7 +163,7 @@ describe("follow Session context", () => {
     expect(startTurn(f).inherited).toMatchObject({ mode: "inherited_delta", fromSeq: 2, toSeq: 3 });
   });
 
-  it("bounds bootstrap and delta costs even after truncation, then advances across every omitted parent event", () => {
+  it("bounds folded bootstrap and delta costs, then advances across every parent event", () => {
     const f = fixture(0);
     const appendLargeBatch = () => {
       for (let index = 0; index < 24; index++) {
@@ -173,9 +173,9 @@ describe("follow Session context", () => {
     const total = resolveProjectionTokenBudget({ provider: f.agent.provider, model: f.agent.model, degradeLevel: 0 });
     appendLargeBatch();
     const bootstrap = startTurn(f);
-    expect(bootstrap.inherited!.truncated).toBe(true);
-    expect(bootstrap.inherited!.omittedEvents).toBeGreaterThan(0);
-    expect(bootstrap.inherited!.jsonl).toContain('"type":"session_elision"');
+    expect(bootstrap.inherited!.truncated).toBe(false);
+    expect(bootstrap.inherited!.omittedEvents).toBe(0);
+    expect(bootstrap.inherited!.jsonl).toContain('"body_folded":true');
     expect(bootstrap.inherited!.estimatedTokens).toBeLessThanOrEqual(Math.floor(total * 0.4));
     expect(f.store.getTask(bootstrap.task.id)?.inheritedProjectionTokenBudget).toBe(Math.floor(total * 0.4));
     expect(f.store.getSessionAgentLane(f.side.id, f.agent.id)?.parentCursorSeq).toBe(0);

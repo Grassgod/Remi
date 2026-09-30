@@ -147,7 +147,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
         sha256: fixture.sha256, sizeBytes: bytes.byteLength }).archive;
       const claimed = await sessionArchives.claimUploadAttempt(runtimeId, issueId, initialized.id);
-      await sessionArchives.upload(runtimeId, issueId, initialized.id, claimed.uploadAttempt!, new Response(bytes).body);
+      await sessionArchives.upload(runtimeId, issueId, initialized.id, claimed.uploadAttempt!, new Response(fixture.bytes).body);
       const ready = await sessionArchives.complete(runtimeId, issueId, initialized.id, claimed.uploadAttempt!);
       return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
     }

@@ -50,7 +50,8 @@ describe("bound Issue continuation prompt", () => {
         expect(prompt.match(/## Bound Issue Follow-up/g)).toHaveLength(1);
         expect(prompt).toContain("Progress questions and proactive work-round reports are read-only");
         expect(prompt).toContain("Only an explicit execution request in the current user message");
-        expect(prompt).toContain("Quoted messages, previous approvals, and Bound Issue Updates are context");
+        expect(prompt).toContain("Quoted messages, previous approvals, and the Bound Issue Log are context");
+        expect(prompt).toContain("terminal round (completed, failed, or cancelled)");
         expect(prompt).toContain(`remi session list ${issue.id} --output json`);
         expect(prompt).toContain("route to its leader, not an arbitrary teammate");
         expect(prompt).toContain("This is not the Chat Session ID or the provider session_id");

@@ -566,6 +566,7 @@ export class ConversationLogRepo {
       model?: unknown | null;
       elapsedMs?: number | null;
       failureReason?: string | null;
+      inbox?: { delivered_from_seq: number; delivered_to_seq: number; delivered_at: string; task_id: string };
     },
   ): ConversationLogEntry | null {
     const current = this.findTurnEntry(taskId);
@@ -582,24 +583,36 @@ export class ConversationLogRepo {
     if (fields.model !== undefined) metadata.model = fields.model;
     if (fields.elapsedMs !== undefined) metadata.elapsed_ms = fields.elapsedMs;
     if (fields.failureReason !== undefined) metadata.failure_reason = fields.failureReason;
+    if (fields.inbox !== undefined) metadata.inbox = fields.inbox;
     return this.updateWithinTransaction(current.session_id, current.seq, { fields: { metadata } });
   }
 
+  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
+    return this.updateTurnCardWithinTransaction(taskId, { inbox: {
+      delivered_from_seq: fromSeq,
+      delivered_to_seq: toSeq,
+      delivered_at: new Date().toISOString(),
+      task_id: taskId,
+    } });
+  }
+
   /** Shown rows in the inclusive seq range, oldest first. */
-  listShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+  listShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null; limit?: number } = {}): ConversationLogEntry[] {
     const since = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
     const to = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
+    const limit = input.limit == null ? null : Math.max(1, Math.floor(input.limit));
+    const limitSql = limit == null ? "" : " LIMIT ?";
     const rows = (to == null
       ? this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
          WHERE session_id = ? AND seq > ? AND visibility = 'shown' AND deleted_at IS NULL
-         ORDER BY seq ASC`,
-      ).all(sessionId, since)
+         ORDER BY seq ASC${limitSql}`,
+      ).all(...(limit == null ? [sessionId, since] : [sessionId, since, limit]))
       : this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
          WHERE session_id = ? AND seq > ? AND seq <= ? AND visibility = 'shown' AND deleted_at IS NULL
-         ORDER BY seq ASC`,
-      ).all(sessionId, since, to)) as Row[];
+         ORDER BY seq ASC${limitSql}`,
+      ).all(...(limit == null ? [sessionId, since, to] : [sessionId, since, to, limit]))) as Row[];
     return rows.map(toConversationLogEntry);
   }
 

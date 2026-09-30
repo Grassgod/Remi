@@ -386,6 +386,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
+    expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
     expect(misdirected, routeCountHint("ui")).toHaveLength(63);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(64);
   });
@@ -426,8 +427,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
     expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(694);
-    expect(refused + 2, routeCountHint("runtime")).toBe(696);
+    expect(refused, routeCountHint("runtime")).toBe(695);
+    expect(refused + 2, routeCountHint("runtime")).toBe(697);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

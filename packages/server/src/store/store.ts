@@ -83,6 +83,7 @@ import {
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
+import { InboxRepo } from "@multiremi/store/repos/inbox-repo.js";
 import {
   ConversationLogRepo,
   type AppendConversationLogInput,
@@ -555,6 +556,7 @@ export class MultiremiStore {
   private knowledge: KnowledgeRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
+  private inbox: InboxRepo;
   private conversationLog: ConversationLogRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
@@ -625,6 +627,7 @@ export class MultiremiStore {
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.conversationLog = new ConversationLogRepo(this.ctx);
+    this.inbox = new InboxRepo(this.ctx);
     this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
       debounceMs: options.agentIssueUpdateDebounceMs,
     });
@@ -2417,6 +2420,7 @@ runMigrations(this.db);
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: import("./repos/inbox-repo.js").EnvelopeDelivery[];
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
@@ -3999,6 +4003,17 @@ runMigrations(this.db);
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
 
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; statusChangeEventId?: string | null } = {},
+  ): void {
+    this.issues.notifyChildStatusChangeWithinTransaction(previous, issue, parentTaskId, collector, deferredEvents, options);
+  }
+
   restoreIssue(id: string): MultiremiIssue {
     return this.issues.restoreIssue(id);
   }
@@ -4027,14 +4042,14 @@ runMigrations(this.db);
     return this.issues.findGeneratedIssueByTitle(sourceIssueId, title);
   }
 
-  createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
-    return this.issues.createIssueComment(issueId, input);
+  createIssueComment(issueId: string, input: CreateIssueCommentInput, options: import("./context.js").CreateIssueCommentOptions = {}): MultiremiIssueComment {
+    return this.issues.createIssueComment(issueId, input, options);
   }
 
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue },
+    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue; deferDispatch?: boolean },
   ): import("./context.js").CreatedIssueComment {
     return this.issues.createIssueCommentWithinTransaction(issueId, input, options);
   }
@@ -4529,6 +4544,16 @@ runMigrations(this.db);
     return this.traceBackfillProgress.fillTurnCards([summary]).updated === 1;
   }
 
+  recordTaskInboxDelivery(taskId: string, fromSeq: number, toSeq: number): void {
+    this.ctx.db.transaction(() => {
+      this.conversationLog.recordTurnInboxDeliveryWithinTransaction(taskId, fromSeq, toSeq);
+    })();
+  }
+
+  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
+    return this.conversationLog.recordTurnInboxDeliveryWithinTransaction(taskId, fromSeq, toSeq);
+  }
+
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
     return this.conversationLog.append(input);
   }
@@ -4565,7 +4590,7 @@ runMigrations(this.db);
   }
 
   /** Shown entries in the inclusive seq range, oldest first. */
-  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null; limit?: number } = {}): ConversationLogEntry[] {
     return this.conversationLog.listShown(sessionId, input);
   }
 
@@ -4611,6 +4636,10 @@ runMigrations(this.db);
 
   getSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
     return this.sessions.getSessionAgentLane(sessionId, agentId, executionScope);
+  }
+
+  getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
+    return this.sessions.getSessionAgentMaxCursorSeq(sessionId, agentId);
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
@@ -5359,11 +5388,14 @@ runMigrations(this.db);
     return this.chat.appendChatMessageWithinTransaction(input);
   }
 
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(
+    chatSessionId: string, body: string,
+    options?: Parameters<ChatRepo["createPendingAgentIssueUpdateWithinTransaction"]>[2],
+  ): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   } {
-    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body);
+    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body, options);
   }
 
   preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
@@ -5403,6 +5435,46 @@ runMigrations(this.db);
     deferredEvents: import("./context.js").CommitEventQueue,
   ): MultiremiTask {
     return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
+  }
+
+  createTaskWithinWorkspaceLock(
+    ...args: Parameters<TasksRepo["createTaskWithinWorkspaceLock"]>
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinWorkspaceLock(...args);
+  }
+
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult {
+    return this.tasks.ensurePendingTurnWithinTransaction(input);
+  }
+
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    return this.tasks.getBoundIssueLogToSeq(taskId);
+  }
+
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
+    return this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
+  }
+
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[] {
+    return this.inbox.sendEnvelopeWithinTransaction(env, collector, deferredEvents);
+  }
+
+  createSystemIssueCommentWithinTransaction(
+    ...args: Parameters<IssuesRepo["createSystemIssueCommentWithinTransaction"]>
+  ): MultiremiIssueComment {
+    return this.issues.createSystemIssueCommentWithinTransaction(...args);
+  }
+
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ) {
+    return this.tasks.ensureDelegationWakeupWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   ensureDelegationWakeup(input: {
@@ -5780,7 +5852,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
+      }, { withinTransaction: true, deferredEvents, childStatusChanges });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -5798,7 +5870,6 @@ runMigrations(this.db);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     // The transaction committed: publish everything it deferred.
     this.ctx.emitCommitEvents(deferredEvents);
-    this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
 

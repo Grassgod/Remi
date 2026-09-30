@@ -14,11 +14,39 @@
  * two prerequisites finishing, and the member forced start.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => {
+  it("inserts the E3 notification turn inside the prerequisite transaction at depth 1", () => {
+    const store = createStore();
+    const flow = inboxFlowFixture(store, "e3");
+    const database = db!;
+    const transaction = database.transaction.bind(database);
+    const run = database.run.bind(database);
+    let depth = 0;
+    let maxDepth = 0;
+    const inserts: Array<{ depth: number; inTransaction: boolean }> = [];
+    database.transaction = ((fn: (...args: unknown[]) => unknown) => {
+      const runner = transaction(fn);
+      return (...args: unknown[]) => {
+        maxDepth = Math.max(maxDepth, ++depth);
+        try { return runner(...args); }
+        finally { depth--; }
+      };
+    }) as typeof database.transaction;
+    database.run = (sql, params) => {
+      if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) inserts.push({ depth, inTransaction: database.inTransaction });
+      return run(sql, params);
+    };
+    try { triggerInboxFlow(store, flow); }
+    finally { database.transaction = transaction; database.run = run; }
+    expect(maxDepth).toBe(1);
+    expect(inserts).toEqual([{ depth: 1, inTransaction: true }]);
+  });
+
   it("auto-starts after a prerequisite is done without nesting", () => {
     const store = createStore();
     store.ensureLocalWorkspace();

@@ -365,26 +365,11 @@ export interface MultiremiApiOptions {
   /** B1 reader for log warm-up and peer reconciliation. */
   hubFill?: HubFillReader | null;
   /**
-   * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
+   * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
    * exists so a test (and `startMultiremiServer`) can pin the role without env.
    */
   apiRole?: ApiRole;
-  /**
-   * The shared Hub for browser sockets, health and human requests. Undefined
-   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
-   */
-  liveHub?: LiveHub;
-  /**
-   * MUL-438: how `stream.subscribe` is authorized. Undefined picks the reader for
-   * the configured backend (read-only pool on Postgres, the store on SQLite).
-   */
-  streamAuth?: StreamAuthReader;
-  /**
-   * MUL-438: the read pool a Postgres subscription check borrows, and the one the
-   * server closes on shutdown. Undefined builds one from `MULTIREMI_DATABASE_URL`.
-   */
-  readPool?: ReturnType<typeof createReadPool> | null;
   /** Resolved once at startup, including whether the default was configured. */
   apiRoleConfiguration?: ApiRoleConfiguration;
   /**
@@ -406,6 +391,21 @@ export interface MultiremiApiOptions {
    * effective role.
    */
   createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
+  /**
+   * The shared Hub for browser sockets, health and human requests. Undefined
+   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
+   */
+  liveHub?: LiveHub;
+  /**
+   * MUL-438: how `stream.subscribe` is authorized. Undefined picks the reader for
+   * the configured backend (read-only pool on Postgres, the store on SQLite).
+   */
+  streamAuth?: StreamAuthReader;
+  /**
+   * MUL-438: the read pool a Postgres subscription check borrows, and the one the
+   * server closes on shutdown. Undefined builds one from `MULTIREMI_DATABASE_URL`.
+   */
+  readPool?: ReturnType<typeof createReadPool> | null;
 }
 
 function resolveAppHub(
