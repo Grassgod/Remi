@@ -83,6 +83,8 @@ export interface EnvelopeMetadata {
   envelope: Omit<Envelope, "body" | "to"> & {
     to: EnvelopeAddress;
     priority: EnvelopePriority;
+    /** Agent resolved when a symbolic address was written, before ownership can change. */
+    recipient_agent_id?: string;
   };
 }
 

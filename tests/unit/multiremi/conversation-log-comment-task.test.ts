@@ -53,7 +53,7 @@ describe("MUL-427 ruling (e): comment task associations", () => {
           expect(sessionEventCompatibilityResponse(carryingTask).task_id).toBeNull();
           const projection = buildSessionProjection({ sessionId: session.id, targetAgentId: agent.id,
             events: [carryingTask], cursorSeq: 0, providerSessionId: null, tokenBudget: 4096 });
-          const line = JSON.parse(projection.jsonl.split("\n")[1]!);
+          const line = JSON.parse(projection.jsonl.split("\n")[2]!);
           expect(line.source_comment_id).toBe(source.id);
           expect(line.task_id).toBeNull();
         }

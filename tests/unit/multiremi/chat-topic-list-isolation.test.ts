@@ -17,12 +17,16 @@ describe("Chat list isolation from Feishu Issue topics", () => {
     const issue = store.createIssue({ title: "Topic only", createdBy: "local" });
     const topic = prepareFeishuIssueTopic(store, { runtimeId: runtime.id, agentId: agent.id, issueId: issue.id });
     expect(topic.creatorId).toBe("local");
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const issueTask = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Report the Issue" });
+    expect(store.claimTask(runtime.id)?.id).toBe(issueTask.id);
+    store.startTask(issueTask.id);
     const privateChat = store.createChatSession({ agentId: agent.id, creatorId: "local", title: "Private conversation" });
     const privateTask = store.sendChatMessage(privateChat.id, { body: "Private message" }).task;
     store.sendChatMessage(topic.id, { body: "Topic progress" });
     store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Issue update for the topic" });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toMatchObject({ delivered: 1 });
-    expect(store.listChatMessages(topic.id).some((message) => message.body.startsWith("Bound Issue update:"))).toBe(true);
+    store.completeTask(issueTask.id, { output: "Issue round ended" });
+    expect(store.listChatMessages(topic.id).some((message) => message.role === "system" && message.body.includes("有新日志"))).toBe(true);
     expect(store.listChatMessages(privateChat.id).map((message) => message.body)).toEqual(["Private message"]);
 
     const credential = await store.createAccessToken({ name: "Chat lists", type: "pat", workspaceId: "local", userId: "local" });
@@ -35,7 +39,7 @@ describe("Chat list isolation from Feishu Issue topics", () => {
         const body = await response.json();
         const sessions = Array.isArray(body) ? body : body.sessions;
         expect(sessions.map((session: { id: string }) => session.id)).toEqual([privateChat.id]);
-        expect(JSON.stringify(body)).not.toContain("Bound Issue update:");
+        expect(JSON.stringify(body)).not.toContain("有新日志");
         if (!Array.isArray(body)) expect(body.total).toBe(1);
       }
     }

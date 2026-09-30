@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { createId } from "@multiremi/ids.js";
 import type { CommitEventQueue, StoreContext } from "@multiremi/store/context.js";
@@ -36,14 +37,20 @@ export class InboxRepo {
     const sourceComment = env.source.commentId ? this.ctx.issues().getIssueComment(env.source.commentId) : null;
     const sourceTask = env.source.taskId ? this.ctx.tasks().getTask(env.source.taskId) : null;
     const { body, ...envelope } = env;
-    const metadata: EnvelopeMetadata = { envelope: {
+    const envelopeMetadata: EnvelopeMetadata["envelope"] = {
       ...envelope,
       priority: envelopePriority({ ...env, senderType: sourceComment?.authorType,
         lifecycleEvent: sourceTask?.status === "failed" ? "task_failed"
           : sourceTask?.status === "cancelled" ? "task_cancelled" : undefined }),
-    } };
+    };
     for (const recipient of recipients) {
       const sessionId = recipient.issueSessionId ?? recipient.chatSessionId!;
+      const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
+        ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
+          this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
+          recipient.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${recipient.chatSessionId}`,
+        ).cursorSeq))
+        : body;
       if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId
         || sourceTask && sourceTask.workspaceId !== recipient.workspaceId) {
         throw new Error("Envelope source belongs to another workspace");
@@ -68,15 +75,20 @@ export class InboxRepo {
           if (previous.session_id !== sessionId) throw new Error("Envelope id belongs to another session");
           stored = { entry: previous, deduplicated: true };
         } else {
+          const metadata: EnvelopeMetadata = { envelope: {
+            ...envelopeMetadata,
+            ...(env.to.role === "issue_owner" || env.to.role === "parent_owner" || env.to.role === "delegator"
+              ? { recipient_agent_id: recipient.agentId } : {}),
+          } };
           if (recipient.issueSessionId) {
             const comment = this.ctx.issues().createSystemIssueCommentWithinTransaction(
-              recipient.issueId!, body, { type: "envelope", ...metadata }, deferredEvents,
+              recipient.issueId!, recipientBody, { type: "envelope", ...metadata }, deferredEvents,
               null, recipient.issueSessionId, id,
             );
             deferredEvents.workspace.push({ type: "comment:created", workspaceId: recipient.workspaceId,
               actorType: "system", actorId: comment.authorId, payload: { comment } });
           } else {
-            const written = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(sessionId, body, { id, metadata: { ...metadata } });
+            const written = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(sessionId, recipientBody, { id, metadata: { ...metadata } });
             afterCommit(this.ctx.db, () => this.ctx.emitChatEvent(written.session, "chat:message", { message: written.message }, {
               actorType: "system", actorId: null,
             }));
@@ -104,7 +116,7 @@ export class InboxRepo {
         : this.ctx.tasks().ensurePendingTurnWithinTransaction({
           lane,
           wake: { reason, seq: stored.entry.seq, commentId: recipient.issueSessionId ? stored.entry.id : null, mode: env.wake },
-          steerBody: body,
+          steerBody: recipientBody,
           create: () => {
             return this.ctx.tasks().createTaskWithinWorkspaceLock({
               agentId: recipient.agentId, issueId: recipient.issueId, issueSessionId: recipient.issueSessionId,
@@ -194,11 +206,17 @@ export class InboxRepo {
         const issue = this.ctx.issues().getIssue(address.issueId);
         if (!issue) throw new Error("Envelope relay Issue not found");
         this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-        const bindings = this.ctx.db.query(`SELECT DISTINCT c.id, c.agent_id
+        const bindings = this.ctx.db.query(`SELECT c.id, c.agent_id, b.chat_id
           FROM multiremi_feishu_bot_chat_bindings b JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
           WHERE b.issue_id = ? AND b.workspace_id = ? AND c.workspace_id = ? AND c.status <> 'archived'
-          ORDER BY c.id`).all(issue.id, issue.workspaceId, issue.workspaceId) as Array<{ id: string; agent_id: string }>;
-        return bindings.map(binding => this.chatRecipient(binding.id, binding.agent_id, issue.id));
+          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`).all(issue.id, issue.workspaceId, issue.workspaceId) as Array<{ id: string; agent_id: string; chat_id: string | null }>;
+        const seen = new Set<string>();
+        return bindings.filter(binding => {
+          const key = binding.chat_id ? `chat:${binding.chat_id}` : `session:${binding.id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).map(binding => this.chatRecipient(binding.id, binding.agent_id, issue.id));
       }
     }
   }

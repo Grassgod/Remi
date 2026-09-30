@@ -28,7 +28,10 @@ notification wakes to this decision.
 1. **The inbox is the recipient's conversation log read from its lane cursor.**
    There is no inbox table. Every cross-agent message is an entry in the
    recipient's session log carrying `metadata.envelope` (`kind`, `wake`,
-   `dedupe_key`, `reply_to`, `grant_ref`, `priority`, `source`). On Issue
+   `dedupe_key`, `reply_to`, `grant_ref`, `priority`, `source`). For symbolic
+   `issue_owner`, `parent_owner`, and `delegator` addresses, the writer also
+   stores the resolved `recipient_agent_id` so later ownership changes do not
+   change delivery attribution. On Issue
    sessions the entry is a system comment (`kind = system`); on chat sessions it
    is a system message. Delegation reports and decision answers, which today live
    only in task prompts or `session_events`, become such entries.

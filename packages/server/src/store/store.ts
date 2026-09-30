@@ -2228,6 +2228,7 @@ runMigrations(this.db);
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: import("./repos/inbox-repo.js").EnvelopeDelivery[];
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
@@ -4282,7 +4283,7 @@ runMigrations(this.db);
   }
 
   /** Shown entries in the inclusive seq range, oldest first. */
-  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null; limit?: number } = {}): ConversationLogEntry[] {
     return this.conversationLog.listShown(sessionId, input);
   }
 
@@ -4320,6 +4321,10 @@ runMigrations(this.db);
 
   getSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
     return this.sessions.getSessionAgentLane(sessionId, agentId, executionScope);
+  }
+
+  getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
+    return this.sessions.getSessionAgentMaxCursorSeq(sessionId, agentId);
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
@@ -5115,6 +5120,14 @@ runMigrations(this.db);
     return this.tasks.ensurePendingTurnWithinTransaction(input);
   }
 
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    return this.tasks.getBoundIssueLogToSeq(taskId);
+  }
+
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
+    return this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
+  }
+
   sendEnvelopeWithinTransaction(
     env: import("@multiremi/contracts/inbox.js").Envelope,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -5482,7 +5495,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
+      }, { withinTransaction: true, deferredEvents, childStatusChanges });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -5500,7 +5513,6 @@ runMigrations(this.db);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     // The transaction committed: publish everything it deferred.
     this.ctx.emitCommitEvents(deferredEvents);
-    this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
 

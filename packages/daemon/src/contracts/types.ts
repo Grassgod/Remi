@@ -19,6 +19,7 @@ import type {
   CreateSkillInput,
   ImportSkillInput,
   MultiremiBoundIssue,
+  MultiremiBoundIssueLog,
   MultiremiSkillFile,
   MultiremiSkillImportSource,
   RunAutopilotInput,
@@ -369,6 +370,8 @@ export interface AgentTask {
   requesting_user_profile_description?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  boundIssueLog?: MultiremiBoundIssueLog;
+  bound_issue_log?: MultiremiBoundIssueLog;
   boundIssueUpdates?: string[];
   bound_issue_updates?: string[];
   boundIssueUpdatesOmittedCount?: number;

@@ -3,6 +3,8 @@ function trimmed(value: unknown): string | null {
   return text || null;
 }
 
+export const RELAY_EXECUTION_SCOPE_PREFIX = "relay:";
+
 /**
  * The model and reasoning level a task will ACTUALLY execute with (MUL-336).
  *

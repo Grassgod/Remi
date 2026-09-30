@@ -1,7 +1,7 @@
 // Issue sessions domain (sessions, participants, session events, agent lanes and published
 // results), extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
-import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
@@ -542,6 +542,14 @@ export class IssueSessionsRepo {
     return row ? toSessionAgentLane(row) : null;
   }
 
+  getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
+    const row = this.ctx.db.query(
+      `SELECT COALESCE(MAX(cursor_seq), 0) AS cursor_seq FROM multiremi_session_agent_lanes
+       WHERE session_id = ? AND agent_id = ? AND substr(execution_scope, 1, ?) <> ?`,
+    ).get(sessionId, agentId, RELAY_EXECUTION_SCOPE_PREFIX.length, RELAY_EXECUTION_SCOPE_PREFIX) as { cursor_seq: number };
+    return Number(row.cursor_seq);
+  }
+
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     return this.ctx.db.transaction(() => {
       const task = this.ctx.tasks().getTask(taskId);
@@ -563,6 +571,7 @@ export class IssueSessionsRepo {
       const agent = this.ctx.agents().getAgentLite(task.agentId);
       const session = this.getIssueSession(task.issueSessionId)!;
       const events = this.projectionEvents(task.issueSessionId);
+      const expandableSeqs = this.expandableProjectionSeqs(task.issueSessionId, events);
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,
@@ -596,6 +605,7 @@ export class IssueSessionsRepo {
         sessionId: task.issueSessionId,
         targetAgentId: task.agentId,
         events,
+        expandableSeqs,
         cursorSeq: lane.cursorSeq,
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
         tokenBudget: tokenBudget - inheritedTokenBudget,
@@ -605,10 +615,12 @@ export class IssueSessionsRepo {
       if (hasInheritedWindow) {
         const parent = this.getIssueSession(session.parentSessionId!);
         if (!parent) throw new Error(`Parent session not found: ${session.parentSessionId}`);
+        const inheritedEvents = this.projectionEvents(parent.id);
         const inheritedProjection = buildSessionProjection({
           sessionId: parent.id,
           targetAgentId: task.agentId,
-          events: this.projectionEvents(parent.id).filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
+          events: inheritedEvents.filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
+          expandableSeqs: this.expandableProjectionSeqs(parent.id, inheritedEvents),
           cursorSeq: 0,
           fromSeq: parentFromSeq,
           toSeq: parentToSeq,
@@ -793,24 +805,6 @@ export class IssueSessionsRepo {
       metadata: { result_id: id, title: input.title?.trim() ?? "" },
     });
     const result = this.getSessionResult(id)!;
-    try {
-      this.ctx.notificationChannels().queueAgentIssueUpdate({
-        activityId: result.id,
-        issueId: session.issueId,
-        actorType: publishedByType,
-        actorId: publishedById,
-        type: "result_published",
-        body: [result.title ? `Published result: ${result.title}` : "Published result", result.body].join("\n\n"),
-        data: {
-          resultId: result.id,
-          sourceSessionId: sessionId,
-          ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
-        },
-        createdAt: now,
-      });
-    } catch (error) {
-      log.warn(`agent issue result update queue skipped for ${session.issueId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
     return result;
   }
 
@@ -841,6 +835,15 @@ export class IssueSessionsRepo {
   private projectionEvents(sessionId: string): MultiremiSessionEvent[] {
     const projected = conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
     return [...projected, ...this.legacyDelegationReports(sessionId)].sort((a, b) => a.seq - b.seq);
+  }
+
+  private expandableProjectionSeqs(sessionId: string, events: MultiremiSessionEvent[]): Set<number> {
+    const entries = this.ctx.conversationLog().listConversationLogEntries(sessionId);
+    const entriesBySeq = new Map(entries.map((entry) => [entry.seq, entry]));
+    return new Set(events.filter((event) => {
+      const entry = entriesBySeq.get(event.seq);
+      return entry?.visibility === "shown" && entry.deleted_at === null && event.body === entry.body_md;
+    }).map((event) => event.seq));
   }
 
   private sessionAuthorName(authorType: string, authorId: string | null): string | null {

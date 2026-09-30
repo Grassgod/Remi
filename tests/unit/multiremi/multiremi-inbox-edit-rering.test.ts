@@ -49,6 +49,23 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
       && (row.data as { reason?: string }).reason === "re_ring")).toHaveLength(1);
   });
 
+  it("T6: deleting the triggering comment re-rings a later merged report", () => {
+    const f = setup();
+    const delivery = f.send();
+    expect(delivery.action).toBe("coalesced");
+    expect(delivery.task!.id).toBe(f.task.id);
+    f.store.deleteIssueComment(f.comment.id);
+    expect(f.store.getIssueComment(f.comment.id)).toBeNull();
+    expect(f.store.getTask(f.task.id)!.status).toBe("cancelled");
+    const queued = f.store.listTasksForIssue(f.issue.id).filter(task => task.status === "queued");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.wakeSource).toBe("re_ring");
+    expect(queued[0]!.triggerCommentId).toBeNull();
+    expect(inboxWakeSeq(f.db, queued[0]!.id)).toBe(delivery.entry.seq);
+    expect(queued[0]!.prompt).not.toContain(delivery.entry.body_md);
+    expect(f.store.getConversationLogEntryById(delivery.entry.id)!.body_md).toBe(delivery.entry.body_md);
+  });
+
   it("T6: editing only a coalesced comment cancels neither the original turn nor its report", () => {
     const f = setup();
     const later = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: f.member.id,

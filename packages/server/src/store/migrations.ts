@@ -3444,6 +3444,12 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     backfillConversationLogWithinTransaction(db);
   });
   migrateTaskExecutionScope(db);
+  runMigrationOnce(db, "20260929_relay_issue_log_to_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_to_seq INTEGER");
+  });
+  runMigrationOnce(db, "20260929_relay_issue_log_delivered_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_delivered_seq INTEGER");
+  });
   runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
     preparePendingTurnConstraintsWithinTransaction(db);
   });

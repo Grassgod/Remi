@@ -1531,6 +1531,8 @@ export interface MultiremiTask {
   auth_token?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  boundIssueLog?: MultiremiBoundIssueLog;
+  bound_issue_log?: MultiremiBoundIssueLog;
   boundIssueUpdates?: string[];
   bound_issue_updates?: string[];
   boundIssueUpdatesOmittedCount?: number;
@@ -1658,6 +1660,15 @@ export interface MultiremiTask {
   completedAt: string | null;
   failedAt: string | null;
   cancelledAt: string | null;
+}
+
+export interface MultiremiBoundIssueLog {
+  session_id: string;
+  from_seq: number;
+  to_seq: number;
+  content_jsonl: string;
+  next_seq: number;
+  has_more: boolean;
 }
 
 export type MultiremiTaskQueueBlockerReason =

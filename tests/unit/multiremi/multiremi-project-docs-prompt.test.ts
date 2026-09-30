@@ -116,12 +116,15 @@ describe("bootstrap and delta task prompts", () => {
         chatSessionId: "chat_issue_topic",
         holdsWorkspace: false,
         boundIssue: { id: issue.id, key: issue.key, title: issue.title, status: issue.status },
-        boundIssueUpdates: ["Latest topic activity"],
+        boundIssueLog: {
+          session_id: "session_issue", from_seq: 0, to_seq: 1, next_seq: 1, has_more: false,
+          content_jsonl: '{"type":"session_event","body":"Latest topic activity"}',
+        },
         sessionProjection: { mode, jsonl: '{"type":"session_event","body":"Topic conversation"}' },
       } as any);
 
       expect(prompt).toContain(`Key: ${issue.key}`);
-      expect(prompt).toContain("## Bound Issue Updates");
+      expect(prompt).toContain("## Bound Issue Log");
       expect(prompt).toContain("Latest topic activity");
       expect(prompt).toContain("## Bound Issue Follow-up");
       expect(prompt).toContain("Topic conversation");

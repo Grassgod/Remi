@@ -14,6 +14,8 @@ describe("platform prompt template preview", () => {
     expect(preview.bootstrap).toContain("## Quick Create Request\n{{quick_create_prompt}}");
     expect(preview.bootstrap).toContain("## Workspace Bootstrap Instructions\n{{workspace_bootstrap_prompt}}");
     expect(preview.bootstrap).toContain("## Current Session Context");
+    expect(preview.bootstrap).toContain("## Inbox");
+    expect(preview.bootstrap.indexOf("## Inbox")).toBeLessThan(preview.bootstrap.indexOf("## Current Session Context"));
     expect(preview.bootstrap).toContain("{{session_jsonl}}");
     expect(preview.bootstrap).toContain("## Published Results From Other Sessions");
     expect(preview.bootstrap).toContain("## Issue Workspace Session History");
@@ -40,6 +42,7 @@ describe("platform prompt template preview", () => {
     expect(preview.delta).toContain("## Quick Create Request\n{{quick_create_prompt}}");
     expect(preview.delta).toContain("## Workspace Delta Instructions\n{{workspace_delta_prompt}}");
     expect(preview.delta).toContain("## Current Session Context");
+    expect(preview.delta).toContain("## Inbox");
     expect(preview.delta).toContain("## Issue\nKey: {{issue_key}}");
     expect(preview.delta).toContain("## Triggering Comment");
     expect(preview.delta).toContain("## Repository Availability Warnings");
