@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,7 +115,7 @@ async function startHarness(options: {
   withElicitation?: boolean;
   approvalMode?: "ask" | "auto";
 } = {}): Promise<Harness> {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
   const agent = store.createAgent({ name: "Approval Agent", provider: "claude" });

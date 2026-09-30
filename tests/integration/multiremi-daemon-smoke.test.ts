@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -3635,7 +3636,7 @@ describe("Bun Multiremi daemon smoke", () => {
  * `string`.
  */
 function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: string } {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
   return { store: new MultiremiStore(db), workDir };
 }

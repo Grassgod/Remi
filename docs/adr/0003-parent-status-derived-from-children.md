@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (MUL-400 E1, child issue MUL-406). Ships with the S1 PR; S2 (dependency
-gate and automatic promotion) extends the same hook.
+gate and automatic promotion) extends the same hook. Amended by MUL-476 (Issue
+row lock order, item 8).
 
 ## Context
 
@@ -126,9 +127,30 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    and reopening a `done`/`cancelled` child lock that same parent before writing.
    This also covers Agent assignment's direct terminal-to-`todo` write, whose
    locks and assignment update commit before task creation opens its transaction.
-   Lock order is workspace lifecycle (when required), existing child Issue,
-   then parent Issue; a parent's guarded decision reads children without locking
-   their rows. A write serialized after parent closure may still introduce an
+   Lock order is workspace lifecycle (when required) and, for creation and for
+   a move into another workspace, the issue-number lock (MUL-405's W -> N -> D,
+   `store/advisory-locks.ts`; a move takes only its target's N), then
+   every Issue row the transaction writes or whose relation it changes, taken
+   **once in ascending id order** (`lockIssueRowsWithinTransaction`), then no further Issue row and no
+   workspace lock. The set is computed before locking from the input plus one
+   unlocked read of the written Issue's own `parent_issue_id` and `status`;
+   every guarded value is re-read after the locks. A child that is reopened
+   still locks its parent; a child that is re-parented locks the new parent;
+   creation locks the parent and every `blocked_by` endpoint; a dependency locks
+   both endpoints; a workspace move locks only itself, is blocked by active
+   tasks, relations and an uncleaned Issue workspace record; a cleaned record
+   follows the move with its machine fields cleared. The move takes the target's next number (number and
+   key change in the same UPDATE, because MUL-405's unique index rejects the
+   old number there); task creation locks its Issue before checking
+   the Issue's workspace, so it and a move serialize. If the post-lock re-read
+   shows the set was incomplete (the child's parent or terminal status changed
+   while it waited, or the Issue now moves and its N was not taken), the
+   transaction owner rolls back and retries once with a
+   fresh set; a second miss, or a caller-owned transaction, raises 409
+   `issue_relation_changed`. A late lock is never taken.
+   `lockIssueArchiveLifecycle` and `lockIssueRowWithinTransaction` take the same
+   Issue row lock; workspace reports, abandonment and cleanup serialize with moves.
+   A parent's guarded decision still reads children without locking their rows. A write serialized after parent closure may still introduce an
    unfinished child under that closed parent; the closed-parent policy above
    remains in effect. The guarantee is a current count at the parent's decision,
    not a prohibition on later child writes.
@@ -143,6 +165,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    reopening from each terminal status through PATCH or Agent assignment.
    SQLite's writer lock can reject the
    contender with `BUSY`; PostgreSQL waits on the parent row.
+   [The relation-lock regression](../../tests/unit/multiremi/multiremi-issue-relation-locks.test.ts)
+   pairs these paths with each other and with dependency and move writers for
+   both id orders, and covers the stale-set retry and its 409.
 
    **Every guarded path runs at transaction depth 1.** When this was decided,
    `PostgresSyncDatabase.transaction()` was a bare `BEGIN`/`COMMIT`, so a nested

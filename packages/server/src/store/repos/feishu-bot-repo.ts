@@ -45,12 +45,15 @@ import { createLogger } from "@shared/logger.js";
 import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/config/background-jobs.js";
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
+import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import {
   buildCardHeader,
   buildIssueDecisionCard,
   buildTaskInteractionCard,
   decisionMentionElement,
+  decodeDecisionCardBody,
   encodeDecisionCardBody,
+  questionCardAction,
 } from "@shared/feishu-task-card.js";
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
@@ -1461,11 +1464,14 @@ export class FeishuBotRepo {
     // the only side that can find out whether a recipient exists, and it sends
     // the text twin itself when the lookup comes back empty.
     const degraded = recipient.kind === "degraded" ? recipient.reason : null;
+    const token = this.rotateQuestionCardToken("multiremi_task_human_requests", request.id,
+      recipient.kind === "resolved" ? recipient.openId : null);
     let body: string;
     if (degraded) {
       body = fallbackText;
     } else {
       const card = buildTaskInteractionCard(request, {
+        token,
         header: buildCardHeader({ agentName: this.botAgentName(issue.workspaceId) }),
         ...(recipient.kind === "resolved" ? { recipientOpenId: recipient.openId } : {}),
         // `group_owner` is resolved by the host, which holds the bot token. The
@@ -1545,6 +1551,52 @@ export class FeishuBotRepo {
     return runtime.metadata[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] === 1;
   }
 
+  private rotateQuestionCardToken(
+    table: "multiremi_task_human_requests" | "multiremi_issue_decisions",
+    id: string,
+    recipient: string | null,
+  ): string {
+    const token = mintQuestionCardToken();
+    const status = table === "multiremi_issue_decisions" ? "escalated" : "pending";
+    const updated = this.ctx.db.run(
+      `UPDATE ${table} SET token_hash = ?, token_recipient = ?, token_consumed_at = NULL
+       WHERE id = ? AND status = ? AND token_consumed_at IS NULL`,
+      [hashQuestionCardToken(token), recipient, id, status],
+    );
+    if (updated.changes !== 1) throw new Error("question card is no longer pending");
+    return token;
+  }
+
+  private rotatedQuestionCard(row: Row, recipientOpenId: string | null): Record<string, unknown> | null {
+    const header = buildCardHeader({ agentName: this.botAgentName(String(row.workspace_id)) });
+    const decisionId = cleanOptionalString(row.decision_id);
+    if (decisionId) {
+      const decision = this.ctx.issues().getIssueDecisionAnywhere(decisionId);
+      if (!decision || decision.status !== "escalated") return null;
+      return buildIssueDecisionCard(decision, { header,
+        token: this.rotateQuestionCardToken("multiremi_issue_decisions", decisionId, recipientOpenId),
+        ...(recipientOpenId ? { recipientOpenId } : { recipientPending: true }),
+      });
+    }
+    const requestId = cleanOptionalString(row.human_request_id);
+    const request = requestId ? this.ctx.tasks().getTaskHumanRequest(requestId) : null;
+    if (!request || request.status !== "pending") return null;
+    return buildTaskInteractionCard(request, { header,
+      token: this.rotateQuestionCardToken("multiremi_task_human_requests", request.id, recipientOpenId),
+      ...(recipientOpenId ? { recipientOpenId } : { recipientPending: true }),
+    });
+  }
+
+  prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
+    if (!isFeishuOpenId(recipientOpenId)) return null;
+    return this.ctx.db.transaction(() => {
+      const request = this.ctx.tasks().getTaskHumanRequest(requestId);
+      const task = request ? this.ctx.tasks().getTask(request.taskId) : null;
+      if (!request || !task || request.status !== "pending") return null;
+      return this.rotatedQuestionCard({ human_request_id: requestId, workspace_id: task.workspaceId }, recipientOpenId);
+    })();
+  }
+
   /**
    * Queue the card for an E4 decision a person must decide (MUL-412).
    *
@@ -1566,11 +1618,18 @@ export class FeishuBotRepo {
     decision: MultiremiIssueDecision,
     deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): void {
+    // MUL-476: the caller's objects may predate a move. Re-read both through the
+    // scoped decision read: a decision whose row, source and target workspaces
+    // differ does not exist and gets no card, and the Issue whose topic and
+    // workspace receive the card is the decision's own current target.
+    const current = this.ctx.issues().getIssueDecision(issue.id, decision.id);
+    if (!current) return;
+    decision = current;
+    issue = this.ctx.issues().getIssue(current.issueId)!;
     // Only the two "a person decides this" states get a card (A3). `pending`
     // belongs to the parent's owner agent, and the two terminal states are
     // already past asking.
     if (decision.status !== "escalated") return;
-    if (decision.issueId !== issue.id) return;
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return;
     // Same lenient read as the human-request path: a stored config the current
@@ -1619,11 +1678,14 @@ export class FeishuBotRepo {
       decision,
     });
     const degraded = recipient.kind === "degraded" ? recipient.reason : null;
+    const token = this.rotateQuestionCardToken("multiremi_issue_decisions", decision.id,
+      recipient.kind === "resolved" ? recipient.openId : null);
     let body: string;
     if (degraded) {
       body = fallbackText;
     } else {
       const card = buildIssueDecisionCard(decision, {
+        token,
         header: buildCardHeader({ agentName: this.botAgentName(issue.workspaceId) }),
         ...(recipient.kind === "resolved" ? { recipientOpenId: recipient.openId } : {}),
         recipientPending: recipient.kind === "host_resolved",
@@ -1689,6 +1751,9 @@ export class FeishuBotRepo {
     decision: MultiremiIssueDecision,
     deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): void {
+    const current = this.ctx.issues().getIssueDecision(decision.issueId, decision.id);
+    if (!current) return;
+    decision = current;
     if (decision.status !== "answered" && decision.status !== "withdrawn") return;
     if (this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_feishu_bot_outbound_deliveries
@@ -1698,10 +1763,13 @@ export class FeishuBotRepo {
       `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
               o.external_message_id, o.decision_id, o.degraded
        FROM multiremi_feishu_bot_outbound_deliveries o
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         AND b.workspace_id = o.workspace_id AND b.issue_id = o.decision_issue_id
        WHERE o.kind = 'decision_card' AND o.decision_id = ?
+         AND o.workspace_id = ? AND o.decision_issue_id = ?
          AND o.degraded IS NULL
        ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-    ).get(decision.id) as Row | null;
+    ).get(decision.id, decision.workspaceId, decision.issueId) as Row | null;
     // Nothing to rewrite when the card never left the outbox, was skipped, or
     // went out as text: a degraded decision has no card on screen, and editing
     // the text would replace the question with a receipt.
@@ -1772,12 +1840,15 @@ export class FeishuBotRepo {
       if (!issueId) continue;
       const issue = this.ctx.issues().getIssue(issueId)!;
       const card = this.ctx.db.query(
-        `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id, o.interaction_open_id
+        `SELECT o.*
          FROM multiremi_feishu_bot_outbound_deliveries o
+         JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+           AND b.workspace_id = o.workspace_id AND b.issue_id = o.decision_issue_id
          WHERE o.kind = 'decision_card' AND o.decision_id = ?
+           AND o.workspace_id = ? AND o.decision_issue_id = ?
            AND o.status = 'sent' AND o.external_message_id IS NOT NULL AND o.degraded IS NULL
          ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-      ).get(decision.id) as Row | null;
+      ).get(decision.id, workspaceId, decision.issueId) as Row | null;
       if (!card) continue;
       // Every check that could skip this row has passed, so the one-shot slot
       // is spent last: running the CAS earlier would burn the nudge on a row
@@ -1793,12 +1864,14 @@ export class FeishuBotRepo {
         ? { mode: "person" as const, openId: recipientOpenId, resolvedOpenId: recipientOpenId }
         : { mode: "none" as const, resolvedOpenId: null };
       const nowIsoValue = now.toISOString();
+      const reminderCard = this.rotatedQuestionCard(card, recipientOpenId);
+      if (!reminderCard) continue;
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
            id, workspace_id, binding_id, task_id, chat_id, thread_id,
            reply_to_message_id, body, status, available_at, created_at, updated_at,
-           mention_snapshot, interaction_open_id, kind, decision_id, decision_issue_id
-         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_reminder', ?, ?)`,
+           mention_snapshot, interaction_open_id, kind, decision_id, decision_issue_id, target_message_id
+         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_reminder', ?, ?, ?)`,
         [
           createId("fbo"),
           issue.workspaceId,
@@ -1806,7 +1879,7 @@ export class FeishuBotRepo {
           String(card.chat_id),
           cleanOptionalString(card.thread_id),
           cleanOptionalString(card.reply_to_message_id),
-          issueDecisionReminderBody(issue, decision),
+          encodeDecisionCardBody({ card: reminderCard, fallback_text: issueDecisionReminderBody(issue, decision) }),
           nowIsoValue,
           nowIsoValue,
           nowIsoValue,
@@ -1814,6 +1887,7 @@ export class FeishuBotRepo {
           recipientOpenId,
           decision.id,
           decision.issueId,
+          cleanOptionalString(card.external_message_id),
         ],
       );
       this.ctx.appendIssueActivity(issue.id, {
@@ -1843,6 +1917,11 @@ export class FeishuBotRepo {
               decision.issue_id
        FROM multiremi_feishu_bot_outbound_deliveries o
        JOIN multiremi_issue_decisions decision ON decision.id = o.decision_id
+         AND decision.workspace_id = o.workspace_id AND decision.issue_id = o.decision_issue_id
+       JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
+       JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         AND b.workspace_id = o.workspace_id AND b.issue_id = decision.issue_id
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.status = 'sent'
          AND o.decision_id IS NOT NULL AND o.external_message_id IS NOT NULL
          AND o.interaction_open_id IS NOT NULL AND o.degraded IS NULL
@@ -1965,9 +2044,10 @@ export class FeishuBotRepo {
        FROM multiremi_feishu_bot_outbound_deliveries o
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id AND b.workspace_id = o.workspace_id
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.decision_id = ?
+         AND o.decision_issue_id = ? AND b.issue_id = o.decision_issue_id
          AND o.degraded IS NULL
        ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-    ).get(workspaceId, decision.id) as Row | null;
+    ).get(workspaceId, decision.id, decision.issueId) as Row | null;
     if (!row) return null;
     return {
       decision,
@@ -2132,7 +2212,7 @@ export class FeishuBotRepo {
       ).get(String(row.id)) as Row | null;
       if (!sent) continue;
       const card = this.ctx.db.query(
-        `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id, o.interaction_open_id
+        `SELECT o.*
          FROM multiremi_feishu_bot_outbound_deliveries o
          WHERE o.kind = 'decision_card' AND o.human_request_id = ?
            AND o.status = 'sent' AND o.external_message_id IS NOT NULL AND o.degraded IS NULL
@@ -2158,12 +2238,14 @@ export class FeishuBotRepo {
         ? { mode: "person" as const, openId: recipientOpenId, resolvedOpenId: recipientOpenId }
         : { mode: "none" as const, resolvedOpenId: null };
       const nowIsoValue = now.toISOString();
+      const reminderCard = this.rotatedQuestionCard(card, recipientOpenId);
+      if (!reminderCard) continue;
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
            id, workspace_id, binding_id, task_id, chat_id, thread_id,
            reply_to_message_id, body, status, available_at, created_at, updated_at,
-           mention_snapshot, interaction_open_id, kind, human_request_id, expires_at
-         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_reminder', ?, ?)`,
+           mention_snapshot, interaction_open_id, kind, human_request_id, expires_at, target_message_id
+         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_reminder', ?, ?, ?)`,
         [
           createId("fbo"),
           issue.workspaceId,
@@ -2171,7 +2253,7 @@ export class FeishuBotRepo {
           String(card.chat_id),
           cleanOptionalString(card.thread_id),
           cleanOptionalString(card.reply_to_message_id),
-          decisionReminderBody(issue, request),
+          encodeDecisionCardBody({ card: reminderCard, fallback_text: decisionReminderBody(issue, request) }),
           nowIsoValue,
           nowIsoValue,
           nowIsoValue,
@@ -2179,6 +2261,7 @@ export class FeishuBotRepo {
           recipientOpenId,
           request.id,
           request.expiresAt ?? null,
+          cleanOptionalString(card.external_message_id),
         ],
       );
       this.ctx.appendIssueActivity(issue.id, {
@@ -2254,8 +2337,12 @@ export class FeishuBotRepo {
     // A decision lane names its Issue directly: it has no binding of its own
     // reason to resolve, and the asking Task column it would otherwise fall
     // back to is NULL for these rows (MUL-412).
-    const decisionIssueId = this.issueIdInWorkspace(workspaceId, row.decision_issue_id);
-    if (decisionIssueId) return decisionIssueId;
+    const decisionId = cleanOptionalString(row.decision_id);
+    if (decisionId) {
+      const decision = this.ctx.issues().getIssueDecisionAnywhere(decisionId);
+      return decision?.workspaceId === workspaceId && decision.issueId === row.decision_issue_id
+        ? decision.issueId : null;
+    }
     const direct = this.ctx.db.query(
       `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ? AND workspace_id = ?`,
     ).get(String(row.binding_id), workspaceId) as Row | null;
@@ -2767,6 +2854,14 @@ export class FeishuBotRepo {
          WHERE o.workspace_id = ? AND b.app_id = ?
            ${decisionFilter}
            AND (? = 1 OR o.delivery_mode IS NULL OR o.delivery_mode = 'legacy')
+           AND (o.decision_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_issue_decisions decision
+             JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
+             JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
+             WHERE decision.id = o.decision_id AND decision.workspace_id = o.workspace_id
+               AND decision.issue_id = o.decision_issue_id
+               AND b.workspace_id = o.workspace_id AND b.issue_id = decision.issue_id
+           ))
            AND NOT EXISTS (
              SELECT 1 FROM multiremi_feishu_bot_round_pushes r
              WHERE r.wake_task_id = o.task_id AND r.binding_id = b.id
@@ -2856,6 +2951,13 @@ export class FeishuBotRepo {
       row.delivery_mode = mode;
       row.kind = kind;
       if (mode === 'split' && carrier) this.materializeTaskDeliveriesWithinTransaction(String(row.task_id), nowIsoValue);
+      if ((kind === "decision_card" || kind === "decision_reminder") && !row.degraded && Number(row.attempt_count) > 0) {
+        const card = this.rotatedQuestionCard(row, cleanOptionalString(row.interaction_open_id));
+        if (card) {
+          row.body = encodeDecisionCardBody({ card, fallback_text: decodeDecisionCardBody(String(row.body))?.fallback_text });
+          this.ctx.db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET body = ? WHERE id = ?", [row.body, String(row.id)]);
+        }
+      }
       return {
         ...outboundDelivery({ ...row, kind: carrier && mode === 'legacy' ? null : kind }, claimToken),
         // The decision lanes carry their own recipient checkpoint and need no
@@ -3019,7 +3121,7 @@ export class FeishuBotRepo {
       const sent = this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
           `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments,
-                  kind, human_request_id, human_request_task_id, decision_id, decision_issue_id, degraded
+                  kind, human_request_id, human_request_task_id, decision_id, decision_issue_id, degraded, body
            FROM multiremi_feishu_bot_outbound_deliveries
            WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
              AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
@@ -3044,6 +3146,17 @@ export class FeishuBotRepo {
             deliveryId, workspaceId, input.claimToken],
         );
         if (updated.changes !== 1) return false;
+        const card = decodeDecisionCardBody(String(row.body))?.card;
+        const action = card ? questionCardAction(card) : null;
+        const recipient = cleanOptionalString(input.interactionOpenId);
+        if (action && recipient && !input.degraded) {
+          const table = row.decision_id ? "multiremi_issue_decisions" : "multiremi_task_human_requests";
+          this.ctx.db.run(
+            `UPDATE ${table} SET token_recipient = COALESCE(token_recipient, ?)
+             WHERE id = ? AND token_hash = ? AND token_consumed_at IS NULL`,
+            [recipient, String(action.r), hashQuestionCardToken(String(action.t))],
+          );
+        }
         // A degrade the host decided (a `group_owner` lookup that came back
         // empty, or a card Feishu refused) is as much a part of the request's
         // story as one the control plane decided up front, so it gets the same
@@ -3087,18 +3200,21 @@ export class FeishuBotRepo {
     }
     return this.ctx.db.transaction(() => {
       const row = this.ctx.db.query(
-        `SELECT attempt_count, kind FROM multiremi_feishu_bot_outbound_deliveries
+        `SELECT attempt_count, kind, body FROM multiremi_feishu_bot_outbound_deliveries
          WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
            AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
       ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
       if (!row) return false;
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
-      const error = cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed";
       if (terminal && row.kind === 'receipt') {
         this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
         advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       }
+      const card = decodeDecisionCardBody(String(row.body))?.card;
+      const token = card ? questionCardAction(card)?.t : null;
+      const detail = cleanOptionalString(input.error) ?? "Feishu send failed";
+      const error = (typeof token === "string" ? detail.replaceAll(token, "[REDACTED]") : detail).slice(0, 2_000);
       const updated = this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = ?, claim_token = NULL, leased_until = NULL,

@@ -22,7 +22,8 @@ import { reportFrame } from "../../fixtures/report-session.js";
 // `POST :id/complete`, which reads through the cache, writes, and then re-reads
 // to build its response body.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -71,8 +72,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return {
-    dialect: "sqlite" as const,
+  return markSqliteDialect<SqlDatabase>({
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -83,7 +83,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     exec: (sql) => { raw.exec(sql); },
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
-  };
+  });
 }
 
 interface Scaffold {
@@ -96,7 +96,7 @@ interface Scaffold {
 
 /** A running Task whose prompt is large enough that any payload read is visible. */
 async function scaffold(): Promise<Scaffold> {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   const probe: Probe = {
     statements: [],
@@ -218,7 +218,7 @@ describe("MUL-474 daemon task-level polls", () => {
  */
 describe("MUL-474 daemon GET task status golden", () => {
   it("returns the same body the pre-change implementation returned", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -247,7 +247,7 @@ describe("MUL-474 daemon GET task status golden", () => {
   // The running case above has `result: null`. These cover the stored shapes a
   // projection's `result` / `session_id` / `work_dir` fallbacks have to survive.
   it("matches the pre-change body for every stored result shape", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -281,7 +281,7 @@ describe("MUL-474 daemon GET task status golden", () => {
  */
 describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () => {
   it("returns no task when the cancel lands while hydration is in flight", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const probe: Probe = { statements: [], reset() { this.statements = []; } };
     const store = new MultiremiStore(countingDatabase(db, probe));

@@ -64,6 +64,11 @@ bot 控制指令携带版本和期望状态。[concierge supervisor](../packages
 
 当前 Store 使用同步 `SqlDatabase` 接口。[openMultiremiDatabase](../packages/server/src/store/db/postgres.ts)
 根据 `MULTIREMI_DATABASE_URL` 选择 PostgreSQL，否则使用本地 SQLite。
+SQLite handle 统一由 [openSqliteDatabase](../packages/server/src/store/db/sqlite.ts) 创建并标记
+`dialect: "sqlite"`；恢复备份使用同文件的 `deserializeSqliteDatabase`。
+已有 SQLite handle 或包装对象使用 `markSqliteDialect`，支持两种后端的包装对象转发内层 `dialect`。
+shared 的 `getDb` 不依赖 server，由 `openMultiremiDatabase` 给返回的同一对象打标记。
+[架构扫描](../tests/arch/sqlite-handle-entry.test.ts)禁止其他 git 跟踪源码直接构造或恢复 `bun:sqlite` handle。
 这是底层存储适配的选择；生产 server 启动还有[必要配置检查](dev/auth.md)，不能据此省略部署配置。
 PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packages/server/src/store/db/pg-worker.ts)，worker 使用单连接。
 这是真实实现约束，不应被“整体 async/await”概述掩盖。

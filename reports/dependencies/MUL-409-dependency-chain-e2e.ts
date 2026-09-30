@@ -30,7 +30,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -77,7 +77,7 @@ async function main(): Promise<void> {
 
   const db = BACKEND === "postgres"
     ? new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB))
-    : new Database(":memory:");
+    : openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   const app = createMultiremiApp({ store });
   const failures: string[] = [];

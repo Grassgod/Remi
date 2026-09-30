@@ -148,6 +148,15 @@ export const ListIssuesResponseSchema = z.object({
   total: z.number().default(0),
 }).loose();
 
+export const IssueStatusPagesResponseSchema = z.object({
+  groups: z.record(z.string(), z.object({
+    issues: z.array(IssueSchema),
+    total: z.number().int().nonnegative(),
+    has_more: z.boolean(),
+  }).loose()),
+  archived_total: z.number().int().nonnegative().optional(),
+}).loose();
+
 export const EMPTY_LIST_ISSUES_RESPONSE: ListIssuesResponse = {
   issues: [],
   total: 0,
@@ -163,6 +172,7 @@ const IssueAssigneeGroupSchema = z.object({
 
 export const GroupedIssuesResponseSchema = z.object({
   groups: z.array(IssueAssigneeGroupSchema).default([]),
+  archived_total: z.number().int().nonnegative().optional(),
 }).loose();
 
 export const EMPTY_GROUPED_ISSUES_RESPONSE: GroupedIssuesResponse = {

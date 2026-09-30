@@ -24,7 +24,7 @@
  * The golden records only the routes PR1 touches. `GET /api/inbox/summary` and
  * `GET /api/attachments/:id/content` are captured by their own PR2 files.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -67,7 +67,7 @@ export interface FirstScreenHotspotGolden {
 
 export async function captureFirstScreenHotspotGolden(source: string): Promise<FirstScreenHotspotGolden> {
   const restoreIds = installFirstScreenHotspotIds();
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   try {
     const store = new MultiremiStore(db);
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });

@@ -172,7 +172,7 @@ describe("CLI capabilities manifest", () => {
     expect(cliCoverageReport(manifest)).toEqual({
       // MUL-479's context-window PUT maps to `remi workspace relay context-window
       // update`, so it raises the mapped count with the total.
-      mapped: 681,
+      mapped: 682,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -183,9 +183,10 @@ describe("CLI capabilities manifest", () => {
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
-      exempt: 86,
+      // The native card mint is daemon-only; workspace abandonment maps to CLI.
+      exempt: 87,
       missing: 0,
-      total: 767,
+      total: 769,
     });
     expect(manifest.aliases["remi chat message list"]?.command).toBe("session.log.window");
     expect(manifest.aliases["remi issue run-messages"]?.command).toBe("task.trace.read");
@@ -193,7 +194,11 @@ describe("CLI capabilities manifest", () => {
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
+    expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"])
+      .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/issues/:id/workspace/abandon"])
+      .toEqual({ command: "issue.workspace.abandon" });
     for (const [route, command] of [
       ["GET /api/issues/:id/decisions", "issue.decision.list"],
       ["POST /api/issues/:id/decisions", "issue.decision.request"],

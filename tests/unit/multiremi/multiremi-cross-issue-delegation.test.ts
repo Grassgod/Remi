@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -28,7 +28,7 @@ function fiveChildFixture(store: MultiremiStore) {
 
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();

@@ -8,7 +8,7 @@
  * once and hands it to the drain; this suite counts the SELECTs on the real
  * terminal path and asserts that bridge metadata and prompt agree.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -26,7 +26,7 @@ const RESULT_COMMENT_SELECT = "SELECT id FROM multiremi_issue_comments";
 
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();

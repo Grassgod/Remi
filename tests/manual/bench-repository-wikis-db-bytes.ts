@@ -77,6 +77,8 @@ class MeteredDb implements SqlDatabase {
   private readonly byStatement = new Map<string, StatementSample>();
   constructor(private readonly inner: SqlDatabase) {}
 
+  get dialect(): SqlDatabase["dialect"] { return this.inner.dialect; }
+
   reset(): void { this.byStatement.clear(); }
 
   statements(): StatementSample[] {

@@ -2,6 +2,7 @@
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
+import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
@@ -103,6 +104,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 
 import {
   dependencyGateEnabled,
@@ -414,6 +416,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
              )
              OR EXISTS (
@@ -421,6 +424,7 @@ function placementIssueWorkspaceSql(runtime: MultiremiRuntime): SqlFragment {
                LEFT JOIN multiremi_runtimes issue_workspace_runtime
                  ON issue_workspace_runtime.id = issue_workspace.runtime_id
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
                  AND (
                    issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
@@ -553,6 +557,7 @@ export interface ChildStatusChange {
   taskId: string;
   /** Terminal status of the task that produced the transition, when it was terminal. */
   taskTerminalStatus?: "completed" | "failed" | "cancelled";
+  dependencyCheckEventId?: string | null;
 }
 
 /**
@@ -882,8 +887,9 @@ function liveIssueWorkspaceMachines(
   const cached = cache?.issueWorkspaces.get(issueId);
   if (cached) return cached;
   const rows = ctx.db.query(
-    `SELECT runtime_id FROM multiremi_issue_workspaces
-      WHERE issue_id = ? AND status <> 'cleaned'`,
+    `SELECT iw.runtime_id FROM multiremi_issue_workspaces iw
+      JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
+      WHERE iw.issue_id = ? AND iw.status <> 'cleaned'`,
   ).all(issueId) as Array<{ runtime_id?: unknown }>;
   const aliases = new Set<string>();
   for (const row of rows) {
@@ -1220,6 +1226,7 @@ export class TasksRepo {
       const reason = placementWaitReason({
         constraints: probe.constraints,
         workspaceRuntimeMissing: probe.workspaceRuntimeMissing,
+        issueId: row.issue_id,
         frozenRetry: probe.frozenRetry,
         agentBound: probe.agentBound,
         codeSnapshot: probe.codeSnapshot,
@@ -1497,6 +1504,10 @@ export class TasksRepo {
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
     const issueId = input.issueId ?? triggerComment?.issueId ?? null;
+    // MUL-476: a task is an edge to its Issue, so lock the Issue (after the
+    // workspace lock) before checking its workspace; a concurrent move then
+    // either sees this task or commits before this read.
+    if (issueId) lockIssueRowWithinTransaction(this.ctx.db, issueId);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
@@ -3993,20 +4004,32 @@ ${placementAfter.sql}
   /** Atomic first-write-wins: returns null when the request is no longer pending. */
   respondTaskHumanRequest(
     requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null },
+    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     let resumedTask: MultiremiTask | null = null;
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
+      const credential = input.cardCredential;
       const result = this.ctx.db.run(
         `UPDATE multiremi_task_human_requests
          SET status = 'responded', response = ?, responded_by = ?, responded_at = ?
-         WHERE id = ? AND status = 'pending'`,
-        [JSON.stringify(input.response ?? {}), input.respondedBy ?? null, now, requestId],
+           ${credential ? ", token_consumed_at = ?" : ""}
+         WHERE id = ? AND status = 'pending'
+           ${credential ? "AND token_hash = ? AND token_recipient = ? AND token_consumed_at IS NULL" : ""}`,
+        [JSON.stringify(input.response ?? {}), credential?.operatorOpenId ?? input.respondedBy ?? null, now,
+          ...(credential ? [now] : []), requestId,
+          ...(credential ? [hashQuestionCardToken(credential.token), credential.operatorOpenId] : [])],
       );
-      if (result.changes === 0) return null;
+      if (result.changes === 0) {
+        if (credential) {
+          assertQuestionCardToken(this.ctx.db.query("SELECT * FROM multiremi_task_human_requests WHERE id = ?")
+            .get(requestId) as Row | null, credential, "pending");
+          throw new QuestionCardTokenError("token_invalid");
+        }
+        return null;
+      }
       const responded = this.getTaskHumanRequest(requestId)!;
       resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
       return responded;
@@ -6240,6 +6263,7 @@ ${placementAfter.sql}
             next,
             {
               taskTerminalStatus: change.taskTerminalStatus,
+              dependencyCheckEventId: change.dependencyCheckEventId,
               seen,
             },
           );
@@ -6318,7 +6342,7 @@ ${placementAfter.sql}
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
-      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      const { dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: updatedIssue,
         previousStatus: issue.status,
         actorType: "agent",
@@ -6336,6 +6360,7 @@ ${placementAfter.sql}
         previous: issue,
         issue: updatedIssue,
         taskId: task.id,
+        dependencyCheckEventId,
         taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
           ? task.status
           : undefined,

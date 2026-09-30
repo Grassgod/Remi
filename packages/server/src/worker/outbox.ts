@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { openSqliteDatabase } from "../store/db/sqlite.js";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createLogger } from "@shared/logger.js";
@@ -108,7 +109,7 @@ export class MultiremiTaskReportOutbox {
 
   constructor(options: MultiremiTaskReportOutboxOptions) {
     if (options.path !== ":memory:") mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
-    this.db = new Database(options.path, { create: true });
+    this.db = openSqliteDatabase(options.path, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     if (options.path !== ":memory:") {
       // Payloads mirror task reports (transcripts, prompts) — owner-only, like

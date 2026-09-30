@@ -25,6 +25,10 @@ all seven server statuses, including `cancelled`; `open` normalizes to `todo`.
 The default limit is 50 per status, capped at 500. Only offset 0 is accepted;
 continue each bucket through the existing `/api/issues` route.
 
+`remi issue grouped --include-archived-total --output json` also opts into
+the workspace-wide `archived_total` for assignee boards. Omitting the flag
+preserves the existing response and avoids the additional archive count.
+
 The API reuses the compatibility list query: `workspace_id`, `statuses`/`status`,
 `priorities`/`priority`, `assignee_types`, `assignee_id`, `assignee_ids`,
 `project_id`, `project_ids`, `parent_id`, `top_level_only`, `metadata` (JSON
@@ -224,6 +228,13 @@ directories owned by a Runtime's daemon. This is distinct from the team tenant
 managed by `remi workspace`. Use `--runtime-workspace <id>` on `chat create` or
 `issue create|update` to select it. See the [runtime workspace contract](dev/runtime-workspaces.md)
 for local context, directory lifetime, and the immutable execution binding.
+
+`remi runtime delete <runtime> --yes` and `runtime archive-agents-and-delete`
+block on uncleaned Issue workspaces. Add `--abandon-issue-workspaces` only after
+reviewing the affected Issue list. For historical records with no Runtime,
+`remi issue workspace abandon <issue> --yes` releases their task affinity and
+retains local files. Records still attached to a Runtime must use deletion or
+retirement instead. `remi issue workspace <issue>` remains the read command.
 
 `remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
 and Agent dependencies, verifying executables and ACP initialization without

@@ -11,6 +11,11 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export type AbandonIssueWorkspaceResult =
+  | { status: "not_found" }
+  | { status: "runtime_attached"; runtimeId: string }
+  | { status: "abandoned"; workspace: MultiremiIssueWorkspace; issueWorkspacesAbandoned: number };
+
 export class IssueWorkspacesRepo {
   constructor(private readonly ctx: StoreContext) {}
 
@@ -21,12 +26,39 @@ export class IssueWorkspacesRepo {
               r.device_info AS runtime_device_info, r.daemon_id AS runtime_daemon_id,
               p.display_name AS runtime_machine_name
        FROM multiremi_issue_workspaces iw
+       JOIN multiremi_issues i ON i.id = iw.issue_id AND i.workspace_id = iw.workspace_id
        LEFT JOIN multiremi_runtimes r ON r.id = iw.runtime_id
        LEFT JOIN multiremi_daemon_profiles p
          ON p.workspace_id = iw.workspace_id AND p.daemon_id = r.daemon_id
        WHERE iw.issue_id = ?`,
     ).get(issueId) as Row | null;
     return row ? toIssueWorkspace(row) : null;
+  }
+
+  abandon(issueId: string, workspaceId: string): AbandonIssueWorkspaceResult {
+    return this.ctx.db.transaction((): AbandonIssueWorkspaceResult => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.ctx.lockIssueArchiveLifecycle(issueId);
+      const issue = this.ctx.db.query(
+        "SELECT workspace_id FROM multiremi_issues WHERE id = ?",
+      ).get(issueId) as Row | null;
+      const current = this.get(issueId);
+      if (!issue || String(issue.workspace_id ?? "local") !== workspaceId || !current || current.workspaceId !== workspaceId) {
+        return { status: "not_found" };
+      }
+      if (current.runtimeId !== null) return { status: "runtime_attached", runtimeId: current.runtimeId };
+      if (current.status === "cleaned") {
+        return { status: "abandoned", workspace: current, issueWorkspacesAbandoned: 0 };
+      }
+      const now = nowIso();
+      const abandoned = this.ctx.db.run(
+        `UPDATE multiremi_issue_workspaces
+         SET status = 'cleaned', cleaned_at = ?, updated_at = ?
+         WHERE issue_id = ? AND workspace_id = ? AND runtime_id IS NULL AND status != 'cleaned'`,
+        [now, now, issueId, workspaceId],
+      ).changes;
+      return { status: "abandoned", workspace: this.get(issueId)!, issueWorkspacesAbandoned: abandoned };
+    })();
   }
 
   report(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
@@ -98,6 +130,8 @@ export class IssueWorkspacesRepo {
          status, repos, last_task_id, cleaned_at, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(issue_id) DO UPDATE SET
+         workspace_id = excluded.workspace_id,
+         issue_key = excluded.issue_key,
          runtime_id = excluded.runtime_id,
          root_path = excluded.root_path,
          branch_name = excluded.branch_name,

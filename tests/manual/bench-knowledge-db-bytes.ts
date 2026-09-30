@@ -31,7 +31,7 @@
  *
  * The "before" numbers come from running this same file on the parent commit.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -100,6 +100,8 @@ class MeteredDb implements SqlDatabase {
   private readonly byStatement = new Map<string, StatementSample>();
 
   constructor(private readonly inner: SqlDatabase, private readonly kind: string) {}
+
+  get dialect(): SqlDatabase["dialect"] { return this.inner.dialect; }
 
   reset(): void {
     this.statements = 0;
@@ -415,7 +417,7 @@ async function measureMode(kind: "postgres" | "sqlite", out: ModeReport): Promis
       await drop.end();
     };
   } else {
-    inner = new Database(":memory:") as unknown as SqlDatabase;
+    inner = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
     databaseLabel = "bun:sqlite in-memory";
   }
 

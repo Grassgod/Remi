@@ -18,7 +18,7 @@
  * Nothing here touches PostgreSQL, production, or a remote host, and no
  * credential is read or written.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
 
@@ -35,7 +35,7 @@ console.log = (...args: unknown[]) => {
 
 // An in-memory store: a smoke run must never open, migrate, or write the
 // operator's real ~/.remi/remi.db.
-const database = new Database(":memory:");
+const database = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(database);
 store.ensureLocalWorkspace();
 const server = startMultiremiServer({

@@ -3,7 +3,8 @@
 // prompt on the same provider session; force_answer additionally arms a grace
 // deadline after which the run completes with the output produced so far.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ afterEach(async () => {
 });
 
 function testBed(prefix: string): { store: MultiremiStore; root: string } {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), prefix));
   return { store: new MultiremiStore(db), root: workDir };
 }

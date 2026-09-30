@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   applyCodexUsageBackfill,
   buildCodexUsageBackfillPlan,
@@ -9,7 +10,7 @@ import {
 let db: Database;
 
 beforeEach(() => {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   db.exec(`
     CREATE TABLE multiremi_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL);
     CREATE TABLE multiremi_tasks (

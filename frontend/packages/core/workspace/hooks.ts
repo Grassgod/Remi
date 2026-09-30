@@ -7,6 +7,13 @@ import { useAfterFirstScreen } from "../platform/use-after-first-screen";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 
+// Stable fallbacks while a list is disabled or loading. A fresh `[]` per render
+// changes every callback below, and consumers that memoize on them (the board's
+// column groups feed a setState effect) then re-render without end.
+const NO_MEMBERS: never[] = [];
+const NO_AGENTS: never[] = [];
+const NO_SQUADS: never[] = [];
+
 export function useActorName(
   /**
    * Row labels defer agent/squad lookups. Assignee board columns opt in
@@ -17,11 +24,11 @@ export function useActorName(
   const wsId = useWorkspaceId();
   const gateOpen = useAfterFirstScreen();
   const squadsEnabled = options.squadsEnabled ?? gateOpen;
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId, {
+  const { data: members = NO_MEMBERS } = useQuery(memberListOptions(wsId));
+  const { data: agents = NO_AGENTS } = useQuery(agentListOptions(wsId, {
     enabled: options.agentsEnabled ?? gateOpen,
   }));
-  const { data: squads = [] } = useQuery(
+  const { data: squads = NO_SQUADS } = useQuery(
     squadListOptions(wsId, { enabled: squadsEnabled }),
   );
 

@@ -5,8 +5,10 @@ import type { Issue } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
+import enMyIssues from "../../locales/en/my-issues.json";
+import { issueKeys } from "@multiremi/core/issues/queries";
 
-const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
+const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues, "my-issues": enMyIssues } };
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
@@ -61,7 +63,8 @@ vi.mock("../../workspace/workspace-avatar", () => ({
 
 // Mock api (queries use api internally)
 const mockListIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ issues: [], total: 0 }));
-const mockListGroupedIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ groups: [] }));
+const mockListIssueStatusPages = vi.hoisted(() => vi.fn());
+const mockListGroupedIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ groups: [], archived_total: 0 }));
 const mockListMembers = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -118,6 +121,7 @@ vi.mock("@multiremi/core/api", () => ({
   api: {
     getBaseUrl: () => "http://127.0.0.1:8080",
     listIssues: (...args: any[]) => mockListIssues(...args),
+    listIssueStatusPages: (...args: any[]) => mockListIssueStatusPages(...args),
     listGroupedIssues: (...args: any[]) => mockListGroupedIssues(...args),
     updateIssue: vi.fn(),
     listMembers: (...args: any[]) => mockListMembers(...args),
@@ -127,6 +131,7 @@ vi.mock("@multiremi/core/api", () => ({
   },
   getApi: () => ({
     listIssues: (...args: any[]) => mockListIssues(...args),
+    listIssueStatusPages: (...args: any[]) => mockListIssueStatusPages(...args),
     listGroupedIssues: (...args: any[]) => mockListGroupedIssues(...args),
     updateIssue: vi.fn(),
     listMembers: (...args: any[]) => mockListMembers(...args),
@@ -243,6 +248,15 @@ vi.mock("@multiremi/core/issues/stores/view-store-context", () => ({
 }));
 
 let mockScope = "all";
+let mockPersonalScope = "assigned";
+vi.mock("@multiremi/core/issues/stores/my-issues-view-store", () => ({
+  myIssuesViewStore: {
+    getState: () => ({ ...mockViewState, scope: mockPersonalScope }),
+    getInitialState: () => ({ ...mockViewState, scope: mockPersonalScope }),
+    subscribe: () => () => {},
+  },
+}));
+vi.mock("../../my-issues/components/my-issues-header", () => ({ MyIssuesHeader: () => null }));
 
 vi.mock("@multiremi/core/issues/stores/issues-scope-store", () => ({
   useIssuesScopeStore: Object.assign(
@@ -446,6 +460,7 @@ function mockAssigneeGroups(issues: Issue[]) {
     groups.get(id)!.issues.push(issue);
   }
   return {
+    archived_total: 0,
     groups: [...groups.entries()].map(([id, group]) => ({
       id,
       assignee_type: group.assignee_type,
@@ -461,6 +476,7 @@ function mockAssigneeGroups(issues: Issue[]) {
 // ---------------------------------------------------------------------------
 
 import { IssuesPage } from "./issues-page";
+import { MyIssuesPage } from "../../my-issues/components/my-issues-page";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -473,13 +489,13 @@ function renderWithQuery(ui: React.ReactElement) {
       mutations: { retry: false },
     },
   });
-  return render(
+  return { qc, ...render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         {ui}
       </QueryClientProvider>
     </I18nProvider>,
-  );
+  ) };
 }
 
 // ---------------------------------------------------------------------------
@@ -490,7 +506,18 @@ describe("IssuesPage (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListIssues.mockResolvedValue({ issues: [], total: 0 });
-    mockListGroupedIssues.mockResolvedValue({ groups: [] });
+    mockListGroupedIssues.mockResolvedValue({ groups: [], archived_total: 0 });
+    mockListIssueStatusPages.mockImplementation(async (params: any) => {
+      const read = mockListIssues.getMockImplementation()!;
+      const pages = await Promise.all(params.statuses.map((status: string) => read({ ...params, status })));
+      const archive = params.include_archived_total ? await read({ archived_only: true }) : undefined;
+      return {
+        groups: Object.fromEntries(pages.map((page, index) => [params.statuses[index], {
+          ...page, has_more: page.issues.length < page.total,
+        }])),
+        ...(archive ? { archived_total: archive.total } : {}),
+      };
+    });
     mockViewState.viewMode = "board";
     mockViewState.grouping = "status";
     mockViewState.statusFilters = [];
@@ -498,6 +525,25 @@ describe("IssuesPage (shared)", () => {
     mockViewState.agentRunningFilter = false;
     mockGetAgentTaskSnapshot.mockReset().mockResolvedValue([]);
     mockScope = "all";
+    mockPersonalScope = "assigned";
+  });
+
+  it.each(["issues", "assigned", "created", "agents", "all"])("%s page keeps its reduced request count after warm invalidation", async (scope) => {
+    mockPersonalScope = scope;
+    mockListIssues.mockImplementation(async (params: any) => {
+      const issues = mockIssues.filter((issue) => issue.status === params?.status);
+      return { issues, total: issues.length };
+    });
+    const { qc } = renderWithQuery(scope === "issues" ? <IssuesPage /> : <MyIssuesPage />);
+    await screen.findByText("Implement auth");
+    const expected = scope === "all" ? 3 : 1;
+    expect(mockListIssueStatusPages).toHaveBeenCalledTimes(expected);
+    expect(mockListIssues).not.toHaveBeenCalled();
+    mockListIssueStatusPages.mockClear();
+    await qc.invalidateQueries({ queryKey: scope === "issues" ? issueKeys.list("ws-1") : issueKeys.myAll("ws-1") });
+    await screen.findByText("Implement auth");
+    expect(mockListIssueStatusPages).toHaveBeenCalledTimes(expected);
+    expect(mockListIssues).not.toHaveBeenCalled();
   });
 
   it("shows loading skeletons initially", () => {
@@ -531,7 +577,7 @@ describe("IssuesPage (shared)", () => {
     renderWithQuery(<IssuesPage />);
 
     // Let every list request settle, then look at what the page claims.
-    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    await waitFor(() => expect(mockListIssueStatusPages).toHaveBeenCalledOnce());
     await act(async () => {
       // Flush Query's batched notification, not only the request promises.
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -644,12 +690,10 @@ describe("IssuesPage (shared)", () => {
         statuses: ["backlog", "todo", "in_progress", "in_review", "done", "blocked"],
       }),
     );
-    expect(mockListIssues).toHaveBeenCalledTimes(1);
-    expect(mockListIssues).toHaveBeenCalledWith({
-      archived_only: true,
-      limit: 1,
-      offset: 0,
-    });
+    expect(mockListGroupedIssues).toHaveBeenCalledTimes(1);
+    expect(mockListGroupedIssues).toHaveBeenCalledWith(expect.objectContaining({ include_archived_total: true }));
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(mockListIssueStatusPages).not.toHaveBeenCalled();
   });
 
   it("shows the 'Issues' section header without a workspace prefix", async () => {

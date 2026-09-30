@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,7 +52,7 @@ describe("Project-bound Chat daemon startup", () => {
       : "starts Project Chat with a diagnostic when automatic repository sync fails", async () => {
       const root = mkdtempSync(join(tmpdir(), "multiremi-bound-project-chat-"));
       roots.push(root);
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
@@ -153,7 +154,7 @@ describe("Project-bound Chat daemon startup", () => {
   it("checks out explicit Project repos once and reuses the stable Chat branch after a daemon restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-chat-repo-reuse-"));
     roots.push(root);
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -276,7 +277,7 @@ describe("Project-bound Chat daemon startup", () => {
       it(`cold-starts once after a completed ${localDirectory ? "local-directory" : "managed"} Chat's Project is ${unavailable}, preserving its files`, async () => {
         const root = mkdtempSync(join(tmpdir(), "multiremi-chat-unavailable-project-"));
         roots.push(root);
-        const db = new Database(":memory:");
+        const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
         store.ensureLocalWorkspace();
@@ -402,7 +403,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
   it("retires an existing Chat's selected directory when only resource position changes, while new Chats adopt the new first directory", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-chat-directory-order-"));
     roots.push(root);
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -525,7 +526,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       it(`cold-starts once in its managed directory after local-directory ${mutation}, preserving the user directory ${insideWorkspacesRoot ? "inside" : "outside"} the workspaces root`, async () => {
         const root = mkdtempSync(join(tmpdir(), "multiremi-chat-directory-transition-"));
         roots.push(root);
-        const db = new Database(":memory:");
+        const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
         store.ensureLocalWorkspace();
@@ -636,7 +637,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
     it(`retries a delta as a full bootstrap before any provider or user-directory write for an ${inheritedPathKind}`, async () => {
       const root = mkdtempSync(join(tmpdir(), "multiremi-chat-unsafe-delta-"));
       roots.push(root);
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
