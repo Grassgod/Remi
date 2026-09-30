@@ -14,6 +14,7 @@ import type { SessionArchiveService } from "@multiremi/session-archive/service.j
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import type { DaemonGcErrorReply, DaemonFeishuOutboundOkReply, DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import { createLogger } from "@shared/logger.js";
+import { log as apiLog } from "../helpers/common.js";
 import { daemonTaskUsageEntries, daemonLocalSkillListReportBody, daemonLocalSkillImportReportBody } from "../helpers.js";
 import { daemonAgentPluginStateResponse } from "../wire/index.js";
 import type { DaemonProtocolLayer } from "./index.js";
@@ -40,6 +41,19 @@ function reject(code = "invalid_report"): never { throw new ReportRejection(code
 const string = (value: unknown): string => typeof value === "string" ? value : "";
 const nullable = (value: unknown): string | null => string(value).trim() || null;
 const terminal = (status: string): boolean => ["completed", "failed", "cancelled"].includes(status);
+
+function completionTraceEventCount(trace: unknown, taskId: string): number | undefined {
+  if (trace === undefined) return undefined;
+  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
+    const eventCount = (trace as Record<string, unknown>).event_count;
+    if (eventCount === undefined) return undefined;
+    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
+      return eventCount;
+    }
+  }
+  apiLog.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
+  return undefined;
+}
 
 function completionFields(p: Record<string, unknown>, taskId: string): DaemonTaskCompletionFields | null {
   const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -103,6 +117,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const task = authorizeReportTask(store, session, taskId, frame.rt);
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
+        const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
         let terminalTransitioned = false;
         switch (frame.type) {
           case "task.start":
@@ -163,7 +178,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           }
           case "task.complete":
             if (task.status === "running") {
-              try { store.completeTask(taskId, { output: string(p.output), branchName: nullable(p.pr_url),
+              try { store.completeTask(taskId, { output: string(p.output), traceEventCount, branchName: nullable(p.pr_url),
                 sessionId: nullable(p.session_id), workDir: nullable(p.work_dir) }); }
               catch (error) {
                 if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
@@ -175,7 +190,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           case "task.fail":
             if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
               store.failTask(taskId, {
-                error: string(p.error) || "Task failed", sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
+                error: string(p.error) || "Task failed", traceEventCount,
+                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
               terminalTransitioned = true;
             }
             break;

@@ -41,19 +41,6 @@ import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.
 const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
 import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
-function daemonCompletionTraceEventCount(trace: unknown, taskId: string): number | undefined {
-  if (trace === undefined) return undefined;
-  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
-    const eventCount = (trace as Record<string, unknown>).event_count;
-    if (eventCount === undefined) return undefined;
-    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
-      return eventCount;
-    }
-  }
-  log.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
-  return undefined;
-}
-
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
   server_url?: string | null;

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -38,7 +40,6 @@ async function setup() {
     workspaceId: "local",
     userId: "member",
   });
-  const app = createMultiremiApp({ store, authToken: "root-secret" });
   const runtime = store.registerRuntime({
     id: "rt_organizer_test",
     name: "Organizer test runtime",
@@ -73,7 +74,8 @@ async function setup() {
     workspaceId: "local",
     prompt: "TOP SECRET target prompt",
   });
-  store.appendTaskMessages(targetTask.id, [
+  const trace = new InMemoryTraceStore();
+  trace.append(targetTask.id, [
     {
       type: "tool_call",
       tool: "exec_command",
@@ -83,6 +85,8 @@ async function setup() {
     },
     { type: "assistant", content: "private answer" },
   ]);
+  const app = createMultiremiApp({ store, authToken: "root-secret",
+    daemonTraceReader: new InMemoryDaemonTraceReader(() => trace) });
   store.reportProgress(targetTask.id, "Indexing repository", 2, 5);
   store.createTaskHumanRequest({
     taskId: targetTask.id,
@@ -197,6 +201,7 @@ describe("Organizer supervisor privilege layer", () => {
 
   it("exposes transcript-free inspection metadata while preserving main's owner parity", async () => {
     const fixture = await setup();
+    fixture.store.markTaskTraceDaemon(fixture.targetTask.id, fixture.runtime.id);
     const supervisorToken = await grantSupervisor(fixture);
     const normalTaskToken = await fixture.store.createTaskAccessToken(fixture.targetTask, "owner");
 
