@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
+import enMyIssues from "../../locales/en/my-issues.json";
+import { issueKeys } from "@multiremi/core/issues/queries";
 
-const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
+const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues, "my-issues": enMyIssues } };
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
@@ -61,7 +63,8 @@ vi.mock("../../workspace/workspace-avatar", () => ({
 
 // Mock api (queries use api internally)
 const mockListIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ issues: [], total: 0 }));
-const mockListGroupedIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ groups: [] }));
+const mockListIssueStatusPages = vi.hoisted(() => vi.fn());
+const mockListGroupedIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ groups: [], archived_total: 0 }));
 const mockListMembers = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -95,6 +98,7 @@ const mockListAgents = vi.hoisted(() =>
     },
   ]),
 );
+const mockGetAgentTaskSnapshot = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockListSquads = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -117,19 +121,23 @@ vi.mock("@multiremi/core/api", () => ({
   api: {
     getBaseUrl: () => "http://127.0.0.1:8080",
     listIssues: (...args: any[]) => mockListIssues(...args),
+    listIssueStatusPages: (...args: any[]) => mockListIssueStatusPages(...args),
     listGroupedIssues: (...args: any[]) => mockListGroupedIssues(...args),
     updateIssue: vi.fn(),
     listMembers: (...args: any[]) => mockListMembers(...args),
     listAgents: (...args: any[]) => mockListAgents(...args),
     listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   },
   getApi: () => ({
     listIssues: (...args: any[]) => mockListIssues(...args),
+    listIssueStatusPages: (...args: any[]) => mockListIssueStatusPages(...args),
     listGroupedIssues: (...args: any[]) => mockListGroupedIssues(...args),
     updateIssue: vi.fn(),
     listMembers: (...args: any[]) => mockListMembers(...args),
     listAgents: (...args: any[]) => mockListAgents(...args),
     listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   }),
   setApiInstance: vi.fn(),
 }));
@@ -240,6 +248,15 @@ vi.mock("@multiremi/core/issues/stores/view-store-context", () => ({
 }));
 
 let mockScope = "all";
+let mockPersonalScope = "assigned";
+vi.mock("@multiremi/core/issues/stores/my-issues-view-store", () => ({
+  myIssuesViewStore: {
+    getState: () => ({ ...mockViewState, scope: mockPersonalScope }),
+    getInitialState: () => ({ ...mockViewState, scope: mockPersonalScope }),
+    subscribe: () => () => {},
+  },
+}));
+vi.mock("../../my-issues/components/my-issues-header", () => ({ MyIssuesHeader: () => null }));
 
 vi.mock("@multiremi/core/issues/stores/issues-scope-store", () => ({
   useIssuesScopeStore: Object.assign(
@@ -443,6 +460,7 @@ function mockAssigneeGroups(issues: Issue[]) {
     groups.get(id)!.issues.push(issue);
   }
   return {
+    archived_total: 0,
     groups: [...groups.entries()].map(([id, group]) => ({
       id,
       assignee_type: group.assignee_type,
@@ -458,6 +476,7 @@ function mockAssigneeGroups(issues: Issue[]) {
 // ---------------------------------------------------------------------------
 
 import { IssuesPage } from "./issues-page";
+import { MyIssuesPage } from "../../my-issues/components/my-issues-page";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -470,13 +489,13 @@ function renderWithQuery(ui: React.ReactElement) {
       mutations: { retry: false },
     },
   });
-  return render(
+  return { qc, ...render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         {ui}
       </QueryClientProvider>
     </I18nProvider>,
-  );
+  ) };
 }
 
 // ---------------------------------------------------------------------------
@@ -487,12 +506,44 @@ describe("IssuesPage (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListIssues.mockResolvedValue({ issues: [], total: 0 });
-    mockListGroupedIssues.mockResolvedValue({ groups: [] });
+    mockListGroupedIssues.mockResolvedValue({ groups: [], archived_total: 0 });
+    mockListIssueStatusPages.mockImplementation(async (params: any) => {
+      const read = mockListIssues.getMockImplementation()!;
+      const pages = await Promise.all(params.statuses.map((status: string) => read({ ...params, status })));
+      const archive = params.include_archived_total ? await read({ archived_only: true }) : undefined;
+      return {
+        groups: Object.fromEntries(pages.map((page, index) => [params.statuses[index], {
+          ...page, has_more: page.issues.length < page.total,
+        }])),
+        ...(archive ? { archived_total: archive.total } : {}),
+      };
+    });
     mockViewState.viewMode = "board";
     mockViewState.grouping = "status";
     mockViewState.statusFilters = [];
     mockViewState.priorityFilters = [];
+    mockViewState.agentRunningFilter = false;
+    mockGetAgentTaskSnapshot.mockReset().mockResolvedValue([]);
     mockScope = "all";
+    mockPersonalScope = "assigned";
+  });
+
+  it.each(["issues", "assigned", "created", "agents", "all"])("%s page keeps its reduced request count after warm invalidation", async (scope) => {
+    mockPersonalScope = scope;
+    mockListIssues.mockImplementation(async (params: any) => {
+      const issues = mockIssues.filter((issue) => issue.status === params?.status);
+      return { issues, total: issues.length };
+    });
+    const { qc } = renderWithQuery(scope === "issues" ? <IssuesPage /> : <MyIssuesPage />);
+    await screen.findByText("Implement auth");
+    const expected = scope === "all" ? 3 : 1;
+    expect(mockListIssueStatusPages).toHaveBeenCalledTimes(expected);
+    expect(mockListIssues).not.toHaveBeenCalled();
+    mockListIssueStatusPages.mockClear();
+    await qc.invalidateQueries({ queryKey: scope === "issues" ? issueKeys.list("ws-1") : issueKeys.myAll("ws-1") });
+    await screen.findByText("Implement auth");
+    expect(mockListIssueStatusPages).toHaveBeenCalledTimes(expected);
+    expect(mockListIssues).not.toHaveBeenCalled();
   });
 
   it("shows loading skeletons initially", () => {
@@ -500,6 +551,52 @@ describe("IssuesPage (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  // MUL-472 b: with the running-agent filter on, the snapshot *is* the row set.
+  // Deferring it would leave `runningIssueIds` empty and paint a confident
+  // "nothing matches" while the real answer was still in flight.
+  it("does not show an empty list while the running-agent filter is waiting for the snapshot", async () => {
+    mockViewState.viewMode = "list";
+    mockViewState.agentRunningFilter = true;
+    // The list itself resolves immediately; only the snapshot hangs. That
+    // isolates the behaviour under test: with the filter on, the row set is the
+    // snapshot, so the page must stay in its loading state until the snapshot
+    // arrives instead of rendering the (currently empty) filtered result.
+    mockListIssues.mockImplementation(async (params: any) => ({
+      issues: mockIssues.filter((i) => i.status === params?.status),
+      total: 0,
+    }));
+    let releaseSnapshot!: (tasks: unknown[]) => void;
+    mockGetAgentTaskSnapshot.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+
+    renderWithQuery(<IssuesPage />);
+
+    // Let every list request settle, then look at what the page claims.
+    await waitFor(() => expect(mockListIssueStatusPages).toHaveBeenCalledOnce());
+    await act(async () => {
+      // Flush Query's batched notification, not only the request promises.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The list body renders one accordion per status; an empty one says
+    // "No issues". With the snapshot still in flight the page must not be
+    // claiming that — the rows it would show depend on the snapshot.
+    expect(screen.queryAllByText("No issues").length).toBe(0);
+    expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
+
+    releaseSnapshot([
+      { id: "task-1", status: "running", issue_id: "issue-1", agent_id: "agent-1" },
+    ]);
+    // Once it arrives the page renders, filtered to the running issue only.
+    await screen.findByText("Implement auth");
+    expect(screen.queryByText("Write tests")).not.toBeInTheDocument();
+    expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
   });
 
   it("renders issue titles after data loads", async () => {
@@ -530,6 +627,21 @@ describe("IssuesPage (shared)", () => {
     await screen.findByText("Backlog");
     expect(screen.getAllByText("Todo").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the ready marker absent while the archive count holds the body skeleton", async () => {
+    let releaseArchive!: () => void;
+    mockListIssues.mockImplementation((params: any) => params?.archived_only
+      ? new Promise((resolve) => { releaseArchive = () => resolve({ issues: [], total: 0 }); })
+      : Promise.resolve({ issues: mockIssues.filter((i) => i.status === params?.status), total: 0 }));
+    renderWithQuery(<IssuesPage />);
+    await waitFor(() => expect(releaseArchive).toBeDefined());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
+    expect(screen.queryByText("Implement auth")).not.toBeInTheDocument();
+    await act(async () => { releaseArchive(); });
+    await screen.findByText("Implement auth");
+    expect(document.querySelector('[data-perf-scroll="list"]')).not.toBeNull();
   });
 
   it("keeps the archived pseudo-column hidden and shows its server count", async () => {
@@ -578,12 +690,10 @@ describe("IssuesPage (shared)", () => {
         statuses: ["backlog", "todo", "in_progress", "in_review", "done", "blocked"],
       }),
     );
-    expect(mockListIssues).toHaveBeenCalledTimes(1);
-    expect(mockListIssues).toHaveBeenCalledWith({
-      archived_only: true,
-      limit: 1,
-      offset: 0,
-    });
+    expect(mockListGroupedIssues).toHaveBeenCalledTimes(1);
+    expect(mockListGroupedIssues).toHaveBeenCalledWith(expect.objectContaining({ include_archived_total: true }));
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(mockListIssueStatusPages).not.toHaveBeenCalled();
   });
 
   it("shows the 'Issues' section header without a workspace prefix", async () => {

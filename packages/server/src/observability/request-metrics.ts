@@ -106,6 +106,8 @@ export interface PeerSummary {
 export interface MinuteSummary {
   event: "api_minute_summary";
   ts: string;
+  /** Emitted by the process that produced the window; two containers share one log. */
+  pid: number;
   window_ms: number;
   requests: number;
   status_5xx: number;
@@ -387,38 +389,528 @@ export function recordDbParse(parseMs: number): void {
 export const DB_REPLY_WARN_BYTES = 1_048_576;
 
 /**
- * Default value of the hard limit: 0, i.e. disabled.
- *
- * A size limit only forces pagination when every path that can trip it already
- * has a pagination or projection exit. Production still has paths whose single
- * reply exceeds 8 MB with no such exit (repository-wikis and un-bounded task
- * messages — MUL-398), so default-on would convert them from slow into failing
- * rather than into paginated. The bridge keeps its 64 MB `RESULT_BUFFER_BYTES`
- * ceiling, and the 1 MB warning line provides visibility in the meantime.
+ * Production and test threshold since MUL-398 C-1 (2026-09-28 authorization).
+ * Production observes this threshold; the hermetic suite explicitly enforces it.
+ * C-2 needs fresh authorization before changing the enforcement default.
+ * An explicit override of 0 disables the configurable threshold.
  */
-export const DEFAULT_DB_REPLY_MAX_BYTES = 0;
+export const DEFAULT_DB_REPLY_MAX_BYTES = 8_388_608;
 
 /**
- * The limit production moves to once MUL-398 lands and one week of
- * `api_large_db_reply` shows no route above it.
- *
- * The test suite enables this value (see `tests/setup/hermetic-env.ts`) so the
- * guardrail keeps catching unbounded reads in CI — it already caught
- * `/tasks/pending` reading the whole task table.
+ * Recommendation and production/test threshold agree; enforcement is separate.
  */
-export const RECOMMENDED_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+export const RECOMMENDED_DB_REPLY_MAX_BYTES = DEFAULT_DB_REPLY_MAX_BYTES;
 
 /**
- * Resolve the hard limit. Unset, empty, non-numeric and negative all mean "off"
- * (0) rather than falling back to 8 MB: the disabled default is deliberate, and
- * a typo in the env var must not silently arm a limit in production.
+ * Exact currentDbReplyOrigin keys, never concrete paths or query strings.
+ * Sources: 209 v0.2.83 slow-request DB totals (not single replies), source audit,
+ * and the C-1 continuation ruling. C-2 removes HTTP entries individually after
+ * bounded reads/MUL-402 and three days of single-reply data below 6 MiB,
+ * including a working-day peak. See docs/dev/performance.md for the audit.
+ */
+export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
+  // 209 total >= 6 MiB; retain every one of the 18 conservative candidates.
+  "GET /api/dashboard/usage/by-agent", // Usage history; C-2 bounded reads/data.
+  "GET /api/dashboard/agent-runtime", // Runtime history; C-2 bounded reads/data.
+  "GET /api/dashboard/runtime/daily", // Runtime history; C-2 bounded reads/data.
+  "GET /api/dashboard/usage/daily", // Usage history; C-2 bounded reads/data.
+  "GET /api/knowledge/submissions", // Knowledge list; C-2 projection/data.
+  "GET /api/projects/:id/knowledge/recall", // Doc bodies; C-2 bounded reads/data.
+  "GET /api/projects/:id/docs", // Doc bodies; C-2 bounded reads/data.
+  "GET /api/workspaces/:id/repository-wikis", // A/A2 fixed; C-2 production data.
+  "GET /api/knowledge/runs", // Compilation outputs; C-2 projection/data.
+  "GET /api/issues/:id", // Issue bundle; C-2 bounded reads/data.
+  "POST /api/autopilots/:id/trigger", // Run payload/result; C-2 bounded reads/data.
+  "POST /api/daemon/tasks/:taskId/fail", // Task completion reads; C-2/data.
+  "POST /api/daemon/tasks/:taskId/complete", // Task completion reads; C-2/data.
+  "GET /api/inbox", // Issue/history reads; C-2 bounded reads/data.
+  "GET /api/tasks/:id/inspection", // Full messages; C-2/MUL-402/data.
+  "GET /api/tasks/:taskId/messages", // Full messages; C-2/MUL-402/data.
+  "POST /api/daemon/runtimes/:runtimeId/tasks/claim", // Session projection; C-2/data.
+  "GET /api/multiremi/tasks", // Hydrated task rows; C-2 bounded reads/data.
+
+  // QA r1: Messaging Core SELECT * reads unbounded message text/raw and source
+  // allowlists/conversation names. C-2 needs bounded projections plus reply data.
+  "GET /api/workspaces/:workspaceId/messaging/messages", // MessagingRepo.listMessages.
+  "GET /api/workspaces/:workspaceId/feishu/messages", // Compat listMessages.
+  "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId", // getMessage.
+  "GET /api/workspaces/:workspaceId/messaging/conversations", // listSources/conversations.
+  "GET /api/workspaces/:workspaceId/feishu/chats", // Compat listSources/conversations.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/resolve", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/notify", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/draft-reply", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/propose-issue", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/create-issue", // requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue", // Compat requireMessage.
+
+  // Audit: full message/session/comment collections. C-2/MUL-402 + byte data.
+  "GET /api/multiremi/tasks/:id/messages",
+  "GET /api/daemon/tasks/:taskId/messages",
+  "GET /api/multiremi/tasks/:id/inspection",
+  "GET /api/shares/:token",
+  "GET /api/issues/:id/sessions/:sessionId/events",
+  "GET /api/issues/:id/comments",
+  "GET /api/multiremi/issues/:id/comments",
+  "GET /api/multiremi/issues/:id", // Legacy bundle also reads all comments/tasks.
+  "GET /api/issues/:id/timeline", // SQL pages still contain full comment bodies.
+  "GET /api/multiremi/issues/:id/timeline",
+  "GET /api/issues/:id/session-results", // Unbounded result content/metadata.
+  "GET /api/issues", // Full description/metadata rows; C-2 bounded bytes/data.
+  "GET /api/multiremi/issues", // Also hydrates full task rows for each issue.
+  "GET /api/issues/status-pages", // Row pages retain full issue bodies.
+  "GET /api/issues/grouped",
+  "GET /api/multiremi/issues/grouped",
+  "GET /api/issues/search",
+  "GET /api/multiremi/issues/search",
+  "GET /api/issues/children",
+  "GET /api/multiremi/issues/children",
+  "GET /api/issues/:id/children",
+  "GET /api/multiremi/issues/:id/children",
+  "GET /api/issues/:id/generated-issues",
+  "GET /api/issues/:id/decisions", // Full body/options and human-request payloads.
+  "GET /api/issues/:id/active-task", // Filters full task rows after the read.
+  "GET /api/issues/:id/task-runs",
+  "GET /api/issues/:id/sessions/:sessionId/tasks",
+  "GET /api/agents/:id/tasks", // Unbounded SELECT * task prompt/result rows.
+  "GET /api/multiremi/agents/:id/tasks",
+  "GET /api/multiremi/chats/:id", // Legacy bundle includes all chat bodies.
+  "GET /api/multiremi/chats/:id/messages",
+  "GET /api/chat/sessions/:sessionId/messages",
+  "GET /api/chat/sessions/:sessionId/messages/page", // Pagination is after SQL.
+  "POST /api/chat/sessions/:sessionId/messages", // Dispatch builds chat history.
+  "POST /api/multiremi/chats/:id/messages",
+  "GET /api/chat/sessions", // Last-message excerpt is projected; retain pending C-2 byte data.
+  "GET /api/multiremi/chats",
+  "GET /api/chat/sessions/:sessionId",
+  "POST /api/chat/sessions", // Initial message/context readbacks.
+  "POST /api/multiremi/chats",
+  "GET /api/chat/sessions/:sessionId/pending-task", // Full queued task rows.
+  "GET /api/chat/pending-tasks", // Already projected; keep pending C-2 byte data.
+  "POST /api/chat/attachments/send", // Task credential scope uses the full task getter.
+  "GET /api/multiremi/inbox", // Legacy full inbox collection/hydration.
+  "GET /api/inbox/page", // Row pagination does not cap details/issue body bytes.
+  "GET /api/inbox/summary", // Projected but unbounded completed-run details rows.
+
+  // Audit: row LIMIT does not bound payload/result/schedule_prompt bytes.
+  // C-2 requires projections/bounded bodies and single-reply data below 6 MiB.
+  "GET /api/autopilots/:id/runs",
+  "GET /api/autopilots/:id/runs/:runId",
+  "GET /api/multiremi/autopilots/:id/runs",
+  "GET /api/multiremi/autopilots/:id",
+  "GET /api/daemon/autopilot-runs/:runId/gc-check",
+  "GET /api/cli/context", // Task scope resolves a full run and prompt context.
+  "GET /api/autopilots", // Autopilot prompt/compiled_prompt collection.
+  "GET /api/autopilots/:id", // Full prompt and trigger payload/templates.
+  "POST /api/autopilots", // Full prompt readback.
+  "POST /api/multiremi/autopilots",
+  "PATCH /api/autopilots/:id",
+  "PATCH /api/multiremi/autopilots/:id",
+  "DELETE /api/autopilots/:id",
+  "DELETE /api/multiremi/autopilots/:id",
+  "POST /api/webhooks/autopilots/:token", // Webhook-triggered run/queued read.
+  "GET /api/multiremi/autopilots",
+  "GET /api/multiremi/scheduler",
+  "POST /api/multiremi/autopilots/:id/run", // advanceScheduledTargetRuns; C-2 bounded queued reads/data.
+  "POST /api/multiremi/autopilots/:id/run-scheduled", // Same queued read/C-2 condition.
+  "POST /api/multiremi/autopilots/:id/trigger", // Same queued read/C-2 condition.
+  "POST /api/multiremi/autopilots/:id/webhook",
+  "GET /api/autopilots/:id/deliveries", // Raw bodies are optionally projected in.
+  "GET /api/autopilots/:id/deliveries/:deliveryId",
+  "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
+  "GET /api/multiremi/autopilots/:id/deliveries",
+  "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
+  "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
+
+  // Audit: SQL storage can contain full document/revision bodies. C-2/data.
+  "GET /api/knowledge/submissions/:id",
+  "POST /api/knowledge/submissions", // Write actor can resolve a full run.
+  "GET /api/knowledge/runs/:id",
+  "GET /api/projects/:id/docs/:ref",
+  "GET /api/projects/:id/docs/:ref/revisions",
+  "GET /api/projects/:id/docs/:ref/backlinks",
+  "POST /api/projects/:id/docs",
+  "PUT /api/projects/:id/docs/:ref",
+  "DELETE /api/projects/:id/docs/:ref",
+  "GET /api/project-docs",
+  "GET /api/project-knowledge/migration",
+  "POST /api/project-knowledge/migration/backfill",
+  "POST /api/project-knowledge/migration/verify",
+  "POST /api/project-knowledge/migration/retry-failed",
+  "POST /api/knowledge/migrate-legacy",
+  "POST /api/knowledge/events/repository-merged", // Compilation/run readbacks.
+  "POST /api/projects/:id/knowledge/publish",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
+  "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/move",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/merge",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/build", // advanceScheduledTargetRuns; C-2 bounded queued reads/data.
+
+  // Audit: archive bytes are external, but SQL metadata has no byte cap.
+  // C-2 requires bounded metadata reads and per-route single-reply evidence.
+  "GET /api/issues/:issueId/session-archives",
+  "POST /api/issues/:issueId/session-archives/:archiveId/verify",
+  "POST /api/issues/:issueId/session-archives/:archiveId/retry",
+  "GET /api/workspaces/:id/session-archive",
+  "PUT /api/workspaces/:id/session-archive",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+  "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+
+  // Audit: even a capped 2-MiB prompt may expand beyond 8 MiB in JSON. C-2/data.
+  "GET /api/tasks/:taskId/prompt",
+  "POST /api/daemon/tasks/:taskId/prompt",
+  // Audit: full task getters/write readbacks can include prompt/result/error.
+  // C-2 requires narrow getters or byte bounds, then per-route evidence.
+  "GET /api/multiremi/tasks/:id",
+  "POST /api/multiremi/tasks",
+  "POST /api/multiremi/tasks/:id/cancel",
+  "POST /api/tasks/:id/cancel",
+  "POST /api/multiremi/tasks/:id/steer",
+  "POST /api/tasks/:id/steer",
+  "GET /api/multiremi/tasks/:id/steer",
+  "GET /api/tasks/:id/steer",
+  "POST /api/multiremi/tasks/:id/redispatch",
+  "POST /api/tasks/:id/redispatch",
+  "GET /api/multiremi/tasks/:id/human-requests",
+  "GET /api/tasks/:id/human-requests",
+  "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+  "POST /api/tasks/:id/human-requests/:requestId/respond",
+  "POST /api/daemon/tasks/:taskId/start",
+  "POST /api/daemon/tasks/:taskId/dispatch-lease",
+  "POST /api/daemon/tasks/:taskId/wait-local-directory",
+  "POST /api/daemon/tasks/:taskId/human-requests",
+  "POST /api/daemon/tasks/:taskId/progress",
+  "POST /api/daemon/tasks/:taskId/session",
+  "POST /api/daemon/tasks/:taskId/workspace",
+  "POST /api/daemon/tasks/:taskId/usage",
+  "GET /api/daemon/tasks/:taskId/gc-check",
+  "GET /api/daemon/tasks/:taskId/status", // Result/error remain in the projection.
+  "GET /api/daemon/tasks/:taskId/steer", // Pending steer text has no row LIMIT.
+  "POST /api/daemon/runtimes/:runtimeId/recover-orphans", // Full orphan task set.
+
+  // Audit: resolved instruction/skill/body readers, including scope checks and readbacks.
+  // C-2: bound/project these reads, then require single-reply data below 6 MiB.
+  "DELETE /api/attachments/:id", // attachments.ts:175; large-column caller.
+  "DELETE /api/autopilots/:id/triggers/:triggerId", // autopilots.ts:545; large-column caller.
+  "DELETE /api/chat/sessions/:sessionId", // chat.ts:117; large-column caller.
+  "DELETE /api/chat/sessions/:sessionId/queue", // chat.ts:210; large-column caller.
+  "DELETE /api/chat/sessions/:sessionId/queue/:taskId", // chat.ts:202; large-column caller.
+  "DELETE /api/comments/:id", // comments.ts:68; large-column caller.
+  "DELETE /api/comments/:id/reactions", // comments.ts:107; large-column caller.
+  "DELETE /api/comments/:id/resolve", // comments.ts:89; large-column caller.
+  "DELETE /api/issues/:id", // issues.ts:1537; large-column caller.
+  "DELETE /api/issues/:id/dependencies/:dependencyId", // issues.ts:1342; large-column caller.
+  "DELETE /api/issues/:id/labels/:labelId", // issues.ts:2001; large-column caller.
+  "DELETE /api/issues/:id/metadata/:key", // issues.ts:2168; large-column caller.
+  "DELETE /api/issues/:id/reactions", // issues.ts:1906; large-column caller.
+  "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId", // issues.ts:1699; large-column caller.
+  "DELETE /api/issues/:id/share", // issue-shares.ts:67; large-column caller.
+  "DELETE /api/issues/:issueId/change-requests/:changeRequestId", // scm.ts:57; large-column caller.
+  "DELETE /api/multiremi/agents/:id", // agents.ts:135; large-column caller.
+  "DELETE /api/multiremi/agents/:id/plugins/:bindingId", // agent-plugins.ts:325; large-column caller.
+  "DELETE /api/multiremi/comments/:id", // comments.ts:38; large-column caller.
+  "DELETE /api/multiremi/comments/:id/reactions", // comments.ts:129; large-column caller.
+  "DELETE /api/multiremi/comments/:id/resolve", // comments.ts:52; large-column caller.
+  "DELETE /api/multiremi/issues/:id", // issues.ts:1522; large-column caller.
+  "DELETE /api/multiremi/issues/:id/dependencies/:dependencyId", // issues.ts:1334; large-column caller.
+  "DELETE /api/multiremi/issues/:id/labels/:labelId", // issues.ts:1969; large-column caller.
+  "DELETE /api/multiremi/issues/:id/metadata/:key", // issues.ts:2153; large-column caller.
+  "DELETE /api/multiremi/issues/:id/reactions", // issues.ts:1897; large-column caller.
+  "DELETE /api/multiremi/issues/:id/subscribers/:memberId", // issues.ts:2091; large-column caller.
+  "DELETE /api/multiremi/projects/:id", // projects.ts:217; large-column caller.
+  "DELETE /api/multiremi/projects/:id/devices/:daemonId", // projects.ts:276; large-column caller.
+  "DELETE /api/multiremi/projects/:id/resources/:resourceId", // projects.ts:320; large-column caller.
+  "DELETE /api/multiremi/skills/:id", // skills.ts:115; large-column caller.
+  "DELETE /api/projects/:id", // projects.ts:352; large-column caller.
+  "DELETE /api/projects/:id/devices/:daemonId", // projects.ts:420; large-column caller.
+  "DELETE /api/projects/:id/resources/:resourceId", // projects.ts:467; large-column caller.
+  "DELETE /api/runtime-workspaces/:id", // runtime-workspaces.ts:46; large-column caller.
+  "DELETE /api/runtimes/:id", // runtimes.ts:721; large-column caller.
+  "DELETE /api/skills/:id", // skills.ts:205; large-column caller.
+  "DELETE /api/skills/:id/files/:fileId", // skills.ts:236; large-column caller.
+  "DELETE /api/workspaces/:id/feishu-bot", // feishu-bot.ts:308; large-column caller.
+  "DELETE /api/workspaces/:id/repos/:repositoryId", // workspaces.ts:1003; large-column caller.
+  "GET /api/agent-task-snapshot", // agents.ts:347; large-column caller.
+  "GET /api/agents", // agents.ts:219; large-column caller.
+  "GET /api/agents/:id", // agents.ts:263; large-column caller.
+  "GET /api/agents/:id/env", // agents.ts:203; large-column caller.
+  "GET /api/agents/:id/skills", // agents.ts:168; large-column caller.
+  "GET /api/attachments/:id", // attachments.ts:145; large-column caller.
+  "GET /api/attachments/:id/content", // attachments.ts:164; large-column caller.
+  "GET /api/attachments/:id/download", // attachments.ts:153; large-column caller.
+  "GET /api/cli/capabilities", // cli.ts:44; large-column caller.
+  "GET /api/daemon/chat-sessions/:sessionId/gc-check", // daemon.ts:1431; large-column caller.
+  "GET /api/daemon/issues/:issueId/gc-check", // daemon.ts:1349; large-column caller.
+  "GET /api/daemon/runtimes/:runtimeId/feishu-bot", // daemon.ts:513; large-column caller.
+  "GET /api/execution-groups", // runtimes.ts:628; large-column caller.
+  "GET /api/issues/:id/attachments", // issues.ts:1925; large-column caller.
+  "GET /api/issues/:id/change-requests", // scm.ts:23; large-column caller.
+  "GET /api/issues/:id/dependencies", // issues.ts:1289; large-column caller.
+  "GET /api/issues/:id/labels", // issues.ts:1977; large-column caller.
+  "GET /api/issues/:id/metadata", // issues.ts:2106; large-column caller.
+  "GET /api/issues/:id/reactions", // issues.ts:1871; large-column caller.
+  "GET /api/issues/:id/sessions", // issues.ts:1600; large-column caller.
+  "GET /api/issues/:id/sessions/:sessionId", // issues.ts:1643; large-column caller.
+  "GET /api/issues/:id/sessions/:sessionId/participants", // issues.ts:1670; large-column caller.
+  "GET /api/issues/:id/share", // issue-shares.ts:32; large-column caller.
+  "GET /api/issues/:id/subscribers", // issues.ts:2020; large-column caller.
+  "GET /api/issues/:id/usage", // issues.ts:1097; large-column caller.
+  "GET /api/issues/:id/workspace", // issues.ts:994; large-column caller.
+  "GET /api/models", // runtimes.ts:654; large-column caller.
+  "GET /api/multiremi/agent-task-snapshot", // agents.ts:338; large-column caller.
+  "GET /api/multiremi/agents", // agents.ts:54; large-column caller.
+  "GET /api/multiremi/agents/:id", // agents.ts:119; large-column caller.
+  "GET /api/multiremi/agents/:id/plugins", // agent-plugins.ts:279; large-column caller.
+  "GET /api/multiremi/agents/:id/skills", // agents.ts:142; large-column caller.
+  "GET /api/multiremi/attachments/:id", // attachments.ts:63; large-column caller.
+  "GET /api/multiremi/comments/:id/attachments", // comments.ts:136; large-column caller.
+  "GET /api/multiremi/comments/:id/reactions", // comments.ts:118; large-column caller.
+  "GET /api/multiremi/execution-groups", // runtimes.ts:629; large-column caller.
+  "GET /api/multiremi/issues/:id/attachments", // issues.ts:1918; large-column caller.
+  "GET /api/multiremi/issues/:id/dependencies", // issues.ts:1281; large-column caller.
+  "GET /api/multiremi/issues/:id/labels", // issues.ts:1948; large-column caller.
+  "GET /api/multiremi/issues/:id/metadata", // issues.ts:2099; large-column caller.
+  "GET /api/multiremi/issues/:id/reactions", // issues.ts:1864; large-column caller.
+  "GET /api/multiremi/issues/:id/subscribers", // issues.ts:2013; large-column caller.
+  "GET /api/multiremi/models", // runtimes.ts:655; large-column caller.
+  "GET /api/multiremi/projects", // projects.ts:74; large-column caller.
+  "GET /api/multiremi/projects/:id", // projects.ts:193; large-column caller.
+  "GET /api/multiremi/projects/:id/devices", // projects.ts:233; large-column caller.
+  "GET /api/multiremi/projects/:id/resources", // projects.ts:227; large-column caller.
+  "GET /api/multiremi/projects/search", // projects.ts:82; large-column caller.
+  "GET /api/multiremi/skills", // skills.ts:38; large-column caller.
+  "GET /api/multiremi/skills/:id", // skills.ts:84; large-column caller.
+  "GET /api/multiremi/skills/search", // skills.ts:76; large-column caller.
+  "GET /api/projects", // projects.ts:123; large-column caller.
+  "GET /api/projects/:id", // projects.ts:327; large-column caller.
+  "GET /api/projects/:id/devices", // projects.ts:373; large-column caller.
+  "GET /api/projects/:id/resources", // projects.ts:367; large-column caller.
+  "GET /api/projects/search", // projects.ts:99; large-column caller.
+  "GET /api/runtime-workspaces", // runtime-workspaces.ts:12; large-column caller.
+  "GET /api/runtime-workspaces/:id", // runtime-workspaces.ts:35; large-column caller.
+  "GET /api/runtimes/:id/workspaces", // runtime-workspaces.ts:20; large-column caller.
+  "GET /api/shares/:token/attachments/:attachmentId/content", // issue-shares.ts:92; large-column caller.
+  "GET /api/skills", // skills.ts:126; large-column caller.
+  "GET /api/skills/:id", // skills.ts:172; large-column caller.
+  "GET /api/skills/:id/files", // skills.ts:216; large-column caller.
+  "GET /api/skills/search", // skills.ts:133; large-column caller.
+  "GET /api/squads/:id/members/status", // squads.ts:194; large-column caller.
+  "GET /api/workspaces/:id/feishu-bot", // feishu-bot.ts:84; large-column caller.
+  "GET /api/workspaces/:id/feishu-bot/candidates", // feishu-bot.ts:108; large-column caller.
+  "PATCH /api/autopilots/:id/triggers/:triggerId", // autopilots.ts:517; large-column caller.
+  "PATCH /api/chat/sessions/:sessionId", // chat.ts:109; large-column caller.
+  "PATCH /api/chat/sessions/:sessionId/queue/:taskId", // chat.ts:195; large-column caller.
+  "PATCH /api/issues/:id", // issues.ts:1478; large-column caller.
+  "PATCH /api/issues/:id/sessions/:sessionId", // issues.ts:1654; large-column caller.
+  "PATCH /api/multiremi/agents/:id", // agents.ts:124; large-column caller.
+  "PATCH /api/multiremi/agents/:id/plugins/:bindingId", // agent-plugins.ts:306; large-column caller.
+  "PATCH /api/multiremi/chats/:id", // chat.ts:61; large-column caller.
+  "PATCH /api/multiremi/comments/:id", // comments.ts:32; large-column caller.
+  "PATCH /api/multiremi/issues/:id", // issues.ts:1385; large-column caller.
+  "PATCH /api/multiremi/projects/:id", // projects.ts:198; large-column caller.
+  "PATCH /api/multiremi/projects/:id/resources/:resourceId", // projects.ts:305; large-column caller.
+  "PATCH /api/multiremi/skills/:id", // skills.ts:89; large-column caller.
+  "PATCH /api/runtime-workspaces/:id", // runtime-workspaces.ts:39; large-column caller.
+  "PATCH /api/skills/:id", // skills.ts:177; large-column caller.
+  "POST /api/agents", // agents.ts:231; large-column caller.
+  "POST /api/agents/:id/archive", // agents.ts:305; large-column caller.
+  "POST /api/agents/:id/cancel-tasks", // agents.ts:319; large-column caller.
+  "POST /api/agents/:id/restore", // agents.ts:312; large-column caller.
+  "POST /api/agents/:id/skills/add", // agents.ts:186; large-column caller.
+  "POST /api/agents/from-template", // agents.ts:245; large-column caller.
+  "POST /api/autopilots/:id/triggers", // autopilots.ts:490; large-column caller.
+  "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", // autopilots.ts:553; large-column caller.
+  "POST /api/chat/sessions/:sessionId/queue/:taskId/prioritize", // chat.ts:218; large-column caller.
+  "POST /api/chat/sessions/:sessionId/read", // chat.ts:223; large-column caller.
+  "POST /api/comments/:id/reactions", // comments.ts:98; large-column caller.
+  "POST /api/comments/:id/resolve", // comments.ts:78; large-column caller.
+  "GET /api/daemon/issues/:issueId/decisions/:decisionId", // daemon.ts:567; decision access reads issue description/metadata.
+  "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer", // daemon.ts:588; decision access and writeback read issue description/metadata.
+  "POST /api/daemon/issues/:issueId/workspace/cleaned", // daemon.ts:1358; large-column caller.
+  "POST /api/daemon/scm/git-credentials", // daemon.ts:159; large-column caller.
+  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire", // daemon.ts:1065; large-column caller.
+  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond", // daemon.ts:1078; large-column caller.
+  "POST /api/daemon/tasks/:taskId/steer/consume", // daemon.ts:1339; large-column caller.
+  "POST /api/issues", // issues.ts:791; large-column caller.
+  "POST /api/issues/:id/comments", // issues.ts:1851; large-column caller.
+  "POST /api/issues/:id/decisions", // issues.ts:1225; large-column caller.
+  "POST /api/issues/:id/decisions/:decisionId/answer", // issues.ts:1242; large-column caller.
+  "POST /api/issues/:id/decisions/:decisionId/escalate", // issues.ts:1259; large-column caller.
+  "POST /api/issues/:id/decisions/:decisionId/withdraw", // issues.ts:1270; large-column caller.
+  "POST /api/issues/:id/dependencies", // issues.ts:1315; large-column caller.
+  "POST /api/issues/:id/labels", // issues.ts:1985; large-column caller.
+  "POST /api/issues/:id/reactions", // issues.ts:1886; large-column caller.
+  "POST /api/issues/:id/rerun", // issues.ts:1104; large-column caller.
+  "POST /api/issues/:id/restore", // issues.ts:1512; large-column caller.
+  "POST /api/issues/:id/sessions", // issues.ts:1612; large-column caller.
+  "POST /api/issues/:id/sessions/:sessionId/messages", // issues.ts:1722; large-column caller.
+  "POST /api/issues/:id/sessions/:sessionId/participants", // issues.ts:1678; large-column caller.
+  "POST /api/issues/:id/sessions/:sessionId/results", // issues.ts:1794; large-column caller.
+  "POST /api/issues/:id/sessions/:sessionId/tasks", // issues.ts:1754; large-column caller.
+  "POST /api/issues/:id/share", // issue-shares.ts:41; large-column caller.
+  "POST /api/issues/:id/share/extend", // issue-shares.ts:55; large-column caller.
+  "POST /api/issues/:id/squad-evaluated", // issues.ts:1140; large-column caller.
+  "POST /api/issues/:id/subscribe", // issues.ts:2037; large-column caller.
+  "POST /api/issues/:id/tasks/:taskId/cancel", // issues.ts:1129; large-column caller.
+  "POST /api/issues/:id/unsubscribe", // issues.ts:2064; large-column caller.
+  "POST /api/issues/batch-delete", // issues.ts:722; large-column caller.
+  "POST /api/issues/batch-update", // issues.ts:679; large-column caller.
+  "POST /api/issues/quick-create", // issues.ts:918; large-column caller.
+  "POST /api/me/onboarding/no-runtime-bootstrap", // me.ts:69; large-column caller.
+  "POST /api/me/onboarding/runtime-bootstrap", // me.ts:59; large-column caller.
+  "POST /api/multiremi/agents", // agents.ts:66; large-column caller.
+  "POST /api/multiremi/agents/:id/plugins", // agent-plugins.ts:290; large-column caller.
+  "POST /api/multiremi/agents/default", // agents.ts:80; large-column caller.
+  "POST /api/multiremi/agents/from-template", // agents.ts:324; large-column caller.
+  "POST /api/multiremi/attachments", // attachments.ts:70; large-column caller.
+  "POST /api/multiremi/comments/:id/reactions", // comments.ts:123; large-column caller.
+  "POST /api/multiremi/comments/:id/resolve", // comments.ts:44; large-column caller.
+  "POST /api/multiremi/issues", // issues.ts:736; large-column caller.
+  "POST /api/multiremi/issues/:id/assign", // issues.ts:1552; large-column caller.
+  "POST /api/multiremi/issues/:id/attachments", // issues.ts:1932; large-column caller.
+  "POST /api/multiremi/issues/:id/comments", // issues.ts:1843; large-column caller.
+  "POST /api/multiremi/issues/:id/dependencies", // issues.ts:1297; large-column caller.
+  "POST /api/multiremi/issues/:id/labels", // issues.ts:1956; large-column caller.
+  "POST /api/multiremi/issues/:id/reactions", // issues.ts:1878; large-column caller.
+  "POST /api/multiremi/issues/:id/restore", // issues.ts:1503; large-column caller.
+  "POST /api/multiremi/issues/:id/retitle", // issues.ts:1480; large-column caller.
+  "POST /api/multiremi/issues/:id/subscribers", // issues.ts:2027; large-column caller.
+  "POST /api/multiremi/issues/batch-delete", // issues.ts:709; large-column caller.
+  "POST /api/multiremi/issues/batch-update", // issues.ts:655; large-column caller.
+  "POST /api/multiremi/issues/quick-create", // issues.ts:893; large-column caller.
+  "POST /api/multiremi/pins", // pins.ts:29; large-column caller.
+  "POST /api/multiremi/projects", // projects.ts:166; large-column caller.
+  "POST /api/multiremi/projects/:id/devices", // projects.ts:257; large-column caller.
+  "POST /api/multiremi/projects/:id/resources", // projects.ts:289; large-column caller.
+  "POST /api/multiremi/projects/:id/restore", // projects.ts:222; large-column caller.
+  "POST /api/multiremi/skills", // skills.ts:47; large-column caller.
+  "POST /api/multiremi/skills/import", // skills.ts:60; large-column caller.
+  "POST /api/pins", // pins.ts:74; large-column caller.
+  "POST /api/projects", // projects.ts:133; large-column caller.
+  "POST /api/projects/:id/devices", // projects.ts:397; large-column caller.
+  "POST /api/projects/:id/resources", // projects.ts:434; large-column caller.
+  "POST /api/projects/:id/restore", // projects.ts:359; large-column caller.
+  "POST /api/skills", // skills.ts:141; large-column caller.
+  "POST /api/skills/import", // skills.ts:155; large-column caller.
+  "POST /api/squads", // squads.ts:49; large-column caller.
+  "POST /api/upload-file", // attachments.ts:94; large-column caller.
+  "POST /api/workspaces", // workspaces.ts:142; large-column caller.
+  "PUT /api/agents/:id", // agents.ts:268; large-column caller.
+  "PUT /api/agents/:id/env", // agents.ts:209; large-column caller.
+  "PUT /api/agents/:id/role", // agents.ts:291; large-column caller.
+  "PUT /api/agents/:id/skills", // agents.ts:173; large-column caller.
+  "PUT /api/agents/:id/supervisor", // agents.ts:279; large-column caller.
+  "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret", // autopilots.ts:570; large-column caller.
+  "PUT /api/comments/:id", // comments.ts:57; large-column caller.
+  "PUT /api/issues/:id", // issues.ts:1479; large-column caller.
+  "PUT /api/issues/:id/metadata/:key", // issues.ts:2134; large-column caller.
+  "PUT /api/issues/:issueId/change-requests/:changeRequestId", // scm.ts:45; large-column caller.
+  "PUT /api/multiremi/agents/:id/skills", // agents.ts:155; large-column caller.
+  "PUT /api/multiremi/comments/:id", // comments.ts:26; large-column caller.
+  "PUT /api/multiremi/issues/:id/metadata/:key", // issues.ts:2113; large-column caller.
+  "PUT /api/multiremi/projects/:id/devices", // projects.ts:238; large-column caller.
+  "PUT /api/multiremi/skills/:id", // skills.ts:102; large-column caller.
+  "PUT /api/projects/:id", // projects.ts:332; large-column caller.
+  "PUT /api/projects/:id/devices", // projects.ts:378; large-column caller.
+  "PUT /api/projects/:id/resources/:resourceId", // projects.ts:451; large-column caller.
+  "PUT /api/skills/:id", // skills.ts:191; large-column caller.
+  "PUT /api/skills/:id/files", // skills.ts:225; large-column caller.
+  "PUT /api/squads/:id", // squads.ts:147; large-column caller.
+  "PUT /api/workspaces/:id/feishu-bot", // feishu-bot.ts:267; large-column caller.
+  "PUT /api/workspaces/:id/issue-topics", // workspaces.ts:269; large-column caller.
+
+  // 479 route audit: gatewayReasoningLevels and discovery/runtime setup can read
+  // the unbounded multiremi_gateway_models.models JSON snapshot. C-2: bound the
+  // snapshot reply and confirm single replies <6 MiB before removing each key.
+  "POST /api/daemon/register",
+  "PUT /api/workspaces/:id/relay-config/discovery",
+  "PUT /api/workspaces/:id/relay-config/:engine",
+  "POST /api/workspaces/:id/relay-config/:engine/probe",
+  "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+  "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+  "PUT /api/workspaces/:id/relay-config/:engine/context-window",
+  "POST /api/multiremi/runtimes",
+  "PATCH /api/multiremi/runtimes/:id",
+  "PATCH /api/runtimes/:id",
+
+  // C-1 ruling: preserve MUL-462 readback page size, avoiding extra bridge calls.
+  // C-2: MUL-402 removes this read OR a separately authorized row-width algorithm.
+  "POST /api/daemon/tasks/:taskId/messages",
+  // Audit: peer.receive calls the reference consumer in this HTTP context.
+  // C-2: MUL-402 removes this read OR a separately authorized row-width algorithm.
+  "POST /internal/peer/events",
+  // C-1 ruling: queued reads must be bounded AND v0.2.84+ background replies
+  // observed below 6 MiB before C-2 removes this independent entry.
+  "<background> <background>",
+]);
+
+/**
+ * Unset/empty means 8 MiB; explicit 0 is the emergency disable switch.
+ * Only one space-padded decimal integer is valid: `Number()` alone would also
+ * take "1\n", "0x10" or "1e3" and arm a limit nobody meant to set.
+ * Invalid values warn once when the bridge caches this resolution, with only
+ * the raw override as variable information, and fall back to the default.
  */
 export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
-  if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  if (!raw?.trim()) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const parsed = /^ *\d+ *$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
+    console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify(env.MULTIREMI_PG_REPLY_MAX_BYTES));
+    return DEFAULT_DB_REPLY_MAX_BYTES;
+  }
   return parsed;
+}
+
+/** Production observes replies until C-2 is authorized to enable rejection. */
+export function resolveDbReplyEnforce(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = env.MULTIREMI_PG_REPLY_ENFORCE;
+  if (raw === undefined || raw === "" || raw === "0") return false;
+  if (raw === "1") return true;
+  console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_ENFORCE", JSON.stringify(raw));
+  return false;
+}
+
+export interface DbReplyPolicy {
+  limitBytes: number;
+  exempt: boolean;
+  enforced: boolean;
+}
+
+// Resolve configuration once; only origin and exception membership vary per SQL.
+let cachedDbReplyConfig: { limitBytes: number; enforced: boolean } | null = null;
+
+export function currentDbReplyPolicy(): DbReplyPolicy {
+  const config = cachedDbReplyConfig ??= {
+    limitBytes: resolveDbReplyMaxBytes(), enforced: resolveDbReplyEnforce(),
+  };
+  const { method, route } = currentDbReplyOrigin();
+  // Hono dispatches HEAD through GET; keep the wire method in observability logs.
+  const dispatchedMethod = method === "HEAD" ? "GET" : method;
+  return { ...config, exempt: DB_REPLY_TRANSITION_EXCEPTIONS.has(`${dispatchedMethod} ${route}`) };
+}
+
+/** Test seam: re-resolve configuration after a test changes the environment. */
+export function resetDbReplyPolicyForTest(): void {
+  cachedDbReplyConfig = null;
 }
 
 /**
@@ -437,15 +929,19 @@ export function currentDbReplyOrigin(): { method: string; route: string } {
  * One line per oversized bridge reply. Never includes SQL text, parameters, the
  * real path, or the query string — only the route pattern, the verb, and a size.
  */
-export function emitLargeDbReply(bytes: number): void {
+export function emitLargeDbReply(bytes: number, policy?: DbReplyPolicy): void {
   if (!(bytes > DB_REPLY_WARN_BYTES)) return;
   const { method, route } = currentDbReplyOrigin();
+  const { limitBytes, exempt, enforced } = policy ?? currentDbReplyPolicy();
   emitJsonLine({
     event: "api_large_db_reply",
     ts: new Date().toISOString(),
     method,
     route,
     bytes,
+    limit_bytes: limitBytes,
+    exempt,
+    enforced,
   });
 }
 
@@ -645,6 +1141,7 @@ export function summarizeWindow(input: WindowSummaryInput): MinuteSummary {
   return {
     event: "api_minute_summary",
     ts: (input.now ?? new Date()).toISOString(),
+    pid: process.pid,
     window_ms: Math.round(windowMs),
     requests: input.samples.length,
     status_5xx: status5xx,
@@ -748,7 +1245,7 @@ function applyServerTiming(c: Context, value: string): void {
 }
 
 /**
- * Route PATTERN of the last non-middleware route Hono matched.
+ * Route PATTERN of the first non-middleware handler Hono matched.
  *
  * Middleware registers as `ALL`, real handlers register as their method, so the
  * `ALL` filter is what separates the two. Anything unmatched — a 404, or a
@@ -758,7 +1255,9 @@ function applyServerTiming(c: Context, value: string): void {
 export function resolveRoutePattern(c: Context): string {
   try {
     const matched = c.req.matchedRoutes;
-    for (let index = matched.length - 1; index >= 0; index -= 1) {
+    // Hono also lists later overlapping handlers (e.g. /issues/:id after
+    // /issues/status-pages), even when the first handler returns the response.
+    for (let index = 0; index < matched.length; index += 1) {
       const route = matched[index];
       if (!route) continue;
       if (String(route.method ?? "ALL").toUpperCase() === "ALL") continue;
@@ -788,8 +1287,6 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
   const buffer = options.enabled ? ringFor(options.bufferCapacity) : null;
 
   return async (c, next) => {
-    if (!options.enabled) return next();
-
     // Hono has already matched the full handler chain by the time a middleware
     // runs, so the pattern is available here — before any handler queries the
     // database. `resolveRoutePattern` skips the `ALL` middleware entries, which
@@ -802,6 +1299,8 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
       method: String(c.req.method ?? "GET").toUpperCase(),
       route: resolveRoutePattern(c),
     };
+    // Reply limits need the route even when collection and timing headers are off.
+    if (!options.enabled) return requestContext.run(state, () => next());
     const startedAt = performance.now();
     let thrown = false;
     try {
@@ -845,6 +1344,7 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
           emitSlowRequest({
             event: "api_slow_request",
             ts: new Date().toISOString(),
+            pid: process.pid,
             role: options.role,
             method,
             route,

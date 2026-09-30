@@ -254,7 +254,8 @@ async function responseError(method: string, path: string, response: Response): 
     : typeof record?.message === "string"
       ? record.message
       : `${method} ${path} returned ${response.status}`;
-  return new CliError(cliErrorCodeForStatus(response.status), message, {
+  const diagnostic = record?.code === "workspace_move_blocked" ? `${record.code}: ${message}` : message;
+  return new CliError(cliErrorCodeForStatus(response.status), diagnostic, {
     status: response.status,
     retryable: RETRYABLE_STATUSES.has(response.status),
     details,

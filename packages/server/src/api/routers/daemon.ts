@@ -73,6 +73,7 @@ import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { QuestionCardTokenError } from "@multiremi/store/question-card-token.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
@@ -519,40 +520,30 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const issueId = c.req.param("issueId");
     const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
     if (denied) return denied;
-    const body = await readJsonStrict<{ answer?: unknown; operator_open_id?: unknown }>(c);
+    const body = await readJsonStrict<{ answer?: unknown; token?: unknown; operator_open_id?: unknown }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const decisionId = c.req.param("decisionId");
     const context = store.getFeishuIssueDecisionCardContext(
       store.getIssue(issueId)?.workspaceId ?? "local", decisionId);
     if (!context || context.issue.id !== issueId) return c.json({ error: "decision not found" }, 404);
     const operatorOpenId = cleanString(typeof body.operator_open_id === "string" ? body.operator_open_id : null);
-    if (!operatorOpenId || operatorOpenId !== context.recipientOpenId) {
-      return c.json({ error: "please answer from the card addressed to you", code: "decision_operator_mismatch" }, 403);
-    }
-    const operator = store.resolveFeishuDecisionOperatorMember(context.issue.workspaceId, context.appId, operatorOpenId);
-    if (operator.status === "unmapped") {
-      return c.json({ error: "operator is not a workspace member", code: "decision_member_unmapped" }, 403);
-    }
-    if (operator.status === "ambiguous") {
-      return c.json({ error: "operator maps to multiple workspace members", code: "decision_member_ambiguous" }, 403);
-    }
-    const member = operator.member;
-    if (context.decision.status !== "escalated") {
-      // Idempotent: a replayed callback (or a second tap) returns the settled
-      // row so the host re-renders the terminal card instead of erroring.
-      return c.json({ decision: context.decision });
-    }
     const answer = cleanString(typeof body.answer === "string" ? body.answer : null);
     if (!answer) return c.json({ error: "answer is required" }, 400);
     try {
       const decision = store.answerIssueDecision(issueId, decisionId, {
         answer, reason: "Answered from the Feishu decision card", overturn: null,
-      }, { type: "member", id: member.id, taskId: null }, { idempotent: true });
+      }, { type: "member", id: operatorOpenId ?? "", taskId: null }, {
+        cardCredential: { token: typeof body.token === "string" ? body.token : "", operatorOpenId: operatorOpenId ?? "" },
+      });
       return c.json({ decision });
     } catch (error) {
       // The write may have raced a withdrawal or another terminal transition.
       // Only the canonical row can prove that the decision ended; an HTTP
       // status alone cannot distinguish that from a rolled-back write.
+      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
+      if (error instanceof IssueDecisionError && error.status === 403) {
+        return c.json({ error: error.message, code: (error as IssueDecisionError & { code?: string }).code }, 403);
+      }
       const decision = store.getIssueDecision(issueId, decisionId);
       if (decision && decision.status !== "escalated") return c.json({ decision });
       if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
@@ -886,20 +877,40 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
+  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/card", async (c) => {
+    const taskId = c.req.param("taskId");
+    const denied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (denied) return denied;
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
+    const body = await readJsonStrict<{ recipient_open_id?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const card = store.prepareTaskStreamQuestionCard(request.id, typeof body.recipient_open_id === "string" ? body.recipient_open_id : "");
+    if (!card) return c.json({ error: "card recipient or request is invalid" }, 409);
+    c.header("Cache-Control", "no-store");
+    return c.json({ card });
+  });
   app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/respond", async (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const body = await readJsonStrict<{ response?: Record<string, unknown>; responded_by?: unknown }>(c);
+    const body = await readJsonStrict<{ response?: Record<string, unknown>; token?: unknown; operator_open_id?: unknown }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const request = store.getTaskHumanRequest(c.req.param("requestId"));
     if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    const responded = store.respondTaskHumanRequest(request.id, {
-      response: body.response ?? {},
-      respondedBy: cleanString(typeof body.responded_by === "string" ? body.responded_by : null) ?? "feishu",
-    });
-    if (!responded) return c.json({ error: "request is no longer pending" }, 409);
-    return c.json({ request: responded });
+    try {
+      const responded = store.respondTaskHumanRequest(request.id, {
+        response: body.response ?? {},
+        cardCredential: {
+          token: typeof body.token === "string" ? body.token : "",
+          operatorOpenId: typeof body.operator_open_id === "string" ? body.operator_open_id : "",
+        },
+      });
+      return c.json({ request: responded });
+    } catch (error) {
+      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
+      throw error;
+    }
   });
 
   app.get("/api/daemon/tasks/:taskId/status", (c) => {

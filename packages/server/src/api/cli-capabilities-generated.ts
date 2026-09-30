@@ -386,6 +386,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.relay.context-window.update": {
+      "command": "remi workspace relay context-window update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.context-window.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "auth": [
@@ -2523,6 +2536,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.workspace",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.workspace.abandon": {
+      "command": "remi issue workspace abandon",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.workspace.abandon",
       "output": [
         "table",
         "json",

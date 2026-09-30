@@ -295,7 +295,11 @@ export function relayForDaemonWire(store: MultiremiStore, workspaceId: string): 
   const config = store.getRelayConfigForDaemon(workspaceId);
   const engine = (e: { fragment: string; authToken: string; revision: number } | null) =>
     e ? { fragment: e.fragment, auth_token: e.authToken, revision: e.revision } : null;
-  return { claude: engine(config.claude), codex: engine(config.codex), model_discovery: config.modelDiscovery };
+  const claude = engine(config.claude);
+  return {
+    claude: claude ? { ...claude, one_million_models: store.listGatewayModelContext(workspaceId, "claude").map(row => row.modelId) } : null,
+    codex: engine(config.codex), model_discovery: config.modelDiscovery,
+  };
 }
 
 function launchHeader(provider: string): string {

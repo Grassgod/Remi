@@ -12,8 +12,9 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 
 ### 1. 任务列表：页面请求展开 → 列表与计数 → PostgreSQL 同步桥
 
-- **实现事实：** [issues/queries.ts](../../frontend/packages/core/issues/queries.ts) 的 `fetchFirstPages` 对 `PAGINATED_STATUSES` 逐状态并行请求，每页 50 条；当前 [BOARD_STATUSES](../../frontend/packages/core/issues/config/status.ts) 有 6 个状态。
-- **实现事实：** `fetchAllMyFirstPages` 合并 assignee、creator、involves 三种人员关系并按 issue ID 去重。因此“我的全部任务”的状态列表首次执行会展开为 **6 × 3 = 18 个列表请求**。这是代码推导，不是页面总请求实测；缓存命中、重试和其他查询会改变网络记录。[MyIssuesPage](../../frontend/packages/views/my-issues/components/my-issues-page.tsx) 的负责人看板使用另一条 grouped 查询分支，不能套用 18。
+- **实现事实：** [issues/queries.ts](../../frontend/packages/core/issues/queries.ts) 的 `fetchFirstPages` 用一次 `GET /api/issues/status-pages` 请求当前 [BOARD_STATUSES](../../frontend/packages/core/issues/config/status.ts) 的 6 个状态，每状态各 50 条、各自 total。各桶来自同一服务端读快照，第二页及以后仍用单状态列表和已加载条数作为 offset。列表 query key 与 `{ byStatus }` 缓存形状不变，失效后也使用分组首页。
+- **实现事实：** `fetchAllMyFirstPages` 保留 assignee、creator、involves 三种人员关系的合并顺序和 issue ID 去重，因此“我的全部任务”的状态列表首次执行是 **3 个分组请求**，其他单一关系页签是 1 个。这是查询层请求数，不是页面总请求实测；缓存命中、重试和其他查询会改变网络记录。[MyIssuesPage](../../frontend/packages/views/my-issues/components/my-issues-page.tsx) 的负责人看板使用另一条 assignee grouped 查询分支，不能套用该数量。
+- **实现事实：** 工作区列表显式请求 `include_archived_total=true`，用响应的 `archived_total` 更新原有归档计数缓存；计数订阅本身不发 HTTP。工作区负责人看板在其活跃的 `/api/issues/grouped` 响应中携带同一可选字段，避免订阅隐藏的状态列表。计数是整个工作区的归档总数，不受列表筛选影响；不传参数时服务端不额外 COUNT。API 返回 404 时，一个 API client 会记住不支持 status-pages，使用旧的逐状态请求；新会话重新探测。
 - **实现事实：** [issues router](../../packages/server/src/api/routers/issues.ts) 的列表响应调用 `listIssues` 和 `countIssues`。[PgBridge.request](../../packages/server/src/store/db/postgres.ts) 使用 `Atomics.wait` 等待 worker，worker 以 [Bun.SQL 的 `max: 1`](../../packages/server/src/store/db/pg-worker.ts) 保证事务语句共用连接。该限制是每个桥实例的连接数，不是整个部署只能有一个连接。
 - **风险推断：** 并行 HTTP 请求无法自动消除主线程同步数据库等待；额外 SQL 往返和较大的响应序列化可能放大排队，影响同进程其他请求。吞吐拐点与 PostgreSQL 网络延迟的影响尚未测量。
 - **采集重点：** 冷/热页面请求数量、单请求 SQL 数与响应 bytes、列表可操作时间，以及 API 并发升高时的 p50/p95、错误率和事件循环延迟。
@@ -80,25 +81,45 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 
 **PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有两条独立规则：
 
-- 单次回包 `len > 1 MB` 时输出一行 `api_large_db_reply`，只带路由模式、方法与字节数：
+- 单次回包 `len > 1 MiB` 时输出一行 `api_large_db_reply`，不新增事件、不限频；带路由模式、方法、字节数以及配置阈值、例外与拒绝模式：
 
 ```json
-{"event":"api_large_db_reply","ts":"2026-09-26T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257}
+{"event":"api_large_db_reply","ts":"2026-09-29T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257,"limit_bytes":8388608,"exempt":true,"enforced":false}
 ```
 
-- 单次回包超过硬上限时在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出一行 `api_db_reply_rejected`（字段同上，另加 `max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。
-- **默认关闭**（MUL-386 裁决）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置、空串、非数字或负数都解析为 `0`，即不设上限；`8388608`（8 MiB）是 MUL-398 落地后的目标值，不是当前默认。现有兜底是桥自身的 64 MB 共享缓冲（`postgres.ts` 的 `RESULT_BUFFER_BYTES`，超限由 worker 直接回错）。
-- 测试套件反向配置：`bun test` 的 preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）在剥离宿主 `MULTIREMI_*` 之后固定设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`，让护栏在 CI 里继续抓无界读——它已经抓到过 `/tasks/pending` 读整张任务表。生产默认与测试默认是分开的两件事，改动其一时 [hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 的 `HERMETIC_ENV_DEFAULTS` 与架构守卫会一起失败。
+- 只有拒绝模式下，单次回包超过有效上限才在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出 `api_db_reply_rejected`（`event/ts/method/route/bytes/max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。64 MiB 物理缓冲限制始终保留，worker 对超物理上限的错误不等于配置阈值拒绝。
+- **阈值默认 8 MiB，拒绝默认关闭**（MUL-398 C-1，2026-09-28 贺华杰授权及 Senior 裁决 B `cmt_q2m2lomd48pm`）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置或为空时是 `8388608`；显式 `0` 关闭配置阈值。只接受一个十进制整数（可带前后空格）；带换行、十六进制、科学计数、负数、小数或不安全整数都回落默认，在缓存解析时输出一行告警；除 env 原值外不带可变信息。显式非负整数按字节解释。
+- `MULTIREMI_PG_REPLY_ENFORCE` 未设置、空或 `0` 时只告警；`1` 才拒绝表外超阈值回包。非法值回落到只告警，并输出一行只带原值的告警。C-2 翻转代码默认值需贺华杰当次授权，C-1 不在生产强制任何 HTTP 子集。
+- `bun test` preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）剥离宿主 `MULTIREMI_*` 后设置 `MAX_BYTES=8388608`、`ENFORCE=1`，让无界读在 CI 暴露。阈值默认两边相等，拒绝模式测试显式开启；[hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 和架构守卫分别断言这两项，不能删除守卫。
+- 过渡例外集中在 [request-metrics.ts](../../packages/server/src/observability/request-metrics.ts) 的 `DB_REPLY_TRANSITION_EXCEPTIONS`，键为 `METHOD route-pattern`，HEAD 按 Hono 分发使用 GET key，日志仍保留 HEAD。`exempt` 表示命中集中表（含独立 `<background>` 项），`enforced` 表示开关模式，`limit_bytes` 始终是配置阈值。有效上限：`exempt || !enforced || limit_bytes == 0` 时为 64 MiB，否则为 `min(limit_bytes, 64 MiB)`。`postgresReplyMaxBytes()`、桥拒绝和 MUL-462 分页共用该值；生产只告警时每页保持 8 行。配置缓存，每次查询只读一次上下文并查一次 Set；关闭指标仍保留路由上下文。
 - 两条日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
 - 硬上限的错误消息会向上冒泡，可能进入 HTTP 响应体，因此 `PgBridge.exec` 不为它拼接 SQL 片段（其它错误仍会追加 SQL 前 400 字符用于排查）。
-- 翻转默认的条件（MUL-398 验收）：A 类 repository-wikis 两条 `SELECT r.*` 改列投影、B 类 task messages 改有界读并各自发版后，观测一周 `api_large_db_reply` 中 `bytes > 8388608` 的路由集合为空，再把默认值改为 `8388608` 并同步本文与 env 示例。
+- 原来「等待 MUL-402 和一周观测后做 C」已被授权替换。C-1 执行阈值翻转和观测机制，拒绝默认翻转挪到 C-2：读路径投影或写入限界后，生产单次数据至少三天（含工作日高峰）满足 <6 MiB，再申请贺华杰当次授权。D 的 Bun UA shim 不属于 C-1。发布冻结在 v0.2.83，不把代码默认值当作生产现状。
 
-**已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
+**例外来源与收回**：Explorer 的 MUL-398 `cmt_5ncm70lxe805` 确认 209 为 v0.2.83，没有单次回包埋点。零条事件不能作为安全证据。例外来源是 **18 条慢请求总 DB 字节 ≥6 MiB 的保守超集 ∪ 代码审计 ∪ `<background>` ∪ daemon POST messages / HTTP peer**。慢请求只覆盖 >500ms，`db_bytes` 是所有 SQL 回包的总和，不能当作单次回包；快请求由审计兜住。发布冻结期间合入前以 v0.2.83 慢请求总量再核对，含单次埋点的版本实际部署后再按路由逐条收回。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
-上述五项请求指标设置同时管 `ws_minute_summary`，见下一节。
+| 来源 | 例外 / 原因 | C-2 收回条件 |
+| --- | --- | --- |
+| 209 请求总量超集 | GET dashboard 的 usage/by-agent、agent-runtime、runtime/daily、usage/daily；GET knowledge/submissions、knowledge/runs；GET projects/:id/knowledge/recall、projects/:id/docs；GET workspaces/:id/repository-wikis；GET issues/:id、inbox、tasks/:id/inspection、tasks/:taskId/messages、multiremi/tasks；POST autopilots/:id/trigger、daemon/tasks/:taskId/fail、complete、daemon/runtimes/:runtimeId/tasks/claim。完整模式带 `/api/` 前缀，18 条全部保留 | 修复随同包或更早上线；有埋点的单次回包按路由 <6 MiB，至少三天并含一个工作日高峰；Explorer 只读复核，带头大哥派单逐条收回 |
+| 审计 | 全量 task/chat messages、inspection 别名、issue share、session events/results、comments/timeline、task 集合、run payload/result/schedule_prompt、SQL 文档与 revision 正文、迁移/发布、task/project/agent 指令、skill/file 正文及相应 write 回读/actor scope。agent lite 仍整读 agent 行，只跳过文件水合；行数 LIMIT 或 TS 读后分页不等于字节有界。完整键及逐条解析调用方依据见常量和本单报告 | 先做对应投影/有界读（messages 等待 MUL-402），再满足上行单次数据条件 |
+| C-1 续做裁定与 Senior `cmt_tvxpad98uqtz` | 当时的 POST `/api/daemon/tasks/:taskId/messages` 因 MUL-462 回读 8 行列入例外；该路由在 daemon v2 已退役。POST `/internal/peer/events` 仍在使用，其同步消费会继承 HTTP 上下文 | 清理已退役路由的例外；peer 回读改为按实际行宽有界后收回其例外，不必等三天观测 |
+| C-1 后台裁定 | `<background> <background>` 为独立、可一行删除的例外。Scheduler.sync → advanceScheduledTargetRuns 仍无界读 queued run 的 schedule_prompt/payload/result；独立 peer 消费也保留 8 行 | queued run 读取有界之后，且含埋点版本实际上线后后台单次数据 <6 MiB，才收回；本 PR 不修改 autopilots-repo.ts |
+
+repository-wikis 的 A/A2（`d905961b`、`d6714966`）已在 main、晚于 v0.2.84，与 C-1 同包或更早上线；本轮保守保留其例外并复测 209 行数模型，未声称 A/A2 已在取证时的生产版本生效。旧 task messages 的 22.7MB / 28 个任务数据来自 MUL-386 `cmt_cecxmzj19eea` 的行 JSON 估算，与桥 bytes 不混用。dashboard 的 58.42 MiB 是请求总量；单次接近/超过 64 MiB 的情况应单列报告，本 PR 不修。
+
+`advanceScheduledTargetRuns` 也可由 canonical trigger、三个 multiremi run/trigger 别名及 repository wiki build 触发；这些 HTTP 例外的收回也要求 queued 读有界。请求内未等待完成的异步工作会继承该请求的 ALS 上下文，同一函数由 timer 触发时则为 `<background>`；C-2 要按触发方看数据。后台收回清单还包括 SCM/issue-title/messaging scheduler、outbound-dispatcher sweep、task-capability-monitor、repository-wiki storage job、WS 消息处理和启动迁移，不能只修 queued run 就移除整个后台例外。归档/trace 正文在外部文件存储；SQL 归档 metadata 无字节上限，相关归档读与回读同样保守进表。
+
+回滚 C-1 合并用 `git revert -m 1 <merge>`；若有人显式开启拒绝，应急设 `MULTIREMI_PG_REPLY_ENFORCE=0` 或 `MULTIREMI_PG_REPLY_MAX_BYTES=0`。物理上限仍为 64 MiB，209 配置变更由贺华杰决定。
+
+新增路由可能通过鉴权、回读或调用链触及项目/agent 指令、skill 正文等大列，慢请求日志不能覆盖快请求。变更这些路径时运行 `env -u MULTIREMI_TOKEN bun tests/manual/audit-pg-reply-c1-callers.ts --list-missing`；脚本从运行时 Hono 路由和 schema 扫描出保守候选。分类尚未完成，架构测试目前只守卫清单与扫描可执行，候选差异只输出报告；不得把绿灯当作例外完整性证明。真实 PG 全路由 GET/HEAD 对照入口是 `tests/manual/probe-pg-reply-c1-routes.ts`。Hono 的 HEAD 复用 GET handler，例外查找也按 GET key 计算有效上限。静态分析与合成样本都不能代替 C-2 的生产单次回包数据。
+
+MUL-479 的 context-window 写路由会经 `gatewayReasoningLevels` 读取无 SQL 字节上限的 `multiremi_gateway_models.models`。其调用路径和 QA r1 授权的 15 条 messaging/Feishu 已入表；表冻结在 `84101310` 的 418 条 HTTP + 独立 `<background>`。21 条 workspace context、8 条 source allowlist 以及 MUL-487 的 human request card 整行读均不再扩表，作为 C-2 的列级风险。推荐 repo 投影掉不需要的大列或给写入限界。全路由门禁运行两遍：默认只告警与 main GET/HEAD 状态码差异须为 0；`ENFORCE=1` 输出按根因列分组的拦截清单，作为 C-2 种子，不是例外表。脚本、最大单次字节、非成功/跳过原因和写入限制见 [裁决 B 实测报告](../../reports/performance/MUL-398-c1-b.md)。
+
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 关闭指标采集、指标日志和响应头；PG 回包护栏与其日志仍独立生效）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 8388608 = 8 MiB**；未设置/空串使用默认，非法值告警后回落；显式 `0` 关闭可配置上限，集中例外保留 64 MiB）。
 
 **观测与验证入口**：
+
+`MULTIREMI_PG_REPLY_ENFORCE` 已在同一 env 示例登记，代码默认 `0`；`MAX_BYTES` 是阈值而不是开启拒绝的开关。C-2 必须先修读/写边界并取得生产单次回包证据，再申请当次翻转授权。
 
 ```bash
 # 生产容器里的四类日志（209 上的 API 容器）
@@ -250,7 +271,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 | 属性 | 宿主 | 取值 | 写入方 |
 | --- | --- | --- | --- |
-| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat | `issue-detail` \| `chat` | S1 打标 |
+| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat；列表页的就绪标记（MUL-472 第 5 项） | `issue-detail` \| `chat` \| `list` | S1 打标；`list` 由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在该页自己的列表请求返回后写上 |
 | `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
@@ -270,8 +291,10 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | --- | --- |
 | 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
 | 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
-| 列表页滚动根 | 11 个列表页既没有 `[data-tab-scroll-root]` 也没有自己 `data-perf-scroll`，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根） |
-| 跳动 | 首次出现真实内容之后，相邻帧中同一 `data-perf-key` 的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格 |
+| 列表页滚动根 | 11 个列表页没有自己的滚动根，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根）。列表 *根* 不在两种表之间分开，`selectorEquivalence.scrollRoot` 才能继续读 `same` |
+| 列表页就绪标记（MUL-472 第 5 项） | issues / my-issues / inbox / projects / agents / runtimes / skills / autopilots / workbench 的列表容器由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在自己那条列表请求 `status === "success"` 且不是 `keepPreviousData` 占位数据时才写 `data-perf-scroll="list"`。`--selectors auto` 从 `[data-perf-scroll]` 判定，所以带标记的列表轮从此记 `contract`（此前 09-28 两轮 32/32 行都是 `legacy`）；标记出现即代表「屏幕上的行是本轮自己那次请求的答案」，事件量是 `mounted && listPerfFresh(query)`，脚本无需再加时钟 |
+| 首屏请求 gate（MUL-472 返工） | [use-after-first-screen.ts](../../frontend/packages/core/platform/use-after-first-screen.ts) 等当前路由主内容就绪，再经下一帧和 `requestIdleCallback({ timeout: 1000 })` 打开。列表由上述同一个标记条件发布，空成功、失败也发布；详情等 timeline reveal。未接入发布者的路由从路由开始等 2s 再进 idle；有发布者的慢请求不会被兜底抢先打开。默认页面级每次切页关闭，首个 render 即 false；`scope: "shell"` 会话内只等一次。筛选依赖 snapshot 时立即取，数据未到不显示空列表，也不写就绪标记 |
+| 跳动 | 首次出现目标页真实内容之后，相邻帧中同一 `data-perf-key` 且同一 DOM 元素的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格。入口页行换成目标页行是导航，不能把两个不同锚点的坐标差计作同一行的位移 |
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
 | 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
@@ -286,6 +309,12 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。**行号在点击前一刻重算**，且算在「真实第一页 + 注入目标」这份快照上——那才是浏览器渲染的列表。目标不在当前列表里时记 `skipped: warm-target-not-in-list`。点击后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 10s）并记 `urlCommitMs`；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`。被点中行的文本记入 `clickedRowText`，用来核对点的就是目标 issue |
 | 深链目标读态 | 候选在同等条件下**优先选未读**（所在分组条目里至少一条 `read=false`）。未读目标会走「自动已读成功 → refetch → 渲染」这条真实用户最常见的路径，而允许表保证它可完成；报告记 `targetRead` 与 `targetGroupHasUnread` |
 | 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
+
+页面 gate 的发布者在最后一个实例卸载时释放该次访问，取消 idle、兜底 timer；发布者自己的帧回调同时取消。同 pathname 重挂也从关闭开始，缓存内容仍在下一帧与 idle 后放行。无发布者时由最后一个消费者释放 registry；会话级 shell 标志保持打开。异步回调绑定 gate 实例，旧回调不能打开同路径的新实例。
+
+聊天 aggregate pending 的两个 observer 是 ChatFab 和 [SessionDropdown](../../frontend/packages/views/chat/components/session-dropdown.tsx)。后者常驻于隐藏 ChatWindow，条件为 `chatVisible || shellGateOpen`：隐藏时等会话首 gate，用户打开窗口或进入聊天页面时立即查询。共享 key 的去重不能替代每个 observer 的 enabled；[壳层守卫](../../frontend/packages/views/layout/shell-deferred-queries.test.tsx)挂载完整 DashboardLayout、ChatFab 与真实隐藏 ChatWindow，核对门控前请求为 0。
+
+隐藏聊天窗口的缓存子树同样需要门控：ChatMessageList 的 live/assistant 任务消息、HumanRequestDock 表单仅在 `chatVisible` 时 enabled，旧消息分页回调也检查可见性；无缓存会话时挂载的 WorkLocationPicker 项目候选同样继承聊天可见性，其他可见选择器保留默认立即查询。隐藏时包括 degraded task header 在内的 invalidate 只标 stale，重新打开立即正常 refetch；详情主体的执行行不受此可见性门控影响。壳层守卫预置 19 组 key 的缓存后逐 key invalidate，并经过真实 `createTaskHandlers`；虚拟列表提供测试尺寸并断言历史回复实际挂载，防止新 observer 从失效路径绕过门控。
 
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 
@@ -304,7 +333,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### 选择器回退：contract / legacy
 
-生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
 
 | 用途 | legacy 选择器 / 规则 |
 | --- | --- |

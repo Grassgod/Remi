@@ -759,22 +759,21 @@ export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
     .test(new URL(c.req.url).pathname);
 }
 
-/** Reads the bot host needs to present a Task, plus answering its requests.
- * Creating or expiring a human request stays with the executing daemon. */
+/** Reads the bot host needs to present a Task, plus minting and answering cards.
+ * Creating or expiring a human request uses the executing daemon's v2 RPC lane. */
 function isFeishuBotTaskTransportRequest(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
   return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages)$/.test(path))
-    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path));
 }
 
 /**
- * MUL-407: the two verbs an Issue topic's host may use on another machine's
- * task. Creating and expiring a human request are deliberately absent — the
- * executing daemon stays the only authority for those.
+ * The Issue topic host may mint a card and answer another machine's task.
+ * Creating and expiring a human request stay on the executing daemon's v2 lane.
  */
 function isFeishuBotIssueTaskRequestTransport(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
-  return c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path);
+  return c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path);
 }
 
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
@@ -951,9 +950,15 @@ export function daemonTaskRuntimeIdentityDenial(
  * with the executing side / the human surfaces.
  */
 function isFeishuBotIssueDecisionTransport(c: Context): boolean {
+  return feishuBotIssueDecisionTransportId(c) !== null;
+}
+
+function feishuBotIssueDecisionTransportId(c: Context): string | null {
   const path = new URL(c.req.url).pathname;
-  return (c.req.method === "GET" && /^\/api\/daemon\/issues\/[^/]+\/decisions\/[^/]+$/.test(path))
-    || (c.req.method === "POST" && /^\/api\/daemon\/issues\/[^/]+\/decisions\/[^/]+\/answer$/.test(path));
+  const match = c.req.method === "GET" ? /^\/api\/daemon\/issues\/[^/]+\/decisions\/([^/]+)$/.exec(path)
+    : c.req.method === "POST" ? /^\/api\/daemon\/issues\/[^/]+\/decisions\/([^/]+)\/answer$/.exec(path)
+      : null;
+  return match?.[1] ?? null;
 }
 
 export function denyDaemonTokenIssueDecisionAccess(
@@ -981,10 +986,21 @@ export function denyDaemonTokenIssueWorkspace(
   issueId: string,
   options: DaemonWorkspaceDenyOptions = {},
 ): Response | null {
-  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
   const issue = store.getIssue(issueId);
   if (!issue) return c.json({ error: "issue not found" }, 404);
-  return denyDaemonTokenWorkspace(c, issue.workspaceId, options);
+  const denied = denyDaemonTokenWorkspace(c, issue.workspaceId, options);
+  // MUL-476: the Issue is foreign to this token, so a decision the token's own
+  // workspace recorded on it is one whose target has left that workspace. Such
+  // a decision does not exist: its card callback gets the same 404 as an
+  // unknown decision, not a "forbidden, try again". Only the two card
+  // transport verbs qualify; every other request keeps the 403.
+  const decisionId = denied ? feishuBotIssueDecisionTransportId(c) : null;
+  if (decisionId && store.isIssueDecisionRecordedInWorkspace(token.workspaceId, issue.id, decisionId)) {
+    return c.json({ error: "decision not found" }, 404);
+  }
+  return denied;
 }
 
 export function denyDaemonTokenChatSessionWorkspace(

@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 748,
+    "routeCount": 751,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 520,
+      "compat": 523,
       "root": 16
     },
     "getRoutes": 325,
@@ -14,8 +14,8 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 423,
-    "mutationRoutesCovered": 264,
+    "mutationRoutes": 426,
+    "mutationRoutesCovered": 265,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -36,6 +36,7 @@
       "issue-relations-native",
       "issue-sessions",
       "issue-shares",
+      "issue-topics-invalid-stored",
       "issues-compat",
       "issues-native",
       "labels",
@@ -552,6 +553,7 @@
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
     "POST /api/daemon/scm/git-credentials",
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
     "POST /api/daemon/tasks/:taskId/start",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
@@ -588,6 +590,7 @@
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
     "POST /api/issues/:id/unsubscribe",
+    "POST /api/issues/:id/workspace/abandon",
     "POST /api/issues/:issueId/session-archives/:archiveId/retry",
     "POST /api/issues/:issueId/session-archives/:archiveId/verify",
     "POST /api/issues/batch-delete",
@@ -807,6 +810,7 @@
     "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
+    "PUT /api/workspaces/:id/relay-config/:engine/context-window",
     "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
     "PUT /api/workspaces/:id/relay-config/discovery",
     "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
@@ -1402,6 +1406,7 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/feishu-bot",
+    "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery"
   ],
@@ -8709,6 +8714,17 @@
             "allowed": true
           },
           {
+            "id": "issue.workspace.abandon",
+            "command": "remi issue workspace abandon",
+            "capability": "issue.workspace.abandon",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "knowledge.inspect",
             "command": "remi knowledge inspect",
             "capability": "knowledge.inspect",
@@ -12199,6 +12215,17 @@
             "id": "workspace.prompt.update",
             "command": "remi workspace prompt update",
             "capability": "workspace.prompt.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.context-window.update",
+            "command": "remi workspace relay context-window update",
+            "capability": "workspace.relay.context-window.update",
             "outputs": [
               "table",
               "json",
@@ -24916,6 +24943,68 @@
       "path": "/api/issues/iss_snapshot/share",
       "status": 204,
       "body": ""
+    },
+    {
+      "key": "issue-topics-invalid-stored#000 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "person",
+          "notify_open_id": null
+        },
+        "invalid": {
+          "code": "issue_topic_config_invalid",
+          "message": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person"
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#001 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 400,
+      "body": {
+        "error": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+        "code": "issue_topic_config_invalid"
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#002 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#003 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
     },
     {
       "key": "issues-compat#000 POST /api/issues",

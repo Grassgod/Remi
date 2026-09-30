@@ -4,7 +4,8 @@
 // API outage mid-stream neither kills the provider session nor loses/reorders
 // messages; release restores claiming.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,7 +57,7 @@ function newServer(options: Parameters<typeof startMultiremiServer>[0]): ReturnT
 }
 
 function testBed(prefix: string): { store: MultiremiStore; root: string } {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), prefix));
   return { store: new MultiremiStore(db), root: workDir };
 }

@@ -86,6 +86,7 @@ import {
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
+import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -115,7 +116,6 @@ import {
   MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS,
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
-import { resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
 
@@ -254,7 +254,18 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
 
-  const listAccessibleChildIssues = (c: Context, parentIds: string[]): MultiremiIssue[] => {
+  const listAccessibleChildIssues = (c: Context, parentRefs: string[], explicitWorkspaceId: string | null): MultiremiIssue[] => {
+    // Full IDs resolve globally; explicit selectors only scope keys, numbers and
+    // prefixes. Keep unscoped refs on the store's resolver; do not infer token/member defaults.
+    let workspaceId = cleanString(explicitWorkspaceId) ?? cleanString(c.req.header("X-Workspace-ID"));
+    let unknownSlug = false;
+    if (!workspaceId) {
+      const slug = cleanString(c.req.header("X-Workspace-Slug"));
+      if (slug) {
+        workspaceId = store.listWorkspaces().find((candidate) => candidate.slug === slug)?.id ?? null;
+        unknownSlug = !workspaceId;
+      }
+    }
     const workspaceAccess = new Map<string, boolean>();
     const canAccessWorkspace = (workspaceId: string): boolean => {
       let allowed = workspaceAccess.get(workspaceId);
@@ -264,10 +275,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       return allowed;
     };
-    return parentIds.flatMap((parentId) => {
-      const parent = store.getIssue(parentId);
+    const seenParentIds = new Set<string>();
+    return parentRefs.flatMap((ref) => {
+      const parent = store.getIssue(ref.trim()) ?? (unknownSlug ? null : store.getIssueByRef(ref, workspaceId));
       if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
-      return store.listChildIssues(parentId).filter((child) => canAccessWorkspace(child.workspaceId));
+      if (seenParentIds.has(parent.id)) return [];
+      seenParentIds.add(parent.id);
+      return store.listChildIssues(parent.id).filter((child) => canAccessWorkspace(child.workspaceId));
     });
   };
 
@@ -541,7 +555,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const query = issueListQuery(store, c, "native", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
-    return c.json(store.listGroupedIssues(query));
+    const result = store.listGroupedIssues(query);
+    return c.json(c.req.query("include_archived_total") === "true"
+      ? { ...result, archived_total: store.countIssues({ workspaceId: query.workspaceId ?? "local", archivedOnly: true }) }
+      : result);
   });
   app.get("/api/issues/grouped", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
@@ -549,7 +566,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
-    return c.json(store.listGroupedIssues(query));
+    const result = store.listGroupedIssues(query);
+    return c.json(c.req.query("include_archived_total") === "true"
+      ? { ...result, archived_total: store.countIssues({ workspaceId: query.workspaceId ?? "local", archivedOnly: true }) }
+      : result);
   });
   app.get("/api/assignee-frequency", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
@@ -625,7 +645,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = listAccessibleChildIssues(c, parentIds)
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspace_id") ?? null)
       .map((child) => ({
         ...issueCompatibilityResponse(child),
         blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
@@ -634,16 +654,23 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? null).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
+  function validateIssueWorkspaceMove(c: Context, issue: MultiremiIssue, updates: UpdateIssueInput): Response | null {
+    const workspaceId = resolveOptionalStringField(updates, "workspaceId", "workspace_id", issue.workspaceId) ?? "local";
+    if (!workspaceId) return c.json({ error: "workspace not found" }, 404);
+    return workspaceId === issue.workspaceId ? null : denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  }
+
   function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
     const updates = input.updates;
-    if (!updates || !("runtimeWorkspaceId" in updates || "runtime_workspace_id" in updates)) return null;
+    if (!updates || !hasAnyField(updates, "workspaceId", "workspace_id", "runtimeWorkspaceId", "runtime_workspace_id")) return null;
     for (const id of input.issueIds ?? input.issue_ids ?? []) {
       const issue = store.getIssue(id);
       if (!issue) continue;
-      const workspaceId = updates.workspaceId ?? updates.workspace_id ?? issue.workspaceId;
+      const workspaceId = resolveOptionalStringField(updates, "workspaceId", "workspace_id", issue.workspaceId) ?? "local";
+      if (!workspaceId) return c.json({ error: "workspace not found" }, 404);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId)
         ?? denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;
@@ -663,18 +690,24 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // The batch writer needs the same attribution the PATCH routes stamp, or
     // guards that branch on `actorType` (A4) silently do not apply.
     const { actorType, actorId } = issueMutationActor(c);
-    const result = store.batchUpdateIssues({
-      ...body,
-      updates: body.updates
-        ? {
-          ...stripServerOwnedIssueUpdateFields(body.updates),
-          actorType,
-          actorId,
-          parentTaskId: currentTaskParentId(c),
-        }
-        : body.updates,
-    });
-    return c.json(result);
+    try {
+      const result = store.batchUpdateIssues({
+        ...body,
+        updates: body.updates
+          ? {
+            ...stripServerOwnedIssueUpdateFields(body.updates),
+            actorType,
+            actorId,
+            parentTaskId: currentTaskParentId(c),
+          }
+          : body.updates,
+      });
+      return c.json(result);
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
@@ -703,6 +736,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         : c.json({ updated: result.updated });
     } catch (err) {
       if (err instanceof Error && err.message === "issue_ids is required") return c.json({ error: err.message }, 400);
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
       throw err;
     }
   });
@@ -772,6 +807,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       // routes. Without this the native route surfaced them as 500.
       const dependencyResponse = issueDependencyErrorResponse(c, err);
       if (dependencyResponse) return dependencyResponse;
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
       throw err;
     }
     let task = null;
@@ -1029,6 +1066,31 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         cleaned_at: workspace.cleanedAt,
         created_at: workspace.createdAt,
         updated_at: workspace.updatedAt,
+      },
+    });
+  });
+  app.post("/api/issues/:id/workspace/abandon", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const result = store.abandonIssueWorkspace(issue.id, issue.workspaceId);
+    if (result.status === "not_found") return c.json({ error: "issue workspace not found" }, 404);
+    if (result.status === "runtime_attached") {
+      return c.json({
+        error: "issue workspace still belongs to a Runtime; use runtime deletion or daemon retirement to abandon it",
+        code: "issue_workspace_runtime_attached",
+        runtime_id: result.runtimeId,
+      }, 409);
+    }
+    return c.json({
+      status: "ok",
+      issue_workspaces_abandoned: result.issueWorkspacesAbandoned,
+      workspace: {
+        issue_id: result.workspace.issueId,
+        runtime_id: result.workspace.runtimeId,
+        status: result.workspace.status,
+        cleaned_at: result.workspace.cleanedAt,
       },
     });
   });
@@ -1388,6 +1450,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
+    const moveDenied = validateIssueWorkspaceMove(c, issue, body);
+    if (moveDenied) return moveDenied;
     // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
     // any other validation so the guard cannot be bypassed by an agent.
     const forceDenied = denyTaskIdentityIssueForce(c, body);
@@ -1450,6 +1514,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       actorId,
       parentTaskId: currentTaskParentId(c),
     };
+    const moveDenied = validateIssueWorkspaceMove(c, issue, input);
+    if (moveDenied) return moveDenied;
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
     try {
@@ -1573,7 +1639,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       actorId,
       parentTaskId: currentTaskParentId(c),
     });
-    if ("error" in result) return c.json({ error: result.error }, result.status);
+    if ("error" in result) {
+      return c.json({ error: result.error, ...("code" in result && result.code ? { code: result.code } : {}) }, result.status);
+    }
     return c.json({
       issue: result.issue,
       cancelled_tasks: result.cancelledTasks,

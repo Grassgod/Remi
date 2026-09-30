@@ -11,7 +11,8 @@
  * The unit test `issue-detail-first-screen-query-count.test.ts` reads
  * `issue-detail-first-screen-golden.json` and fails on any difference.
  */
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -32,7 +33,7 @@ function runPinned(db: Database, sql: string, params: unknown[]): void {
 }
 
 const restoreIds = installDeterministicIds();
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 try {
   const store = new MultiremiStore(db);
   const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });

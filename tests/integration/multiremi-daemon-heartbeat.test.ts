@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,7 @@ interface FaultSocketData { identity: DaemonProtocolIdentity; session: DaemonPro
 // No production Runtime, provider credentials, or operating-system service is used.
 async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
   const root = mkdtempSync(join(tmpdir(), "remi-heartbeat-recovery-"));
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const token = await store.createAccessToken({

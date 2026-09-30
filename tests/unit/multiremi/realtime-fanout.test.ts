@@ -9,13 +9,14 @@
  * PR-C (MUL-464) scales the same topology out to real child processes.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { createPeerChannel, PEER_REALTIME_TOPIC, type PeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
@@ -247,8 +248,8 @@ describe("realtime fanout — two servers over one database", () => {
   } = {}): Promise<TwoServers> {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-two-"));
     const databasePath = join(directory, "shared.sqlite");
-    const dbA = new Database(databasePath, { create: true });
-    const dbB = new Database(databasePath, { create: true });
+    const dbA = openSqliteDatabase(databasePath, { create: true });
+    const dbB = openSqliteDatabase(databasePath, { create: true });
     const storeA = new MultiremiStore(dbA);
     const storeB = new MultiremiStore(dbB);
     storeA.ensureLocalWorkspace();
@@ -530,6 +531,8 @@ describe("realtime fanout — two servers over one database", () => {
         expect(two.postCounts.b).toBe(postsBeforeCreate.b);
 
         const card = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+        const cardCredential = questionCardAction(decodeDecisionCardBody(card.body)!.card);
+        expect(typeof cardCredential?.t).toBe("string");
         storeA.reportFeishuBotOutbound("local", "rt_peer_decision", card.id, {
           claimToken: card.claimToken,
           status: "sent",
@@ -549,6 +552,7 @@ describe("realtime fanout — two servers over one database", () => {
         const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
           answer: "yes",
           operatorOpenId: "ou_peer_decision",
+          token: cardCredential!.t as string,
         });
         expect(answered.status).toBe("answered");
         const answerDeadline = Date.now() + WS_TIMEOUT_MS;
@@ -695,7 +699,7 @@ describe("realtime fanout — two servers over one database", () => {
     // Acceptance item 1: with no peer URL there is no sender and no subscriber,
     // the health route says so, and a local write still reaches a local socket.
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-off-"));
-    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
@@ -748,7 +752,7 @@ describe("realtime fanout — two servers over one database", () => {
 
   it("delivers each queued task once through the real server fanout, across 20 subscribe-ack barriers", async () => {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-fanout-once-"));
-    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
     const server = startMultiremiServer({ store, scheduler: null, backgroundJobs: false, port: 0, hostname: "127.0.0.1" });

@@ -15,6 +15,7 @@ import {
   findCachedIssue,
   issueListOptions,
   myIssueListOptions,
+  PAGINATED_STATUSES,
   childIssueProgressOptions,
   issueKeys,
   issueDecisionsOptions,
@@ -28,19 +29,23 @@ const PROJECT_ID = "project-1";
 
 describe("sub-issue visibility queries", () => {
   it("keys and fetches the server-filtered workspace and personal lists separately", async () => {
-    const listIssues = vi.fn().mockResolvedValue({ issues: [], total: 0 });
-    setApiInstance({ listIssues } as unknown as ApiClient);
+    const listIssueStatusPages = vi.fn().mockResolvedValue({
+      groups: Object.fromEntries(PAGINATED_STATUSES.map((status) => [status, { issues: [], total: 0, has_more: false }])),
+      archived_total: 0,
+    });
+    setApiInstance({ listIssueStatusPages } as unknown as ApiClient);
     const hidden = issueListOptions(WS_ID, { top_level_only: true });
     const shown = issueListOptions(WS_ID, { top_level_only: false });
     expect(hidden.queryKey).not.toEqual(shown.queryKey);
     await new QueryClient().fetchQuery(hidden);
-    expect(listIssues.mock.calls.length).toBeGreaterThan(0);
-    expect(listIssues.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(1);
+    expect(listIssueStatusPages.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
 
-    listIssues.mockClear();
+    listIssueStatusPages.mockClear();
     const personal = myIssueListOptions(WS_ID, "all", { top_level_only: true }, "user-1");
     await new QueryClient().fetchQuery(personal);
-    expect(listIssues.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(3);
+    expect(listIssueStatusPages.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
   });
 
   it("indexes child progress by the server's parentIssueId field", () => {
@@ -156,21 +161,23 @@ function installFakeApi(listIssues: (params?: ListIssuesParams) => Promise<ListI
 }
 
 describe("archived issue queries", () => {
-  it("uses a one-row request for the hidden-column count and a separate list page", async () => {
+  it("reads the inline hidden-column count and only fetches a page when archives are opened", async () => {
     const listIssues = vi
       .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
       .mockResolvedValue({ issues: [makeIssue(1)], total: 7 });
-    installFakeApi(listIssues);
+    const listIssueStatusPages = vi.fn().mockResolvedValue({
+      groups: Object.fromEntries(PAGINATED_STATUSES.map((status) => [status, { issues: [], total: 0, has_more: false }])),
+      archived_total: 7,
+    });
+    setApiInstance({ listIssues, listIssueStatusPages } as unknown as ApiClient);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    expect(await qc.fetchQuery(archivedIssueCountOptions(WS_ID))).toBe(7);
+    await qc.fetchQuery(issueListOptions(WS_ID));
+    expect(qc.getQueryData(archivedIssueCountOptions(WS_ID).queryKey)).toBe(7);
+    expect(listIssues).not.toHaveBeenCalled();
     expect(await qc.fetchQuery(archivedIssueListOptions(WS_ID))).toMatchObject({ total: 7 });
-    expect(listIssues).toHaveBeenNthCalledWith(1, {
-      archived_only: true,
-      limit: 1,
-      offset: 0,
-    });
-    expect(listIssues).toHaveBeenNthCalledWith(2, {
+    expect(listIssues).toHaveBeenCalledTimes(1);
+    expect(listIssues).toHaveBeenCalledWith({
       archived_only: true,
       limit: 50,
       offset: 0,

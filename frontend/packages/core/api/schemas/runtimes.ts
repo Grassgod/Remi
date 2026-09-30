@@ -27,6 +27,25 @@ export const RuntimeProtocolStatusSchema = z.object({
   last_error: z.string().nullable(),
 });
 
+export const RuntimeDeleteResponseSchema = z.object({
+  status: z.literal("ok"),
+  issue_workspaces_abandoned: z.number().int().nonnegative(),
+});
+
+export const ArchiveAgentsAndDeleteRuntimeResponseSchema = RuntimeDeleteResponseSchema.extend({
+  agents_archived: z.number().int().nonnegative(),
+  tasks_cancelled: z.number().int().nonnegative(),
+});
+
+export const RuntimeActiveIssueWorkspacesConflictSchema = z.object({
+  code: z.literal("runtime_has_active_issue_workspaces"),
+  issues: z.array(z.object({
+    id: z.string().min(1), key: z.string().min(1), title: z.string(), status: z.string(),
+  })).min(1),
+});
+
+export type RuntimeIssueWorkspaceImpact = z.infer<typeof RuntimeActiveIssueWorkspacesConflictSchema>["issues"][number];
+
 export const AgentRuntimeSchema = z.object({
   id: z.string(),
   execution_group_id: z.string().nullable().optional(),
@@ -362,6 +381,11 @@ export const RelayReasoningLevelEffectiveSchema = z.object({
 const RelayReasoningLevelModelSchema = z.object({
   model_id: z.string(),
   label: z.string().default(""),
+  context_window: z.object({
+    one_million: z.literal(true),
+    updated_by: z.string().nullable(),
+    updated_at: z.string(),
+  }).nullable().default(null),
   manual: RelayReasoningLevelManualSchema.nullable().default(null),
   effective: RelayReasoningLevelEffectiveSchema.nullable().default(null),
 }).loose();
@@ -385,6 +409,10 @@ export const RelayReasoningLevelSaveResultSchema = z.object({
 }).loose();
 
 export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
+export const RelayContextWindowSaveResultSchema = RelayReasoningLevelsResponseSchema.extend({
+  deleted: z.boolean(),
+});
+export type RelayContextWindowSaveResult = z.infer<typeof RelayContextWindowSaveResultSchema>;
 export type RelayReasoningLevelManualState = z.infer<typeof RelayReasoningLevelManualStateSchema>;
 export type RelayReasoningLevelManualStateCode = z.infer<typeof RelayReasoningLevelManualStateCodeSchema>;
 export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;

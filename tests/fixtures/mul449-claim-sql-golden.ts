@@ -44,6 +44,7 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
              OR NOT EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
              )
              OR EXISTS (
@@ -51,6 +52,7 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
                LEFT JOIN multiremi_runtimes issue_workspace_runtime
                  ON issue_workspace_runtime.id = issue_workspace.runtime_id
                WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.workspace_id = t.workspace_id
                  AND issue_workspace.status <> 'cleaned'
                  AND (
                    issue_workspace.runtime_id IN (?, ?)
@@ -101,6 +103,11 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
 )) END
           AND project_device.daemon_id = ?
       )
+    )
+    OR EXISTS (
+      SELECT 1 FROM multiremi_runtime_workspaces rw
+      WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+        AND rw.daemon_id = ? AND rw.archived_at IS NULL
     )
   )
 )

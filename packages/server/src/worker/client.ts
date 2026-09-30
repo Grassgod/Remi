@@ -94,6 +94,7 @@ export interface MultiremiRelayEngineWire {
   fragment: string;
   auth_token: string;
   revision: number;
+  one_million_models?: string[];
 }
 export interface MultiremiRelayWire {
   claude: MultiremiRelayEngineWire | null;
@@ -569,11 +570,11 @@ export class MultiremiDaemonClient {
   answerFeishuIssueDecision(
     issueId: string,
     decisionId: string,
-    input: { answer: string; operatorOpenId: string },
+    input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
     return this.post<{ decision: MultiremiIssueDecision }>(
       `/api/daemon/issues/${encodeURIComponent(issueId)}/decisions/${encodeURIComponent(decisionId)}/answer`,
-      { answer: input.answer, operator_open_id: input.operatorOpenId },
+      { answer: input.answer, operator_open_id: input.operatorOpenId, token: input.token },
     ).then(resp => resp.decision);
   }
 
@@ -1022,12 +1023,20 @@ export class MultiremiDaemonClient {
     taskId: string,
     requestId: string,
     response: Record<string, unknown>,
+    credential?: { token: string; operatorOpenId: string },
   ): Promise<MultiremiTaskHumanRequest> {
     const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
       `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/respond`,
-      { response, responded_by: "feishu" },
+      { response, token: credential?.token, operator_open_id: credential?.operatorOpenId },
     );
     return result.request;
+  }
+
+  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+    return this.post<{ card: Record<string, unknown> }>(
+      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/card`,
+      { recipient_open_id: recipientOpenId },
+    ).then(result => result.card);
   }
 
   async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {

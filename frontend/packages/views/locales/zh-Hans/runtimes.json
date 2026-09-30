@@ -283,6 +283,10 @@
     "visibility_toast_updated": "可见性已设为「{{visibility}}」",
     "visibility_toast_failed": "更新可见性失败",
     "delete_dialog": {
+      "workspaces": {
+        "warning": "以下 Issue 仍有工作区属于此运行时，请确认后继续。",
+        "checkbox": "放弃这些工作区。我已了解：本地文件会保留，后续任务可能在新工作区运行。"
+      },
       "light": {
         "title": "删除运行时？",
         "description": "确定要删除「{{name}}」吗？此操作无法撤销。",

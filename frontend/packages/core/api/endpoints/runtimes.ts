@@ -81,6 +81,8 @@ import {
   RelayReasoningLevelSaveResultSchema,
   type RelayReasoningLevelsResponse,
   RelayReasoningLevelsResponseSchema,
+  type RelayContextWindowSaveResult,
+  RelayContextWindowSaveResultSchema,
   RuntimeDirectoryScanRequestSchema,
   RuntimeProvisionListResponseSchema,
   RuntimeProvisionResponseSchema,
@@ -90,6 +92,8 @@ import {
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
   RetireDaemonResponseSchema,
+  RuntimeDeleteResponseSchema,
+  ArchiveAgentsAndDeleteRuntimeResponseSchema,
   SshMeshOverviewSchema,
   SshMeshTestResponseSchema,
 } from "../schemas/runtimes";
@@ -244,6 +248,20 @@ export class RuntimesEndpoints {
     });
   }
 
+  async putRelayContextWindow(
+    workspaceId: string,
+    engine: "claude",
+    data: { model: string; one_million: boolean },
+  ): Promise<RelayContextWindowSaveResult> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/context-window`,
+      { method: "PUT", body: JSON.stringify({ model: data.model, one_million: data.one_million }) },
+    );
+    return parseStrictResponse(raw, RelayContextWindowSaveResultSchema, {
+      endpoint: "PUT /api/workspaces/:id/relay-config/:engine/context-window",
+    });
+  }
+
   async setRelayDiscovery(workspaceId: string, enabled: boolean): Promise<void> {
     await this.http.fetch(`/api/workspaces/${workspaceId}/relay-config/discovery`, {
       method: "PUT",
@@ -294,8 +312,10 @@ export class RuntimesEndpoints {
     });
   }
 
-  async deleteRuntime(runtimeId: string): Promise<void> {
-    await this.http.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
+  async deleteRuntime(runtimeId: string, abandonIssueWorkspaces = false) {
+    const search = abandonIssueWorkspaces ? "?abandon_issue_workspaces=true" : "";
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}${search}`, { method: "DELETE" });
+    return parseStrictResponse(raw, RuntimeDeleteResponseSchema, { endpoint: "DELETE /api/runtimes/:id" });
   }
 
   async getDaemonInventory(workspaceId: string): Promise<DaemonInventoryResponse> {
@@ -561,11 +581,14 @@ export class RuntimesEndpoints {
   async archiveAgentsAndDeleteRuntime(
     runtimeId: string,
     expectedActiveAgentIds: string[],
-  ): Promise<{ status: string; agents_archived: number; tasks_cancelled: number }> {
-    return this.http.fetch(`/api/runtimes/${runtimeId}/archive-agents-and-delete`, {
+    abandonIssueWorkspaces = false,
+  ) {
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${encodeURIComponent(runtimeId)}/archive-agents-and-delete`, {
       method: "POST",
-      body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds }),
+      body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds,
+        ...(abandonIssueWorkspaces ? { abandon_issue_workspaces: true } : {}) }),
     });
+    return parseStrictResponse(raw, ArchiveAgentsAndDeleteRuntimeResponseSchema, { endpoint: "POST /api/runtimes/:id/archive-agents-and-delete" });
   }
 
   async updateRuntime(

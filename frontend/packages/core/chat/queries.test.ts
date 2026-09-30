@@ -13,7 +13,9 @@ import {
   appendTaskMessagesToHydratedCache,
   CHAT_PENDING_REFETCH_INTERVAL_MS,
   isTaskMessageTaskId,
+  pendingChatTaskOptions,
   pendingChatTaskRefetchInterval,
+  pendingChatTasksOptions,
   pendingChatTasksRefetchInterval,
   chatKeys,
   chatSessionsOptions,
@@ -188,6 +190,29 @@ describe("pending chat task polling", () => {
     expect(pendingChatTaskRefetchInterval({
       state: { data: {} },
     })).toBe(false);
+  });
+
+  // MUL-472 (a): the UI turned "hidden tab" off and moved the steady-state
+  // cadence from 3 s to 10 s. The option objects are what the app actually
+  // mounts, so assert on them rather than only on the interval helper — an
+  // option-level regression (the flag flipping back to `true`) is the failure
+  // mode this guards.
+  it("stops the per-session pending poll while the tab is hidden and keeps a 10 s cadence", () => {
+    const options = pendingChatTaskOptions("chat-1");
+    expect(options.refetchIntervalInBackground).toBe(false);
+    expect(options.refetchInterval).toBe(pendingChatTaskRefetchInterval);
+    expect(pendingChatTaskRefetchInterval({
+      state: { data: { task_id: "tsk_1", status: "running" } },
+    })).toBe(10_000);
+  });
+
+  it("stops the aggregate pending poll while the tab is hidden and keeps a 10 s cadence", () => {
+    const options = pendingChatTasksOptions("ws-1");
+    expect(options.refetchIntervalInBackground).toBe(false);
+    expect(options.refetchInterval).toBe(pendingChatTasksRefetchInterval);
+    expect(pendingChatTasksRefetchInterval({
+      state: { data: { tasks: [{ task_id: "tsk_1", status: "running", chat_session_id: "chat-1" }] } },
+    })).toBe(10_000);
   });
 
   it("polls the aggregate only while it contains pending tasks", () => {

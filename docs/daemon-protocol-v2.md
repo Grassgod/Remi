@@ -463,6 +463,8 @@ SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议�
 条件 HTTP 清单：`GET /api/daemon/tasks/:taskId/status` 仅在飞书 bot 轮询任务时出现，
 不是 daemon 空闲稳态轮询。15 分钟空闲窗口的 HTTP 请求数仍为 0；飞书任务活跃时
 该 GET 允许按其任务轮询节奏发出。将这条读取迁至 WS 留待单独处理。
+`POST /api/daemon/tasks/:taskId/human-requests/:requestId/card` 仅在飞书任务流需要
+为指定收件人展示交互卡片时调用，不走定时器；v2 保留此条件 HTTP 请求。
 
 ### 4.1 归档为什么不用 `pending_command`
 

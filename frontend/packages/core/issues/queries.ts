@@ -2,8 +2,10 @@ import {
   infiniteQueryOptions,
   keepPreviousData,
   queryOptions,
+  skipToken,
   type InfiniteData,
   type QueryClient,
+  type QueryKey,
 } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
@@ -17,6 +19,7 @@ import type {
   TimelinePage,
 } from "../types";
 import { BOARD_STATUSES } from "./config";
+import { createArchivedTotalWriter } from "./archive-total-requests";
 
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
@@ -145,11 +148,11 @@ export const ISSUE_TIMELINE_PAGE_SIZE = 40;
 export const PAGINATED_STATUSES: readonly IssueStatus[] = BOARD_STATUSES;
 
 /**
- * Reconcile a per-status fan-out into buckets keyed by each issue's own
+ * Reconcile status pages into buckets keyed by each issue's own
  * `status` field rather than by the status that was requested.
  *
- * The fan-out is not a consistent snapshot — it is one request per status,
- * issued in parallel — so an Issue whose status changes while it is in
+ * status-pages returns one consistent server snapshot. The legacy 404
+ * fallback still issues one request per status, so an Issue changing while in
  * flight comes back from two of them. Bucketing by the requested status
  * then leaves the same id in two columns, and the board's `issueMap`
  * (last write wins, in `BOARD_STATUSES` order) renders every copy using
@@ -191,13 +194,26 @@ export function flattenIssueBuckets(data: ListIssuesCache) {
   return out;
 }
 
-async function fetchFirstPages(filter: MyIssuesFilter = {}, sort?: IssueSortParam): Promise<ListIssuesCache> {
-  const responses = await Promise.all(
-    PAGINATED_STATUSES.map((status) =>
-      api.listIssues({ status, limit: ISSUE_PAGE_SIZE, offset: 0, ...sort, ...filter }),
-    ),
-  );
-  return reconcileIssueBuckets(responses.map((res, i) => ({ ...res, status: PAGINATED_STATUSES[i]! })));
+async function fetchFirstPages(
+  filter: MyIssuesFilter = {},
+  sort?: IssueSortParam,
+  archive?: { client: QueryClient; wsId: string; queryKey: QueryKey; signal: () => AbortSignal },
+): Promise<ListIssuesCache> {
+  const cacheArchivedTotal = archive
+    ? createArchivedTotalWriter(archive.client, archive.wsId, issueKeys.archivedCount(archive.wsId), archive.queryKey, archive.signal)
+    : undefined;
+  try {
+    const response = await api.listIssueStatusPages({
+      statuses: [...PAGINATED_STATUSES], limit: ISSUE_PAGE_SIZE, ...sort, ...filter,
+      ...(archive ? { include_archived_total: true } : {}),
+    });
+    cacheArchivedTotal?.publish(response.archived_total);
+    return reconcileIssueBuckets(PAGINATED_STATUSES.map((status) => ({
+      ...response.groups[status]!, status,
+    })));
+  } finally {
+    cacheArchivedTotal?.finish();
+  }
 }
 
 /**
@@ -209,11 +225,9 @@ async function fetchFirstPages(filter: MyIssuesFilter = {}, sort?: IssueSortPara
  * issue id within each status bucket. Order within each bucket preserves
  * the first-seen position (each sub-fetch is already server-sorted).
  *
- * Personal lists are bounded (tens to a few hundred issues across all
- * three relations), so 3× the request count is acceptable — a single
- * fetchFirstPages already runs 7 status fetches in parallel, so the total
- * here is 21 small parallel requests. Easy enough; no need to add a new
- * backend query just for this scope.
+ * Each relation now requests a consistent status-pages snapshot: three
+ * requests replace eighteen single-status requests. Cross-relation union
+ * order and totals remain unchanged; the API has no combined OR filter.
  *
  * `total` per bucket is set to the merged length, not the true server
  * total — pagination on the "All" scope is out of scope; the first
@@ -304,13 +318,17 @@ async function fetchAllMyAssigneeGroups(
  * `Issue[]` for consumers. Mutations and ws-updaters must use
  * `setQueryData<ListIssuesCache>(...)` and preserve the byStatus shape.
  *
- * Fetches the first page of each paginated status in parallel. Use
+ * Fetches every paginated status's first page in one request. Use
  * {@link useLoadMoreByStatus} to paginate a specific status into the cache.
  */
 export function issueListOptions(wsId: string, sort?: IssueSortParam) {
   return queryOptions({
     queryKey: issueKeys.listSorted(wsId, sort),
-    queryFn: () => fetchFirstPages({}, sort),
+    // Read the signal at publication time; reading it before the transport
+    // settles also opts into TanStack's cancel-on-last-observer-removal policy.
+    queryFn: (context) => fetchFirstPages({}, sort, {
+      client: context.client, wsId, queryKey: context.queryKey, signal: () => context.signal,
+    }),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
   });
@@ -321,8 +339,8 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
  * subscribing to a query or triggering a fetch.
  *
  * Use this — never `useQuery(issueListOptions(wsId))` — when all you need is a
- * lookup (seeding `initialData`, resolving a title). `issueListOptions` fans
- * out to one request per board status, and because callers that only want a
+ * lookup (seeding `initialData`, resolving a title). `issueListOptions` fetches
+ * every board status, and because callers that only want a
  * lookup have no reason to pass a sort, their `listSorted(wsId, {})` key can
  * never hit the entry the list page wrote under `listSorted(wsId, sort)`. That
  * guaranteed miss cost ~2s per issue open on the detail page (MUL-172): six
@@ -356,9 +374,10 @@ export function findCachedIssue(
 }
 
 export function archivedIssueCountOptions(wsId: string) {
-  return queryOptions({
+  return queryOptions<number>({
     queryKey: issueKeys.archivedCount(wsId),
-    queryFn: async () => (await api.listIssues({ archived_only: true, limit: 1, offset: 0 })).total,
+    // The active workspace list supplies this value, including on refetch.
+    queryFn: skipToken,
   });
 }
 
@@ -382,14 +401,23 @@ export function issueAssigneeGroupsOptions(
 ) {
   return queryOptions<GroupedIssuesResponse>({
     queryKey: issueKeys.assigneeGroups(wsId, { ...filter, ...sort }),
-    queryFn: () =>
-      api.listGroupedIssues({
-        group_by: "assignee",
-        limit: ISSUE_PAGE_SIZE,
-        offset: 0,
-        ...sort,
-        ...filter,
-      }),
+    queryFn: async (context) => {
+      const cacheArchivedTotal = createArchivedTotalWriter(context.client, wsId, issueKeys.archivedCount(wsId), context.queryKey, () => context.signal);
+      try {
+        const response = await api.listGroupedIssues({
+          group_by: "assignee",
+          limit: ISSUE_PAGE_SIZE,
+          offset: 0,
+          ...sort,
+          ...filter,
+          include_archived_total: true,
+        });
+        cacheArchivedTotal.publish(response.archived_total);
+        return response;
+      } finally {
+        cacheArchivedTotal.finish();
+      }
+    },
     placeholderData: keepPreviousData,
   });
 }
@@ -530,10 +558,15 @@ export function issueWorkspaceOptions(issueId: string) {
   });
 }
 
-export function childIssueProgressOptions(wsId: string) {
+export function childIssueProgressOptions(
+  wsId: string,
+  /** `false` defers the roll-up; the list renders without the ring until then (MUL-472 b). */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: issueKeys.childProgress(wsId),
     queryFn: () => api.getChildIssueProgress(),
+    enabled: options.enabled ?? true,
     select: (data) => {
       const map = new Map<string, { done: number; total: number; cancelled: number; blocked: number; waiting: number; active: number }>();
       for (const entry of data.progress) {

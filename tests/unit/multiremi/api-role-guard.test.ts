@@ -17,7 +17,8 @@
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -125,7 +126,7 @@ function concreteRequest(pattern: string): { method: string; path: string } {
 }
 
 function memoryStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   return { store, db };
@@ -357,8 +358,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // Fixed counts, derived from the literal rule above (not from the guard).
     // Every daemon route is checked above; the upgrade-only route is checked below.
     expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
-    expect(misdirected, routeCountHint("ui")).toHaveLength(46);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(47);
+    expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
+    expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
+    expect(misdirected, routeCountHint("ui")).toHaveLength(47);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(48);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
@@ -371,17 +374,26 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     }
     // The two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 694. Every browser route main added before MUL-462 sits outside
+    // total is 696. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
+    // MUL-479's context-window PUT is workspace admin/browser traffic, outside
+    // every runtime allowlist prefix; ui serves it and runtime refuses it.
     // MUL-395: /api/issues/status-pages is browser/CLI traffic, outside the
     // runtime allowlist. UI serves it; runtime refuses this one new route.
     // MUL-462's two /internal/peer/* routes increase the swept inventory by two,
-    // but runtime serves both, so the refusal totals remain 692/694.
-    expect(refused, routeCountHint("runtime")).toBe(692);
-    expect(refused + 2, routeCountHint("runtime")).toBe(694);
+    // but runtime serves both, so they leave the refusal totals unchanged.
+    // MUL-467's abandonment POST and MUL-479's context-window PUT are outside
+    // the runtime allowlist; together they move the totals to 694/696.
+    // The native card mint is served by runtime and leaves these totals unchanged.
+    const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
+    expect(statuses.has(mintRoute)).toBe(true);
+    expect(statuses.get(mintRoute)).not.toBe(421);
+    expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
+    expect(refused, routeCountHint("runtime")).toBe(694);
+    expect(refused + 2, routeCountHint("runtime")).toBe(696);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

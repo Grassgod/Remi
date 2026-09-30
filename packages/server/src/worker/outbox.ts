@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "../store/db/sqlite.js";
 import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -108,7 +109,7 @@ export class MultiremiTaskReportOutbox {
 
   constructor(options: MultiremiTaskReportOutboxOptions) {
     if (options.path !== ":memory:") mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
-    this.db = new Database(options.path, { create: true });
+    this.db = openSqliteDatabase(options.path, { create: true });
     this.db.exec("PRAGMA journal_mode = WAL;");
     if (options.path !== ":memory:") {
       // Payloads mirror task reports (transcripts, prompts) — owner-only, like
@@ -217,7 +218,7 @@ export class MultiremiTaskReportOutbox {
   /** Copy old provider queues once; their files remain recoverable. */
   importLegacy(path: string, runtimeId?: string): void {
     if (path === ":memory:") return;
-    const source = new Database(path, { readonly: true });
+    const source = openSqliteDatabase(path, { readonly: true });
     try {
       const prefix = createHash("sha256").update(path).digest("hex");
       const rows = source.query("SELECT * FROM outbox_events ORDER BY id").all() as Array<Record<string, unknown>>;

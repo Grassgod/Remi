@@ -37,7 +37,8 @@
  * preserved, fields are never dropped.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -1167,7 +1168,7 @@ async function buildApp(
   // Declare the backend: the store runs migrations immediately, and an
   // inherited MULTIREMI_DATABASE_URL must not turn this SQLite fixture into a
   // Postgres migration (MUL-407).
-  db: Database = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }),
+  db: Database = openSqliteDatabase(":memory:"),
 ): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);
@@ -1811,6 +1812,18 @@ flow("feishu-bot", async (rec, refs) => {
 });
 
 // -- settings / misc --------------------------------------------------------
+flow("issue-topics-invalid-stored", async (rec, refs, store) => {
+  const workspace = store.getWorkspace(refs.workspaceId)!;
+  store.updateWorkspace(refs.workspaceId, { settings: { ...workspace.settings, issueTopics: {
+    enabled: true, chatId: "oc_snapshot_topics", notifyMode: "person",
+  } } });
+  const path = `/api/workspaces/${refs.workspaceId}/issue-topics`;
+  await rec.call("GET", path);
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics" });
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics", notify_mode: "none" });
+  await rec.call("GET", path);
+});
+
 flow("settings-misc", async (rec, refs) => {
   await rec.json("PUT", "/api/notification-preferences", { email_enabled: false });
   await rec.json("PUT", "/api/multiremi/notification-preferences", { emailEnabled: true });

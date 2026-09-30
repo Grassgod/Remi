@@ -10,7 +10,7 @@
 // The clock and id generation are pinned the same way
 // `issue-detail-first-screen-fixture.ts` pins them: `created_at` is part of the
 // frame, so without a fixed clock the comparison would only be a shape check.
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import type {
   BrowserScopeWebSocketRegistry,
@@ -21,6 +21,7 @@ import type {
 export const FANOUT_WORKSPACE_TASK_ID = "tsk_fanout_workspace";
 export const FANOUT_CHAT_TASK_ID = "tsk_fanout_chat";
 export const FANOUT_CHAT_SESSION_ID = "chs_fanout";
+let pinMessageClock: ((milliseconds: number) => void) | null = null;
 
 export interface FanoutClient {
   client: MultiremiWebSocketClient;
@@ -65,6 +66,8 @@ export function installDeterministicFanoutClock(): () => void {
   const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
   const RealDate = globalThis.Date;
   let clock = Date.UTC(2026, 8, 27, 12, 0, 0);
+  const previousPinMessageClock = pinMessageClock;
+  pinMessageClock = (milliseconds) => { clock = milliseconds; };
   class FixtureDate extends RealDate {
     constructor(...args: unknown[]) {
       if (args.length === 0) super(clock++);
@@ -93,6 +96,7 @@ export function installDeterministicFanoutClock(): () => void {
   return () => {
     (globalThis.crypto as { getRandomValues: unknown }).getRandomValues = realGetRandomValues;
     (globalThis as { Date: unknown }).Date = RealDate;
+    pinMessageClock = previousPinMessageClock;
   };
 }
 
@@ -140,6 +144,8 @@ export function driveTaskMessageFanout(
     workspaceId: "local",
     prompt: "p".repeat(4_096),
   });
+  // Preserve the captured event times independently of migration clock reads.
+  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 41));
   const messages = store.appendTaskMessages(task.id, [
     { seq: 1, type: "text", content: "hello" },
     { seq: 2, type: "tool_use", tool: "Bash", input: { command: "ls" }, toolCallId: "tc_1", status: "in_progress" },
@@ -162,6 +168,7 @@ export function driveTaskMessageFanout(
     chatSessionId: chat.id,
     prompt: "q".repeat(4_096),
   });
+  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 44));
   const chatMessages = store.appendTaskMessages(chatTask.id, [
     { seq: 1, type: "text", content: "chat hello" },
   ]);

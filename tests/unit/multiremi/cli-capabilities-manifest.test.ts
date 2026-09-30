@@ -168,7 +168,7 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 678,
+      mapped: 680,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -179,9 +179,11 @@ describe("CLI capabilities manifest", () => {
       // A-5/A-6 remove 25 daemon routes; MUL-412 keeps its two decision routes.
       // The read-only v1 desired upgrade bridge is daemon-only, so it adds one
       // daemon_internal_protocol exemption without changing user CLI mappings.
-      exempt: 70,
+      // MUL-487 adds one daemon-only route to mint a native question card.
+      // The merged inventory includes the workspace abandonment command.
+      exempt: 71,
       missing: 0,
-      total: 748,
+      total: 751,
     });
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
@@ -192,7 +194,11 @@ describe("CLI capabilities manifest", () => {
         category: "daemon_internal_protocol",
         reason: "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command.",
       });
+    expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"])
+      .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/issues/:id/workspace/abandon"])
+      .toEqual({ command: "issue.workspace.abandon" });
     for (const [route, command] of [
       ["GET /api/issues/:id/decisions", "issue.decision.list"],
       ["POST /api/issues/:id/decisions", "issue.decision.request"],
@@ -211,6 +217,8 @@ describe("CLI capabilities manifest", () => {
       .toEqual({ command: "workspace.relay.reasoning-levels.get" });
     expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
       .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/context-window"])
+      .toEqual({ command: "workspace.relay.context-window.update" });
     expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
       command: "remi workspace relay reasoning-levels update",
       mutation: "write",

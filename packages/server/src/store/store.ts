@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -103,6 +104,7 @@ import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
+  type RuntimeDeleteOptions,
 } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   DaemonProfilesRepo,
@@ -153,6 +155,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelContextDecl,
   type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
@@ -161,6 +164,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelContextDecl,
   GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
@@ -858,7 +862,7 @@ runMigrations(this.db);
     const updated = this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1448,6 +1452,24 @@ runMigrations(this.db);
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
   }
 
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    return this.workspaces.listGatewayModelContext(workspaceId, engine);
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    return this.workspaces.getGatewayModelContext(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string, engine: RelayEngine, input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    return this.workspaces.saveGatewayModelContext(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelContext(workspaceId, engine, modelId);
+  }
+
   listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
     return this.workspaces.listGatewayModelReasoning(workspaceId, engine);
   }
@@ -1554,9 +1576,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -2903,15 +2926,16 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
-    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
+    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id, options);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
-    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
+    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds, options);
   }
 
   mergeRuntimeInto(
@@ -3256,6 +3280,10 @@ runMigrations(this.db);
     return this.issues.getIssueDecisionAnywhere(decisionId);
   }
 
+  isIssueDecisionRecordedInWorkspace(workspaceId: string, issueId: string, decisionId: string): boolean {
+    return this.issues.isIssueDecisionRecordedInWorkspace(workspaceId, issueId, decisionId);
+  }
+
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
     return this.issues.listIssueDecisions(issueId);
   }
@@ -3288,6 +3316,10 @@ runMigrations(this.db);
 
   getIssueWorkspace(issueId: string): MultiremiIssueWorkspace | null {
     return this.issueWorkspaces.get(issueId);
+  }
+
+  abandonIssueWorkspace(issueId: string, workspaceId: string) {
+    return this.issueWorkspaces.abandon(issueId, workspaceId);
   }
 
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
@@ -3480,6 +3512,10 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    this.issues.replayDependencyAutoStart(event);
+  }
+
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -3521,6 +3557,7 @@ runMigrations(this.db);
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
@@ -3531,6 +3568,7 @@ runMigrations(this.db);
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -3568,7 +3606,7 @@ runMigrations(this.db);
     issue: MultiremiIssue,
     parentTaskId: string | null,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; dependencyCheckEventId?: string | null; seen?: Set<string> } = {},
   ): void {
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
@@ -4570,7 +4608,7 @@ runMigrations(this.db);
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
     return this.autopilots.enqueueIssueStatusChangedEvent(input);
   }
 
@@ -4969,13 +5007,17 @@ runMigrations(this.db);
     return this.tasks.getTaskHumanRequest(requestId);
   }
 
+  prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
+    return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
+  }
+
   listTaskHumanRequests(taskId: string): MultiremiTaskHumanRequest[] {
     return this.tasks.listTaskHumanRequests(taskId);
   }
 
   respondTaskHumanRequest(
     requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null },
+    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
@@ -4990,6 +5032,10 @@ runMigrations(this.db);
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     return this.tasks.createTaskSteerMessage(input);
+  }
+
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
   }
 
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
@@ -5090,7 +5136,7 @@ runMigrations(this.db);
       } else {
         const content = String(input.content ?? "").trim();
         if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
-        message = this.tasks.createTaskSteerMessage({
+        message = this.tasks.createTaskSteerMessageWithinTransaction({
           taskId: target.id,
           kind: input.action,
           content,

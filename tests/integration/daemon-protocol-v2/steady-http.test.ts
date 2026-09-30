@@ -4,7 +4,10 @@ import { DaemonProtocolHarness, waitFor } from "./harness.js";
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.dispose(); });
 
-const conditionalHttp = [{ method: "GET", path: /^\/api\/daemon\/tasks\/[^/]+\/status$/ }];
+const conditionalHttp = [
+  { method: "GET", path: /^\/api\/daemon\/tasks\/[^/]+\/status$/ },
+  { method: "POST", path: /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/card$/ },
+];
 
 it("Q418-http15: real v2 model and GC timers produce no idle HTTP in an accelerated 15-minute window", async () => {
   const intervalMs = 1_000; // One accelerated cycle represents the production 15-minute interval.

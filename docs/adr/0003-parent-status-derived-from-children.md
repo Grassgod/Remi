@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (MUL-400 E1, child issue MUL-406). Ships with the S1 PR; S2 (dependency
-gate and automatic promotion) extends the same hook.
+gate and automatic promotion) extends the same hook. Amended by MUL-476 (Issue
+row lock order, item 8).
 
 ## Context
 
@@ -118,7 +119,57 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
 
-8. **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
+8. **Guard decisions and child membership writes share the parent row lock.**
+   The API writer locks its Issue before guard A. The SCM effect locks the
+   linked Issue before reading child membership, unfinished-child count, grant
+   and A1, and retains that lock through the status/effect transaction. Child
+   creation, moving an Issue under a new parent (including a terminal child),
+   and reopening a `done`/`cancelled` child lock that same parent before writing.
+   This also covers Agent assignment's direct terminal-to-`todo` write, whose
+   locks and assignment update commit before task creation opens its transaction.
+   Lock order is workspace lifecycle (when required) and, for creation and for
+   a move into another workspace, the issue-number lock (MUL-405's W -> N -> D,
+   `store/advisory-locks.ts`; a move takes only its target's N), then
+   every Issue row the transaction writes or whose relation it changes, taken
+   **once in ascending id order** (`lockIssueRowsWithinTransaction`), then no further Issue row and no
+   workspace lock. The set is computed before locking from the input plus one
+   unlocked read of the written Issue's own `parent_issue_id` and `status`;
+   every guarded value is re-read after the locks. A child that is reopened
+   still locks its parent; a child that is re-parented locks the new parent;
+   creation locks the parent and every `blocked_by` endpoint; a dependency locks
+   both endpoints; a workspace move locks only itself, is blocked by active
+   tasks, relations and an uncleaned Issue workspace record; a cleaned record
+   follows the move with its machine fields cleared. The move takes the target's next number (number and
+   key change in the same UPDATE, because MUL-405's unique index rejects the
+   old number there); task creation locks its Issue before checking
+   the Issue's workspace, so it and a move serialize. If the post-lock re-read
+   shows the set was incomplete (the child's parent or terminal status changed
+   while it waited, or the Issue now moves and its N was not taken), the
+   transaction owner rolls back and retries once with a
+   fresh set; a second miss, or a caller-owned transaction, raises 409
+   `issue_relation_changed`. A late lock is never taken.
+   `lockIssueArchiveLifecycle` and `lockIssueRowWithinTransaction` take the same
+   Issue row lock; workspace reports, abandonment and cleanup serialize with moves.
+   A parent's guarded decision still reads children without locking their rows. A write serialized after parent closure may still introduce an
+   unfinished child under that closed parent; the closed-parent policy above
+   remains in effect. The guarantee is a current count at the parent's decision,
+   not a prohibition on later child writes.
+   Re-derivation does not lock the parent before counting: its conditional
+   `in_review` → `in_progress` UPDATE locks the row and re-checks the status
+   after any wait; a child added or reopened after the count is a child event
+   of its own; closing a child never takes that lock, so an earlier lock would
+   not make the count more current. The old parent's re-parenting hook owns a
+   separate post-commit transaction.
+   [The two-connection regression](../../tests/unit/multiremi/multiremi-parent-status-race.test.ts)
+   exercises both orders 20 times for API/SCM and creation, attachment, and
+   reopening from each terminal status through PATCH or Agent assignment.
+   SQLite's writer lock can reject the
+   contender with `BUSY`; PostgreSQL waits on the parent row.
+   [The relation-lock regression](../../tests/unit/multiremi/multiremi-issue-relation-locks.test.ts)
+   pairs these paths with each other and with dependency and move writers for
+   both id orders, and covers the stale-set retry and its 409.
+
+   **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
    is a bare `BEGIN`/`COMMIT` with no savepoint support, so a nested
    `transaction()` inside an open one commits the outer transaction early,
    releases its row locks, and turns the outer `ROLLBACK` into a no-op. The

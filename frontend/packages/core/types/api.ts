@@ -64,6 +64,12 @@ export interface ListIssuesParams {
   offset?: number;
   workspace_id?: string;
   status?: IssueStatus;
+  /**
+   * Comma list form of `status` (MUL-472 c). `GET /api/issues` has always read
+   * `statuses` and `status` through the same splitter; this only exposes the
+   * list form to callers that want one request for several statuses.
+   */
+  statuses?: IssueStatus[];
   priority?: IssuePriority;
   assignee_id?: string;
   assignee_ids?: string[];
@@ -99,6 +105,16 @@ export interface IssueActorRef {
   id: string;
 }
 
+export interface ListIssueStatusPagesParams extends Omit<ListIssuesParams, "status" | "offset"> {
+  statuses: IssueStatus[];
+  include_archived_total?: boolean;
+}
+
+export interface IssueStatusPagesResponse {
+  groups: Partial<Record<IssueStatus, IssueStatusBucket & { has_more: boolean }>>;
+  archived_total?: number;
+}
+
 export interface ListGroupedIssuesParams {
   top_level_only?: boolean;
   group_by: "assignee";
@@ -124,6 +140,7 @@ export interface ListGroupedIssuesParams {
   label_ids?: string[];
   group_assignee_type?: IssueAssigneeType | "none";
   group_assignee_id?: string;
+  include_archived_total?: boolean;
   include_archived?: boolean;
   archived_only?: boolean;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
@@ -147,6 +164,7 @@ export interface IssueAssigneeGroup {
 /** Raw backend response shape for `GET /api/issues/grouped?group_by=assignee`. */
 export interface GroupedIssuesResponse {
   groups: IssueAssigneeGroup[];
+  archived_total?: number;
 }
 
 /** Per-status bucket in the paginated issue cache. `total` is the server count (all pages), not the length of `issues`. */
@@ -157,8 +175,8 @@ export interface IssueStatusBucket {
 
 /**
  * Frontend cache shape for the issue list. Data is bucketed by status so
- * each column can paginate independently. Assembled from per-status
- * `api.listIssues` responses by the query functions in `issues/queries.ts`.
+ * each column can paginate independently. Assembled from a status-pages
+ * snapshot (or legacy per-status responses when an older API returns 404).
  */
 export interface ListIssuesCache {
   byStatus: Partial<Record<IssueStatus, IssueStatusBucket>>;

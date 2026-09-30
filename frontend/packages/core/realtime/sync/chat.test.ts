@@ -1,7 +1,7 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingTask, ChatSession } from "../../types";
-import { chatKeys } from "../../chat/queries";
+import { chatKeys, pendingChatTasksOptions } from "../../chat/queries";
 import { issueKeys } from "../../issues/queries";
 import { applyChatDoneToCache, createChatHandlers } from "./chat";
 
@@ -125,10 +125,36 @@ describe("chat queue realtime", () => {
     expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))).toEqual({ supports_queue: true, queued_tasks: [] });
   });
 
+  // MUL-472 (a): the front-end poll was cut from 3 s to 10 s (and stops while
+  // the tab is hidden). That is only safe while the WS path still refreshes the
+  // pending keys immediately, so assert the *effect* (a live observer refetches)
+  // rather than the call to `invalidateQueries`.
+  it("still refetches the mounted pending aggregate as soon as a chat event arrives", async () => {
+    expect(pendingChatTasksOptions("ws-1").refetchIntervalInBackground).toBe(false);
+    const listPendingChatTasks = vi.fn(async () => ({
+      tasks: [{ task_id: "task-1", status: "running", chat_session_id: "chat-1" }],
+    }));
+    const observer = new QueryObserver(qc, {
+      queryKey: chatKeys.pendingTasks("ws-1"),
+      queryFn: listPendingChatTasks,
+      staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await observer.refetch();
+      expect(listPendingChatTasks).toHaveBeenCalledTimes(1);
+      handlers["chat:message"]?.({ chat_session_id: "chat-1" });
+      await vi.waitFor(() => expect(listPendingChatTasks).toHaveBeenCalledTimes(2));
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("refreshes paged messages, queue, summaries and detail in the current workspace", () => {
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     handlers["chat:queue_updated"]?.({ chat_session_id: "chat-1" });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTasks("ws-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messagesPage("chat-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.session("ws-1", "chat-1") });
     expect(qc.getQueryState(chatKeys.sessionList("ws-1", "active"))?.isInvalidated).toBe(true);

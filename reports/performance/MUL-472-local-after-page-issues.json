@@ -1,0 +1,1863 @@
+{
+  "meta": {
+    "schema": 3,
+    "issue": "MUL-383",
+    "task": "MUL-384",
+    "generatedAt": "2026-09-27T21:09:25.164Z",
+    "beijingTime": "2026/9/28 05:09:25",
+    "window": "offpeak",
+    "baseUrl": "http://localhost:3360",
+    "workspaceSlug": "local",
+    "workspaceName": "Local Workspace",
+    "memberName": "Local User",
+    "rounds": 3,
+    "runner": "n37-066-008 (linux 5.15.120.bsk.3-amd64 x64, 64 vCPU, 248 GiB RAM)",
+    "mode": "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
+    "viewport": "1440x900",
+    "readingRule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+    "selectorMode": "auto",
+    "hoverLeadMs": 150,
+    "quietMs": 500,
+    "entryQuietMs": 500,
+    "entryQuietCapMs": 5000,
+    "entryQuietNote": "warm 轮点击前等入口页在阈值内没有新的 /api 请求开始；超过上限照点并记 entrySettled=false。0/关闭时 entryQuietMs 为 null。",
+    "timeBase": "cold 从文档 origin 起算；warm 从页面内记录的 click（navStartMs）起算。帧、跳动、首屏集合都先减 navStartMs，首屏集合另有 startMs >= navStartMs 下界。",
+    "roundTimeoutMs": 20000,
+    "byteAccounting": "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
+    "lcpNote": "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
+    "writeGuardSelfTest": {
+      "blocked": true,
+      "target": "/api/inbox/unread-count",
+      "detail": "deliberate POST /api/inbox/unread-count was aborted by the guard",
+      "allowedWrites": [
+        "POST /api/inbox/:id/read"
+      ]
+    },
+    "stubbedWriteAllowList": [
+      {
+        "method": "POST",
+        "label": "POST /api/inbox/:id/read",
+        "reason": "auto mark-read is unavoidable on any selection and its abort loop delays the URL commit past the assertion window"
+      }
+    ],
+    "inboxResponseRewrites": [
+      "target-injection",
+      "read-state"
+    ],
+    "ambientLatency": {
+      "before": {
+        "path": "/api/config",
+        "samplesMs": [
+          4.3,
+          3.9,
+          4.2,
+          3.8,
+          3.9,
+          4.9,
+          4.4
+        ],
+        "minMs": 3.8,
+        "medianMs": 4.2,
+        "maxMs": 4.9
+      },
+      "after": {
+        "path": "/api/config",
+        "samplesMs": [
+          5.9,
+          4,
+          2.9,
+          2.7,
+          3.2,
+          2.9,
+          3
+        ],
+        "minMs": 2.7,
+        "medianMs": 3,
+        "maxMs": 5.9
+      }
+    },
+    "ambientNote": "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+    "apiVersion": null,
+    "apiRef": null,
+    "apiPublishedAt": null,
+    "apiImageDigest": null,
+    "webImageDigest": null
+  },
+  "scenarios": [
+    {
+      "key": "page-issues",
+      "mode": "cold",
+      "target": {
+        "identifier": "issues"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": null,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2723.400001525879,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2723.400001525879,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 9,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/workspaces/:id/members",
+            "/api/runtime-workspaces",
+            "/api/agents",
+            "/api/squads",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 26,
+          "apiFirstScreen": 22,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1196,
+              "responseEndMs": 1206.5,
+              "durationMs": 10.5,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.4
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1197.2,
+              "responseEndMs": 1208.3,
+              "durationMs": 11.1,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1198.2,
+              "responseEndMs": 1209.5,
+              "durationMs": 11.3,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1877.3,
+              "responseEndMs": 1890.2,
+              "durationMs": 12.9,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/invitations",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1880.6,
+              "responseEndMs": 1892.7,
+              "durationMs": 12.1,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.2
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1883,
+              "responseEndMs": 1893.5,
+              "durationMs": 10.5,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1885.3,
+              "responseEndMs": 1897.7,
+              "durationMs": 12.4,
+              "encodedBytes": 12,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.8
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 1887.5,
+              "responseEndMs": 1898.1,
+              "durationMs": 10.6,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.9
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 1889.3,
+              "responseEndMs": 2151.9,
+              "durationMs": 262.6,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 262
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2140.5,
+              "responseEndMs": 2155,
+              "durationMs": 14.5,
+              "encodedBytes": 715,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.8
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2142.4,
+              "responseEndMs": 2156.1,
+              "durationMs": 13.7,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.2
+            },
+            {
+              "path": "/api/agent-task-snapshot",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2144.6,
+              "responseEndMs": 2157.1,
+              "durationMs": 12.5,
+              "encodedBytes": 829,
+              "serverTiming": {
+                "total": 1.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.3
+            },
+            {
+              "path": "/api/squads",
+              "method": "GET",
+              "wave": 6,
+              "after": 9,
+              "startMs": 2337.2,
+              "responseEndMs": 2347.5,
+              "durationMs": 10.3,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2427,
+              "responseEndMs": 2440.9,
+              "durationMs": 13.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2428.8,
+              "responseEndMs": 2441.6,
+              "durationMs": 12.8,
+              "encodedBytes": 625,
+              "serverTiming": {
+                "total": 1.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.6
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2430.5,
+              "responseEndMs": 2445.9,
+              "durationMs": 15.4,
+              "encodedBytes": 445,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14.6
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2432.2,
+              "responseEndMs": 2445.7,
+              "durationMs": 13.5,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.9
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2433.9,
+              "responseEndMs": 2446.9,
+              "durationMs": 13,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2435.5,
+              "responseEndMs": 2447.4,
+              "durationMs": 11.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.9
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2437.4,
+              "responseEndMs": 2476.1,
+              "durationMs": 38.7,
+              "encodedBytes": 681,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 37.9
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 9,
+              "after": 17,
+              "startMs": 2677,
+              "responseEndMs": 2687.5,
+              "durationMs": 10.5,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/pins",
+              "method": "GET",
+              "wave": 9,
+              "after": 17,
+              "startMs": 2679.4,
+              "responseEndMs": 2734.6,
+              "durationMs": 55.2,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 54.3
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 23658177,
+          "lcpMs": 2364,
+          "slowestServerTotalMs": 1.2,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 2,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2748.7000007629395,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2748.7000007629395,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 9,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/workspaces/:id/members",
+            "/api/runtime-workspaces",
+            "/api/agents",
+            "/api/squads",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 26,
+          "apiFirstScreen": 22,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1217.5,
+              "responseEndMs": 1230.8,
+              "durationMs": 13.3,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.2
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1218.8,
+              "responseEndMs": 1231.3,
+              "durationMs": 12.5,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.7
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1219.9,
+              "responseEndMs": 1231.8,
+              "durationMs": 11.9,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.4
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1908.8,
+              "responseEndMs": 1921.9,
+              "durationMs": 13.1,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.6
+            },
+            {
+              "path": "/api/invitations",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1912.1,
+              "responseEndMs": 1924.7,
+              "durationMs": 12.6,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.8
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1914.6,
+              "responseEndMs": 1925.9,
+              "durationMs": 11.3,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.7
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1917.2,
+              "responseEndMs": 1930.9,
+              "durationMs": 13.7,
+              "encodedBytes": 12,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 1919.5,
+              "responseEndMs": 1931.2,
+              "durationMs": 11.7,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.9
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 1921.4,
+              "responseEndMs": 2175.8,
+              "durationMs": 254.4,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 253.7
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2164.2,
+              "responseEndMs": 2178.2,
+              "durationMs": 14,
+              "encodedBytes": 715,
+              "serverTiming": {
+                "total": 1.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.9
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2166.1,
+              "responseEndMs": 2180.3,
+              "durationMs": 14.2,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.6
+            },
+            {
+              "path": "/api/agent-task-snapshot",
+              "method": "GET",
+              "wave": 5,
+              "after": 7,
+              "startMs": 2168.5,
+              "responseEndMs": 2181.2,
+              "durationMs": 12.7,
+              "encodedBytes": 829,
+              "serverTiming": {
+                "total": 1.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.4
+            },
+            {
+              "path": "/api/squads",
+              "method": "GET",
+              "wave": 6,
+              "after": 9,
+              "startMs": 2361.5,
+              "responseEndMs": 2372.7,
+              "durationMs": 11.2,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2525,
+              "responseEndMs": 2535.9,
+              "durationMs": 10.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 12,
+              "startMs": 2527.2,
+              "responseEndMs": 2541.3,
+              "durationMs": 14.1,
+              "encodedBytes": 625,
+              "serverTiming": {
+                "total": 3.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2529.2,
+              "responseEndMs": 2545.6,
+              "durationMs": 16.4,
+              "encodedBytes": 445,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 15.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2531.2,
+              "responseEndMs": 2545.7,
+              "durationMs": 14.5,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2533.1,
+              "responseEndMs": 2545.8,
+              "durationMs": 12.7,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2535.1,
+              "responseEndMs": 2546.4,
+              "durationMs": 11.3,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 13,
+              "startMs": 2537.2,
+              "responseEndMs": 2576.4,
+              "durationMs": 39.2,
+              "encodedBytes": 681,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 38.2
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 9,
+              "after": 15,
+              "startMs": 2699.4,
+              "responseEndMs": 2710.2,
+              "durationMs": 10.8,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.9
+            },
+            {
+              "path": "/api/pins",
+              "method": "GET",
+              "wave": 9,
+              "after": 15,
+              "startMs": 2701.8,
+              "responseEndMs": 2757.5,
+              "durationMs": 55.7,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 55.3
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 23658177,
+          "lcpMs": 2384,
+          "slowestServerTotalMs": 3.3,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 3,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2684,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2684,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 14,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/invitations",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/agent-task-snapshot",
+            "/api/squads",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency",
+            "/api/pins"
+          ],
+          "apiCallsTotal": 26,
+          "apiFirstScreen": 22,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1189.3,
+              "responseEndMs": 1204.1,
+              "durationMs": 14.8,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14.7
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1190.5,
+              "responseEndMs": 1204.9,
+              "durationMs": 14.4,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.7
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1191.5,
+              "responseEndMs": 1205.6,
+              "durationMs": 14.1,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.7
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1857.5,
+              "responseEndMs": 1868.7,
+              "durationMs": 11.2,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.7
+            },
+            {
+              "path": "/api/invitations",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1861,
+              "responseEndMs": 1873.1,
+              "durationMs": 12.1,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.6
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1863.9,
+              "responseEndMs": 1874.5,
+              "durationMs": 10.6,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 4,
+              "after": 4,
+              "startMs": 1866.9,
+              "responseEndMs": 1877.4,
+              "durationMs": 10.5,
+              "encodedBytes": 12,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.9
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 5,
+              "after": 6,
+              "startMs": 1869.5,
+              "responseEndMs": 1878,
+              "durationMs": 8.5,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 1872,
+              "responseEndMs": 2130.2,
+              "durationMs": 258.2,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 257.3
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 2118.9,
+              "responseEndMs": 2131.7,
+              "durationMs": 12.8,
+              "encodedBytes": 715,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.8
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 2121.2,
+              "responseEndMs": 2133.6,
+              "durationMs": 12.4,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.7
+            },
+            {
+              "path": "/api/agent-task-snapshot",
+              "method": "GET",
+              "wave": 7,
+              "after": 8,
+              "startMs": 2123.8,
+              "responseEndMs": 2136,
+              "durationMs": 12.2,
+              "encodedBytes": 829,
+              "serverTiming": {
+                "total": 1.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            },
+            {
+              "path": "/api/squads",
+              "method": "GET",
+              "wave": 8,
+              "after": 11,
+              "startMs": 2309,
+              "responseEndMs": 2317.5,
+              "durationMs": 8.5,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 12,
+              "startMs": 2384.4,
+              "responseEndMs": 2396.4,
+              "durationMs": 12,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 12,
+              "startMs": 2386.1,
+              "responseEndMs": 2398.6,
+              "durationMs": 12.5,
+              "encodedBytes": 625,
+              "serverTiming": {
+                "total": 1.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 12,
+              "startMs": 2387.8,
+              "responseEndMs": 2400.9,
+              "durationMs": 13.1,
+              "encodedBytes": 445,
+              "serverTiming": {
+                "total": 1.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 13,
+              "startMs": 2389.4,
+              "responseEndMs": 2400.7,
+              "durationMs": 11.3,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 13,
+              "startMs": 2391.1,
+              "responseEndMs": 2402.1,
+              "durationMs": 11,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 11,
+              "after": 16,
+              "startMs": 2397.9,
+              "responseEndMs": 2406.2,
+              "durationMs": 8.3,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 12,
+              "after": 18,
+              "startMs": 2400,
+              "responseEndMs": 2437.6,
+              "durationMs": 37.6,
+              "encodedBytes": 681,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 36.6
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 13,
+              "after": 19,
+              "startMs": 2634.6,
+              "responseEndMs": 2644.4,
+              "durationMs": 9.8,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.1
+            },
+            {
+              "path": "/api/pins",
+              "method": "GET",
+              "wave": 14,
+              "after": 20,
+              "startMs": 2637.5,
+              "responseEndMs": 2699.4,
+              "durationMs": 61.9,
+              "encodedBytes": 2,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 61.2
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 23658177,
+          "lcpMs": 2340,
+          "slowestServerTotalMs": 1.6,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 3,
+        "timeouts": 0,
+        "readyP50": 2723.4,
+        "readyP75": 2748.7,
+        "readyP95": 2748.7,
+        "readyMax": 2748.7,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 14,
+        "apiFirstScreenP50": 22,
+        "slowestServerTotalP50": 1.6,
+        "apiByPath": [
+          {
+            "path": "/api/issues",
+            "method": "GET",
+            "count": 21,
+            "rounds": 3,
+            "totalP50": 0.8,
+            "totalP95": 1.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.6
+          },
+          {
+            "path": "/api/agent-task-snapshot",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 1.2,
+            "totalP95": 1.3,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.3
+          },
+          {
+            "path": "/api/agents",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 1,
+            "totalP95": 1.1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 12.9
+          },
+          {
+            "path": "/api/squads",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.6,
+            "totalP95": 1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9.7
+          },
+          {
+            "path": "/api/assignee-frequency",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.8,
+            "totalP95": 0.9,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9.7
+          },
+          {
+            "path": "/api/invitations",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.8,
+            "totalP95": 0.9,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.6
+          },
+          {
+            "path": "/api/pins",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.7,
+            "totalP95": 0.9,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 55.3
+          },
+          {
+            "path": "/api/projects",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.7,
+            "totalP95": 0.9,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 257.3
+          },
+          {
+            "path": "/api/me",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.8,
+            "totalP95": 0.8,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.7
+          },
+          {
+            "path": "/api/runtime-workspaces",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.7,
+            "totalP95": 0.8,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9.9
+          },
+          {
+            "path": "/api/chat/pending-tasks",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.6,
+            "totalP95": 0.7,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.8
+          },
+          {
+            "path": "/api/chat/sessions",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.6,
+            "totalP95": 0.7,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 13.2
+          },
+          {
+            "path": "/api/runtimes",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.5,
+            "totalP95": 0.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 12.3
+          },
+          {
+            "path": "/api/workspaces/:id/members",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.5,
+            "totalP95": 0.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.1
+          },
+          {
+            "path": "/api/workspaces",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.5,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.4
+          },
+          {
+            "path": "/api/config",
+            "method": "GET",
+            "count": 3,
+            "rounds": 3,
+            "totalP50": 0.1,
+            "totalP95": 0.1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 13.2
+          }
+        ]
+      }
+    },
+    {
+      "key": "page-issues",
+      "mode": "warm",
+      "target": {
+        "identifier": "issues"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": 150,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 3726.2,
+          "clickT": 3726.2,
+          "readyMs": 22.399998474121276,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 22.399998474121276,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 0,
+          "serialChain": [],
+          "apiCallsTotal": 0,
+          "apiFirstScreen": 0,
+          "apiFirstScreenEntries": [],
+          "chunksLoaded": 0,
+          "chunkBytes": 0,
+          "lcpMs": 2384,
+          "slowestServerTotalMs": null,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2800,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 2,
+          "navStartMs": 3657.7,
+          "clickT": 3657.7,
+          "readyMs": 23.800000000000182,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 23.800000000000182,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 0,
+          "serialChain": [],
+          "apiCallsTotal": 0,
+          "apiFirstScreen": 0,
+          "apiFirstScreenEntries": [],
+          "chunksLoaded": 0,
+          "chunkBytes": 0,
+          "lcpMs": 2300,
+          "slowestServerTotalMs": null,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2734,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 3,
+          "navStartMs": 3691.1,
+          "clickT": 3691.1,
+          "readyMs": 23.999998474121185,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 23.999998474121185,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 0,
+          "serialChain": [],
+          "apiCallsTotal": 0,
+          "apiFirstScreen": 0,
+          "apiFirstScreenEntries": [],
+          "chunksLoaded": 0,
+          "chunkBytes": 0,
+          "lcpMs": 2336,
+          "slowestServerTotalMs": null,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2755,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 3,
+        "timeouts": 0,
+        "readyP50": 23.8,
+        "readyP75": 24,
+        "readyP95": 24,
+        "readyMax": 24,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 0,
+        "apiFirstScreenP50": 0,
+        "slowestServerTotalP50": null,
+        "apiByPath": []
+      }
+    }
+  ],
+  "blockedWrites": [],
+  "stubbedWrites": []
+}

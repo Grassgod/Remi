@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { Hono } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -7,6 +7,7 @@ import { createRealtimeFanout } from "@multiremi/api/realtime-fanout.js";
 import { createPeerChannel } from "@multiremi/api/peer/peer-channel.js";
 import { registerPeerRoutes } from "@multiremi/api/peer/peer-routes.js";
 import { taskMessageRealtimePayload } from "@multiremi/api/wire/tasks.js";
+import { createRequestMetricsMiddleware } from "@multiremi/observability/request-metrics.js";
 import { fanoutBrowserClient } from "../../fixtures/multiremi/task-message-fanout-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -42,7 +43,7 @@ async function withReplyLimit(bytes: number, run: () => Promise<void>): Promise<
   const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(bytes);
   resetDbReplyLimitForTest();
-  try { await run(); }
+  try { await withNonExceptionContext(run); }
   finally {
     if (previous === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previous;
@@ -50,7 +51,17 @@ async function withReplyLimit(bytes: number, run: () => Promise<void>): Promise<
   }
 }
 
-function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: number) {
+// C-1 exempts the real peer route and background work; small-limit probes use an ordinary context.
+async function withNonExceptionContext(run: () => Promise<void>): Promise<void> {
+  const app = new Hono();
+  app.use("*", createRequestMetricsMiddleware({ enabled: false, slowRequestMs: 500,
+    summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 256, role: "all" }));
+  app.onError(error => { throw error; });
+  app.get("/api/peer-limit-fixture", async c => { await run(); return c.body(null, 204); });
+  await app.request("/api/peer-limit-fixture");
+}
+
+function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: number, probeSmallLimit = false) {
   const store = new MultiremiStore(writer);
   const receiverStore = new MultiremiStore(reader);
   const agent = store.createAgent({ name: "Reference probe", provider: "codex" });
@@ -98,6 +109,7 @@ function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: nu
     });
   });
   const app = new Hono();
+  if (probeSmallLimit) app.use("*", (_c, next) => withNonExceptionContext(next));
   const secret = "fake-reference-peer-secret";
   registerPeerRoutes(app, { peer: receiver, secret });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
@@ -188,19 +200,19 @@ async function assertUpsertConvergence(writer: SqlDatabase, reader: SqlDatabase,
 
 describe("peer current-committed message references", () => {
   it("preserves seqs, converges with the real browser merge, and queues only after commit (SQLite upsert)", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { await assertUpsertConvergence(db, db); }
     finally { db.close(); }
   }, 20_000);
 
   it("converges even when a reference delivers a newer version before an older queued full frame", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { await assertUpsertConvergence(db, db, true); }
     finally { db.close(); }
   }, 20_000);
 
   it("does not silently swallow a reference query failure or send its header to a denied recipient", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const pair = fanoutPair(db, db, 1024);
     const read = spyOn(pair.receiverStore, "listTaskMessages").mockImplementation(() => { throw new Error("fake-reference-query-failure"); });
     try {
@@ -245,7 +257,7 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
 
   it("pages below a deliberately small PG bridge limit instead of reading the whole range", async () => {
     await withReplyLimit(512 * 1024, () => withPgPair(async (writer, reader) => {
-      const pair = fanoutPair(writer, reader, 1024);
+      const pair = fanoutPair(writer, reader, 1024, true);
       try {
         pair.store.appendTaskMessages(pair.task.id, Array.from({ length: 32 }, () => ({ type: "assistant", content: CONTENT })));
         await pair.drained();
@@ -266,7 +278,7 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
 
   it("sends a header-only refetch frame and counts a reference read failure when one row cannot fit", async () => {
     await withPgPair(async (writer, reader) => {
-      const pair = fanoutPair(writer, reader, 1024);
+      const pair = fanoutPair(writer, reader, 1024, true);
       const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
       try {
         pair.store.appendTaskMessages(pair.task.id, [{ type: "assistant", content: CONTENT }]);

@@ -15,6 +15,8 @@ import {
   uniqueRefMatch,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { isAgentRole, normalizeStoredAgentRole } from "@multiremi/store/agent-role.js";
 import type {
   CreateAgentInput,
@@ -91,27 +93,29 @@ export class AgentsSkillsRepo {
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
+    return this.ctx.db.transaction(() => this.updateAgentWithinTransaction(id, input))();
+  }
+
+  /** Caller owns the transaction, including any role-dependent token revocations. */
+  updateAgentWithinTransaction(id: string, input: UpdateAgentInput): MultiremiAgent {
     const initial = this.getAgent(id);
     if (!initial) throw new Error(`Agent not found: ${id}`);
     const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
       ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
       : initial.workspaceId;
     const workspaceIds = [...new Set([initial.workspaceId, requestedWorkspaceId])].sort();
-    const transaction = this.ctx.db.transaction(() => {
-      for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
-      this.lockAgentRow(id);
-      const current = this.getAgent(id);
-      if (!current) throw new Error(`Agent not found: ${id}`);
-      const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
-        ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
-        : current.workspaceId;
-      if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
-        throw new Error("Agent workspace changed concurrently; retry the update");
-      }
-      return this.updateAgentWithinPluginLock(id, input);
-    });
-    return transaction();
+    for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+    this.lockAgentRow(id);
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+      ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
+      : current.workspaceId;
+    if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
+      throw new Error("Agent workspace changed concurrently; retry the update");
+    }
+    return this.updateAgentWithinPluginLock(id, input);
   }
 
   setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {
@@ -332,7 +336,21 @@ export class AgentsSkillsRepo {
     const initial = this.getAgent(id);
     if (!initial) throw new Error(`Agent not found: ${id}`);
     const tx = this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N, before any domain lock. The
+      // Feishu cascade at the end of this transaction writes the audit trail
+      // (its seq is allocated under the audit number lock) and updates rows, so
+      // N must already be held when the first D write happens — otherwise this
+      // path runs W -> D -> N while every other audit writer runs W -> N -> D.
+      //
+      // Taken unconditionally: this is a low-frequency admin action, and the
+      // alternative (a read to see whether any Feishu config references this
+      // Agent, then a conditional lock) would need the read to be lock-free
+      // against config creation. It is not: `upsertConfig` and `replaceRoutes`
+      // also take W, so a plain read here cannot be proven race-free without
+      // adding a read-creates-a-write dependency. A per-workspace lock held for
+      // one archive is the cheaper, provable choice.
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${initial.workspaceId}`));
       this.ctx.agentPlugins().lockAgentPluginWorkspace(initial.workspaceId);
       this.lockAgentRow(id);
       const agent = this.getAgent(id);

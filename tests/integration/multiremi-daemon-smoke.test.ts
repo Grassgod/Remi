@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -2341,6 +2342,17 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("passes an Issue-scoped CODEX_HOME and in-memory key to the ACP provider", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-codex-home-");
+    // This fixture verifies credential delivery, not the live gateway's latency.
+    const originalFetch = globalThis.fetch;
+    const gatewayRequests: string[] = [];
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === "https://ai.openremi.fun") {
+        gatewayRequests.push(url.pathname);
+        return new Response("fixture unauthorized", { status: 401 });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch);
     store.upsertRelayConfig("local", "codex", {
       fragment: [
         'model_provider = "OpenAI"',
@@ -2410,6 +2422,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
+      expect(gatewayRequests).toContain("/backend-api/codex/models");
       const expectedHome = join(
         workspacesRoot,
         ".runtime",
@@ -2431,6 +2444,7 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon?.stopAndDrainTestWork();
       catalog.mockRestore();
       server.stop(true);
+      fetchSpy.mockRestore();
     }
   });
 
@@ -3668,7 +3682,7 @@ describe("Bun Multiremi daemon smoke", () => {
  * `string`.
  */
 function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: string } {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
   return { store: new MultiremiStore(db), workDir };
 }
