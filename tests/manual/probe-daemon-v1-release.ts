@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { daemonRuntimeId } from "@multiremi/store/store.js";
@@ -21,7 +22,7 @@ async function runScenario(scenario: "empty" | "nonempty"): Promise<void> {
   let proxy: ReturnType<typeof Bun.serve> | undefined;
   const exchanges: Exchange[] = [];
   try {
-    db = new Database(":memory:");
+    db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     const credential = await store.createAccessToken({ name: "release fixture", type: "daemon", workspaceId: "local", daemonId });

@@ -1,14 +1,14 @@
-import { Database } from "bun:sqlite";
 import { createInterface } from "node:readline";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createPeerChannel } from "../../../packages/server/src/api/peer/peer-channel.js";
 import { createRealtimeFanout } from "../../../packages/server/src/api/realtime-fanout.js";
 
 const [databasePath, runtimePort, peerSecret] = process.argv.slice(2);
 if (!databasePath || !runtimePort || !peerSecret) throw new Error("ui fixture arguments missing");
 
-const db = new Database(databasePath);
+const db = openSqliteDatabase(databasePath);
 db.exec("PRAGMA busy_timeout = 5000");
 const store = new MultiremiStore(db);
 const peer = createPeerChannel({

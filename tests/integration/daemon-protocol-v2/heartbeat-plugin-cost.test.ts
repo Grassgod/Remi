@@ -1,6 +1,6 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonHeartbeatPayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiDaemonSshMeshStatus } from "@multiremi/contracts/types.js";

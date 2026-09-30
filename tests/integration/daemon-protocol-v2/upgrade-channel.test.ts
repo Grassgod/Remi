@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +19,7 @@ const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 function bed(cliVersion = "0.2.82") {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_upgrade", name: "Upgrade test", provider: "claude", daemonId: "dmn_upgrade", metadata: { cli_version: cliVersion } });
@@ -116,7 +116,7 @@ describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
     const h = await DaemonProtocolHarness.create({ apiRole: "runtime" });
     cleanups.push(() => h.dispose());
     // The UI owns an independent Store/SQLite connection, with no shared session registry.
-    const uiDb = new Database(`${h.root}/server.db`);
+    const uiDb = openSqliteDatabase(`${h.root}/server.db`);
     const uiStore = new MultiremiStore(uiDb);
     const previousRole = process.env.MULTIREMI_API_ROLE;
     let ui: ReturnType<typeof startMultiremiServer>;

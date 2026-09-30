@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
@@ -185,7 +185,7 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
     expect(h.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
     await h.startDaemon(); await h.settleHeartbeat();
-    const persisted = new Database(join(h.root, "server.db"), { readonly: true });
+    const persisted = openSqliteDatabase(join(h.root, "server.db"), { readonly: true });
     try {
       expect(persisted.query("SELECT id FROM multiremi_runtimes").all()).toEqual([
         { id: h.store.listRuntimes()[0]!.id },

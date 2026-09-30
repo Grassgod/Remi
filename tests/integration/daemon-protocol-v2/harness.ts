@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,7 +60,7 @@ export async function waitFor(predicate: () => boolean, label: string, timeoutMs
 /** Empty-load scaffold: real daemon, Bun API, SQLite and an inert ACP provider. */
 export class DaemonProtocolHarness {
   readonly root = mkdtempSync(join(tmpdir(), "mul418-protocol-"));
-  readonly db = new Database(join(this.root, "server.db"));
+  readonly db = openSqliteDatabase(join(this.root, "server.db"));
   // Commit the fresh fixture schema once; business writes remain separate real transactions.
   readonly store = this.db.transaction(() => new MultiremiStore(this.db))();
   readonly clock = new ManualDaemonProtocolClock();

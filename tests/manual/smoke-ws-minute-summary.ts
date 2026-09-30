@@ -13,7 +13,7 @@
  * Everything is 127.0.0.1 and an in-memory SQLite: no PostgreSQL, no production,
  * no credential is read or written.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { DAEMON_PROTOCOL_VERSION } from "@multiremi/contracts/daemon-protocol.js";
@@ -29,7 +29,7 @@ console.log = (...args: unknown[]) => {
   realLog(line);
 };
 
-const database = new Database(":memory:");
+const database = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(database);
 store.ensureLocalWorkspace();
 store.createWorkspaceMember({ workspaceId: "local", userId: "owner-1", name: "Owner", role: "owner" });

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp, RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
@@ -46,7 +47,7 @@ it("keeps the retired method + path table equal to v1 minus live routes", () => 
 });
 
 it.each(["empty", "nonempty"] as const)("keeps reconciled v1 desired state unchanged at the same write cost as plugin.desired RPC (%s)", async scenario => {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   try {
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -104,7 +105,7 @@ it.each(["empty", "nonempty"] as const)("keeps reconciled v1 desired state uncha
 });
 
 it.each(["GET", "RPC"] as const)("reconciles completed-task plugin removal before either desired read (%s first)", async first => {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   try {
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -149,7 +150,7 @@ it.each(["GET", "RPC"] as const)("reconciles completed-task plugin removal befor
 });
 
 it.each(["all", "runtime"] as const)("keeps v1 task claim inert and authenticated (%s)", async apiRole => {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   try {
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -181,7 +182,7 @@ let liveRoutes: Set<string>;
 const removedRoutesAuthToken = "isolated-removed-v1-routes";
 
 beforeAll(() => {
-  removedRoutesDb = new Database(":memory:");
+  removedRoutesDb = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(removedRoutesDb);
   store.ensureLocalWorkspace();
   const app = createMultiremiApp({ store, authToken: removedRoutesAuthToken, apiRole: "all" });
@@ -219,7 +220,7 @@ it.each(removedBy421)("does not disclose retired route %s without authorization"
 });
 
 it.each(["all", "runtime"] as const)("automatically rejects removed snapshot routes and preserves the HTTP upgrade channel (%s)", async (apiRole) => {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_legacy_http", name: "Legacy HTTP", provider: "claude", daemonId: "dmn_legacy_http", metadata: { cli_version: "0.2.82" } });
@@ -296,7 +297,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
 });
 
 it("keeps UI-role routing rejection ahead of every retired HTTP route", async () => {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const authToken = "isolated-legacy-ui-fixture";
