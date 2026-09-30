@@ -3,8 +3,9 @@
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
-import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
+import type { EnvelopeDelivery } from "./inbox-repo.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
@@ -2929,7 +2930,9 @@ export class TasksRepo {
       // expensive parts — Skills, Skill files, Project context and the Wiki indexes — are read
       // once here and carried through the snapshot into the response.
       const hydrated = this.withHydratedAgent(candidate);
-      const task = this.snapshotTaskExecution(hydrated, lockedRuntime, deferredEvents);
+      const task = this.captureRelayIssueLogWindowWithinTransaction(
+        this.snapshotTaskExecution(hydrated, lockedRuntime, deferredEvents),
+      );
       this.ctx.taskTraces().markTaskTraceDaemon(task.id, runtimeId);
       // Check the actual hydrated payload, including both linked and legacy
       // inline skills. Older daemons ignore encoding and would write base64
@@ -2976,6 +2979,53 @@ export class TasksRepo {
       if (result?.dispatched) this.ctx.notifyTaskEvent("task:dispatch", result.task);
       return result?.task ?? null;
     }
+  }
+
+  private relayIssueLane(task: MultiremiTask): { sessionId: string; executionScope: string } | null {
+    if (!task.chatSessionId || !task.issueId
+      || this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId) !== task.issueId) return null;
+    const session = this.ctx.issueSessions().getOrCreateDefaultIssueSession(task.issueId);
+    return { sessionId: session.id, executionScope: `${RELAY_EXECUTION_SCOPE_PREFIX}${task.chatSessionId}` };
+  }
+
+  private captureRelayIssueLogWindowWithinTransaction(task: MultiremiTaskWithAgent): MultiremiTaskWithAgent {
+    const relay = this.relayIssueLane(task);
+    if (!relay) return task;
+    this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
+    this.ctx.db.run("UPDATE multiremi_tasks SET bound_issue_log_delivered_seq = NULL WHERE id = ?", [task.id]);
+    if (this.getBoundIssueLogToSeq(task.id) != null) return task;
+    const toSeq = this.ctx.conversationLog().getConversationLogHead(relay.sessionId)?.headSeq ?? 0;
+    this.ctx.db.run("UPDATE multiremi_tasks SET bound_issue_log_to_seq = ? WHERE id = ? AND bound_issue_log_to_seq IS NULL", [toSeq, task.id]);
+    return task;
+  }
+
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    const row = this.ctx.db.query("SELECT bound_issue_log_to_seq FROM multiremi_tasks WHERE id = ?")
+      .get(taskId) as { bound_issue_log_to_seq: number | null } | null;
+    return row?.bound_issue_log_to_seq ?? null;
+  }
+
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
+    return this.ctx.db.run(`UPDATE multiremi_tasks SET bound_issue_log_delivered_seq = ?
+      WHERE id = ? AND bound_issue_log_to_seq = ?`, [toSeq, taskId, toSeq]).changes === 1;
+  }
+
+  private promoteRelayIssueLogCursorWithinTransaction(task: MultiremiTask): void {
+    const row = this.ctx.db.query(`SELECT bound_issue_log_to_seq, bound_issue_log_delivered_seq
+      FROM multiremi_tasks WHERE id = ?`).get(task.id) as {
+        bound_issue_log_to_seq: number | null;
+        bound_issue_log_delivered_seq: number | null;
+      } | null;
+    const toSeq = row?.bound_issue_log_to_seq;
+    if (toSeq == null || row?.bound_issue_log_delivered_seq !== toSeq) return;
+    const relay = this.relayIssueLane(task);
+    if (!relay) return;
+    this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
+    this.ctx.db.run(`UPDATE multiremi_session_agent_lanes
+      SET cursor_seq = CASE WHEN cursor_seq < ? THEN ? ELSE cursor_seq END,
+          last_task_id = ?, updated_at = ?
+      WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+      [toSeq, toSeq, task.id, nowIso(), relay.sessionId, task.agentId, relay.executionScope]);
   }
 
   /**
@@ -5565,9 +5615,7 @@ ${placementAfter.sql}
     const delegationReturns: MultiremiTask[] = [];
     let roundPushTasks: MultiremiTask[] = [];
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
-    if (status === "completed" && task.chatSessionId) {
-      this.ctx.chat().completePendingAgentIssueUpdatesForTaskWithinTransaction(task.chatSessionId, task.id);
-    }
+    if (status === "completed" && task.chatSessionId) this.promoteRelayIssueLogCursorWithinTransaction(task);
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
       const role = "assistant";
       const messageBody = status === "completed" ? (body || "Task completed.") : (body || `Task ${status}`);
@@ -5748,31 +5796,22 @@ ${placementAfter.sql}
         }
       }
       if (issue?.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
-      const lead = issue?.assigneeType && issue.assigneeId
-        ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)
-        : null;
-      if (
-        status === "completed"
-        && task.issueSessionId
-        && !task.chatSessionId
-        && issue
-        && lead?.id === task.agentId
-        && !this.hasActiveTaskForIssue(issue.id)
-      ) {
-        this.ctx.notificationChannels().queueAgentIssueUpdate({
-          activityId: `leader-round:${task.id}`,
-          issueId: issue.id,
-          actorType: "agent",
-          actorId: task.agentId,
-          type: "leader_round_completed",
-          body,
-          data: { sourceTaskId: task.id, status: "completed" },
-          createdAt: now,
-        });
-        this.ctx.notificationChannels().flushAgentIssueUpdatesForIssueWithinTransaction(issue.id, deferredEvents, now);
+      if (issue && this.shouldReportIssueRound(task, status, issue)) {
+        const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
+        const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
+        const outcome = status === "completed" ? "done" : status;
+        const reason = status === "failed" ? (task.failureReason ?? body ?? "unknown") : body;
+        const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
+          + (reason ? `，原因 ${reason}` : "");
+        const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
+          to: { role: "relay", issueId: issue.id }, kind: "report", outcome,
+          wake: "now", dedupeKey: `relay:${issue.id}:${task.id}`,
+          body: envelopeBody, source: { issueId: issue.id, taskId: task.id },
+        }, childStatusChanges, deferredEvents);
         roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
           issue,
           leaderTask: task,
+          envelopeDeliveries: deliveries,
           childStatusChanges,
           deferredEvents,
         });
@@ -5904,6 +5943,11 @@ ${placementAfter.sql}
       }
     }
     return { retry, delegationReturns, roundPushTasks };
+  }
+
+  private shouldReportIssueRound(task: MultiremiTask, status: "completed" | "failed" | "cancelled", issue: MultiremiIssue): boolean {
+    return (status === "completed" || status === "failed" || status === "cancelled")
+      && !!task.issueSessionId && !task.chatSessionId && !this.hasActiveTaskForIssue(issue.id);
   }
 
   /**

@@ -47,9 +47,9 @@ import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
 import {
   registerDecisionCardInteraction,
   registerIssueDecisionCardInteraction,
+  registerQuestionCardClient,
   registerTaskInteraction,
   buildTaskInteractionCard,
-  registerQuestionCardClient,
 } from "@connectors/feishu/task-interaction.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { DECISION_RECIPIENT_SENTINEL, decodeDecisionCardBody, questionCardIdempotencyKey } from "@shared/feishu-task-card.js";

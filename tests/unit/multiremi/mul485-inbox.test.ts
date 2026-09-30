@@ -260,7 +260,8 @@ async function verifyCursorDeliveryAcrossScopes(
       [cursor, session.id, agent.id, scope],
     );
   }
-  expect(store.getSessionAgentMaxCursorSeq(session.id, agent.id)).toBe(Math.max(...lanes.map((lane) => lane.cursor)));
+  expect(store.getSessionAgentMaxCursorSeq(session.id, agent.id))
+    .toBe(Math.max(0, ...lanes.filter((lane) => !lane.scope.startsWith("relay:")).map((lane) => lane.cursor)));
   if (lanes.length === 1 && lanes[0]!.scope) {
     expect(store.getSessionAgentLane(session.id, agent.id)).toBeNull();
   }
@@ -458,6 +459,14 @@ describe("MUL-485 SQLite", () => {
     await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "", cursor: 1 }], true);
   });
 
+  it("does not mistake a relay cursor for issue inbox delivery", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "relay:chat_bound", cursor: 1 }], false);
+  });
+
+  it("counts a differently cased Relay scope as issue inbox delivery", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "Relay:other", cursor: 1 }], true);
+  });
+
   it("reports undelivered when every execution scope cursor is behind", async () => {
     await verifyCursorDeliveryAcrossScopes(createStore(), [
       { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
@@ -604,6 +613,14 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
 
   it("reports the default scope cursor as delivered on real PostgreSQL", async () => {
     await verifyCursorDeliveryAcrossScopes(store, [{ scope: "", cursor: 1 }], true);
+  });
+
+  it("does not mistake a relay cursor for issue inbox delivery on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "relay:chat_bound", cursor: 1 }], false);
+  });
+
+  it("counts a differently cased Relay scope as issue inbox delivery on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "Relay:other", cursor: 1 }], true);
   });
 
   it("reports undelivered when every execution scope cursor is behind on real PostgreSQL", async () => {

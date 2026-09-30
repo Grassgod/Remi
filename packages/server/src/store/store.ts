@@ -2228,6 +2228,7 @@ runMigrations(this.db);
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: import("./repos/inbox-repo.js").EnvelopeDelivery[];
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
@@ -4272,7 +4273,7 @@ runMigrations(this.db);
   }
 
   /** Shown entries in the inclusive seq range, oldest first. */
-  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null; limit?: number } = {}): ConversationLogEntry[] {
     return this.conversationLog.listShown(sessionId, input);
   }
 
@@ -5107,6 +5108,14 @@ runMigrations(this.db);
 
   ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult {
     return this.tasks.ensurePendingTurnWithinTransaction(input);
+  }
+
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    return this.tasks.getBoundIssueLogToSeq(taskId);
+  }
+
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
+    return this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
   }
 
   sendEnvelopeWithinTransaction(

@@ -737,7 +737,7 @@ export interface ConversationLogSurface {
   getConversationLogHead(sessionId: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): { sessionId: string; headSeq: number; logVersion: number; updatedAt: string } | null;
   conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
   locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
-  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null; limit?: number }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
@@ -752,6 +752,14 @@ export interface ConversationLogSurface {
     title: string | null,
     createdAt?: string,
   ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+}
+
+export interface InboxSurface {
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[];
 }
 
 export interface IssueSessionsSurface {
@@ -871,6 +879,7 @@ export interface FeishuBotSurface {
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: import("./repos/inbox-repo.js").EnvelopeDelivery[];
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
   }): MultiremiTask[];
@@ -925,14 +934,6 @@ export interface TaskTracesSurface {
   /** Must be called inside the caller's transaction. */
   writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
   clearTaskTraceArchivePointers(archiveId: string): number;
-}
-
-export interface InboxSurface {
-  sendEnvelopeWithinTransaction(
-    env: import("@multiremi/contracts/inbox.js").Envelope,
-    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue,
-  ): import("./repos/inbox-repo.js").EnvelopeDelivery[];
 }
 
 export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface, InboxSurface {}
@@ -1368,22 +1369,6 @@ export class StoreContext {
         now,
       ],
     );
-    afterCommit(this.db, () => {
-      try {
-        this.host.queueAgentIssueUpdate({
-          activityId: id,
-          issueId,
-          actorType: input.actorType,
-          actorId: input.actorId ?? null,
-          type: input.type,
-          body: input.body ?? null,
-          data: input.data ?? null,
-          createdAt: now,
-        });
-      } catch (err) {
-        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity

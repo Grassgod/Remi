@@ -1,7 +1,7 @@
 // Issue sessions domain (sessions, participants, session events, agent lanes and published
 // results), extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
-import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
@@ -544,8 +544,9 @@ export class IssueSessionsRepo {
 
   getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
     const row = this.ctx.db.query(
-      "SELECT COALESCE(MAX(cursor_seq), 0) AS cursor_seq FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
-    ).get(sessionId, agentId) as { cursor_seq: number };
+      `SELECT COALESCE(MAX(cursor_seq), 0) AS cursor_seq FROM multiremi_session_agent_lanes
+       WHERE session_id = ? AND agent_id = ? AND substr(execution_scope, 1, ?) <> ?`,
+    ).get(sessionId, agentId, RELAY_EXECUTION_SCOPE_PREFIX.length, RELAY_EXECUTION_SCOPE_PREFIX) as { cursor_seq: number };
     return Number(row.cursor_seq);
   }
 
@@ -804,24 +805,6 @@ export class IssueSessionsRepo {
       metadata: { result_id: id, title: input.title?.trim() ?? "" },
     });
     const result = this.getSessionResult(id)!;
-    try {
-      this.ctx.notificationChannels().queueAgentIssueUpdate({
-        activityId: result.id,
-        issueId: session.issueId,
-        actorType: publishedByType,
-        actorId: publishedById,
-        type: "result_published",
-        body: [result.title ? `Published result: ${result.title}` : "Published result", result.body].join("\n\n"),
-        data: {
-          resultId: result.id,
-          sourceSessionId: sessionId,
-          ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
-        },
-        createdAt: now,
-      });
-    } catch (error) {
-      log.warn(`agent issue result update queue skipped for ${session.issueId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
     return result;
   }
 
