@@ -9,6 +9,7 @@ WHERE delivery_mode = 'split' AND status NOT IN ('sent', 'failed');
 SELECT id FROM multiremi_feishu_bot_outbound_operations WHERE status <> 'done';
 
 -- TRANSACTION
+.bail on
 BEGIN IMMEDIATE;
 CREATE TEMP TABLE c5_restore_schema_guard (
   passed INTEGER CONSTRAINT c5_restore_requires_split_schema CHECK (passed = 1)

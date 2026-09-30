@@ -86,7 +86,9 @@ those E5 and decision columns and indexes. The current main schema is the
 preceding binary's actual write target and retains E5 rows, so there is no
 separate `v0.2.83` restore script. The C5 source must have the two decision
 columns before running these scripts (normal after the main migrations are
-included in the release). Check this on the intended database first.
+included in the release). Check this on the intended database first. On
+PostgreSQL, main's migration bridge strips SQLite's decorative foreign keys;
+the PG restore script follows that actual catalog and does not add them.
 
 The SQL artifacts are [SQLite](feishu-outbound-restore-sqlite.sql) and
 [PostgreSQL](feishu-outbound-restore-postgres.sql). Both use `__C5_STAMP__`
@@ -130,7 +132,11 @@ psql -X -v ON_ERROR_STOP=1 "$C5_DB" -c "SELECT
 Do not continue when any SQLite pre-check returns a row. A second check runs
 under `BEGIN IMMEDIATE` to close the gap between inspection and writing.
 SQLite errors leave the connection's transaction uncommitted; `sqlite3 -bail`
-exits without committing it. If using a persistent client, explicitly
+exits without committing it. The SQL transaction section also sets `.bail on`,
+so the default `sqlite3 database < rendered.sql` stops on a failed guard.
+The SQLite `_c5_backup` table must still exist: the script renames its
+ordinary indexes before recreating their original names on the live table.
+If using a persistent client, explicitly
 `ROLLBACK` after an error. PostgreSQL raises inside its transaction and rolls
 back. Reusing a stamp or running against an already-restored live table fails
 without replacing an archive.
@@ -139,7 +145,8 @@ Physical restore sequence:
 
 1. Pause all writers and claimers, drain active Task streams and split Tasks,
    and take a database backup/export **before** SQL execution. Drain pending
-   deferred operations too. SQL checks delivery and operation rows, but cannot
+   deferred operations too. On SQLite, verify the C5 `_c5_backup` table exists.
+   SQL checks delivery and operation rows, but cannot
    prove the application has stopped writing or that streams are drained.
    SQLite's three pre-check queries must all return zero rows; PostgreSQL
    raises if a split Task lacks one terminal result, any split delivery is not

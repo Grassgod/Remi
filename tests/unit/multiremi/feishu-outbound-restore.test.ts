@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -111,7 +115,8 @@ function sqlitePrechecks(sql: string, db: Database): unknown[][] {
 
 function runSqlite(sql: string, db: Database): void {
   try {
-    for (const statement of sql.slice(sql.indexOf("-- TRANSACTION")).split(";")) {
+    const transaction = sql.slice(sql.indexOf("-- TRANSACTION")).replace(/^\.[^\n]*$/gm, "");
+    for (const statement of transaction.split(";")) {
       if (statement.trim()) db.exec(`${statement};`);
     }
   }
@@ -161,6 +166,42 @@ describe("C5 physical restore on SQLite", () => {
     }
   });
 
+  it.skipIf(!Bun.which("sqlite3"))("stops the default sqlite3 CLI on a failed guard", () => {
+    const directory = mkdtempSync(join(tmpdir(), "m447-c5-sqlite-"));
+    const path = join(directory, "restore.sqlite");
+    try {
+      const db = new Database(path);
+      seed(db);
+      db.run(`UPDATE ${table} SET status = 'pending' WHERE id = 'sent-receipt'`);
+      const before = rows(db);
+      const indexes = db.query("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name").all();
+      db.close();
+
+      const result = spawnSync("sqlite3", [path], { input: sql, encoding: "utf8" });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("c5_restore_requires_drained_rows");
+
+      const after = new Database(path);
+      try {
+        expect(rows(after)).toEqual(before);
+        expect(after.query("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name").all())
+          .toEqual(indexes);
+        expect(after.query("SELECT name FROM sqlite_master WHERE name = ?").get(archive)).toBeNull();
+      } finally { after.close(); }
+
+      const drained = new Database(path);
+      drained.run(`UPDATE ${table} SET status = 'sent' WHERE id = 'sent-receipt'`);
+      drained.close();
+      const success = spawnSync("sqlite3", [path], { input: sql, encoding: "utf8" });
+      expect(success.status).toBe(0);
+      const restored = new Database(path);
+      try {
+        expect(rows(restored)).toHaveLength(5);
+        expect(rows(restored, archive)).toHaveLength(11);
+      } finally { restored.close(); }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it("rejects an occupied archive and a second restore without changing existing tables", () => {
     const db = new Database(":memory:");
     try {
@@ -185,6 +226,20 @@ describe("C5 physical restore on SQLite", () => {
 });
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
+// Catalog captured from fresh origin/main a2ef6f6e7 PostgreSQL migrations.
+const mainPgColumns = [
+  "id", "workspace_id", "binding_id", "task_id", "chat_id", "thread_id",
+  "reply_to_message_id", "body", "status", "claim_token", "leased_until",
+  "available_at", "attempt_count", "external_message_id", "last_error",
+  "sent_at", "created_at", "updated_at", "mention_snapshot",
+  "presentation_checkpoint", "interaction_open_id", "attachments",
+  "previous_delivery_id", "kind", "human_request_id", "human_request_task_id",
+  "expires_at", "target_message_id", "degraded", "decision_id", "decision_issue_id",
+];
+const mainPgRequiredColumns = new Set([
+  "id", "workspace_id", "binding_id", "chat_id", "body", "status",
+  "available_at", "attempt_count", "created_at", "updated_at",
+]);
 describe.skipIf(!adminUrl)("C5 physical restore on real PostgreSQL", () => {
   const database = `c5_restore_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
   let db: PostgresSyncDatabase, url: string, sql: string;
@@ -247,5 +302,38 @@ describe.skipIf(!adminUrl)("C5 physical restore on real PostgreSQL", () => {
     expect(rows(db)).toEqual(live);
     expect(rows(db, archive)).toEqual(saved);
     expect(db.query("SELECT indexname, tablename FROM pg_indexes WHERE schemaname = current_schema() ORDER BY indexname").all()).toEqual(indexes);
+  });
+
+  it("matches the columns, constraints, and indexes from fresh main migrations", () => {
+    const columns = db.query(`SELECT column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns WHERE table_schema = current_schema()
+        AND table_name = ? ORDER BY ordinal_position`).all(table);
+    expect(columns).toEqual(mainPgColumns.map(column_name => ({
+      column_name,
+      data_type: column_name === "attempt_count" ? "integer" : "text",
+      is_nullable: mainPgRequiredColumns.has(column_name) ? "NO" : "YES",
+      column_default: column_name === "status" ? "'pending'::text"
+        : column_name === "attempt_count" ? "0" : null,
+    })));
+    expect(db.query(`SELECT c.conname, c.contype, pg_get_constraintdef(c.oid) AS definition
+      FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+      WHERE t.relname = ? ORDER BY c.conname`).all(table)).toEqual([
+      { conname: `${table}_pkey`, contype: "p", definition: "PRIMARY KEY (id)" },
+      { conname: `${table}_task_id_key`, contype: "u", definition: "UNIQUE (task_id)" },
+    ]);
+    const expectedIndexes = [
+      ["idx_multiremi_feishu_bot_outbound_decision", "decision_id, status, available_at", false],
+      ["idx_multiremi_feishu_bot_outbound_kind", "kind, status, available_at", false],
+      ["idx_multiremi_feishu_bot_outbound_pending", "status, available_at, leased_until, created_at", false],
+      ["idx_multiremi_feishu_bot_outbound_previous", "previous_delivery_id", false],
+      [`${table}_pkey`, "id", true],
+      [`${table}_task_id_key`, "task_id", true],
+    ] as const;
+    expect(db.query(`SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND tablename = ? ORDER BY indexname`).all(table))
+      .toEqual(expectedIndexes.map(([indexname, keys, unique]) => ({
+        indexname,
+        indexdef: `CREATE ${unique ? "UNIQUE " : ""}INDEX ${indexname} ON public.${table} USING btree (${keys})`,
+      })));
   });
 });

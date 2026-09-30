@@ -44,9 +44,7 @@ CREATE TABLE multiremi_feishu_bot_outbound_deliveries (
   updated_at TEXT NOT NULL, mention_snapshot TEXT, presentation_checkpoint TEXT,
   interaction_open_id TEXT, attachments TEXT, previous_delivery_id TEXT, kind TEXT,
   human_request_id TEXT, human_request_task_id TEXT, expires_at TEXT,
-  target_message_id TEXT, degraded TEXT, decision_id TEXT, decision_issue_id TEXT,
-  FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
-  FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+  target_message_id TEXT, degraded TEXT, decision_id TEXT, decision_issue_id TEXT
 );
 INSERT INTO multiremi_feishu_bot_outbound_deliveries (
   id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id,
