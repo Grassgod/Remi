@@ -1659,10 +1659,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (seq == null) return c.json({ error: "entry not found" }, 404);
     const entry = store.getConversationLogEntry(sessionId, seq);
     if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
-    const recipient = entry.metadata.envelope?.to;
-    const agentId = recipient?.role === "agent" && recipient.issueSessionId === sessionId
-      ? recipient.agentId
-      : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null;
+    const envelope = entry.metadata.envelope;
+    const recipient = envelope?.to;
+    const agentId = envelope?.recipient_agent_id
+      ?? (recipient?.role === "agent" && recipient.issueSessionId === sessionId
+        ? recipient.agentId
+        : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null);
     const delivered: boolean | null = agentId === null ? null : (
       store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
       || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
