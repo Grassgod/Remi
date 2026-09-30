@@ -2823,23 +2823,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "task.messages": {
-      "command": "remi issue run-messages",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "task.messages",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "comment": {
       "command": "remi comment",
       "aliases": [],
@@ -3216,7 +3199,9 @@
     },
     "session.log.window": {
       "command": "remi session log window",
-      "aliases": [],
+      "aliases": [
+        "remi chat message list"
+      ],
       "auth": [
         "human",
         "task"
@@ -4497,23 +4482,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "chat.message.list": {
-      "command": "remi chat message list",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.message.list",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "chat.message.create": {
       "command": "remi chat message create",
       "aliases": [],
@@ -4834,7 +4802,8 @@
       "command": "remi task trace read",
       "aliases": [
         "remi task message list",
-        "remi task messages"
+        "remi task messages",
+        "remi issue run-messages"
       ],
       "auth": [
         "human",
@@ -9838,6 +9807,12 @@
       "replacement": "remi session list",
       "hidden": false
     },
+    "remi chat message list": {
+      "command": "session.log.window",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session log window",
+      "hidden": false
+    },
     "remi issue session result list": {
       "command": "session.result.list",
       "deprecated_since": "0.3.0",
@@ -9887,6 +9862,12 @@
       "hidden": false
     },
     "remi task messages": {
+      "command": "task.trace.read",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi task trace read",
+      "hidden": false
+    },
+    "remi issue run-messages": {
       "command": "task.trace.read",
       "deprecated_since": "0.3.0",
       "replacement": "remi task trace read",
@@ -10289,12 +10270,6 @@
     "GET /api/chat/sessions/:sessionId": {
       "command": "chat.get"
     },
-    "GET /api/chat/sessions/:sessionId/messages": {
-      "command": "chat.message.list"
-    },
-    "GET /api/chat/sessions/:sessionId/messages/page": {
-      "command": "chat.message.list"
-    },
     "GET /api/chat/sessions/:sessionId/pending-task": {
       "command": "chat.pending"
     },
@@ -10672,7 +10647,7 @@
       "command": "chat.get"
     },
     "GET /api/multiremi/chats/:id/messages": {
-      "command": "chat.message.list"
+      "command": "session.log.window"
     },
     "GET /api/multiremi/comments/:id/attachments": {
       "command": "comment.attachment.list"
