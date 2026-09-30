@@ -95,6 +95,8 @@ function finishLeaderRound(store: MultiremiStore, f: ReturnType<typeof fixture>)
 }
 
 for (const backend of ["sqlite", "postgres"] as const) {
+  // These PG scenarios do several writes; CI runner jitter is outside the behavior asserted below.
+  const pgScenarioTimeout = backend === "postgres" ? 15000 : 5000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
     it("recognizes the child and sibling subtrees and explains rejected dispatches", async () => withStore(backend, async (store) => {
       const f = fixture(store);
@@ -394,7 +396,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const bridge = store.listSessionEvents(f.leaderSession.id)
         .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
       expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
-    }));
+    }), pgScenarioTimeout);
 
     it("drains five child reports into one round and marks the lane cursor covered", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
@@ -445,7 +447,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((event) => event.kind === "delegation_report");
       expect(bridges).toHaveLength(5);
       expect(new Set(bridges.map((event) => event.taskId))).toEqual(new Set(childTasks.map((task) => task.id)));
-    }));
+    }), pgScenarioTimeout);
 
     it("reproduces the MUL-383 HTTP path step by step", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
@@ -494,6 +496,6 @@ for (const backend of ["sqlite", "postgres"] as const) {
       // The leader never waited: every child report landed while the leader's
       // own round was already over, and the single queued return is claimable.
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
-    }));
+    }), pgScenarioTimeout);
   });
 }
