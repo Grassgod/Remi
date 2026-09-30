@@ -7,7 +7,7 @@
  *     authorization that decides 4401/4403/4410;
  *   - the downlink sequence, which starts at 1 on every connection and is never
  *     persisted - the downlink is re-derived from the database on reconnect
- *     (ADR 0005), so a queue here would be a second source of truth;
+ *     (ADR 0012), so a queue here would be a second source of truth;
  *   - the acknowledgement deadline: every reliable downlink frame records its
  *     send time, and a frame unacknowledged for `DAEMON_ACK_TIMEOUT_MS` closes
  *     the connection with 4000;
@@ -366,7 +366,7 @@ export class DaemonProtocolSession {
    * a refusal consumes no sequence, so the caller can retry the same slot once an
    * ack frees room. There is deliberately no in-memory queue behind this - the
    * protocol's rule is that the database is the queue, and the pusher re-derives
-   * what is still owed (ADR 0005).
+   * what is still owed (ADR 0012).
    *
    * `pausable` traffic is additionally held while the socket is behind.
    */

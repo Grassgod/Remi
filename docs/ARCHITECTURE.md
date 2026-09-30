@@ -52,7 +52,7 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 推送待办和配置；steer、human request、取消与 plugin desired 使用 v2 帧和 RPC，不再搭心跳 ack 或定时轮询。
 跨进程触发依赖 MUL-462 的实时扇出，临时同进程接线不能替代该交付门禁。
 HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。规范见
-[daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0005](adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
+[daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0012](adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
 上行报告在 MUL-421 合入前仍走现有 HTTP 路径，不能将它视为已经迁移。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
