@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { createId } from "@multiremi/ids.js";
 import type { CommitEventQueue, StoreContext } from "@multiremi/store/context.js";
@@ -47,7 +48,7 @@ export class InboxRepo {
       const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
         ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
           this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
-          recipient.agentId, `relay:${recipient.chatSessionId}`,
+          recipient.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${recipient.chatSessionId}`,
         ).cursorSeq))
         : body;
       if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId

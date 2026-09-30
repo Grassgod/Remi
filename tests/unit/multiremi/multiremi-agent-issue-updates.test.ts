@@ -1,4 +1,4 @@
-import { beforeEach, expect, it } from "bun:test";
+import { beforeEach, expect, it, spyOn } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -157,11 +157,40 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const relay = claimRelayAfterCompletedIssueRound(f);
     expect(f.store.getBoundIssueLogToSeq(relay.id)).toBe(3);
     expect(f.store.markBoundIssueLogDelivered(relay.id, 4)).toBe(false);
+    const originalMark = f.store.markBoundIssueLogDelivered;
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    f.store.markBoundIssueLogDelivered = (taskId, toSeq) => originalMark.call(f.store, taskId, toSeq + 1);
+    try {
+      expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log)
+        .toMatchObject({ from_seq: 0, to_seq: 3 });
+      expect(warnings.mock.calls.some(([message]) =>
+        String(message).includes("WARN")
+        && String(message).includes(`Failed to mark bound Issue log delivered for claimed task ${relay.id}`),
+      )).toBe(true);
+    } finally {
+      f.store.markBoundIssueLogDelivered = originalMark;
+      warnings.mockRestore();
+    }
     expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
       .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: null });
     f.store.startTask(relay.id);
     f.store.completeTask(relay.id, { output: "No matching delivery window" });
     expect(f.lane()?.cursorSeq).toBe(0);
+  });
+
+  it("does not warn when the claim delivery marker matches the frozen window", () => {
+    const f = setup();
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log)
+        .toMatchObject({ from_seq: 0, to_seq: 3 });
+      expect(warnings.mock.calls).toHaveLength(0);
+    } finally {
+      warnings.mockRestore();
+    }
+    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+      .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: 3 });
   });
 
   it("replays the relay and pending-turn migrations twice without losing either column", () => {

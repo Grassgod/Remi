@@ -2,7 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
-import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
@@ -740,7 +740,7 @@ function appendDaemonClaimBoundIssueLog(
     const toSeq = store.getBoundIssueLogToSeq(task.id);
     if (toSeq == null) return;
     const session = store.getOrCreateDefaultIssueSession(task.issueId);
-    const lane = store.getSessionAgentLane(session.id, task.agentId, `relay:${task.chatSessionId}`);
+    const lane = store.getSessionAgentLane(session.id, task.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${task.chatSessionId}`);
     const fromSeq = lane?.cursorSeq ?? 0;
     const shown = store.listConversationLogShown(session.id, { sinceSeq: fromSeq, toSeq, limit: 101 });
     const entries = shown.slice(0, 100);

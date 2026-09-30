@@ -3,7 +3,7 @@
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
-import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
@@ -2985,7 +2985,7 @@ export class TasksRepo {
     if (!task.chatSessionId || !task.issueId
       || this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId) !== task.issueId) return null;
     const session = this.ctx.issueSessions().getOrCreateDefaultIssueSession(task.issueId);
-    return { sessionId: session.id, executionScope: `relay:${task.chatSessionId}` };
+    return { sessionId: session.id, executionScope: `${RELAY_EXECUTION_SCOPE_PREFIX}${task.chatSessionId}` };
   }
 
   private captureRelayIssueLogWindowWithinTransaction(task: MultiremiTaskWithAgent): MultiremiTaskWithAgent {

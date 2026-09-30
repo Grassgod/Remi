@@ -935,14 +935,6 @@ export interface TaskTracesSurface {
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
-export interface InboxSurface {
-  sendEnvelopeWithinTransaction(
-    env: import("@multiremi/contracts/inbox.js").Envelope,
-    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue,
-  ): import("./repos/inbox-repo.js").EnvelopeDelivery[];
-}
-
 export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface, InboxSurface {}
 
 export class StoreContext {
