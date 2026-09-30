@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { Database } from "bun:sqlite";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { daemonRuntimeId } from "@multiremi/store/store.js";
 import { DaemonV1ReleaseHarness } from "../fixtures/daemon-v1-release.js";
@@ -64,6 +64,9 @@ async function runScenario(scenario: "empty" | "nonempty"): Promise<void> {
     assert.equal(daemon.hasExited(), false, `${scenario}: release exited before desired GET completed`);
     const desired = exchanges.find(entry => entry.method === "GET" && entry.path === desiredPath)!;
     assert.equal(desired.status, 200);
+    assert.equal(RETIRED_DAEMON_HTTP_ROUTES.some(route => route.method === "GET"
+      && String(route.path) === "/api/daemon/runtimes/:runtimeId/agent-plugins/desired"), false,
+    "the live desired GET must not also be marked retired");
     const desiredBody = desired.body as { runtime_id: string; revision: string; plugins: unknown[] };
     assert.equal(desiredBody.runtime_id, runtime.id);
     assert.equal(typeof desiredBody.revision, "string");
