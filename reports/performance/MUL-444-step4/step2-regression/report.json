@@ -1,0 +1,139 @@
+{
+  "step": 2,
+  "results": [
+    {
+      "name": "XSS API write accepted markdown",
+      "ok": true
+    },
+    {
+      "name": "XSS API response has comment id",
+      "ok": true
+    },
+    {
+      "name": "XSS write path renders sanitized HTML",
+      "ok": true
+    },
+    {
+      "name": "follow_frozen shown and thread markers hidden in API",
+      "ok": true
+    },
+    {
+      "name": "resolved state belongs to comment row",
+      "ok": true
+    },
+    {
+      "name": "XSS API sanitized rendered body",
+      "ok": true
+    },
+    {
+      "name": "XSS write and backfill use identical renderer",
+      "ok": true
+    },
+    {
+      "name": "comment update ignores client body_html",
+      "ok": true
+    },
+    {
+      "name": "issue update ignores client body_html",
+      "ok": true
+    },
+    {
+      "name": "forged body_html is absent from persisted log",
+      "ok": true
+    },
+    {
+      "name": "comment-link #1 SSR target centered with no jump",
+      "ok": true,
+      "jumps": 0,
+      "position": {
+        "delta": 0.375,
+        "rowHeight": 757.75,
+        "state": "released",
+        "positioned": "1",
+        "rows": 31
+      },
+      "errors": []
+    },
+    {
+      "name": "comment-link #1 target highlighted without resize",
+      "ok": true
+    },
+    {
+      "name": "comment-link #1 highlight fades after 2.5s at fixed height",
+      "ok": true
+    },
+    {
+      "name": "deep window has both paging ends and return",
+      "ok": true,
+      "earlier": 1,
+      "newer": 1,
+      "latest": 1
+    },
+    {
+      "name": "return latest loads tail and pins",
+      "ok": true
+    },
+    {
+      "name": "comment-link #1 no browser errors or cookie leak",
+      "ok": true
+    },
+    {
+      "name": "comment-link #2 SSR target centered with no jump",
+      "ok": true,
+      "jumps": 0,
+      "position": {
+        "delta": 0.375,
+        "rowHeight": 757.75,
+        "state": "released",
+        "positioned": "1",
+        "rows": 31
+      },
+      "errors": []
+    },
+    {
+      "name": "comment-link #2 target highlighted without resize",
+      "ok": true
+    },
+    {
+      "name": "comment-link #2 highlight fades after 2.5s at fixed height",
+      "ok": true
+    },
+    {
+      "name": "comment-link #2 no browser errors or cookie leak",
+      "ok": true
+    },
+    {
+      "name": "comment-link #3 SSR target centered with no jump",
+      "ok": true,
+      "jumps": 0,
+      "position": {
+        "delta": 0.375,
+        "rowHeight": 757.75,
+        "state": "released",
+        "positioned": "1",
+        "rows": 31
+      },
+      "errors": []
+    },
+    {
+      "name": "comment-link #3 target highlighted without resize",
+      "ok": true
+    },
+    {
+      "name": "comment-link #3 highlight fades after 2.5s at fixed height",
+      "ok": true
+    },
+    {
+      "name": "comment-link #3 no browser errors or cookie leak",
+      "ok": true
+    },
+    {
+      "name": "no-cookie SSR shell locates comment in non-default session with client Bearer",
+      "ok": true
+    },
+    {
+      "name": "Cookie absent from local service logs",
+      "ok": true
+    }
+  ]
+}

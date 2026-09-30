@@ -22,13 +22,14 @@ import {
   modKey,
 } from "@multiremi/core/platform";
 import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
+import type { Attachment } from "@multiremi/core/types";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
 
 interface ChatInputProps {
-  onSend: (content: string, attachmentIds?: string[]) => void | Promise<void>;
+  onSend: (content: string, attachmentIds?: string[], localAttachments?: Attachment[]) => void | Promise<void>;
   /** Receives a File and returns the attachment row (with id + CDN link).
    *  The wrapper owner (ChatWindow) lazy-creates a chat_session if needed
    *  and forwards `chatSessionId` to the upload — chat-input only cares
@@ -107,6 +108,7 @@ export function ChatInput({
   const setInputDraftAttachment = useChatStore(
     (s) => s.setInputDraftAttachment,
   );
+  const setLocalAttachmentDetail = useChatStore((s) => s.setLocalAttachmentDetail);
   useEffect(() => {
     setIsEmpty(!inputDraft.trim());
     setSendError(false);
@@ -122,6 +124,7 @@ export function ChatInput({
         const result = await onUploadFile(file);
         if (getCurrentWsId() !== workspaceAtUpload) return null;
         if (result) {
+          setLocalAttachmentDetail(result);
           setInputDraftAttachment(
             result.chat_session_id ?? draftKey,
             result.link,
@@ -133,7 +136,7 @@ export function ChatInput({
         setPendingUploads((n) => Math.max(0, n - 1));
       }
     },
-    [onUploadFile, draftKey, setInputDraftAttachment],
+    [onUploadFile, draftKey, setInputDraftAttachment, setLocalAttachmentDetail],
   );
 
   // Drop zone wraps the rounded card so a drop anywhere on the input
@@ -197,7 +200,8 @@ export function ChatInput({
     setIsSending(true);
     setSendError(false);
     try {
-      await onSend(content, activeIds.length > 0 ? activeIds : undefined);
+      await onSend(content, activeIds.length > 0 ? activeIds : undefined,
+        activeIds.map(id => useChatStore.getState().localAttachmentDetails[id]).filter((item): item is Attachment => !!item));
       if (getCurrentWsId() !== workspaceAtSend) return;
       // A user may keep typing while the request is in flight. Only clear
       // the submitted content; retain subsequent edits and their attachments.

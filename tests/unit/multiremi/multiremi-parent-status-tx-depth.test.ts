@@ -2,17 +2,19 @@
  * MUL-400 S1: every path the parent-status work touches must reach the database
  * with a transaction depth of at most 1.
  *
- * `PostgresSyncDatabase.transaction()` is a bare BEGIN/COMMIT with no savepoint
- * support, so a nested `transaction()` commits the outer one early, releases its
- * locks, and makes the outer ROLLBACK a no-op. The store's convention is that
- * the outermost caller owns the only transaction and everything inside it uses a
- * `...WithinTransaction` variant. This file wraps `db.transaction` in a depth
- * counter and asserts that ceiling for each entry point, plus the atomicity of
- * the E2 hook itself.
+ * Depth 1 is a hard contract for these entry points, not a bridge limit (Senior
+ * ruling cmt_96e1yqxgifms §1, docs/adr/0011-transaction-ownership-and-side-effect-timing.md).
+ * A nested `transaction()` is a SAVEPOINT on both backends (MUL-405), so it no
+ * longer commits the outer one early, but it is still an extra frame a helper
+ * added. The store's convention is that the outermost caller owns the only
+ * transaction and everything inside it uses a `...WithinTransaction` variant.
+ * This file wraps `db.transaction` in a depth counter that counts every frame,
+ * outer and nested, and asserts that ceiling for each entry point, plus the
+ * atomicity of the E2 hook itself.
  *
- * The counters run on both backends: SQLite here, and the same assertions run
- * against real Postgres when `MULTIREMI_TEST_POSTGRES_URL` points at one (the
- * PG suite imports this file's helpers, see `multiremi-postgres-tx-depth`).
+ * This file runs the counter on SQLite; multiremi-parent-status-pg-depth.test.ts
+ * runs the same full-frame count, plus the SQL control assertions, on real
+ * PostgreSQL.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";

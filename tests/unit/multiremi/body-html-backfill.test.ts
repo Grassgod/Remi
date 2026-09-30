@@ -4,7 +4,7 @@
  * The acceptance points from the issue description are the start gate — "只在
  * B1 的列存在时启动，不存在就不启动" — and the re-render rule, "`render_version`
  * 过期的行也重新渲染". Both are exercised against the real store on SQLite,
- * with the table created the way B1 will create it.
+ * with the table created by B1's migration.
  *
  * The task is driven by `runBatch()` rather than the timer, so the tests do not
  * depend on the pause between batches; `start()` is exercised separately for
@@ -21,23 +21,9 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
-/**
- * The B1 table, narrowed to the columns this task touches. B1's migration is
- * its own; the point here is that the task works against the shape it declares.
- */
-function createConversationLog(withBodyHtmlColumns = true): void {
-  const bodyHtml = withBodyHtmlColumns
-    ? "body_html TEXT, render_version TEXT,"
-    : "";
-  db!.exec(`
-    CREATE TABLE multiremi_conversation_log (
-      session_id TEXT NOT NULL,
-      seq INTEGER NOT NULL,
-      body_md TEXT,
-      ${bodyHtml}
-      PRIMARY KEY(session_id, seq)
-    )
-  `);
+function removeRenderColumns(): void {
+  db!.exec("ALTER TABLE multiremi_conversation_log DROP COLUMN body_html");
+  db!.exec("ALTER TABLE multiremi_conversation_log DROP COLUMN render_version");
 }
 
 function insertRow(
@@ -48,9 +34,10 @@ function insertRow(
   renderVersion: string | null = null,
 ): void {
   db!.run(
-    `INSERT INTO multiremi_conversation_log (session_id, seq, body_md, body_html, render_version)
-     VALUES (?, ?, ?, ?, ?)`,
-    [sessionId, seq, bodyMd, bodyHtml, renderVersion],
+    `INSERT INTO multiremi_conversation_log
+       (session_id, seq, id, kind, visibility, body_md, body_html, render_version, created_at, updated_at)
+     VALUES (?, ?, ?, 'message', 'shown', ?, ?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    [sessionId, seq, `${sessionId}:${seq}`, bodyMd, bodyHtml, renderVersion],
   );
 }
 
@@ -82,6 +69,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 describe("body_html backfill: start gate", () => {
   test("does not start when the table is absent", () => {
     const store = createStore();
+    db!.exec("DROP TABLE multiremi_conversation_log");
     const task = new BodyHtmlBackfillTask({ store });
     expect(task.start()).toBe(false);
     expect(task.started).toBe(false);
@@ -91,7 +79,7 @@ describe("body_html backfill: start gate", () => {
 
   test("does not start when the table exists without body_html/render_version", () => {
     const store = createStore();
-    createConversationLog(false);
+    removeRenderColumns();
     const task = new BodyHtmlBackfillTask({ store });
     expect(conversationLogBodyHtmlColumnsExist(store)).toBe(false);
     expect(task.start()).toBe(false);
@@ -101,7 +89,6 @@ describe("body_html backfill: start gate", () => {
 
   test("starts when both columns are present", () => {
     const store = createStore();
-    createConversationLog();
     const task = new BodyHtmlBackfillTask({ store, intervalMs: 60_000 });
     expect(conversationLogBodyHtmlColumnsExist(store)).toBe(true);
     expect(task.start()).toBe(true);
@@ -110,13 +97,13 @@ describe("body_html backfill: start gate", () => {
     expect(task.started).toBe(false);
   });
 
-  test("probe picks up a table that appears after the first attempt", () => {
-    // The API process can boot before B1's migration runs. `probe()` is what
-    // lets a caller retry without restarting.
+  test("probe picks up render columns that appear after the first attempt", () => {
     const store = createStore();
+    removeRenderColumns();
     const task = new BodyHtmlBackfillTask({ store });
     expect(task.start()).toBe(false);
-    createConversationLog();
+    db!.exec("ALTER TABLE multiremi_conversation_log ADD COLUMN body_html TEXT");
+    db!.exec("ALTER TABLE multiremi_conversation_log ADD COLUMN render_version TEXT");
     expect(task.probe()).toBe(true);
     expect(task.start()).toBe(true);
     task.stop();
@@ -124,7 +111,6 @@ describe("body_html backfill: start gate", () => {
 
   test("a table with no rows is not an error", async () => {
     const store = createStore();
-    createConversationLog();
     const task = new BodyHtmlBackfillTask({ store });
     expect(await task.runBatch()).toBe(0);
     task.stop();
@@ -134,7 +120,6 @@ describe("body_html backfill: start gate", () => {
 describe("body_html backfill: rendering", () => {
   test("fills rows whose body_html is NULL", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "# Title\n\ntext");
     insertRow("ises_1", 1, "**bold**");
     const task = new BodyHtmlBackfillTask({ store });
@@ -148,7 +133,6 @@ describe("body_html backfill: rendering", () => {
 
   test("re-renders rows whose render_version is stale", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "current", "<p>current</p>", RENDER_VERSION);
     insertRow("ises_1", 1, "stale", "<p>from an older pipeline</p>", "md-0000000000000000");
 
@@ -163,7 +147,6 @@ describe("body_html backfill: rendering", () => {
 
   test("treats a NULL render_version as stale, even with HTML present", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "text", "<p>orphan</p>", null);
     const task = new BodyHtmlBackfillTask({ store });
     expect(await task.runBatch()).toBe(1);
@@ -174,7 +157,6 @@ describe("body_html backfill: rendering", () => {
 
   test("is idempotent: a drained table produces no further work", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "one");
     const task = new BodyHtmlBackfillTask({ store });
     expect(await task.runBatch()).toBe(1);
@@ -187,7 +169,6 @@ describe("body_html backfill: rendering", () => {
 
   test("an empty body_md renders, rather than being skipped or throwing", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "");
     const task = new BodyHtmlBackfillTask({ store });
     expect(await task.runBatch()).toBe(1);
@@ -197,7 +178,6 @@ describe("body_html backfill: rendering", () => {
 
   test("one failing row does not stop the batch and stays a candidate", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "poison");
     insertRow("ises_1", 1, "good");
 
@@ -224,7 +204,6 @@ describe("body_html backfill: rendering", () => {
 
   test("processes at most one batch per call and in a stable order", async () => {
     const store = createStore();
-    createConversationLog();
     const total = BODY_HTML_BACKFILL_BATCH_SIZE + 10;
     for (let seq = 0; seq < total; seq++) insertRow("ises_1", seq, `row ${seq}`);
 
@@ -242,7 +221,6 @@ describe("body_html backfill: rendering", () => {
 
   test("renders across sessions, not just the first", async () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_a", 0, "alpha");
     insertRow("ises_b", 0, "beta");
     insertRow("chat_c", 0, "gamma");
@@ -260,7 +238,6 @@ describe("body_html backfill: the loop", () => {
     // The batches above are driven by hand; this is the one that goes through
     // the timer, so the wiring in `start()`/`tick()` is covered too.
     const store = createStore();
-    createConversationLog();
     for (let seq = 0; seq < 3; seq++) insertRow("ises_1", seq, `row ${seq}`);
 
     const task = new BodyHtmlBackfillTask({ store, intervalMs: 0 });
@@ -283,13 +260,13 @@ describe("body_html backfill: store API guardrails", () => {
     // The task's own gate covers this, but the store method has to be safe on
     // its own: it is reachable from anywhere the store is.
     const store = createStore();
+    db!.exec("DROP TABLE multiremi_conversation_log");
     expect(store.conversationLogRenderColumns()).toBeNull();
     expect(store.listConversationLogRowsNeedingBodyHtml(RENDER_VERSION, 10)).toEqual([]);
   });
 
   test("the guarded update only touches the addressed row", () => {
     const store = createStore();
-    createConversationLog();
     insertRow("ises_1", 0, "a");
     insertRow("ises_2", 0, "b");
     expect(store.setConversationLogBodyHtml("ises_1", 0, "<p>a</p>", RENDER_VERSION)).toBe(1);

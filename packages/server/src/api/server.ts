@@ -72,14 +72,16 @@ import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import {
   createHub,
+  type HubFillReader,
   type HubImpl,
   type ObservableLiveHub,
 } from "./hub/hub-core.js";
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { createPeerHubTransport } from "./hub/peer-hub-transport.js";
 import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
-import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
+import { hubHealthPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -133,6 +135,9 @@ import {
   withFeedbackRequestMetadata,
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
+import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { organizerTurnStats } from "./helpers/organizer.js";
 import {
   createRequestMetricsMiddleware,
   readProcessDbCounters,
@@ -193,6 +198,17 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import {
+  createPostgresStreamAuthReader,
+  createStreamAuthReader,
+} from "@multiremi/api/hub/stream-auth.js";
+import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
+import { createReadPool } from "@multiremi/store/db/read-pool.js";
+import { createConversationLogFillReader } from "./hub/conversation-log-fill-reader.js";
+import { stopHubReadResources } from "./hub/hub-lifecycle.js";
+import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import {
   createRealtimeFanout,
   type RealtimeFanout,
@@ -205,15 +221,6 @@ import {
   type PeerChannel,
 } from "./peer/peer-channel.js";
 import { registerPeerRoutes } from "./peer/peer-routes.js";
-import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
-import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
-import {
-  createPostgresStreamAuthReader,
-  createStreamAuthReader,
-} from "@multiremi/api/hub/stream-auth.js";
-import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
-import { createReadPool } from "@multiremi/store/db/read-pool.js";
-import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 
 /**
  * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
@@ -277,6 +284,8 @@ export interface MultiremiApiOptions {
   projectKnowledge?: ProjectKnowledgeServiceContract;
   repositoryWiki?: RepositoryWikiServiceContract;
   sessionArchives?: SessionArchiveService;
+  daemonTraceReader?: import("./trace/daemon-trace-reader.js").DaemonTraceReader;
+  getOrganizerTurnStats?: (taskId: string) => import("./helpers/organizer.js").OrganizerTurnStats | null;
   /** Absolute API origin advertised to daemons for direct archive uploads. */
   daemonDirectBaseUrl?: string | null;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
@@ -312,12 +321,29 @@ export interface MultiremiApiOptions {
   hub?: LiveHub | ObservableLiveHub | null;
   /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
   hubRingLimits?: Partial<HubRingLimits>;
+  /** B1 reader for log warm-up and peer reconciliation. */
+  hubFill?: HubFillReader | null;
   /**
-   * MUL-461: injected role takes precedence over the startup configuration;
+   * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
    * exists so a test (and `startMultiremiServer`) can pin the role without env.
    */
   apiRole?: ApiRole;
+  /**
+   * The shared Hub for browser sockets, health and human requests. Undefined
+   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
+   */
+  liveHub?: LiveHub;
+  /**
+   * MUL-438: how `stream.subscribe` is authorized. Undefined picks the reader for
+   * the configured backend (read-only pool on Postgres, the store on SQLite).
+   */
+  streamAuth?: StreamAuthReader;
+  /**
+   * MUL-438: the read pool a Postgres subscription check borrows, and the one the
+   * server closes on shutdown. Undefined builds one from `MULTIREMI_DATABASE_URL`.
+   */
+  readPool?: ReturnType<typeof createReadPool> | null;
   /** Resolved once at startup, including whether the default was configured. */
   apiRoleConfiguration?: ApiRoleConfiguration;
   /**
@@ -339,23 +365,30 @@ export interface MultiremiApiOptions {
    * effective role.
    */
   createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
-  /**
-   * The shared Hub for browser sockets, health and human requests. Undefined
-   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
-   */
-  liveHub?: LiveHub;
-  /**
-   * MUL-438: how `stream.subscribe` is authorized. Undefined picks the reader for
-   * the configured backend (read-only pool on Postgres, the store on SQLite).
-   */
-  streamAuth?: StreamAuthReader;
-  /**
-   * MUL-438: the read pool a Postgres subscription check borrows, and the one the
-   * server closes on shutdown. Undefined builds one from `MULTIREMI_DATABASE_URL`.
-   */
-  readPool?: ReturnType<typeof createReadPool> | null;
 }
 
+function resolveAppHub(
+  options: MultiremiApiOptions,
+  apiRole: ApiRole,
+  defaultFill: HubFillReader | null,
+  peer: PeerChannel | null = options.peerChannel ?? null,
+): LiveHub | null {
+  if (options.liveHub !== undefined) return options.liveHub;
+  if (options.hub !== undefined) return options.hub;
+  return createHub({
+    transport: peer?.enabled ? createPeerHubTransport({ peer }) : createLocalHubTransport(),
+    role: apiRole,
+    fill: options.hubFill === undefined ? defaultFill : options.hubFill,
+    ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
+  });
+}
+
+function attachOwnedConversationLogHub(store: MultiremiStore, hub: LiveHub | null, options: MultiremiApiOptions): () => void {
+  if (!hub || options.liveHub !== undefined || options.hub !== undefined) return () => {};
+  return store.subscribeConversationLog({ onEntry: (sessionId, payload) => {
+    hub.onEntry(sessionId, "target_seq" in payload ? { ...payload, session_id: sessionId } : payload);
+  } });
+}
 /**
  * The only two `/internal/` routes that exist, and so the only two the dashboard
  * auth middleware may skip. A prefix rule would silently exempt whatever route
@@ -364,20 +397,10 @@ export interface MultiremiApiOptions {
  */
 const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/health"]);
 
-function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole): LiveHub | null {
-  if (options.liveHub !== undefined) return options.liveHub;
-  if (options.hub !== undefined) return options.hub;
-  return createHub({
-    transport: createLocalHubTransport(),
-    role: apiRole,
-    ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
-  });
-}
-
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const platformUpdaterToken = options.platformUpdaterToken
     ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
     ?? "";
@@ -392,6 +415,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
+  const traceReader = new TraceReader({
+    store,
+    daemon: options.daemonTraceReader ?? {
+      read: async ({ runtimeId }) => ({ ok: false, code: "daemon_unreachable", runtime_id: runtimeId }),
+    },
+    archive: new SessionArchiveReader({ store, root: sessionArchives.config.root }),
+  });
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   // MUL-461: the process's ONE effective role. The guard middleware, the health
   // payloads, the realtime fanout and the metrics lines all read this value, so
@@ -421,7 +451,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
   // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
   // an explicitly injected hub is shared rather than rebuilt.
-  const hub = resolveAppHub(options, effectiveApiRole);
+  // An app factory has no shutdown hook; only a server-owned Hub may keep an
+  // asynchronous reader alive after the caller closes the store.
+  const hub = resolveAppHub(options, effectiveApiRole, null);
+  attachOwnedConversationLogHub(store, hub, options);
 
   // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
   // detach handle, but an app has no shutdown hook — the listener lives exactly as
@@ -453,6 +486,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     projectKnowledge,
     repositoryWiki,
     sessionArchives,
+    traceReader,
+    getOrganizerTurnStats: options.getOrganizerTurnStats ?? ((taskId) => organizerTurnStats(store, taskId)),
     messagingProviders,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
@@ -687,7 +722,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     ...extra,
   });
   app.get("/health", (c) => c.json(healthBody(hubHealthPayload(hub))));
-  app.get("/readyz", (c) => c.json(healthBody(hubReadyzPayload(hub))));
+  app.get("/readyz", (c) => c.json(healthBody()));
   app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
@@ -952,7 +987,23 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
-  const liveHub = resolveAppHub(options, effectiveApiRole);
+  // Create the shared channel before the Hub so both server subscriptions and
+  // the realtime fanout use the same process identity and queue.
+  const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
+    : options.peerChannel;
+  const store = options.store ?? new MultiremiStore();
+  // The Hub fill and stream auth share this pool; only the server-created one is ours to close.
+  const readPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
+    ? null
+    : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole }));
+  const ownedReadPool = options.readPool === undefined ? readPool : null;
+  const liveHub = resolveAppHub(options, effectiveApiRole,
+    createConversationLogFillReader(store, readPool), peer);
   if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
@@ -961,7 +1012,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     log.warn(`[configuration-degradation] ${degradation.message}`);
   }
 
-  const store = options.store ?? new MultiremiStore();
+  const detachConversationLogHub = attachOwnedConversationLogHub(store, liveHub, options);
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
   const scheduler = backgroundJobs
@@ -1013,7 +1064,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   if (backgroundJobs) store.startNotificationDeliverySweeper();
   bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
@@ -1026,13 +1077,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // `options.peerChannel` is the injection point the two-server tests use.
   // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
   // no sender, no subscriber, and the routes uniformly answer 401.
-  const peerUrl = resolvePeerUrl();
-  const peerSecret = options.peerSecret === undefined
-    ? resolvePeerSecret()
-    : (options.peerSecret ?? "");
-  const peer = options.peerChannel === undefined
-    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
-    : options.peerChannel;
   // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
   // resolved once by startup-env, including an injected role). Resolving it
   // again here from env would disagree with an injected `apiRole`: a process
@@ -1071,6 +1115,20 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
+  const streamAuth: StreamAuthReader = options.streamAuth
+    ?? (readPool
+      ? createPostgresStreamAuthReader(readPool)
+      : createStreamAuthReader(store, { role: effectiveApiRole }));
+  const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "log",
+  });
+  const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "trace",
+  });
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
   // is exactly the two deliveries that used to live inline here.
@@ -1084,27 +1142,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       browserUser: browserUserWebSockets,
       browserScope: browserScopeWebSockets,
     },
-  });
-  // A caller-supplied auth reader owns its pool; when this function builds the
-  // Postgres one, it also owns closing it at shutdown.
-  const ownedReadPool = options.streamAuth
-    ? null
-    : (options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
-      ? null
-      : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL })));
-  const streamAuth: StreamAuthReader = options.streamAuth
-    ?? (ownedReadPool
-      ? createPostgresStreamAuthReader(ownedReadPool)
-      : createStreamAuthReader(store));
-  const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
-    hub: liveHub,
-    auth: streamAuth,
-    endpoint: "log",
-  });
-  const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
-    hub: liveHub,
-    auth: streamAuth,
-    endpoint: "trace",
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,
@@ -1315,16 +1352,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     browserWebSockets,
     jitterMs: options.jitterMs,
   });
-  // The pool this function built is this function's to close. A caller-supplied
-  // reader owns its own pool (see `readPool` in the options), and closing the
-  // server must not reach into it.
-  const closeOwnedReadPool = (): void => {
-    if (!ownedReadPool) return;
-    void ownedReadPool.close().catch(() => {
-      // Shutdown is best-effort: the process is going away and the store's own
-      // handle is closed by its owner.
-    });
-  };
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
@@ -1345,8 +1372,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     issueTitleScheduler?.stop();
     store.stopNotificationDeliverySweeper();
     bodyHtmlBackfill?.stop();
-    closeOwnedReadPool();
-    if (options.liveHub === undefined && options.hub === undefined) (liveHub as HubImpl).shutdown();
+    stopHubReadResources(
+      detachConversationLogHub,
+      options.liveHub === undefined && options.hub === undefined ? liveHub as HubImpl : null,
+      ownedReadPool,
+    );
     return stopServer(closeActiveConnections);
   };
   return serverWithResync;

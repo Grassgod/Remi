@@ -414,6 +414,11 @@
     "shared_issue": "Shared issue",
     "unavailable_title": "This shared issue is unavailable",
     "unavailable_description": "The link may have expired or sharing may have been stopped.",
+    "trace_loading": "Loading trace…",
+    "trace_failed": "Could not load the trace. Close and reopen to retry.",
+    "trace_unreachable": "daemon {{name}} is currently offline",
+    "trace_lost": "Lost when the daemon was retired",
+    "trace_backfilling": "Archive backfill in progress",
     "description": "Description",
     "no_description": "No description",
     "details": "Details",
@@ -435,6 +440,9 @@
     "loading": "Loading..."
   },
   "activity": {
+    "expand_earlier": "Load {{count}} earlier entries",
+    "expand_newer": "Load {{count}} newer entries",
+    "remaining_earlier": "{{count}} earlier entries",
     "created": "created this issue",
     "self_assigned": "self-assigned this issue",
     "assigned_to": "assigned to {{name}}",

@@ -28,7 +28,14 @@
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
-    "loading_older": "이전 메시지를 불러오는 중…"
+    "loading_older": "이전 메시지를 불러오는 중…",
+    "expand_older": "이전 메시지 30개 보기",
+    "earliest": "첫 메시지입니다",
+    "sending": "보내는 중…",
+    "sent": "전송됨",
+    "send_failed": "전송 실패 ·",
+    "retry": "다시 시도",
+    "retry_send": "이 메시지 다시 보내기"
   },
   "session_history": {
     "untitled": "제목 없음",

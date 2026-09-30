@@ -1,5 +1,18 @@
 # Runtime Model Capabilities
 
+## Context Window Declarations
+
+Claude gateway models have a separate administrator-controlled 1M context switch
+in Settings > Model gateway, defaulting off. The declaration is stored independently
+of discovery snapshots and reasoning levels, so a probe cannot erase it. The
+reasoning-level listing includes each model's `context_window` and retains
+context-only rows when an inventory entry disappears. The write command is
+`remi workspace relay context-window update claude --model <id> --one-million`
+(or `--clear`). It neither invents reasoning metadata nor changes model
+executability. Configuration follows the daemon relay wire; Runtime-specific
+Claude profiles are outside its scope. Selection and rollout are documented in
+[Claude Context Windows](claude-context-window.md).
+
 For workspace Codex relays, two gateway endpoints serve different purposes:
 `<base_url>/models` supplies available IDs and labels, while
 `<origin>/backend-api/codex/models` supplies the native model catalog, including

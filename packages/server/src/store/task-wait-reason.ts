@@ -1,4 +1,5 @@
 export const QUEUED_CAPABILITY_GRACE_MS = 120_000;
+export const QUEUED_CAPABILITY_FALLBACK_MS = 5 * 60_000;
 // This lightweight alert uses task creation age. Before adding Inbox/Feishu
 // delivery, persist starvation_started_at and measure continuous capability failure.
 export const QUEUED_CAPABILITY_ALERT_MS = 15 * 60_000;
@@ -58,6 +59,7 @@ export interface DeviceRoutingState {
   projectId: string | null;
   projectHasDevices: boolean;
   machineBound: boolean;
+  runtimeWorkspaceOnMachine: boolean;
   dedicated: boolean;
 }
 
@@ -66,7 +68,8 @@ export function deviceRoutingRepair(state: DeviceRoutingState, machineName: stri
   cause: string; actions: string[];
 } | null {
   const bindingAllowed = !state.projectId || !state.projectHasDevices || state.machineBound;
-  const dedicatedAllowed = !state.dedicated || (Boolean(state.projectId) && state.machineBound);
+  const dedicatedAllowed = !state.dedicated || (Boolean(state.projectId) && state.machineBound)
+    || state.runtimeWorkspaceOnMachine;
   if (bindingAllowed && dedicatedAllowed) return null;
   const actions: string[] = [];
   if (state.projectId) actions.push(`把 ${machineName} 加回项目的设备绑定`);

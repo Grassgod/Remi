@@ -1,35 +1,31 @@
-"use client";
+import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
+import { workspaceKeys } from "@multiremi/core/workspace/queries";
+import { readIssueLogBootstrap } from "../../../../../features/issues/server-log";
+import IssuePageClient from "../../../../../features/issues/issue-page-client";
 
-import { use, useCallback } from "react";
-import { IssueDetail } from "@multiremi/views/issues/components";
-import { useNavigation } from "@multiremi/views/navigation";
-import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
-import { useWorkspacePaths } from "@multiremi/core/paths";
-
-export default function IssueDetailPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ id: string }>;
-  searchParams: Promise<{ session?: string | string[] }>;
+export default async function IssueDetailPage({ params, searchParams }: {
+  params: Promise<{ workspaceSlug: string; id: string }>;
+  searchParams: Promise<{ session?: string | string[]; comment?: string | string[] }>;
 }) {
-  const { id } = use(params);
-  const query = use(searchParams);
-  const initialIssueSessionId =
-    typeof query.session === "string" ? query.session : undefined;
-  const navigation = useNavigation();
-  const paths = useWorkspacePaths();
-  const handleIssueSessionChange = useCallback(
-    (sessionId: string) => navigation.replace(paths.issueSession(id, sessionId)),
-    [id, navigation, paths],
-  );
+  const { workspaceSlug, id } = await params;
+  const query = await searchParams;
+  const sessionId = typeof query.session === "string" ? query.session : undefined;
+  const commentId = typeof query.comment === "string" ? query.comment : undefined;
+  const initial = await readIssueLogBootstrap(workspaceSlug, id, sessionId, commentId);
+  const queries = new QueryClient();
+  if (initial) {
+    queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, id), initial.issue);
+    queries.setQueryData(issueKeys.sessions(id), initial.sessions);
+    queries.setQueryData(workspaceKeys.members(initial.issue.workspace_id), initial.members);
+    queries.setQueryData(issueKeys.children(initial.issue.workspace_id, id), initial.children);
+    queries.setQueryData(issueKeys.tasks(id), initial.tasks);
+    if (initial.parentIssue) queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, initial.parentIssue.id), initial.parentIssue);
+  }
   return (
-    <ErrorBoundary resetKeys={[id]}>
-      <IssueDetail
-        issueId={id}
-        initialIssueSessionId={initialIssueSessionId}
-        onIssueSessionChange={handleIssueSessionChange}
-      />
-    </ErrorBoundary>
+    <HydrationBoundary state={dehydrate(queries)}>
+      <IssuePageClient issueId={id} initialIssueSessionId={sessionId ?? initial?.log.sessionId} highlightCommentId={commentId}
+        initialLog={initial?.log} initialData={initial ?? undefined} />
+    </HydrationBoundary>
   );
 }

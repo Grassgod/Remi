@@ -167,12 +167,25 @@ describe("CLI capabilities manifest", () => {
   });
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
+    // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
+    // machine-to-server protocol, so they raise the exempt count with the total.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 678,
-      // A-5/A-6 remove daemon routes; the parent adds trace WS and main adds peer routes.
-      exempt: 70,
+      // MUL-479's context-window PUT maps to `remi workspace relay context-window
+      // update`, so it raises the mapped count with the total.
+      mapped: 683,
+      // MUL-407 adds one daemon-internal route (turning decision cards back into
+      // click handlers after a host restart), which the existing `/api/daemon/`
+      // rule exempts rather than mapping to a user command.
+      // MUL-438 adds the browser trace socket (`GET /api/trace/ws`), exempt under
+      // the existing `websocket_transport` rule: a long-lived stream is not a CLI
+      // command surface.
+      //
+      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
+      // channel), also exempt under `daemon_internal_protocol`: machine-to-server
+      // traffic between two API processes with no user-facing command.
+      exempt: 111,
       missing: 0,
-      total: 748,
+      total: 794,
     });
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
@@ -196,6 +209,8 @@ describe("CLI capabilities manifest", () => {
       .toEqual({ command: "workspace.relay.reasoning-levels.get" });
     expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
       .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/context-window"])
+      .toEqual({ command: "workspace.relay.context-window.update" });
     expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
       command: "remi workspace relay reasoning-levels update",
       mutation: "write",
@@ -270,7 +285,7 @@ describe("CLI capabilities manifest", () => {
       deprecated_since: "0.3.0",
     });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
-    expect(Object.keys(manifest.aliases)).toHaveLength(47);
+    expect(Object.keys(manifest.aliases)).toHaveLength(48);
     for (const [legacy, alias] of Object.entries(manifest.aliases)) {
       expect(migrationDoc, legacy).toContain(`| \`${legacy}\` | \`${alias.replacement}\` |`);
     }

@@ -569,6 +569,12 @@ model: { provider: string; model: string } | null;                // 最后一�
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**回填的历史 trace 是稀疏的**，
   `head ≠ event_count`（A11）。
 
+HTTP 兼容入口 `POST /api/daemon/tasks/:taskId/complete|fail` 接受可选的同形 `trace` 块。
+B5 只读取其中的 `event_count`：非负安全整数才有效，非法值按未提供处理并记一条 warn。
+只有明确的 `event_count === 0` 才把热指针写成 `none`；缺失或正数保留 daemon 指针，
+不通过旧消息表推断空 trace。旧的空任务因此可能暂时返回 `unreachable` 或 `not_found`，
+由 B8 回填在确认旧表无事件且没有 archive member 后写成 `none`。
+
 ### 5.4c `deriveFinalReply` 与直方图
 
 `packages/shared/src/trace-derive.ts` 提供三个纯函数，daemon 完成时与 B8 回填**共用**，

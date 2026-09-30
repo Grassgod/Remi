@@ -1,6 +1,7 @@
 import { reportFrame } from "../../fixtures/report-session.js";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { IssueTopicConfigError, readWorkspaceIssueTopicsLenient } from "@multiremi/issue-topics/config.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -89,6 +90,338 @@ function prepareReport(store: MultiremiStore) {
 }
 
 describe("Feishu Issue topics", () => {
+  describe("unexpected configuration errors", () => {
+    it("propagates an ordinary Error from the settings getter unchanged", () => {
+      const failure = new Error("Unexpected settings getter failure");
+      const settings = { get issueTopics(): unknown { throw failure; } };
+      const onInvalid = spyOn({ report: () => {} }, "report");
+      let caught: unknown;
+      try {
+        readWorkspaceIssueTopicsLenient(settings, onInvalid);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+      expect(onInvalid).not.toHaveBeenCalled();
+    });
+
+    it("propagates an ordinary Error from the invalid callback unchanged", () => {
+      const failure = new Error("Unexpected invalid callback failure");
+      const onInvalid = spyOn({ report: (_error: IssueTopicConfigError) => { throw failure; } }, "report");
+      let caught: unknown;
+      try {
+        readWorkspaceIssueTopicsLenient({ issueTopics: null }, onInvalid);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+      expect(onInvalid).toHaveBeenCalledTimes(1);
+      expect(onInvalid.mock.calls[0]?.[0]).toBeInstanceOf(IssueTopicConfigError);
+    });
+  });
+
+  const invalidValue = "invalid-private-config-value";
+  const invalidConfigs: {
+    name: string;
+    raw: unknown;
+    enabled: boolean;
+    chatId: string;
+    message: string;
+  }[] = [
+    {
+      name: "unknown notification mode",
+      raw: { enabled: true, chatId: "oc_issue_topics", notifyMode: invalidValue },
+      enabled: true, chatId: "oc_issue_topics",
+      message: "issueTopics.notifyMode must be group_owner, person, or none",
+    },
+    {
+      name: "non-array project IDs",
+      raw: { enabled: true, chatId: "oc_issue_topics", projectIds: invalidValue },
+      enabled: true, chatId: "oc_issue_topics",
+      message: "issueTopics.projectIds must be an array",
+    },
+    {
+      name: "empty project ID",
+      raw: { enabled: true, chatId: "oc_issue_topics", projectIds: ["", invalidValue] },
+      enabled: true, chatId: "oc_issue_topics",
+      message: "issueTopics.projectIds[0] must be a non-empty string",
+    },
+    {
+      name: "non-boolean enabled",
+      raw: { enabled: "true", chatId: "oc_issue_topics" },
+      enabled: false, chatId: "oc_issue_topics",
+      message: "issueTopics.enabled must be a boolean",
+    },
+    {
+      name: "enabled without chat ID",
+      raw: { enabled: true },
+      enabled: true, chatId: "",
+      message: "issueTopics.chatId is required when enabled",
+    },
+    {
+      name: "string config", raw: invalidValue,
+      enabled: false, chatId: "", message: "issueTopics must be an object",
+    },
+    {
+      name: "array config", raw: [],
+      enabled: false, chatId: "", message: "issueTopics must be an object",
+    },
+    {
+      name: "null config", raw: null,
+      enabled: false, chatId: "", message: "issueTopics must be an object",
+    },
+  ];
+
+  for (const scenario of invalidConfigs) {
+    for (const matching of [true, false]) {
+      it(`accepts inbound messages with ${scenario.name} (${matching ? "matching" : "other"} group)`, () => {
+        const { store, revision } = scaffold();
+        store.submitFeishuBotMessage("local", "rt_bot", {
+          revision, externalSessionKey: "oc_discovery", externalMessageId: "om_discovery",
+          senderOpenId: "ou_issue_topic_owner", text: "Hello",
+        });
+        store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
+        store.updateWorkspace("local", { settings: { issueTopics: scenario.raw } });
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const chatId = matching ? "oc_issue_topics" : "oc_other";
+          const result = store.submitFeishuBotMessage("local", "rt_bot", {
+            revision, chatType: "group", chatId,
+            externalSessionKey: `${chatId}:thread:om_invalid_config`, externalMessageId: "om_invalid_config",
+            senderOpenId: "ou_issue_topic_owner", text: "Accept this group message",
+          });
+          expect(result.senderAllowed).toBe(true);
+          expect(store.getTask(result.taskId)).not.toBeNull();
+          const issueId = store.getFeishuIssueIdForChatSession(result.chatSessionId);
+          const createsIssue = matching && scenario.enabled && scenario.chatId === "oc_issue_topics";
+          expect(Boolean(issueId)).toBe(createsIssue);
+          expect(store.listIssues({ workspaceId: "local" })).toHaveLength(createsIssue ? 1 : 0);
+          if (createsIssue) {
+            expect(store.getIssue(issueId!)?.projectId).toBeNull();
+            expect(store.getTask(result.taskId)?.issueId).toBe(issueId);
+          }
+          expect(warn).toHaveBeenCalledTimes(1);
+          expect(warn.mock.calls[0]?.[0]).toContain("invalid issueTopics config for local");
+          expect(JSON.stringify(warn.mock.calls)).not.toContain(invalidValue);
+          expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(scenario.raw);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    }
+
+    it(`returns recovered settings and a static reason for ${scenario.name}`, async () => {
+      const { store } = scaffold();
+      store.updateWorkspace("local", { settings: { issueTopics: scenario.raw } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const response = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        workspace_id: "local",
+        config: {
+          enabled: scenario.enabled, chat_id: scenario.chatId,
+          project_ids: null, notify_mode: "group_owner", notify_open_id: null,
+        },
+        invalid: { code: "issue_topic_config_invalid", message: scenario.message },
+      });
+      expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(scenario.raw);
+    });
+
+    it(`repairs ${scenario.name} with valid replacement settings`, async () => {
+      const { store } = scaffold();
+      store.updateWorkspace("local", { settings: { preserved: "setting", issueTopics: scenario.raw } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const path = "/api/workspaces/local/issue-topics";
+      const response = await app.request(path, {
+        method: "PUT", headers: JSON_HEADERS,
+        body: JSON.stringify({ enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none" }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toEqual({
+        workspace_id: "local",
+        config: { enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none", notify_open_id: null },
+      });
+      expect(store.getWorkspace("local")?.settings).toEqual({
+        preserved: "setting", issueTopics: { enabled: true, chatId: "oc_repaired", notifyMode: "none" },
+      });
+      expect(await (await app.request(path, { headers: JSON_HEADERS })).json()).toEqual(body);
+    });
+  }
+
+  for (const scenario of ["missing recipient", "invalid recipient", "invalid projects", "different chat"] as const) {
+    it(`accepts inbound messages with an invalid person config (${scenario})`, () => {
+      const { store, revision } = scaffold();
+      store.submitFeishuBotMessage("local", "rt_bot", {
+        revision, externalSessionKey: "oc_discovery", externalMessageId: "om_discovery",
+        senderOpenId: "ou_issue_topic_owner", text: "Hello",
+      });
+      store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
+      const project = store.createProject({ title: "Topic project", workspaceId: "local" });
+      const issueTopics = {
+        enabled: true, chatId: "oc_issue_topics", notifyMode: "person",
+        ...(scenario === "missing recipient" ? {} : { notifyOpenId: "invalid-private-recipient" }),
+        projectIds: scenario === "invalid projects" ? [42] : [project.id],
+      };
+      store.updateWorkspace("local", { settings: { issueTopics } });
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = store.submitFeishuBotMessage("local", "rt_bot", {
+          revision, chatType: "group", chatId: scenario === "different chat" ? "oc_other" : "oc_issue_topics",
+          externalSessionKey: "oc_issue_topics:thread:om_invalid_config", externalMessageId: "om_invalid_config",
+          senderOpenId: "ou_issue_topic_owner", text: "Accept this group message",
+        });
+        expect(result.senderAllowed).toBe(true);
+        expect(store.getTask(result.taskId)).not.toBeNull();
+        const issueId = store.getFeishuIssueIdForChatSession(result.chatSessionId);
+        if (scenario === "different chat") {
+          expect(issueId).toBeNull();
+          expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
+        } else {
+          expect(store.getIssue(issueId!)?.projectId).toBe(scenario === "invalid projects" ? null : project.id);
+          expect(store.getTask(result.taskId)?.issueId).toBe(issueId);
+          expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
+        }
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("invalid issueTopics config for local");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("invalid-private-recipient");
+        expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(issueTopics);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  it("returns recovered settings and static validation details for an invalid stored config", async () => {
+    const { store } = scaffold();
+    const issueTopics = {
+      enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId: "invalid-private-recipient",
+    };
+    store.updateWorkspace("local", { settings: { issueTopics } });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const response = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      workspace_id: "local",
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+      invalid: {
+        code: "issue_topic_config_invalid",
+        message: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+      },
+    });
+    expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(issueTopics);
+  });
+
+  it("keeps the full response unchanged for valid stored settings", async () => {
+    const { store } = scaffold();
+    const project = store.createProject({ title: "Topic project", workspaceId: "local" });
+    store.updateWorkspace("local", { settings: { issueTopics: {
+      enabled: true, chatId: "oc_issue_topics", projectIds: [project.id], notifyMode: "person", notifyOpenId: "ou_reviewer",
+    } } });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const response = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      workspace_id: "local",
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
+    });
+  });
+
+  for (const notifyOpenId of [undefined, "invalid-private-recipient"]) {
+    it(`rejects an omitted recipient repair with a static 400 (stored recipient=${notifyOpenId === undefined ? "missing" : "invalid"})`, async () => {
+      const { store } = scaffold();
+      const issueTopics = { enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId };
+      store.updateWorkspace("local", { settings: { issueTopics } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const response = await app.request("/api/workspaces/local/issue-topics", {
+        method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ enabled: true, chat_id: "oc_repaired" }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        code: "issue_topic_config_invalid",
+        error: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+      });
+      expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(JSON.parse(JSON.stringify(issueTopics)));
+    });
+  }
+
+  for (const repair of [{ notify_mode: "none" }, { notify_open_id: "ou_repaired" }]) {
+    it(`repairs an invalid stored person config by replacing ${Object.keys(repair)[0]}`, async () => {
+      const { store } = scaffold();
+      store.updateWorkspace("local", { settings: { preserved: "setting", issueTopics: {
+        enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId: "invalid-private-recipient", projectIds: [42],
+      } } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const path = "/api/workspaces/local/issue-topics";
+      const response = await app.request(path, {
+        method: "PUT", headers: JSON_HEADERS,
+        body: JSON.stringify({ enabled: true, chat_id: "oc_repaired", ...repair }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).not.toHaveProperty("invalid");
+      expect(body.config).toMatchObject({
+        chat_id: "oc_repaired", project_ids: null,
+        notify_mode: "notify_mode" in repair ? "none" : "person",
+        notify_open_id: "notify_open_id" in repair ? "ou_repaired" : null,
+      });
+      expect(store.getWorkspace("local")?.settings.preserved).toBe("setting");
+      expect(JSON.stringify(store.getWorkspace("local")?.settings)).not.toContain("invalid-private-recipient");
+      expect(await (await app.request(path, { headers: JSON_HEADERS })).json()).toEqual(body);
+    });
+  }
+
+  for (const rollback of [false, true]) {
+    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "publishes Chat before terminal events after commit"} on SQLite`, () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const wake = prepareReport(store);
+      const issue = store.getIssue(wake.issueId!)!;
+      db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE issue_id = ? AND chat_session_id IS NULL", [issue.id]);
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
+      db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
+      const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const chatActorIds: Array<string | null | undefined> = [];
+      const unsubscribe = store.onWorkspaceEvent(event => {
+        events.push({ type: event.type, inTransaction: db!.inTransaction });
+        if (event.type === "chat:message") chatActorIds.push(event.actorId);
+      });
+      const database = db!;
+      const originalRun = database.run;
+      let injected = false;
+      if (rollback) database.run = function run(sql, ...params) {
+        const result = originalRun.call(this, sql, ...params);
+        if (sql.includes("INSERT INTO multiremi_feishu_bot_round_pushes")) {
+          injected = true;
+          throw new Error("MUL-465 SQLite round rollback injection");
+        }
+        return result;
+      };
+      try {
+        const complete = () => store.completeTask(leader.id, { output: "Next round result" });
+        if (rollback) expect(complete).toThrow("MUL-465 SQLite round rollback injection");
+        else expect(complete().status).toBe("completed");
+      } finally {
+        database.run = originalRun;
+        unsubscribe();
+      }
+      if (rollback) {
+        expect(injected).toBe(true);
+        expect(store.getTask(leader.id)!.status).toBe("running");
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
+        expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
+        expect(events).toEqual([]);
+      } else {
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+        expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
+        expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
+        expect(events[0].type).toBe("chat:message");
+        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+      }
+    });
+  }
+
   for (const rollback of [false, true]) {
     it(`publishes group Issue creation ${rollback ? "never on rollback" : "after commit"}`, () => {
       const { store, revision } = scaffold();

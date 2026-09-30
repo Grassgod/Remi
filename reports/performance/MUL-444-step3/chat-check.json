@@ -1,0 +1,103 @@
+{
+  "results": [
+    {
+      "name": "seeded Chat session exposes a 30-row log tail",
+      "ok": true,
+      "detail": {
+        "rows": 30,
+        "head": 40
+      }
+    },
+    {
+      "name": "real Chat log endpoint survives the local API proxy",
+      "ok": true,
+      "detail": {
+        "direct": 200,
+        "proxy": 200
+      }
+    },
+    {
+      "name": "SSR Chat opens on its latest 30 rows at the bottom",
+      "ok": true,
+      "detail": {
+        "count": 30,
+        "bottom": 0,
+        "skeletons": 0
+      }
+    },
+    {
+      "name": "browser has no page error or credential in HTML",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "manual earlier pagination preserves the old row position",
+      "ok": true,
+      "detail": {
+        "before": 173,
+        "after": 172.5
+      }
+    },
+    {
+      "name": "ten sends remain single rows and pinned to the bottom",
+      "ok": true,
+      "detail": {
+        "bottom": 0,
+        "eachOnce": true,
+        "sendPositions": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "reconnect keeps each optimistic/server pair as one row",
+      "ok": true
+    },
+    {
+      "name": "final page has no JavaScript errors",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "no-cookie SSR shell recovers Chat rows with browser Bearer",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "bearerRead": true
+      }
+    },
+    {
+      "name": "401 SSR shell recovers Chat rows with browser Bearer",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "bearerRead": true
+      }
+    },
+    {
+      "name": "503 SSR shell recovers Chat rows with browser Bearer",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "bearerRead": true
+      }
+    },
+    {
+      "name": "timeout SSR shell recovers Chat rows with browser Bearer",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "bearerRead": true
+      }
+    }
+  ]
+}

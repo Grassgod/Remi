@@ -34,8 +34,30 @@ use `--workspace`, `--statuses`/`--status`, `--priority`, `--assignee-type`,
 `--assignee`, `--assignee-ids`, `--project`, `--project-ids`, `--parent`,
 `--metadata`, and hyphenated forms of the Boolean flags. Assignee references
 use the shared resolver, including user IDs, member IDs, Agent IDs and names.
+The compatibility list query also accepts the legacy `assignee_type` spelling
+when `assignee_types` is absent; the plural takes precedence, including when
+empty. Native queries retain `assigneeTypes`/`assignee_types` only. The CLI sends
+`assignee_types` for `--assignee-type`.
 Like the existing list, ordering is `updated_at DESC`; `sort_by`, `sort_order`,
 `creator_id` and `involves_user_id` currently have no effect.
+
+`remi issue children <key-or-id>` accepts either reference. Both children batch
+routes resolve `parent_ids` to parent IDs and deduplicate those IDs before
+listing children. A full issue ID resolves globally, whatever workspace is
+selected, so the CLI's default `X-Workspace-ID` never hides a parent the caller
+can access; the workspace only distinguishes keys, numbers and ID prefixes.
+For those, explicit workspace selectors take precedence in this order: query
+`workspace_id` (native requests first check `workspaceId`, then `workspace_id`),
+`X-Workspace-ID`, then `X-Workspace-Slug` resolved to a workspace ID. An unknown
+explicit slug skips keys, numbers and prefixes but still resolves full IDs. With
+no explicit selector, resolution remains unscoped and does not infer token or
+member defaults. Non-ID references follow `getIssueByRef`, like
+`/api/issues/:id/children`: a unique match wins, or, without a workspace
+selector, the unique local row takes precedence among multiple matches. An
+explicit workspace restricts resolution to that workspace's row. Unknown or
+still unresolved references and inaccessible parents are skipped; children must
+also pass the existing workspace access check. Compatibility responses retain
+snake_case Issue fields, while native responses retain camelCase.
 
 `include_archived_total=true` (CLI `--include-archived-total`) adds the
 workspace-wide archived count, independent of other list filters. Omission
@@ -500,7 +522,8 @@ remove any alias.
 | `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
 | `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
-| `remi task messages` | `remi task message list` | One-release compatibility alias |
+| `remi task message list` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
+| `remi task messages` | `remi task trace read` | One-release compatibility alias |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
 | `remi agent edit` | `remi agent update` | One-release compatibility alias |

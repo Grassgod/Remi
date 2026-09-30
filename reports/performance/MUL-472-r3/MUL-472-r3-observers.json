@@ -1,0 +1,1017 @@
+{
+  "scope": "all frontend runtime TypeScript, excluding tests/build/dependencies; AST calls plus direct API/key audit in report",
+  "calls": [
+    {
+      "file": "frontend/packages/core/agents/use-agent-activity.ts",
+      "line": 76,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspaceActivityMap",
+      "expression": "useQuery({\n    ...agentListOptions(wsId ?? \"\"),\n    enabled: !!wsId,\n  })",
+      "category": "不门控（主体）",
+      "reason": "AgentsPage/ActivityTab 的主体 activity 图依赖 agent 集合。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-agent-presence.ts",
+      "line": 70,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspacePresenceMap",
+      "expression": "useQuery({\n    ...agentListOptions(wsId ?? \"\"),\n    enabled: !!wsId && snapshotGated,\n  })",
+      "category": "页面级",
+      "reason": "agents 与 snapshot 同时使用 snapshotEnabled ?? gateOpen；现有行/头像调用保持门控。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-agent-presence.ts",
+      "line": 144,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useAgentPresenceDetail",
+      "expression": "useQuery({\n    ...agentListOptions(wsId ?? \"\"),\n    enabled: !!wsId && snapshotGated,\n  })",
+      "category": "页面级",
+      "reason": "agents 与 snapshot 同时使用 snapshotEnabled ?? gateOpen；现有行/头像调用保持门控。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-workspace-agent-availability.ts",
+      "line": 48,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspaceAgentAvailability",
+      "expression": "useQuery({\n    ...agentListOptions(wsId),\n    enabled,\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-workspace-presence-prefetch.ts",
+      "line": 35,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspacePresencePrefetch",
+      "expression": "useQuery({ ...agentListOptions(wsId ?? \"\", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces })",
+      "category": "外壳",
+      "reason": "WorkspacePresencePrefetch 跨路由常驻；warmChildSurfaces 来自 shell gate。"
+    },
+    {
+      "file": "frontend/packages/core/workspace/hooks.ts",
+      "line": 21,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "useActorName",
+      "expression": "useQuery(agentListOptions(wsId, {\n    enabled: options.agentsEnabled ?? gateOpen,\n  }))",
+      "category": "页面级 / 主体例外",
+      "reason": "默认 gateOpen；仅 assignee board/swimlane 的列标题显式 agentsEnabled/squadsEnabled=true（主体分组名称）。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-activity-hover-content.tsx",
+      "line": 52,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentActivityHoverContent",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-detail-page.tsx",
+      "line": 75,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentDetailPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-live-peek-card.tsx",
+      "line": 35,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentLivePeekCard",
+      "expression": "useQuery(\n    agentListOptions(wsId),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-profile-card.tsx",
+      "line": 26,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentProfileCard",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agents-page.tsx",
+      "line": 103,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentsPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/autopilots/components/autopilot-dialog.tsx",
+      "line": 301,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AutopilotDialog",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/autopilots/components/pickers/agent-picker.tsx",
+      "line": 41,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentPicker",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-window.tsx",
+      "line": 151,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "ChatWindow",
+      "expression": "useQuery(\n    agentListOptions(wsId, { enabled: chatVisible }),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+    },
+    {
+      "file": "frontend/packages/views/dashboard/components/dashboard-page.tsx",
+      "line": 180,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "DashboardPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/execution-log-section.tsx",
+      "line": 76,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "ExecutionLogSection",
+      "expression": "useQuery({ ...agentListOptions(wsId ?? \"\"), enabled: !!wsId && afterFirstScreen })",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-detail.tsx",
+      "line": 111,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "IssueDetail",
+      "expression": "useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }))",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issues-header.tsx",
+      "line": 202,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "ActorSubContent",
+      "expression": "useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }))",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/pickers/assignee-picker.tsx",
+      "line": 77,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AssigneePicker",
+      "expression": "useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }))",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/members/member-profile-card.tsx",
+      "line": 34,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "MemberProfileCard",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/modals/create-squad.tsx",
+      "line": 65,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "CreateSquadModal",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/modals/quick-create-issue.tsx",
+      "line": 91,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "AgentCreatePanel",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/delete-runtime-dialog.tsx",
+      "line": 80,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "DeleteRuntimeDialog",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtime-detail.tsx",
+      "line": 143,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "RuntimeDetail",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtime-list.tsx",
+      "line": 98,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "RuntimeList",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtimes-page.tsx",
+      "line": 164,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "RuntimesPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/usage-section.tsx",
+      "line": 801,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "CostByBlock",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/skills/components/skill-detail-page.tsx",
+      "line": 263,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "SkillDetailPage",
+      "expression": "useQuery(\n    agentListOptions(wsId),\n  )",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/skills/components/skills-page.tsx",
+      "line": 199,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "SkillsPage",
+      "expression": "useQuery(\n    agentListOptions(wsId),\n  )",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/squads/components/squad-detail-page.tsx",
+      "line": 63,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "SquadDetailPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/squads/components/squad-profile-card.tsx",
+      "line": 29,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "SquadProfileCard",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/squads/components/squads-page.tsx",
+      "line": 34,
+      "factory": "agentListOptions",
+      "observer": "useQuery",
+      "owner": "SquadsPage",
+      "expression": "useQuery(agentListOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-agent-presence.ts",
+      "line": 78,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspacePresenceMap",
+      "expression": "useQuery({\n    ...agentTaskSnapshotOptions(wsId ?? \"\", { enabled: snapshotGated }),\n    enabled: !!wsId && snapshotGated,\n  })",
+      "category": "页面级",
+      "reason": "agents 与 snapshot 同时使用 snapshotEnabled ?? gateOpen；现有行/头像调用保持门控。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-agent-presence.ts",
+      "line": 152,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "useAgentPresenceDetail",
+      "expression": "useQuery({\n    ...agentTaskSnapshotOptions(wsId ?? \"\", { enabled: snapshotGated }),\n    enabled: !!wsId && snapshotGated,\n  })",
+      "category": "页面级",
+      "reason": "agents 与 snapshot 同时使用 snapshotEnabled ?? gateOpen；现有行/头像调用保持门控。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-workspace-presence-prefetch.ts",
+      "line": 37,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspacePresencePrefetch",
+      "expression": "useQuery({ ...agentTaskSnapshotOptions(wsId ?? \"\", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces })",
+      "category": "外壳",
+      "reason": "WorkspacePresencePrefetch 跨路由常驻；warmChildSurfaces 来自 shell gate。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-live-peek-card.tsx",
+      "line": 37,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "AgentLivePeekCard",
+      "expression": "useQuery(agentTaskSnapshotOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/tabs/activity-tab.tsx",
+      "line": 72,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "ActivityTab",
+      "expression": "useQuery(agentTaskSnapshotOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-agent-activity-indicator.tsx",
+      "line": 64,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "IssueAgentActivityIndicator",
+      "expression": "useQuery(\n    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issues-page.tsx",
+      "line": 87,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "IssuesPage",
+      "expression": "useQuery(\n    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),\n  )",
+      "category": "页面级 / 筛选必需例外",
+      "reason": "默认等本页 gate；running-agent 筛选启用时立即请求，pending 显示加载态且不发布就绪标记。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/workspace-agent-working-chip.tsx",
+      "line": 74,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "WorkspaceAgentWorkingChip",
+      "expression": "useQuery(\n    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || value }),\n  )",
+      "category": "页面级 / 筛选必需例外",
+      "reason": "默认等本页 gate；running-agent 筛选启用时立即请求，pending 显示加载态且不发布就绪标记。"
+    },
+    {
+      "file": "frontend/packages/views/my-issues/components/my-issues-page.tsx",
+      "line": 66,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "MyIssuesPage",
+      "expression": "useQuery(\n    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),\n  )",
+      "category": "页面级 / 筛选必需例外",
+      "reason": "默认等本页 gate；running-agent 筛选启用时立即请求，pending 显示加载态且不发布就绪标记。"
+    },
+    {
+      "file": "frontend/packages/views/projects/components/project-detail.tsx",
+      "line": 145,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "ProjectIssuesContent",
+      "expression": "useQuery(\n    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || agentRunningFilter }),\n  )",
+      "category": "页面级 / 筛选必需例外",
+      "reason": "默认等本页 gate；running-agent 筛选启用时立即请求，pending 显示加载态且不发布就绪标记。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtime-list.tsx",
+      "line": 100,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "RuntimeList",
+      "expression": "useQuery(agentTaskSnapshotOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtimes-page.tsx",
+      "line": 165,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "RuntimesPage",
+      "expression": "useQuery(agentTaskSnapshotOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/workbench/components/workbench-page.tsx",
+      "line": 126,
+      "factory": "agentTaskSnapshotOptions",
+      "observer": "useQuery",
+      "owner": "WorkbenchPage",
+      "expression": "useQuery(agentTaskSnapshotOptions(wsId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-window.tsx",
+      "line": 178,
+      "factory": "chatMessagesPageOptions",
+      "observer": "useInfiniteQuery",
+      "owner": "ChatWindow",
+      "expression": "useInfiniteQuery(\n    chatMessagesPageOptions(activeSessionId ?? \"\", undefined, { enabled: chatVisible }),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-fab.tsx",
+      "line": 38,
+      "factory": "chatSessionsOptions",
+      "observer": "useQuery",
+      "owner": "ChatFab",
+      "expression": "useQuery(\n    chatSessionsOptions(wsId, \"all\", { enabled: afterFirstScreen }),\n  )",
+      "category": "外壳",
+      "reason": "跨路由常驻；sessions/aggregate pending 都等待 shell gate。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-window.tsx",
+      "line": 168,
+      "factory": "chatSessionsOptions",
+      "observer": "useQuery",
+      "owner": "ChatWindow",
+      "expression": "useQuery(chatSessionsOptions(wsId, \"all\", { enabled: chatVisible }))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+    },
+    {
+      "file": "frontend/packages/views/common/actor-issues-panel.tsx",
+      "line": 137,
+      "factory": "childIssueProgressOptions",
+      "observer": "useQuery",
+      "owner": "ActorIssuesPanel",
+      "expression": "useQuery(\n    childIssueProgressOptions(wsId),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issues-page.tsx",
+      "line": 189,
+      "factory": "childIssueProgressOptions",
+      "observer": "useQuery",
+      "owner": "IssuesPage",
+      "expression": "useQuery(\n    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面行附属 child-progress；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/my-issues/components/my-issues-page.tsx",
+      "line": 191,
+      "factory": "childIssueProgressOptions",
+      "observer": "useQuery",
+      "owner": "MyIssuesPage",
+      "expression": "useQuery(\n    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面行附属 child-progress；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/projects/components/project-detail.tsx",
+      "line": 180,
+      "factory": "childIssueProgressOptions",
+      "observer": "useQuery",
+      "owner": "ProjectIssuesContent",
+      "expression": "useQuery(\n    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面行附属 child-progress；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/core/inbox/queries.ts",
+      "line": 60,
+      "factory": "inboxSummaryOptions",
+      "observer": "useQuery",
+      "owner": "useInboxUnreadCount",
+      "expression": "useQuery({\n    ...inboxSummaryOptions(wsId ?? \"\"),\n    enabled: !!wsId && enabled,\n    select: (summary) => summary.unread,\n  })",
+      "category": "页面级",
+      "reason": "InboxPage 唯一调用方传本页 afterFirstScreen；summary 不决定 inbox 主列表。"
+    },
+    {
+      "file": "frontend/packages/core/inbox/queries.ts",
+      "line": 72,
+      "factory": "inboxSummaryOptions",
+      "observer": "useQuery",
+      "owner": "useInboxAttentionUnreadCount",
+      "expression": "useQuery({\n    ...inboxSummaryOptions(wsId ?? \"\"),\n    enabled: !!wsId && enabled,\n    select: (summary) => summary.attention,\n  })",
+      "category": "外壳 / 原生调用例外",
+      "reason": "AppSidebar 传 shellGateOpen；useDesktopUnreadBadge 默认立即订阅，但全仓无挂载调用，web 壳层不使用它。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/agent-live-peek-card.tsx",
+      "line": 180,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "CurrentIssueRow",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, issueId ?? \"\"),\n    enabled: !!issueId,\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/agents/components/tabs/activity-tab.tsx",
+      "line": 143,
+      "factory": "issueDetailOptions",
+      "observer": "useQueries",
+      "owner": "ActivityTab",
+      "expression": "useQueries({\n    queries: issueIds.map((id) => issueDetailOptions(wsId, id)),\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/use-chat-context-items.ts",
+      "line": 96,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "useChatContextItems",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, currentRoute?.type === \"issue\" ? currentRoute.id : \"\"),\n    enabled: currentRoute?.type === \"issue\",\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前路由的 issue/project 上下文共用主体 detail key；只匹配实际路由，不为最近记录预载。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/use-chat-context-items.ts",
+      "line": 108,
+      "factory": "issueDetailOptions",
+      "observer": "useQueries",
+      "owner": "useChatContextItems",
+      "expression": "useQueries({\n    queries: visibleRecentEntries.map((entry) => ({\n      ...(entry.type === \"issue\"\n        ? issueDetailOptions(wsId, entry.id)\n        : projectDetailOptions(wsId, entry.id)),\n      enabled: recentsEnabled,\n      staleTime: 30_000,\n    })),\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "最近上下文 useQueries 的 recentsEnabled 由 ChatWindow 传 chatVisible；隐藏时关闭。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-chip.tsx",
+      "line": 44,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "IssueChip",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, issueId),\n    enabled: !listIssue,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-detail-sidebar.tsx",
+      "line": 456,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "IssueCreationRelationSection",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, issue.source_issue_id ?? \"\"),\n    enabled: Boolean(issue.source_issue_id),\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-detail.tsx",
+      "line": 164,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "IssueDetail",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, id),\n    initialData: () => {\n      const cached = findCachedIssue(queryClient, wsId, id);\n      return cached?.description != null\n        && cached.pending_decision_count !== undefined\n        && Object.prototype.hasOwnProperty.call(cached, \"parent_done_grant\")\n        ? cached\n        : undefined;\n    },\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-detail.tsx",
+      "line": 227,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "IssueDetail",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, parentIssueId ?? \"\"),\n    enabled: !!parentIssueId,\n    initialData: () =>\n      parentIssueId ? findCachedIssue(queryClient, wsId, parentIssueId) : undefined,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/layout/app-sidebar.tsx",
+      "line": 291,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "PinRow",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, pin.item_id),\n    enabled: isIssue && detailsEnabled,\n  })",
+      "category": "外壳",
+      "reason": "侧栏跨路由常驻；shellGateOpen。PinRow 详情还检查 item_type 和 detailsEnabled。"
+    },
+    {
+      "file": "frontend/packages/views/modals/add-child-issue.tsx",
+      "line": 27,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "AddChildIssueModal",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, issueId),\n    enabled: !!issueId,\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/modals/create-issue.tsx",
+      "line": 151,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "ManualCreatePanel",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, parentIssueId ?? \"\"),\n    enabled: !!parentIssueId,\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/search/search-command.tsx",
+      "line": 166,
+      "factory": "issueDetailOptions",
+      "observer": "useQueries",
+      "owner": "SearchCommand",
+      "expression": "useQueries({\n    queries: recentItems.map((item) => ({\n      ...issueDetailOptions(wsId, item.id),\n      enabled: open,\n    })),\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "最近 20 条 issue 详情只在搜索面板 open 后启用。"
+    },
+    {
+      "file": "frontend/packages/views/search/search-command.tsx",
+      "line": 199,
+      "factory": "issueDetailOptions",
+      "observer": "useQuery",
+      "owner": "SearchCommand",
+      "expression": "useQuery({\n    ...issueDetailOptions(wsId, currentIssueId ?? \"\"),\n    enabled: !!currentIssueId,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前详情路由的命令共用主 issue detail key；currentIssueId 存在时加载。"
+    },
+    {
+      "file": "frontend/packages/core/runtimes/hooks.ts",
+      "line": 59,
+      "factory": "latestCliVersionOptions",
+      "observer": "useQuery",
+      "owner": "useMyRuntimesNeedUpdate",
+      "expression": "useQuery(\n    latestCliVersionOptions({ enabled: latestVersionEnabled }),\n  )",
+      "category": "外壳",
+      "reason": "唯一调用方 AppSidebar 传 shellGateOpen；runtime 更新角标非主体数据。"
+    },
+    {
+      "file": "frontend/packages/core/runtimes/hooks.ts",
+      "line": 82,
+      "factory": "latestCliVersionOptions",
+      "observer": "useQuery",
+      "owner": "useUpdatableRuntimeIds",
+      "expression": "useQuery(\n    latestCliVersionOptions({ enabled: latestVersionEnabled }),\n  )",
+      "category": "不门控（主体）",
+      "reason": "唯一调用方 RuntimesPage 需要最新 CLI 版本来构成 runtime 更新列表。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/runtime-list.tsx",
+      "line": 101,
+      "factory": "latestCliVersionOptions",
+      "observer": "useQuery",
+      "owner": "RuntimeList",
+      "expression": "useQuery(latestCliVersionOptions())",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/invitations/invitations-page.tsx",
+      "line": 55,
+      "factory": "myInvitationListOptions",
+      "observer": "useQuery",
+      "owner": "InvitationsPage",
+      "expression": "useQuery(myInvitationListOptions())",
+      "category": "不门控（主体）",
+      "reason": "邀请页面自己的主列表，不是侧栏附属提示。"
+    },
+    {
+      "file": "frontend/packages/views/layout/app-sidebar.tsx",
+      "line": 389,
+      "factory": "myInvitationListOptions",
+      "observer": "useQuery",
+      "owner": "AppSidebar",
+      "expression": "useQuery(\n    myInvitationListOptions({ enabled: shellGateOpen }),\n  )",
+      "category": "外壳",
+      "reason": "侧栏跨路由常驻；shellGateOpen。PinRow 详情还检查 item_type 和 detailsEnabled。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-window.tsx",
+      "line": 206,
+      "factory": "pendingChatTaskOptions",
+      "observer": "useQuery",
+      "owner": "ChatWindow",
+      "expression": "useQuery(\n    pendingChatTaskOptions(activeSessionId ?? \"\", { enabled: chatVisible }),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/chat-fab.tsx",
+      "line": 41,
+      "factory": "pendingChatTasksOptions",
+      "observer": "useQuery",
+      "owner": "ChatFab",
+      "expression": "useQuery(\n    pendingChatTasksOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "外壳",
+      "reason": "跨路由常驻；sessions/aggregate pending 都等待 shell gate。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/session-dropdown.tsx",
+      "line": 133,
+      "factory": "pendingChatTasksOptions",
+      "observer": "useQuery",
+      "owner": "SessionDropdown",
+      "expression": "useQuery(pendingChatTasksOptions(wsId, {\n    enabled: chatVisible || shellGateOpen,\n  }))",
+      "category": "外壳 / 交互优先",
+      "reason": "隐藏窗口常驻；chatVisible || shellGateOpen。两处调用均传 chatVisible，用户打开立即加载。"
+    },
+    {
+      "file": "frontend/packages/views/issues/actions/use-issue-actions.ts",
+      "line": 50,
+      "factory": "pinListOptions",
+      "observer": "useQuery",
+      "owner": "useIssueActions",
+      "expression": "useQuery({\n    ...pinListOptions(wsId, userId ?? \"\", { enabled: afterFirstScreen }),\n    enabled: !!userId && afterFirstScreen,\n  })",
+      "category": "页面级",
+      "reason": "页面挂载的 pin 工具栏状态非主体；userId && afterFirstScreen。ProjectDetail 的遗漏在本轮 R1 observer 审计中补齐。"
+    },
+    {
+      "file": "frontend/packages/views/layout/app-sidebar.tsx",
+      "line": 395,
+      "factory": "pinListOptions",
+      "observer": "useQuery",
+      "owner": "AppSidebar",
+      "expression": "useQuery({\n    ...pinListOptions(wsId ?? \"\", userId ?? \"\", { enabled: shellGateOpen }),\n    enabled: !!wsId && !!userId && shellGateOpen,\n  })",
+      "category": "外壳",
+      "reason": "侧栏跨路由常驻；shellGateOpen。PinRow 详情还检查 item_type 和 detailsEnabled。"
+    },
+    {
+      "file": "frontend/packages/views/projects/components/project-detail.tsx",
+      "line": 489,
+      "factory": "pinListOptions",
+      "observer": "useQuery",
+      "owner": "ProjectDetail",
+      "expression": "useQuery({\n    ...pinListOptions(wsId, userId ?? \"\", { enabled: afterFirstScreen }),\n    enabled: !!userId && afterFirstScreen,\n  })",
+      "category": "页面级",
+      "reason": "页面挂载的 pin 工具栏状态非主体；userId && afterFirstScreen。ProjectDetail 的遗漏在本轮 R1 observer 审计中补齐。"
+    },
+    {
+      "file": "frontend/packages/views/autopilots/components/autopilot-detail-page.tsx",
+      "line": 653,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "AutopilotDetailPage",
+      "expression": "useQuery({\n    ...projectDetailOptions(wsId, projectId ?? \"\"),\n    enabled: Boolean(projectId),\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/use-chat-context-items.ts",
+      "line": 101,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "useChatContextItems",
+      "expression": "useQuery({\n    ...projectDetailOptions(wsId, currentRoute?.type === \"project\" ? currentRoute.id : \"\"),\n    enabled: currentRoute?.type === \"project\",\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前路由的 issue/project 上下文共用主体 detail key；只匹配实际路由，不为最近记录预载。"
+    },
+    {
+      "file": "frontend/packages/views/chat/components/use-chat-context-items.ts",
+      "line": 109,
+      "factory": "projectDetailOptions",
+      "observer": "useQueries",
+      "owner": "useChatContextItems",
+      "expression": "useQueries({\n    queries: visibleRecentEntries.map((entry) => ({\n      ...(entry.type === \"issue\"\n        ? issueDetailOptions(wsId, entry.id)\n        : projectDetailOptions(wsId, entry.id)),\n      enabled: recentsEnabled,\n      staleTime: 30_000,\n    })),\n  })",
+      "category": "不等首屏 gate（交互）",
+      "reason": "最近上下文 useQueries 的 recentsEnabled 由 ChatWindow 传 chatVisible；隐藏时关闭。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-detail.tsx",
+      "line": 237,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "IssueDetail",
+      "expression": "useQuery({\n    ...projectDetailOptions(wsId, issueProjectId ?? \"\"),\n    enabled: !!issueProjectId,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/layout/app-sidebar.tsx",
+      "line": 295,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "PinRow",
+      "expression": "useQuery({\n    ...projectDetailOptions(wsId, pin.item_id),\n    enabled: !isIssue && detailsEnabled,\n  })",
+      "category": "外壳",
+      "reason": "侧栏跨路由常驻；shellGateOpen。PinRow 详情还检查 item_type 和 detailsEnabled。"
+    },
+    {
+      "file": "frontend/packages/views/projects/components/project-chip.tsx",
+      "line": 38,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "ProjectChip",
+      "expression": "useQuery({\n    ...projectDetailOptions(wsId, projectId),\n    enabled: !listProject,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/views/projects/components/project-detail.tsx",
+      "line": 465,
+      "factory": "projectDetailOptions",
+      "observer": "useQuery",
+      "owner": "ProjectDetail",
+      "expression": "useQuery(projectDetailOptions(wsId, projectId))",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/core/agents/use-workspace-presence-prefetch.ts",
+      "line": 39,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "useWorkspacePresencePrefetch",
+      "expression": "useQuery({\n    ...squadListOptions(wsId ?? \"\", { enabled: warmChildSurfaces }),\n    enabled: !!wsId && warmChildSurfaces,\n  })",
+      "category": "外壳",
+      "reason": "WorkspacePresencePrefetch 跨路由常驻；warmChildSurfaces 来自 shell gate。"
+    },
+    {
+      "file": "frontend/packages/core/workspace/hooks.ts",
+      "line": 25,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "useActorName",
+      "expression": "useQuery(\n    squadListOptions(wsId, { enabled: squadsEnabled }),\n  )",
+      "category": "页面级 / 主体例外",
+      "reason": "默认 gateOpen；仅 assignee board/swimlane 的列标题显式 agentsEnabled/squadsEnabled=true（主体分组名称）。"
+    },
+    {
+      "file": "frontend/packages/views/autopilots/components/autopilot-dialog.tsx",
+      "line": 302,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "AutopilotDialog",
+      "expression": "useQuery(squadListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/autopilots/components/pickers/agent-picker.tsx",
+      "line": 42,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "AgentPicker",
+      "expression": "useQuery(squadListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issues-header.tsx",
+      "line": 204,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "ActorSubContent",
+      "expression": "useQuery(\n    squadListOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/pickers/assignee-picker.tsx",
+      "line": 81,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "AssigneePicker",
+      "expression": "useQuery(\n    squadListOptions(wsId, { enabled: afterFirstScreen }),\n  )",
+      "category": "页面级",
+      "reason": "页面附属名称、在线点或执行信息；afterFirstScreen。"
+    },
+    {
+      "file": "frontend/packages/views/modals/quick-create-issue.tsx",
+      "line": 92,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "AgentCreatePanel",
+      "expression": "useQuery(squadListOptions(wsId))",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/squads/components/squad-profile-card.tsx",
+      "line": 27,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "SquadProfileCard",
+      "expression": "useQuery(\n    squadListOptions(wsId),\n  )",
+      "category": "不等首屏 gate（交互）",
+      "reason": "用户打开的 profile/peek、picker 或 modal 才挂载；是该交互的主体数据。"
+    },
+    {
+      "file": "frontend/packages/views/squads/components/squads-page.tsx",
+      "line": 31,
+      "factory": "squadListOptions",
+      "observer": "useQuery",
+      "owner": "SquadsPage",
+      "expression": "useQuery({\n    ...squadListOptions(wsId),\n    enabled: !!wsId,\n  })",
+      "category": "不门控（主体）",
+      "reason": "当前页面/可见对象的主体数据或渲染输入；不属于附属首屏延后。详情主 key 与 PinRow 的不同 id 逐项区分。"
+    },
+    {
+      "file": "frontend/packages/core/issues/workbench.ts",
+      "line": 123,
+      "factory": "workbenchPendingCountOptions",
+      "observer": "useQuery",
+      "owner": "useWorkbenchPendingCount",
+      "expression": "useQuery({\n    ...workbenchPendingCountOptions(wsId ?? \"\", { enabled: enabled && !!wsId }),\n  })",
+      "category": "外壳",
+      "reason": "唯一调用方 AppSidebar 传 shellGateOpen；combined total 的独立 pending-count key。"
+    }
+  ],
+  "imperative": [
+    {
+      "file": "frontend/packages/core/realtime/sync/workspace.ts",
+      "line": 66,
+      "operation": "fetchQuery",
+      "expression": "qc.fetchQuery({\n      ...workspaceListOptions(),\n      staleTime: 0,\n    })"
+    },
+    {
+      "file": "frontend/packages/core/realtime/sync/inbox.ts",
+      "line": 33,
+      "operation": "ensureQueryData",
+      "expression": "qc.ensureQueryData(workspaceListOptions())"
+    },
+    {
+      "file": "frontend/packages/core/realtime/sync/inbox.ts",
+      "line": 83,
+      "operation": "ensureQueryData",
+      "expression": "qc.ensureQueryData(\n            notificationPreferenceOptions(sourceWsId, slug),\n          )"
+    },
+    {
+      "file": "frontend/packages/views/invitations/invitations-page.tsx",
+      "line": 100,
+      "operation": "fetchQuery",
+      "expression": "qc.fetchQuery({\n        ...workspaceListOptions(),\n        staleTime: 0,\n      })"
+    },
+    {
+      "file": "frontend/packages/views/issues/components/issue-dependency-editor.tsx",
+      "line": 38,
+      "operation": "fetchQuery",
+      "expression": "queryClient.fetchQuery({ queryKey: issueKeys.detail(wsId, parentId), queryFn: () => api.getIssue(parentId!) })"
+    },
+    {
+      "file": "frontend/packages/views/layout/app-sidebar.tsx",
+      "line": 450,
+      "operation": "fetchQuery",
+      "expression": "queryClient.fetchQuery({\n        ...workspaceListOptions(),\n        staleTime: 0,\n      })"
+    },
+    {
+      "file": "frontend/packages/views/invite/invite-page.tsx",
+      "line": 79,
+      "operation": "fetchQuery",
+      "expression": "qc.fetchQuery({\n        ...workspaceListOptions(),\n        staleTime: 0,\n      })"
+    }
+  ],
+  "directApiExceptions": [
+    {
+      "file": "frontend/apps/web/app/(auth)/login/page.tsx:43",
+      "operation": "api.listMyInvitations",
+      "reason": "认证完成后的入口路由选择必需；不在 dashboard 壳层。"
+    },
+    {
+      "file": "frontend/apps/web/app/auth/callback/page.tsx:76",
+      "operation": "api.listMyInvitations",
+      "reason": "OAuth 完成后的入口路由选择必需；不在 dashboard 壳层。"
+    },
+    {
+      "file": "frontend/packages/views/runtimes/components/update-section.tsx:42",
+      "operation": "api.getLatestCliVersion",
+      "reason": "MachineCliUpdate 的版本比较；当前 runtime 更新 UI 主体，10 分钟模块缓存，不是 sidebar key observer。"
+    }
+  ],
+  "keyAudit": "aggregate pending 仅 ChatFab/SessionDropdown 两个 observer；其他 key 的裸调用为定义、缓存读取/写入或 invalidate，另有依赖选择器在用户点击后 fetchQuery 父单链（交互优先），没有冷首屏命令式预取旁路。chatMessagesOptions 无 runtime observer。"
+}

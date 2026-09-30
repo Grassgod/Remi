@@ -2,6 +2,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { createCommitEventQueue, type StoreContext, type WorkspaceEvent } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "./tasks-repo.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
 import {
@@ -1735,6 +1736,9 @@ export class ScmRepo {
         const collector: ChildStatusChangeCollector = [];
         const deferredEvents = createCommitEventQueue();
         const applied = this.ctx.db.transaction(() => {
+          // Take the same lock as child creation/reparenting/reopening before
+          // reading membership, the grant or A1, and hold it through the effect.
+          lockIssueRowWithinTransaction(this.ctx.db, issueId);
           const current = this.ctx.issues().getIssue(issueId);
           // A linked parent closes only after children, an effective owner-agent
           // grant and a final summary. A held effect is settled and not retried.

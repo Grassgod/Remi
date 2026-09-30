@@ -128,7 +128,7 @@
   "fallback": {
     "model_label": "备用模型",
     "thinking_label": "备用模型思考等级",
-    "description": "仅在主模型网关资源不可用时自动接管当前任务。",
+    "description": "主模型或网关不可用时，自动接管当前任务。",
     "unconfigured": "未配置",
     "same_as_primary": "备用模型不能与主模型相同",
     "clear": "清除备用模型",
@@ -137,6 +137,9 @@
     "switch_count": "切换 {{count}} 次",
     "reason_gateway": "网关资源不可用",
     "reason_no_account": "网关无可用账号",
+    "reason_model_unavailable": "主模型不可用",
+    "reason_server": "供应商服务错误",
+    "reason_queued": "候选 Runtime 均不支持主模型",
     "reason_unknown": "资源不可用"
   },
   "inspector": {
@@ -421,6 +424,18 @@
   },
   "transcript": {
     "dialog_title": "智能体执行记录",
+    "view_live": "查看实时执行过程",
+    "view_finished": "查看已结束的执行过程",
+    "trace_loading": "正在加载执行过程…",
+    "trace_live": "实时更新中",
+    "trace_finished": "执行已结束 · {{count}} 条事件",
+    "trace_unreachable": "执行机 {{name}} 离线，过程记录暂时无法读取",
+    "trace_last_seen": "最近在线 {{time}}",
+    "trace_backfilling": "执行过程正在回填",
+    "trace_lost": "执行过程已丢失",
+    "trace_not_found": "暂无执行过程记录",
+    "trace_failed": "执行过程载入失败",
+    "trace_retry": "重试",
     "execution_view": "执行过程",
     "prompt_view": "输入 Prompt",
     "copy_prompt": "复制 Prompt",

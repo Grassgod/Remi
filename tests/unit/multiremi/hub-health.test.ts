@@ -2,9 +2,7 @@
  * What the API reports about its hub (MUL-403 §1 item 9).
  *
  * `/health` carries the fan-out numbers (`streams`, ring occupancy, lagging
- * subscribers, flush p95); `/readyz` carries the routing facts a deploy reads
- * (`hub.role`, `hub.transport`, `hub.peer_link`, `hub.fill_count`,
- * `hub_hole_wait_ms`).
+ * subscribers, flush p95, routing facts); `/readyz` retains main's exact body.
  *
  * The compatibility half matters as much as the new fields: both bodies are
  * consumed by probes that only look at `ok`, and `scripts/api-routes.golden.json`
@@ -15,13 +13,16 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createHub } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
-import { hubHealthPayload, hubReadyzPayload, isObservableHub } from "@multiremi/api/hub/hub-health.js";
+import { hubHealthPayload, isObservableHub } from "@multiremi/api/hub/hub-health.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 function appWith(hub: unknown) {
-  return createMultiremiApp({ store: createStore(), hub: hub as never, realtimeState: { enabled: true, connections: 0 } });
+  return createMultiremiApp({
+    store: createStore(), hub: hub as never, realtimeState: { enabled: true, connections: 0 },
+    apiRoleConfiguration: { role: "all", configured: false },
+  });
 }
 
 describe("hub health payloads", () => {
@@ -41,25 +42,14 @@ describe("hub health payloads", () => {
     expect(typeof snapshot.flush_p95_ms).toBe("number");
   });
 
-  it("reports the routing facts under /readyz", async () => {
+  it("reports routing facts under /health without changing /readyz", async () => {
     const hub = createHub({ transport: createLocalHubTransport(), role: "runtime" });
-    const body = await (await appWith(hub).request("/readyz")).json() as Record<string, any>;
-    expect(body.ok).toBe(true);
-    expect(body.hub).toEqual({
-      role: "runtime",
-      transport: "local",
-      // No `MULTIREMI_PEER_URL` in the hermetic test environment: single process.
-      peer_link: false,
-      fill_count: 0,
-      hub_hole_wait_ms: 0,
-    });
-  });
-
-  it("reads the peer link from the environment rather than probing it", () => {
-    const hub = createHub({ transport: createLocalHubTransport(), role: "all" });
-    expect(hubReadyzPayload(hub, {} as NodeJS.ProcessEnv).hub?.peer_link).toBe(false);
-    expect(hubReadyzPayload(hub, { MULTIREMI_PEER_URL: "ws://api-runtime:6120" } as NodeJS.ProcessEnv).hub?.peer_link).toBe(true);
-    expect(hubReadyzPayload(hub, { MULTIREMI_PEER_URL: "   " } as NodeJS.ProcessEnv).hub?.peer_link).toBe(false);
+    const app = appWith(hub);
+    const ready = await (await app.request("/readyz")).json() as Record<string, any>;
+    expect(ready).toEqual({ ok: true });
+    expect(ready).not.toHaveProperty("hub");
+    const health = await (await app.request("/health")).json() as Record<string, any>;
+    expect(health.hub).toMatchObject({ role: "runtime", transport: "local", fill_count: 0, hole_wait_ms: 0 });
   });
 
   it("adds nothing for an app built without a hub, keeping the old body byte-identical", async () => {

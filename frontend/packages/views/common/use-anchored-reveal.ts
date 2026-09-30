@@ -39,6 +39,8 @@ export interface UseAnchoredRevealOptions {
    * renders its content instead of a skeleton.
    */
   enabled?: boolean;
+  /** The SSR list has been positioned by its inline pre-paint script. */
+  initialPositioned?: boolean;
 }
 
 export interface UseAnchoredRevealResult {
@@ -120,10 +122,12 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
     budgetMs = DEFAULT_BUDGET_MS,
     imageWaitMs = DEFAULT_IMAGE_WAIT_MS,
     enabled = true,
+    initialPositioned = false,
   } = options;
 
-  const [state, setState] = useState<RevealState>("pending");
-  const stateRef = useRef<RevealState>("pending");
+  const [state, setState] = useState<RevealState>(initialPositioned ? "ready" : "pending");
+  const stateRef = useRef<RevealState>(initialPositioned ? "ready" : "pending");
+  const initialKeyRef = useRef(resetKey);
   /** rAF chain generation: bumping it cancels whatever the previous run queued. */
   const runRef = useRef(0);
   /** The activation the DOM was last prepared for, by identity. */
@@ -185,6 +189,15 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
     runRef.current += 1;
     dataReadyAtRef.current = null;
 
+    if (initialPositioned && initialKeyRef.current === resetKey && dataReady) {
+      if (scrollEl && scrollEl.dataset.ssrPositioned !== "1") return;
+      if (scrollEl && contentEl) scrollEl.scrollTop = targetScrollTop(scrollEl, resolveAnchor());
+      stateRef.current = "ready";
+      setState("ready");
+      writeState("ready");
+      return;
+    }
+
     if (!enabled) {
       // Pass-through: leave the content visible and clear whatever a previous
       // activation may have written.
@@ -204,7 +217,7 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
     if (!contentEl) return;
 
     contentEl.style.visibility = "hidden";
-  }, [resetKey, enabled, scrollEl, contentEl, writeState]);
+  }, [resetKey, enabled, scrollEl, contentEl, writeState, initialPositioned, dataReady, resolveAnchor]);
 
   // The first aim happens before the frame is painted, and it is also where gate
   // (i) starts its clock: the budget is measured from the moment the consumer
@@ -223,8 +236,9 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
   // stale while still hidden says so before it ever reveals.
   useEffect(() => {
     if (!enabled || !scrollEl) return;
+    if (initialPositioned && scrollEl.dataset.ssrPositioned !== "1") return;
     writeState(state);
-  }, [enabled, scrollEl, state, writeState]);
+  }, [enabled, scrollEl, state, writeState, initialPositioned]);
 
   useEffect(() => {
     // Gate (i) is what starts the rAF loop; with the data not there yet there is

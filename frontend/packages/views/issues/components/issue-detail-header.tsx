@@ -20,12 +20,12 @@ import {
 import { cn } from "@multiremi/ui/lib/utils";
 import type { Issue, Project, UpdateIssueRequest } from "@multiremi/core/types";
 import { useWorkspacePaths } from "@multiremi/core/paths";
-import { AppLink } from "../../navigation";
 import { BreadcrumbHeader, type BreadcrumbSegment } from "../../layout/breadcrumb-header";
 import { useT } from "../../i18n";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { IssueActionsDropdown } from "../actions";
 import { IssueShareDialog } from "./issue-share-dialog";
+import { IssueTitle } from "./issue-title";
 
 interface IssueDetailHeaderProps {
   issue: Issue;
@@ -97,14 +97,7 @@ export function IssueDetailHeader({
     <BreadcrumbHeader
       segments={segments}
       leaf={
-        <AppLink
-          href={paths.issueDetail(issue.id)}
-          className="flex min-w-0 overflow-hidden whitespace-nowrap transition-opacity hover:opacity-80"
-        >
-          <span className="truncate font-medium text-foreground">
-            {issue.identifier} {issue.title}
-          </span>
-        </AppLink>
+        <IssueTitle issue={issue} onUpdateField={onUpdateField} />
       }
       actions={
         <>

@@ -12,7 +12,8 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { cn } from "@multiremi/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
-import { AgentTranscriptDialog, buildTimeline } from "../../common/task-transcript";
+import { buildTimeline } from "../../common/task-transcript";
+import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatToolInputSummary, toolIcon } from "../../common/task-transcript/tool-summaries";
 import { useT } from "../../i18n";
 
@@ -193,14 +194,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
           )}
         </span>
       </button>
-      <AgentTranscriptDialog
-        open={open}
-        onOpenChange={setOpen}
-        task={task}
-        items={items}
-        agentName={agentName}
-        isLive={task.status === "running"}
-      />
+      {open && <TaskTraceDialog task={task} agentName={agentName} onOpenChange={setOpen} />}
     </>
   );
 }

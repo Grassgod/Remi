@@ -12,6 +12,9 @@ import {
   clearLoggedInCookie,
 } from "@/features/auth/auth-cookie";
 import { PageviewTracker } from "./pageview-tracker";
+import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
+
+const replicaEnv = { createWorker: () => new Worker(new URL("../features/issues/replica-worker.ts", import.meta.url), { type: "module" }) };
 
 // Derive WebSocket URL from the page origin so self-hosted / LAN deployments
 // work without explicit NEXT_PUBLIC_WS_URL.  The Next.js rewrite rule
@@ -71,7 +74,9 @@ export function WebProviders({
       <Suspense fallback={null}>
         <PageviewTracker />
       </Suspense>
-      <WebNavigationProvider>{children}</WebNavigationProvider>
+      <ReplicaEnvProvider env={replicaEnv}>
+        <WebNavigationProvider>{children}</WebNavigationProvider>
+      </ReplicaEnvProvider>
     </CoreProvider>
   );
 }

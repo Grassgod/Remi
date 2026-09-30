@@ -14,6 +14,7 @@ import {
   issueFromParam,
   humanRequestActor,
   issueListQuery,
+  loadChatSessionForCurrentUser,
   issueMutationActor,
   denyAttachmentCreationAccess,
   issueSubscriberCaller,
@@ -39,6 +40,7 @@ import {
   attachmentCompatibilityResponse,
   cleanString,
   commentCompatibilityResponse,
+  commentReactionCompatibilityResponse,
   currentTaskAccessToken,
   authenticatedRequestUserId,
   currentRequestUserId,
@@ -254,7 +256,18 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
 
-  const listAccessibleChildIssues = (c: Context, parentIds: string[]): MultiremiIssue[] => {
+  const listAccessibleChildIssues = (c: Context, parentRefs: string[], explicitWorkspaceId: string | null): MultiremiIssue[] => {
+    // Full IDs resolve globally; explicit selectors only scope keys, numbers and
+    // prefixes. Keep unscoped refs on the store's resolver; do not infer token/member defaults.
+    let workspaceId = cleanString(explicitWorkspaceId) ?? cleanString(c.req.header("X-Workspace-ID"));
+    let unknownSlug = false;
+    if (!workspaceId) {
+      const slug = cleanString(c.req.header("X-Workspace-Slug"));
+      if (slug) {
+        workspaceId = store.listWorkspaces().find((candidate) => candidate.slug === slug)?.id ?? null;
+        unknownSlug = !workspaceId;
+      }
+    }
     const workspaceAccess = new Map<string, boolean>();
     const canAccessWorkspace = (workspaceId: string): boolean => {
       let allowed = workspaceAccess.get(workspaceId);
@@ -264,10 +277,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       return allowed;
     };
-    return parentIds.flatMap((parentId) => {
-      const parent = store.getIssue(parentId);
+    const seenParentIds = new Set<string>();
+    return parentRefs.flatMap((ref) => {
+      const parent = store.getIssue(ref.trim()) ?? (unknownSlug ? null : store.getIssueByRef(ref, workspaceId));
       if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
-      return store.listChildIssues(parentId).filter((child) => canAccessWorkspace(child.workspaceId));
+      if (seenParentIds.has(parent.id)) return [];
+      seenParentIds.add(parent.id);
+      return store.listChildIssues(parent.id).filter((child) => canAccessWorkspace(child.workspaceId));
     });
   };
 
@@ -625,7 +641,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = listAccessibleChildIssues(c, parentIds)
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspace_id") ?? null)
       .map((child) => ({
         ...issueCompatibilityResponse(child),
         blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
@@ -634,7 +650,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? null).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
   function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
@@ -1589,6 +1605,59 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       session,
       store.listSessionParticipants(session.id),
     ));
+  });
+  const logSessionAccess = (c: Context): string | Response => {
+    const sessionId = c.req.param("sessionId") ?? "";
+    const issueSession = store.getIssueSession(sessionId);
+    if (issueSession) {
+      return denyCurrentUserWorkspaceAccess(c, store, issueSession.workspaceId) ?? sessionId;
+    }
+    const chat = loadChatSessionForCurrentUser(c, store, sessionId);
+    return chat instanceof Response ? chat : chat.session.id;
+  };
+  app.get("/api/sessions/:sessionId/log/locate", (c) => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const id = c.req.query("id");
+    if (!id) return c.json({ error: "id is required" }, 400);
+    const location = store.locateConversationLogEntry(sessionId, id);
+    return location ? c.json(location) : c.json({ error: "entry not found" }, 404);
+  });
+  app.get("/api/sessions/:sessionId/log", (c) => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const readNumber = (name: string): number | null | undefined => {
+      const raw = c.req.query(name);
+      if (raw == null) return undefined;
+      const value = Number(raw);
+      return raw !== "" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    };
+    const anchor = readNumber("anchor");
+    const before = readNumber("before");
+    const after = readNumber("after");
+    if (anchor === null || before === null || after === null || (before ?? 0) + (after ?? 0) > 100) {
+      return c.json({ error: "invalid log window" }, 400);
+    }
+    const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    if (!store.getIssueSession(sessionId)) {
+      const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
+        .map(entry => entry.id);
+      const attachments = store.listAttachmentsForChatMessages(messageIds);
+      return c.json({ ...window, entries: window.entries.map(entry =>
+        entry.kind === "message" || entry.kind === "turn"
+          ? { ...entry, metadata: { ...entry.metadata,
+            attachments: (attachments.get(entry.id) ?? []).map(attachmentCompatibilityResponse),
+          } }
+          : entry) });
+    }
+    const commentIds = window.entries.filter(entry => entry.kind === "message").map(entry => entry.id);
+    const reactions = store.listCommentReactionsForComments(commentIds);
+    const attachments = store.listAttachmentsForComments(commentIds);
+    return c.json({ ...window, entries: window.entries.map(entry => entry.kind === "message"
+      ? { ...entry, metadata: { ...entry.metadata,
+        reactions: (reactions.get(entry.id) ?? []).map(commentReactionCompatibilityResponse),
+        attachments: (attachments.get(entry.id) ?? []).map(attachmentCompatibilityResponse),
+      } } : entry) });
   });
   app.get("/api/sessions/:sessionId/inherited-context", (c) => {
     const session = store.getIssueSession(c.req.param("sessionId"));

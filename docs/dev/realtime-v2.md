@@ -18,6 +18,7 @@ summary: 浏览器 WebSocket 的 v2 帧、两条流的端点与鉴权、断线�
 两个端点各自**只**承载一种流：`/ws` 收到 `stream.subscribe{stream:"trace"}` 回 `stream.error{code:"wrong_endpoint"}`，`/api/trace/ws` 收到 `stream:"log"` 同样处理。这条规则让「订阅发错进程」变成显式错误，而不是一个永远收不到帧的订阅。
 
 trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts](../../packages/server/src/config/api-role.ts) 把 `/api/trace/ws` 放进 runtime 放行清单：nginx 把该路径交给 runtime（MUL-464），ui 进程收到它是 421，不是 426。
+B5 的 `GET /api/tasks/:id/trace` 和 `GET /api/shares/:token/tasks/:task_id/trace` 也由 runtime 服务；UI 收到这两条读取路由返回 421。运行中和已结束的执行过程都从该端点按 `after_seq` 分页读取，直播仍用 trace socket。
 
 ## 帧
 
@@ -61,6 +62,9 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 `apiRole` 同时决定路由守卫、健康响应和 Hub 角色，具体接入见
 [Live Hub 对接说明](live-hub-a6-integration.md)。
 
+服务端自建 Hub 默认使用 [会话日志 fill reader](../../packages/server/src/api/hub/conversation-log-fill-reader.ts)：冷流订阅和 peer head 补齐均读取 `log:` 的 B1 head 与有界范围页，包含隐藏标记以保留 seq 连续性；Postgres 走异步 read pool，SQLite 走 store。`trace:` 的 head 返回 `null`，不从数据库补帧。关停时先解除日志 listener、关闭 Hub，再关闭读池，避免进行中的 fill 访问已关闭的连接。
+独立调用 `createMultiremiApp` 没有关停句柄，默认不启用这个异步 fill；需要它的调用方可显式传入 `hubFill` 并负责自身生命周期。
+
 实现在 [hub/stream-auth.ts](../../packages/server/src/api/hub/stream-auth.ts)，规则只写一次，两种后端各自提供事实：
 
 - `log:` 按会话归属。chat 会话只允许 `creatorId` 本人；issue 会话要求请求者是该会话所属工作区的成员。socket 的 workspace 绑定仍然生效，跨工作区一律拒绝。
@@ -81,7 +85,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 - 认证成功后对每条活动流重发 `stream.subscribe`：有本地帧则 `from_seq = 本地 head + 1`，否则沿用调用方原始锚点。
 - 收到 `resync` 与收到重连走同一恢复动作：重订阅所有流，再跑一次非流式缓存的失效（[use-realtime-sync.ts](../../frontend/packages/core/realtime/use-realtime-sync.ts)）。
 
-`resync` 的发送方是服务端一个进程级入口 `server.broadcastResync()`（[server.ts](../../packages/server/src/api/server.ts)、[hub/browser-stream.ts](../../packages/server/src/api/hub/browser-stream.ts)）：给本进程所有已认证浏览器连接发 `{type:"resync"}`，每连接 0–2s 抖动，避免整片客户端同一刻重取。Hub 的 peer 适配器在链路恢复后调用它。
+`resync` 的发送方是服务端一个进程级入口 `server.broadcastResync()`（[server.ts](../../packages/server/src/api/server.ts)、[hub/browser-stream.ts](../../packages/server/src/api/hub/browser-stream.ts)）：给本进程所有已认证浏览器连接发 `{type:"resync"}`，每连接 0–2s 抖动，避免整片客户端同一刻重取。Hub 的 peer 适配器在序号跳号或对端重启时改为查库补齐，不广播 `resync`；链路静默 15 秒只在 `/health.hub.peer_link` 标记 `stale`。
 
 ## 客户端订阅入口
 
@@ -96,5 +100,6 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 
 - 服务端协议与鉴权：`bun test tests/unit/multiremi/multiremi-browser-stream-protocol.test.ts`（假 Hub，覆盖三种 log 归属、trace 四种可见性、ack/gap、续传、`wrong_endpoint`、resync）。
 - 服务端端点接线与 chat 归属：`bun test tests/unit/multiremi/multiremi-browser-stream-socket.test.ts`。
+- 冷流、真实 PG peer 补帧与关停顺序：`bun test tests/unit/multiremi/conversation-log-server-wiring.test.ts`。
 - 客户端：`cd frontend/packages/core && bunx vitest run api/ws-client-streams.test.ts api/trace-socket.test.ts`。
 - 路由清单：`bun run scripts/snapshot-api-routes.ts --check`；角色守卫计数：`bun test tests/unit/multiremi/api-role-guard.test.ts`。

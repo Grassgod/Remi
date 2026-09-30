@@ -686,7 +686,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     }) as unknown as typeof globalThis.fetch;
 
     const client = new MultiremiDaemonClient("https://remi.example/", "daemon-token");
-    await expect(client.getIssueSessionArchiveStatus("runtime/1", "issue/1")).resolves.toMatchObject({
+    await expect(client.getSessionArchiveStatus("runtime/1", { kind: "issue", id: "issue/1" })).resolves.toMatchObject({
       latest: { retry_state: "backoff" },
     });
     expect(requests).toEqual([
@@ -735,20 +735,20 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
 
     const client = new MultiremiDaemonClient("https://remi.example/", "daemon-token");
     const reports = captureReports(client);
-    await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc");
-    await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc", true);
-    await client.initIssueSessionArchive("runtime/1", "issue/1", {
+    await client.getSessionArchiveStatus("runtime/1", { kind: "issue", id: "issue/1" }, "revision/1", "abc");
+    await client.getSessionArchiveStatus("runtime/1", { kind: "issue", id: "issue/1" }, "revision/1", "abc", true);
+    await client.initSessionArchive("runtime/1", { kind: "issue", id: "issue/1" }, {
       sourceRevision: "revision/1",
       sha256: "abc",
       sizeBytes: 13,
       fileCount: 2,
     });
-    await client.reportIssueSessionArchiveFailure("runtime/1", "issue/1", {
+    await client.reportSessionArchiveFailure("runtime/1", { kind: "issue", id: "issue/1" }, {
       stage: "prepare",
       error: "pack failed",
     });
-    await client.uploadIssueSessionArchive("runtime/1", "issue/1", "archive/1", archivePath);
-    await client.completeIssueSessionArchive("runtime/1", "issue/1", "archive/1");
+    await client.uploadSessionArchive("runtime/1", { kind: "issue", id: "issue/1" }, "archive/1", archivePath);
+    await client.completeSessionArchive("runtime/1", { kind: "issue", id: "issue/1" }, "archive/1");
     await client.reportIssueWorkspaceCleaned("issue/1", "runtime/1", {
       archiveId: "archive/1",
       sourceRevision: "revision/1",
@@ -813,16 +813,16 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       return Response.json({ archive: { id: "archive-large", status: "uploading" } });
     }) as unknown as typeof globalThis.fetch;
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
-    await client.initIssueSessionArchive("runtime-large", "issue-large", {
+    await client.initSessionArchive("runtime-large", { kind: "issue", id: "issue-large" }, {
       sourceRevision: "revision-large",
       sha256: "abc",
       sizeBytes: 8 * 1024 * 1024 + 1,
       fileCount: 1,
     });
 
-    await expect(client.uploadIssueSessionArchive(
+    await expect(client.uploadSessionArchive(
       "runtime-large",
-      "issue-large",
+      { kind: "issue", id: "issue-large" },
       "archive-large",
       archivePath,
     )).rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
@@ -855,16 +855,16 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       return Response.json({ archive: { id: "archive-host", status: "failed" } });
     }) as unknown as typeof globalThis.fetch;
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
-    await client.initIssueSessionArchive("runtime-host", "issue-host", {
+    await client.initSessionArchive("runtime-host", { kind: "issue", id: "issue-host" }, {
       sourceRevision: "revision-host",
       sha256: "abc",
       sizeBytes: 10,
       fileCount: 1,
     });
 
-    await expect(client.uploadIssueSessionArchive(
+    await expect(client.uploadSessionArchive(
       "runtime-host",
-      "issue-host",
+      { kind: "issue", id: "issue-host" },
       "archive-host",
       archivePath,
     )).rejects.toThrow("unexpected host collector.example");
@@ -916,15 +916,15 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token", {
       sessionArchiveUploadBaseUrl: "http://127.0.0.1:6120",
     });
-    await client.initIssueSessionArchive("runtime-override", "issue-override", {
+    await client.initSessionArchive("runtime-override", { kind: "issue", id: "issue-override" }, {
       sourceRevision: "revision-override",
       sha256: "abc",
       sizeBytes: 8,
       fileCount: 1,
     });
-    await client.uploadIssueSessionArchive(
+    await client.uploadSessionArchive(
       "runtime-override",
-      "issue-override",
+      { kind: "issue", id: "issue-override" },
       "archive-override",
       archivePath,
     );
@@ -976,15 +976,15 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       sessionArchiveDirectProbeTtlMs: 20,
     });
     const initAndUpload = async () => {
-      const response = await client.initIssueSessionArchive("runtime-attestation", "issue-attestation", {
+      const response = await client.initSessionArchive("runtime-attestation", { kind: "issue", id: "issue-attestation" }, {
         sourceRevision: `revision-${initialized + 1}`,
         sha256: "abc",
         sizeBytes: 9,
         fileCount: 1,
       });
-      return await client.uploadIssueSessionArchive(
+      return await client.uploadSessionArchive(
         "runtime-attestation",
-        "issue-attestation",
+        { kind: "issue", id: "issue-attestation" },
         response.archive.id,
         archivePath,
       );
@@ -1025,16 +1025,16 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token", {
       sessionArchiveProxyMaxBytes: 8,
     });
-    await client.initIssueSessionArchive("runtime-preflight", "issue-preflight", {
+    await client.initSessionArchive("runtime-preflight", { kind: "issue", id: "issue-preflight" }, {
       sourceRevision: "revision-preflight",
       sha256: "abc",
       sizeBytes: 9,
       fileCount: 1,
     });
 
-    await expect(client.uploadIssueSessionArchive(
+    await expect(client.uploadSessionArchive(
       "runtime-preflight",
-      "issue-preflight",
+      { kind: "issue", id: "issue-preflight" },
       "archive-preflight",
       archivePath,
     )).rejects.toThrow("proxy fallback limit");
@@ -1062,16 +1062,16 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       sessionArchiveProxyMaxBytes: 8,
       sessionArchiveFailureReportTimeoutMs: 20,
     });
-    await client.initIssueSessionArchive("runtime-timeout", "issue-timeout", {
+    await client.initSessionArchive("runtime-timeout", { kind: "issue", id: "issue-timeout" }, {
       sourceRevision: "revision-timeout",
       sha256: "abc",
       sizeBytes: 9,
       fileCount: 1,
     });
     const started = Date.now();
-    const result = await client.uploadIssueSessionArchive(
+    const result = await client.uploadSessionArchive(
       "runtime-timeout",
-      "issue-timeout",
+      { kind: "issue", id: "issue-timeout" },
       "archive-failure-timeout",
       archivePath,
     ).catch((value: unknown) => value as Error & { cause?: Error });
@@ -1105,15 +1105,15 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     const client = new MultiremiDaemonClient("https://remi.example", "daemon-token", {
       sessionArchiveProxyMaxBytes: 8,
     });
-    await client.initIssueSessionArchive("runtime-stale", "issue-stale", {
+    await client.initSessionArchive("runtime-stale", { kind: "issue", id: "issue-stale" }, {
       sourceRevision: "revision-stale",
       sha256: "abc",
       sizeBytes: 9,
       fileCount: 1,
     });
-    const result = await client.uploadIssueSessionArchive(
+    const result = await client.uploadSessionArchive(
       "runtime-stale",
-      "issue-stale",
+      { kind: "issue", id: "issue-stale" },
       "archive-stale",
       archivePath,
     ).catch((value: unknown) => value as Error);
@@ -1122,9 +1122,9 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
 
     expect(error.message).toContain("proxy fallback limit");
     expect(error.message).not.toContain("additionally failed");
-    await expect(client.uploadIssueSessionArchive(
+    await expect(client.uploadSessionArchive(
       "runtime-stale",
-      "issue-stale",
+      { kind: "issue", id: "issue-stale" },
       "archive-stale",
       archivePath,
     )).rejects.toThrow("must be initialized");
@@ -1167,7 +1167,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       sessionArchiveUploadTimeoutMs: 25,
       sessionArchiveFailureReportTimeoutMs: 100,
     });
-    await client.initIssueSessionArchive("runtime-short", "issue-short", {
+    await client.initSessionArchive("runtime-short", { kind: "issue", id: "issue-short" }, {
       sourceRevision: "revision-short",
       sha256: "abc",
       sizeBytes: declaredBytes,
@@ -1175,9 +1175,9 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     });
     const started = Date.now();
 
-    await expect(client.uploadIssueSessionArchive(
+    await expect(client.uploadSessionArchive(
       "runtime-short",
-      "issue-short",
+      { kind: "issue", id: "issue-short" },
       "archive-short",
       archivePath,
     )).rejects.toThrow("upload timed out after 25ms");
@@ -1244,15 +1244,15 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     });
     try {
       const client = new MultiremiDaemonClient(`http://127.0.0.1:${server.port}`, "daemon-token");
-      await client.initIssueSessionArchive("runtime-native", "issue-native", {
+      await client.initSessionArchive("runtime-native", { kind: "issue", id: "issue-native" }, {
         sourceRevision: "revision-native",
         sha256: "def",
         sizeBytes: archiveBytes.byteLength,
         fileCount: 1,
       });
-      await client.uploadIssueSessionArchive(
+      await client.uploadSessionArchive(
         "runtime-native",
-        "issue-native",
+        { kind: "issue", id: "issue-native" },
         "archive-native",
         archivePath,
       );

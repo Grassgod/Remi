@@ -1,4 +1,5 @@
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import { redactString, redactValue } from "./redact";
 
 /** A unified timeline entry: tool calls, thinking, text, and errors in chronological order. */
@@ -289,4 +290,19 @@ export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
     });
   }
   return redactTimelineItems(coalesceTimelineItems(items));
+}
+
+export function buildTraceTimeline(events: readonly TraceEvent[]): TimelineItem[] {
+  return redactTimelineItems(events.map((event) => ({
+    seq: event.seq,
+    type: event.type as TimelineItem["type"],
+    tool: event.tool ?? undefined,
+    content: event.content ?? undefined,
+    input: event.input ?? undefined,
+    output: event.output ?? undefined,
+    createdAt: event.ts,
+    toolCallId: event.tool_call_id ?? undefined,
+    status: event.status ?? undefined,
+    meta: event.meta ?? undefined,
+  })).sort((a, b) => a.seq - b.seq));
 }

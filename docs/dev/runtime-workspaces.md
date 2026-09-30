@@ -64,12 +64,12 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 
 ## 亲和与设备路由
 
-Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。Issue lane 刷新仅在任务钉机与 Agent 绑定相同时保留该绑定；等待原因观察者独立判断 Agent 是否绑定，避免旧 lane 钉机失去自愈能力。亲和分两类，规则不同（MUL-449）：
+Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。显式 Runtime 工作区的任务仍按无项目计算；当工作区与任务属于同一团队、`daemon_id` 等于当前设备且未归档时，独享设备允许领取这类任务（MUL-466）。其他机器、归档工作区和未指定工作区的无项目任务不能使用这个例外。共享路由 SQL、等待原因状态和 Chat / Issue lane 亲和检查使用相同规则，不要求工作区增加项目归属。Issue lane 刷新仅在任务钉机与 Agent 绑定相同时保留该绑定；等待原因观察者独立判断 Agent 是否绑定，避免旧 lane 钉机失去自愈能力。亲和分两类，规则不同（MUL-449）：
 
 - **软亲和**＝ provider 会话血统：Chat 的 `chat_sessions.session_id / session_runtime_id`，Issue 的 `session_agent_lanes.provider_session_id / runtime_id`。钉住的机器过不了设备路由、或与真实 Issue 工作区所在机器冲突时，放弃血统、任务回池冷启动（`inheritChatSession=false`，Issue lane 走 `resetSessionAgentLane`，重置原因分别记为 `device_routing_rejected` / `issue_workspace_elsewhere`）。硬亲和优先于软亲和：真实工作区在 B 而旧会话在 A 时丢掉会话（`issue_workspace_elsewhere`），由工作区把任务约束到 B。工作区只约束**持有它**的任务（`holds_workspace=1`），讨论/侧会话轮次不因此丢会话；没有未 cleaned 工作区时不构成约束，lane 照常继承。判定按**机器**而非 Runtime id：同一台机器上的另一个 provider（例如 B 上的 codex 与 claude）算作同一台，不会互相判成冲突，只有 Runtime 已删除时才退化为按 id 比较。建单时（`createTaskWithinWorkspaceLock`）和领取前（`refreshQueuedIssueLaneAffinity` / `refreshQueuedChatAffinity`）都重算，所以改绑后已排队和存量的这类任务会自愈，不需要数据迁移。
 - **落点** ＝ 同时满足任务全部硬亲和、能被抢单放行的机器。抢单 SQL 的结构谓词（`placementBeforeRoutingSql` / `placementAfterRoutingSql` + 共享的 `TASK_CLAIM_FROM_SQL`）与观察者共用同源只读探针；扫描排队任务时，每台 Runtime 批量计算候选任务，`store.describeTaskPlacement(taskId)` 仍可只读地看单条任务在每台 Runtime 的 `placementOk` / `routingOk`。观察者按一条不变式判定：有机器同时满足落点与路由 → 不写原因；有落点但全被设备路由拒绝 → 写「等待项目设备：」并列出这些机器；没有任何机器满足落点 → 全部约束指向同一台未注册机器时退回 daemon 级判断，否则写「等待任务落点：」。优先级为落点 > 设备 > 模型能力；可回池的 provider 血统不写落点原因。
 - **硬亲和与硬钉**：代码快照、真实 Issue 工作区、项目本机目录、显式 Runtime 工作区和 Agent Runtime 绑定是数据或配置亲和，不能回池。除此之外，`runtime_id` 钉机只有在 `execution_fingerprint IS NULL AND attempt = 1` 时才由领取前刷新回池；取反为硬钉。带指纹的任务称为「冻结重试」，`attempt>1` 但无指纹的任务称为「重试钉机」，不能误报为冻结。工作区按机器别名集合判断，与抢单 SQL 的 `EXISTS` 一致。硬亲和或硬钉冲突时，60 秒观察者写 `wait_reason`，由设备绑定拒绝写「等待项目设备：」，约束相互冲突写「等待任务落点：」。
-- **补救**：以本机目录、代码快照或工作区这些数据约束所在机器为锚点。设备路由同时要求项目绑定条件与独享条件成立：机器不在已有的项目设备绑定里时，有项目的任务可把机器加入绑定；机器是独享设备，且项目没有设备绑定或任务没有项目时，取消独享也能单独放行。只有项目尚无设备绑定、机器又独享时，这两个动作才是可任选的「或」；任务没有项目时只能取消独享。等待原因写出实际拒绝条件，有锚点和没有锚点的设备等待都遵循同一规则。Agent 绑定同时指向别处时，再改绑到锚点。已满足的步骤不重复提示；只需恢复设备路由时，原任务可继续被领取。数据约束本身指向不同机器时，等待原因列明冲突约束，归入「让这些约束指向同一台机器」，不提供机械补救。没有数据锚点时，等待原因只给当前可独立放行的设备动作；落点冲突的改绑目标必须通过项目设备路由。工作区 Runtime 已删除则重新注册原机器或人工处理。无指纹的「重试钉机」不会收到 redispatch 建议。设备路由恢复后等待原因自动清空。
+- **补救**：以本机目录、代码快照或工作区这些数据约束所在机器为锚点。设备路由同时要求项目绑定条件与独享条件成立：机器不在已有的项目设备绑定里时，有项目的任务可把机器加入绑定；机器是独享设备，且项目没有设备绑定或任务没有项目、又不满足本机显式工作区例外时，取消独享也能单独放行。只有项目尚无设备绑定、机器又独享时，这两个动作才是可任选的「或」；没有项目且未满足本机显式工作区例外时，只能取消独享。已满足该例外的工作区拥有机器不会收到取消独享建议。等待原因写出实际拒绝条件，有锚点和没有锚点的设备等待都遵循同一规则。Agent 绑定同时指向别处时，再改绑到锚点。已满足的步骤不重复提示；只需恢复设备路由时，原任务可继续被领取。数据约束本身指向不同机器时，等待原因列明冲突约束，归入「让这些约束指向同一台机器」，不提供机械补救。没有数据锚点时，等待原因只给当前可独立放行的设备动作；落点冲突的改绑目标必须通过项目设备路由。工作区 Runtime 已删除则重新注册原机器或人工处理。无指纹的「重试钉机」不会收到 redispatch 建议。设备路由恢复后等待原因自动清空。
 - **Issue 冻结任务**：需要改绑到数据锚点时，先运行 `remi task redispatch <原任务 ID> --reason '恢复已冻结任务并保留原请求' --yes`，再运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；替代任务保留原请求和会话、没有执行指纹，由锚点机器领取。直接改绑会取消原任务。没有数据锚点时，只有不含代码快照、本机目录的冻结任务才单独收到 redispatch 建议。redispatch 需要 supervisor 角色的任务凭证，工作区 organizer 模式须为 act。
 - **Chat 冻结任务**：只要任务带 `chatSessionId`，即使同时带 `issueId`，也按 Chat 处理。直接改绑会取消这条已冻结的任务。若需改绑，Agent 所有者或工作区 owner/admin 先运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；能查看该 Chat 的用户运行 `remi chat message list <Chat ID> --output json`，找到 `task_id` 为原任务 ID、`role` 为 `user` 的消息。默认只返回最新 50 条；找不到时，将本页 `next_cursor` 对象序列化为 JSON，运行 `remi chat message list <Chat ID> --output json --cursor '<next_cursor JSON>'` 继续翻更早的消息。将命中消息的 `content` 字段正文原样存成文件，再运行 `remi chat message create <Chat ID> --content-file <文件>` 重发。发送入口会 trim 首尾空白；原消息本身已 trim 时，新消息和新任务 prompt 与原文逐字相同，内部空白保留。改绑与重发可以由不同的人执行；原消息附件需重新上传。Chat 任务不能沿用 Issue 的 redispatch 补救：supervisor 任务凭证无法通过 `canCurrentUserAccessChatTask` 的私有 Chat 访问检查，而 Chat 用户 PAT 不满足 organizer 的 supervisor 要求。重发后会生成新任务，原冻结任务仍为 cancelled。
 
@@ -94,6 +94,14 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 这些文件无需纳入云端 Git。注册不上传文件内容，服务端 Task prompt 仅描述路径；执行 agent 及其模型服务仍可能读取文件，任务输出和会话归档仍按现有机制处理。跨 Chat 的原生历史不会自动合并；跨任务记忆可保存在工作区文件中。
 
 原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
+
+Session Archive v2 的容器与遍历策略：包体是标准 ZIP（`multiremi.session-archive.v2`），每个成员单独 deflate（level 6）+ data descriptor，末尾 `index.json` 记录每个成员的 `local_header_offset`、`data_offset`、压缩/原始大小和 sha256，所以读单个 task 的 trace 只解压一个成员。成员布局为 `manifest.json`、`traces/<task_id>.jsonl`、`sessions/<session_id>/...` 与末尾 `index.json`；主体可以是 issue、chat 或一次性 task。`source_revision` 仍是内容清单的 sha256（与压缩方式无关），归档 `sha256` 仍是整包哈希，GC 屏障与硬删屏障不变。
+
+服务端逐个校验 trace 成员：Issue 包只收该 Issue 的 task，Chat 包只收该 Chat 的 task，一次性包只收同 id 且没有 Issue/Chat 绑定的 task；所有成员都须属于同一 workspace。执行 Runtime 可以等于归档 Runtime，也可以是同一 daemon 的另一个 Runtime（两行都存在且 `daemon_id` 非空且相同）。这与 daemon 按主体收集本机 session 根、上传路由按 daemon 身份鉴权一致；预校验和 ready 事务内复核使用同一规则。提升后的失败只清理由该 attempt 写入的最终文件与 manifest，按 attempt 编号及文件身份隔离较新的 attempt。
+
+归档遍历不再依赖 `/proc/self/fd`：写入器逐级 `lstat`，拒绝符号链接，并在扫描前后比对 dev/ino/size/mtime，成员读取用 `O_NOFOLLOW` 打开。这样 macOS daemon 也能归档（Linux 上过去只有描述符路径可用）。Windows 仍被拒绝，因为 `lstat` 不把 junction 报告为符号链接，无法保证「不逃出会话根」。
+
+daemon 的规范化过程记录按 task 写在 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；一次性 task 以 task id 代替 session id。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加。启动时扫描这些 daemon 管理目录重建索引。文件索引与 GC 共用完整性判定：校验头行、事件 seq 顺序及尾行的状态、时间和计数；未封口文件中的重复 seq 取首条、末尾半行忽略以便恢复；带尾行但仍有这些歧义的文件不进入索引。GC 对无法确认完好且已封口的 trace 保留目录并记录路径。
 
 [GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
 

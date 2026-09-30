@@ -119,6 +119,7 @@ vi.mock("@multiremi/core/chat", () => {
     selectedAgentId: "agent-1",
     inputDrafts: {} as Record<string, string>,
     inputDraftAttachments: {} as Record<string, Record<string, string>>,
+    localAttachmentDetails: {} as Record<string, UploadResult>,
     setInputDraft: vi.fn((key: string, content: string) => {
       state.inputDrafts[key] = content;
     }),
@@ -131,6 +132,9 @@ vi.mock("@multiremi/core/chat", () => {
         ...state.inputDraftAttachments[key],
         [url]: id,
       };
+    }),
+    setLocalAttachmentDetail: vi.fn((attachment: UploadResult) => {
+      state.localAttachmentDetails[attachment.id] = attachment;
     }),
   };
   return {
@@ -153,6 +157,7 @@ beforeEach(() => {
   const state = useChatStore.getState();
   state.inputDrafts = {};
   state.inputDraftAttachments = {};
+  state.localAttachmentDetails = {};
   state.activeSessionId = null;
   state.selectedAgentId = "agent-1";
 });
@@ -248,8 +253,9 @@ describe("ChatInput attachment wiring", () => {
     fireEvent.click(sendButton!);
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    const [, ids] = onSend.mock.calls[0]!;
+    const [, ids, localAttachments] = onSend.mock.calls[0]!;
     expect(ids).toEqual(["att-42"]);
+    expect(localAttachments).toMatchObject([{ id: "att-42", filename: "x.png" }]);
   });
 
   it("disables send while an upload is in flight, re-enables after it resolves", async () => {
@@ -333,7 +339,7 @@ describe("ChatInput sending and queue", () => {
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
-    expect(onSend).toHaveBeenLastCalledWith("Please keep this", undefined);
+    expect(onSend).toHaveBeenLastCalledWith("Please keep this", undefined, []);
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
@@ -374,7 +380,7 @@ describe("ChatInput sending and queue", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await screen.findByRole("alert");
-    expect(onSend).toHaveBeenCalledWith(content, ["att-failed"]);
+    expect(onSend).toHaveBeenCalledWith(content, ["att-failed"], [attachment]);
     expect(useChatStore.getState().inputDrafts["session-1"]).toBe(content);
     expect(useChatStore.getState().inputDraftAttachments["session-1"]).toEqual({
       "https://cdn.example/failed.png": "att-failed",
@@ -406,7 +412,7 @@ describe("ChatInput sending and queue", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
     await waitFor(() =>
-      expect(onSend).toHaveBeenCalledWith("Next instruction", undefined),
+      expect(onSend).toHaveBeenCalledWith("Next instruction", undefined, []),
     );
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onStop).toHaveBeenCalledOnce();
@@ -449,7 +455,7 @@ it("retains uploaded attachment IDs when moving to another chat surface", async 
   await waitFor(() =>
     expect(onSend).toHaveBeenCalledWith("![](https://cdn.example/cross.png)", [
       "att-cross",
-    ]),
+    ], [uploaded]),
   );
   await waitFor(() =>
     expect(

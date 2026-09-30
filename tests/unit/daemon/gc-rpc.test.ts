@@ -34,7 +34,7 @@ async function fixture(code: string) {
     workspace(runtime.id);
     const bytes = Buffer.from("physically verified GC archive");
     const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    const initialized = archives.initialize({ workspaceId: "local", issueId: issue.id, runtimeId: runtime.id,
+    const initialized = archives.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id, issueId: issue.id, runtimeId: runtime.id,
       daemonId: "daemon-gc", sourceRevision: "physical", sha256, sizeBytes: bytes.length }).archive;
     const claimed = await archives.claimUploadAttempt(runtime.id, issue.id, initialized.id);
     await archives.upload(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!, new Response(bytes).body);

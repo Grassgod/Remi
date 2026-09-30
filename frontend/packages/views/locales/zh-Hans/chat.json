@@ -25,7 +25,14 @@
     "copy_action": "复制",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
-    "loading_older": "正在加载更早的消息…"
+    "loading_older": "正在载入更早消息…",
+    "expand_older": "展开更早 30 条",
+    "earliest": "已到最早消息",
+    "sending": "发送中…",
+    "sent": "已发送",
+    "send_failed": "发送失败 ·",
+    "retry": "重试",
+    "retry_send": "重新发送这条消息"
   },
   "session_history": {
     "untitled": "无标题",

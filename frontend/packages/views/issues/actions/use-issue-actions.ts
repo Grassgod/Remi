@@ -13,6 +13,7 @@ import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { pinListOptions, useCreatePin, useDeletePin } from "@multiremi/core/pins";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { useNavigation } from "../../navigation";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useT } from "../../i18n";
 
 const BACKLOG_HINT_LS_KEY = "multimira:backlog-agent-hint-dismissed";
@@ -38,12 +39,16 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
+  const { pathname } = navigation;
   const user = useAuthStore((s) => s.user);
   const userId = user?.id;
 
+  // MUL-472 b: the pin state is decoration on a toolbar that renders anyway, so
+  // it waits for the page gate instead of leaving with the detail's first wave.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "shell" });
   const { data: pinnedItems = [] } = useQuery({
-    ...pinListOptions(wsId, userId ?? ""),
-    enabled: !!userId,
+    ...pinListOptions(wsId, userId ?? "", { enabled: afterFirstScreen }),
+    enabled: !!userId && afterFirstScreen,
   });
 
   const isPinned =

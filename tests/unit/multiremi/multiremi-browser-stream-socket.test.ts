@@ -453,7 +453,7 @@ describe("MUL-438 browser stream endpoints", () => {
     }
   });
 
-  it("closes the read pool it built, and leaves an injected one alone", async () => {
+  it("leaves an injected read pool open when the server shuts down", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     // The process under test builds no pool in `NODE_ENV=test` (the auth checks

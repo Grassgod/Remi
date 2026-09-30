@@ -2095,19 +2095,28 @@ export type MultiremiSessionArchiveStatus =
   | "failed"
   | "superseded";
 
+/** What an archive covers: one Issue, one Chat Session, or one one-shot Task. */
+export type MultiremiSessionArchiveSubjectKind = "issue" | "chat" | "task";
+
 export const MULTIREMI_SESSION_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_MIN_GC_INTERVAL_MS = 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION = "preparation-failed";
 
 /**
- * Control-plane metadata for a provider-native Issue session archive.
- * Archive bytes live in SessionArchiveStore, never in SQL.
+ * Control-plane metadata for one Session Archive.
+ *
+ * `subjectKind` is `issue`, `chat` or `task`; `issueId` is only set for Issue
+ * subjects. Archive bytes live in SessionArchiveStore, never in SQL.
  */
 export interface MultiremiSessionArchive {
   id: string;
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  /** Container format; v1 rows stay readable, new uploads are always v2. */
+  format: string;
+  issueId: string | null;
   runtimeId: string;
   daemonId: string;
   sourceRevision: string;
@@ -2119,6 +2128,8 @@ export interface MultiremiSessionArchive {
   relativePath: string;
   metadata: Record<string, unknown>;
   attemptCount: number;
+  /** Attempt number at the last manual retry; budget and display use the difference. */
+  retryBudgetBaseAttempt: number;
   lastError: string | null;
   nextRetryAt: string | null;
   retryExhaustedAt: string | null;
@@ -2129,9 +2140,14 @@ export interface MultiremiSessionArchive {
 
 export interface InitSessionArchiveInput {
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  /** Only Issue subjects carry an Issue id. */
+  issueId?: string | null;
   runtimeId: string;
   daemonId: string;
+  /** Container format; v2 uploads carry the v2 format string. */
+  format?: string;
   sourceRevision: string;
   sha256: string;
   sizeBytes: number;
@@ -2141,7 +2157,9 @@ export interface InitSessionArchiveInput {
 
 export interface ReportSessionArchiveFailureInput {
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  issueId?: string | null;
   runtimeId: string;
   daemonId: string;
   stage: "prepare";
@@ -4440,6 +4458,19 @@ export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
 /** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
 export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
 
+/**
+ * Metadata flag an Issue topic's bot host sets when it can render and answer
+ * decision cards (MUL-412). Human requests and decisions share the card
+ * pipeline but not this flag: a host that predates decisions keeps sending
+ * human-request cards while the control plane writes no decision delivery for
+ * it, so an escalation stays on the web workbench instead of becoming a card
+ * nobody can answer.
+ */
+export const FEISHU_ISSUE_DECISION_CARD_CAPABILITY = "feishu_issue_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_ISSUE_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4468,6 +4499,12 @@ export interface IssueTopicConfig {
   notifyMode?: IssueTopicNotifyMode;
   /** Open ID scoped to the bot application; only used in person mode. */
   notifyOpenId?: string;
+}
+
+/** Static validation details for a stored Issue topic configuration. */
+export interface IssueTopicConfigInvalid {
+  code: "issue_topic_config_invalid";
+  message: string;
 }
 
 export interface FeishuBotOutboundMention {
@@ -4613,6 +4650,16 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Reminder deadline for `decision_card` / `decision_reminder`. */
   expiresAt?: string | null;
   expires_at?: string | null;
+  /**
+   * Set on every delivery of an E4 issue decision's card lane (MUL-412). A
+   * decision has no deadline, so `expires_at` stays null for these rows; the
+   * one reminder is scheduled off the decision row's own `reminder_at`.
+   */
+  decisionId?: string;
+  decision_id?: string;
+  /** The Issue the decision hangs on — the one whose topic carries the card. */
+  decisionIssueId?: string;
+  decision_issue_id?: string;
 }
 
 /**
@@ -5235,6 +5282,7 @@ export interface UpdateChatSessionInput {
 export interface SendChatMessageInput {
   body?: string | null;
   content?: string | null;
+  client_id?: string;
   attachmentIds?: string[];
   attachment_ids?: string[];
   /** Server-internal creator lineage. */

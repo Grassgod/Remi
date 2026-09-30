@@ -1,0 +1,847 @@
+{
+  "step": 1,
+  "results": [
+    {
+      "name": "XSS API write accepted markdown",
+      "ok": true
+    },
+    {
+      "name": "XSS API response has comment id",
+      "ok": true
+    },
+    {
+      "name": "XSS write path renders sanitized HTML",
+      "ok": true
+    },
+    {
+      "name": "follow_frozen shown and thread markers hidden in API",
+      "ok": true
+    },
+    {
+      "name": "resolved state belongs to comment row",
+      "ok": true
+    },
+    {
+      "name": "XSS API sanitized rendered body",
+      "ok": true
+    },
+    {
+      "name": "XSS write and backfill use identical renderer",
+      "ok": true
+    },
+    {
+      "name": "comment update ignores client body_html",
+      "ok": true
+    },
+    {
+      "name": "issue update ignores client body_html",
+      "ok": true
+    },
+    {
+      "name": "forged body_html is absent from persisted log",
+      "ok": true
+    },
+    {
+      "name": "cold #1 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "cold #1 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "cold #1 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "cold #1 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "cold #1 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "cold #1 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "cold #1 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "cold #1 SSR contains sanitized XSS row",
+      "ok": true
+    },
+    {
+      "name": "cold #2 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "cold #2 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "cold #2 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "cold #2 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "cold #2 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "cold #2 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "cold #2 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "cold #2 SSR contains sanitized XSS row",
+      "ok": true
+    },
+    {
+      "name": "cold #3 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "cold #3 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "cold #3 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "cold #3 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "cold #3 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "cold #3 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "cold #3 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "cold #3 SSR contains sanitized XSS row",
+      "ok": true
+    },
+    {
+      "name": "navigation #1 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "navigation #1 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "navigation #1 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "navigation #1 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "navigation #1 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "navigation #1 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "navigation #1 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "navigation #2 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "navigation #2 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "navigation #2 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "navigation #2 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "navigation #2 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "navigation #2 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "navigation #2 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "navigation #3 first frame rows and header keep height",
+      "ok": true,
+      "first": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      },
+      "final": {
+        "rows": [
+          204,
+          211,
+          235,
+          211,
+          211,
+          211,
+          758,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          758,
+          211,
+          211,
+          211,
+          211,
+          211,
+          235,
+          211,
+          211,
+          211,
+          243,
+          51,
+          44,
+          235
+        ],
+        "header": 48,
+        "notice": 40
+      }
+    },
+    {
+      "name": "navigation #3 jumps=0",
+      "ok": true,
+      "jumps": 0,
+      "movements": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "positioning": {
+        "positioned": "1",
+        "visibility": "visible",
+        "inlineVisibility": "",
+        "rows": 31
+      },
+      "errors": [],
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "renderStates": [],
+      "url": "http://localhost:18600/local/issues/iss_zerojump_long"
+    },
+    {
+      "name": "navigation #3 no browser errors",
+      "ok": true,
+      "count": 0
+    },
+    {
+      "name": "navigation #3 system notice is read-only and thread markers absent",
+      "ok": true
+    },
+    {
+      "name": "navigation #3 resolved comment renders folded from its own row",
+      "ok": true
+    },
+    {
+      "name": "navigation #3 XSS inert DOM",
+      "ok": true
+    },
+    {
+      "name": "navigation #3 cookie absent from client output",
+      "ok": true
+    },
+    {
+      "name": "no-cookie SSR shell only",
+      "ok": true
+    },
+    {
+      "name": "no-cookie SSR cookie excluded",
+      "ok": true
+    },
+    {
+      "name": "no-cookie Bearer client fills list",
+      "ok": true
+    },
+    {
+      "name": "401 SSR shell only",
+      "ok": true
+    },
+    {
+      "name": "401 SSR cookie excluded",
+      "ok": true
+    },
+    {
+      "name": "401 Bearer client fills list",
+      "ok": true
+    },
+    {
+      "name": "timeout SSR shell only",
+      "ok": true
+    },
+    {
+      "name": "timeout SSR cookie excluded",
+      "ok": true
+    },
+    {
+      "name": "timeout Bearer client fills list",
+      "ok": true
+    },
+    {
+      "name": "503 SSR shell only",
+      "ok": true
+    },
+    {
+      "name": "503 SSR cookie excluded",
+      "ok": true
+    },
+    {
+      "name": "503 Bearer client fills list",
+      "ok": true
+    },
+    {
+      "name": "Cookie absent from local service logs",
+      "ok": true
+    }
+  ]
+}

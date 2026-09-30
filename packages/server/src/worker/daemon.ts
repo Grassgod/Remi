@@ -17,6 +17,9 @@ import type { TraceStore } from "@multiremi/worker/trace-store.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
+  AcpSessionFailureError,
+  AcpRpcError,
+  redactProviderErrorText,
   createRuntimeProvider,
   type AcpModelCapability,
   type AcpProviderOptions,
@@ -96,6 +99,7 @@ import {
 } from "@multiremi/repo-cache.js";
 import {
   classifyDaemonTaskFailure,
+  classifyLegacyProviderFailure,
   classifyPoisonedOutput,
   TaskFailureReason,
   type TaskFailureReasonValue,
@@ -195,7 +199,7 @@ import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/sa
 import {
   prepareIssueSessionArchive,
   readIssueSessionArchiveReceipt,
-  removePreparedIssueSessionArchive,
+  removePreparedSessionArchive,
   writeIssueSessionArchiveReceipt,
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
@@ -205,6 +209,7 @@ import type {
   MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceArchiveBinding,
+  MultiremiIssueDecision,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
@@ -557,6 +562,7 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
+  readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
   getStreamedText?: (chatId: string) => string;
@@ -1147,6 +1153,29 @@ export class MultiremiDaemon {
     recipientOpenId: string;
   }>> {
     return this.client.listFeishuBotDecisionCards(this.options.runtimeId!);
+  }
+
+  /** Issue decision cards this Runtime must re-register after a restart (MUL-412). */
+  listFeishuIssueDecisionCards(): Promise<Array<{
+    decisionId: string;
+    issueId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    return this.client.listFeishuIssueDecisionCards(this.options.runtimeId!);
+  }
+
+  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
+    return this.client.getFeishuIssueDecision(issueId, decisionId);
+  }
+
+  answerFeishuIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: { answer: string; operatorOpenId: string },
+  ): Promise<MultiremiIssueDecision> {
+    return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
   }
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
@@ -2744,12 +2773,13 @@ export class MultiremiDaemon {
     this.assertWorkspaceRootOwner();
     const runtimeId = this.options.runtimeId;
     if (!runtimeId) throw new Error("Session archive requires a registered Runtime");
+    const subject = { kind: "issue" as const, id: issueId };
     const receipt = await readIssueSessionArchiveReceipt(workspaceDir);
     let preflightStatus: MultiremiDaemonSessionArchiveStatus | null = null;
     if (!forceFreshSnapshot && receipt?.issueId === issueId) {
-      const status = await this.client.getIssueSessionArchiveStatus(
+      const status = await this.client.getSessionArchiveStatus(
         runtimeId,
-        issueId,
+        subject,
         receipt.sourceRevision,
         receipt.sha256,
       );
@@ -2766,7 +2796,7 @@ export class MultiremiDaemon {
       }
       preflightStatus = status;
     }
-    preflightStatus ??= await this.client.getIssueSessionArchiveStatus(runtimeId, issueId);
+    preflightStatus ??= await this.client.getSessionArchiveStatus(runtimeId, subject);
     if (this.shouldDeferIssueSessionArchive(issueId, preflightStatus.latest)) {
       return null;
     }
@@ -2776,6 +2806,7 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       prepared = await prepareIssueSessionArchive(workspaceDir, {
+        issueId,
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
         ...(runtimeStorageRoot
           ? {
@@ -2788,7 +2819,7 @@ export class MultiremiDaemon {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
-        await this.client.reportIssueSessionArchiveFailure(runtimeId, issueId, {
+        await this.client.reportSessionArchiveFailure(runtimeId, subject, {
           stage: "prepare",
           error: message,
         });
@@ -2801,9 +2832,9 @@ export class MultiremiDaemon {
     }
     try {
       log.debug(`Checking Issue Session archive status for ${issueId}`);
-      const status = await this.client.getIssueSessionArchiveStatus(
+      const status = await this.client.getSessionArchiveStatus(
         runtimeId,
-        issueId,
+        subject,
         prepared.sourceRevision,
         prepared.sha256,
         forceFreshSnapshot,
@@ -2814,7 +2845,7 @@ export class MultiremiDaemon {
           status.latest?.source_revision === MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION
           && (status.latest.status === "failed" || status.latest.status === "pending")
         ) {
-          await this.client.initIssueSessionArchive(runtimeId, issueId, {
+          await this.client.initSessionArchive(runtimeId, subject, {
             sourceRevision: prepared.sourceRevision,
             sha256: prepared.sha256,
             sizeBytes: prepared.sizeBytes,
@@ -2842,7 +2873,7 @@ export class MultiremiDaemon {
       }
 
       log.debug(`Initializing Issue Session archive for ${issueId}`);
-      const initialized = await this.client.initIssueSessionArchive(runtimeId, issueId, {
+      const initialized = await this.client.initSessionArchive(runtimeId, subject, {
         sourceRevision: prepared.sourceRevision,
         sha256: prepared.sha256,
         sizeBytes: prepared.sizeBytes,
@@ -2868,16 +2899,16 @@ export class MultiremiDaemon {
         };
       }
       log.debug(`Uploading Issue Session archive for ${issueId}`);
-      await this.client.uploadIssueSessionArchive(
+      await this.client.uploadSessionArchive(
         runtimeId,
-        issueId,
+        subject,
         initialized.archive.id,
         prepared.archivePath,
       );
       log.debug(`Issue Session archive uploaded for ${issueId}`);
-      const completed = await this.client.completeIssueSessionArchive(
+      const completed = await this.client.completeSessionArchive(
         runtimeId,
-        issueId,
+        subject,
         initialized.archive.id,
       );
       if (completed.status !== "ready") return null;
@@ -2894,7 +2925,7 @@ export class MultiremiDaemon {
         sha256: prepared.sha256,
       };
     } finally {
-      await removePreparedIssueSessionArchive(prepared.archivePath);
+      await removePreparedSessionArchive(prepared.archivePath);
     }
   }
 
@@ -3112,6 +3143,12 @@ export class MultiremiDaemon {
     let providerHome: IssueSessionProviderHome | null = null;
     let taskPrivateTmp: TaskPrivateTempDirectory | null = null;
     let providerEnv: Record<string, string> | undefined;
+    const failureCredentials: string[] = [];
+    const redactTaskError = (text: string) => redactProviderErrorText(text, [
+      ...failureCredentials, ...Object.entries(providerEnv ?? {})
+        .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+        .map(([, value]) => value),
+    ]);
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
@@ -3210,6 +3247,8 @@ export class MultiremiDaemon {
         : task.agent?.provider === "codex"
           ? workspaceRelay?.codex
           : null;
+      if (relay?.auth_token) failureCredentials.push(relay.auth_token);
+      if (task.authToken) failureCredentials.push(task.authToken);
       if (providerHome) {
         providerEnv = await loadIssueSessionProviderEnv(providerHome, {
           ...(relayAuthoritative
@@ -3290,6 +3329,7 @@ export class MultiremiDaemon {
       summary = await this.runAgent(
         task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
         progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
+        relay?.one_million_models ?? [],
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -3297,7 +3337,7 @@ export class MultiremiDaemon {
           ?? TaskFailureReason.AgentFallbackMessage;
         if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
         this.enqueueTaskReport(task.id, "fail", {
-          error: summary.output,
+          error: redactTaskError(summary.output),
           sessionId: summary.sessionId,
           workDir: summary.workDir,
           failureReason,
@@ -3314,7 +3354,7 @@ export class MultiremiDaemon {
       this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
       await awaitFinalReportDrain();
     } catch (err) {
-      const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
+      const error = redactTaskError(timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err));
       if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
         if (serverTerminalStatus === "cancelled") this.outbox?.purgeTask(task.id);
         log.info(`Task ${task.id} is already ${serverTerminalStatus} on the server; stopped local execution`);
@@ -3329,7 +3369,10 @@ export class MultiremiDaemon {
       }
       const failureReason = err instanceof LocalDirectoryError
         ? err.failureReason
-        : classifyDaemonTaskFailure(task.agent?.provider ?? "", error);
+        : classifyDaemonTaskFailure(task.agent?.provider ?? "", error,
+          err instanceof AcpSessionFailureError ? err.hint
+            : err instanceof AcpRpcError && err.data && typeof err.data === "object"
+              ? err.data : undefined);
       this.enqueueTaskReport(task.id, "fail", {
         error,
         sessionId: summary?.sessionId ?? task.sessionId,
@@ -3994,6 +4037,7 @@ export class MultiremiDaemon {
     providerEnv?: Record<string, string>,
     progressSummarizer?: TaskProgressSummarizer | null,
     privateTmpDirectory?: string,
+    claudeOneMillionModels: readonly string[] = [],
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4069,6 +4113,9 @@ export class MultiremiDaemon {
       providerEnv,
     };
     const config = runtime.assemble(ctx);
+    const failureCredentials = Object.entries(config.env ?? {})
+      .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+      .map(([, value]) => value);
     if (config.agentType === "antigravity" && workDir !== codeWorkDir) {
       config.addDirs = [...new Set([...(config.addDirs ?? []), codeWorkDir])];
     }
@@ -4078,6 +4125,7 @@ export class MultiremiDaemon {
       executable: config.executable,
       args: config.customArgs,
       model: task.claudeProfile?.model ?? config.model,
+      claudeOneMillionModels,
       ...(task.claudeProfile ? { claudeSettings: { model: task.claudeProfile.model, env: runtimeClaudeProfileRouting(task.claudeProfile) } } : {}),
       allowedTools: config.allowedTools,
       cwd: config.cwd,
@@ -4209,11 +4257,17 @@ export class MultiremiDaemon {
         }
         steerFeed.setInterrupt(() => turnAbort.abort());
         let turnError: unknown = null;
+        let lastTurnMessage: { type: string; content?: string | null } | null = null;
         try {
           resetElicitationContextOffset();
           for await (const event of session.run(prompt)) {
             const emitted = toMessages(event);
             for (const message of emitted) {
+              if (provider.typedSessionFailures === false && message.type === "text" && message.content
+                && classifyLegacyProviderFailure(message.content)) {
+                message.content = redactProviderErrorText(message.content, failureCredentials);
+              }
+              lastTurnMessage = message;
               if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
@@ -4243,6 +4297,14 @@ export class MultiremiDaemon {
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
+        if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastTurnMessage?.type === "text") {
+          const error = redactProviderErrorText(lastTurnMessage.content ?? "", failureCredentials);
+          const failureReason = classifyLegacyProviderFailure(error);
+          if (failureReason) {
+            await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+            return { output: error, sessionId: finalSessionId, workDir, usage, completed: false, failureReason };
+          }
+        }
         if (forceAnswerExpired) {
           log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
           // Steers that arrived too late to act on are still recorded/consumed

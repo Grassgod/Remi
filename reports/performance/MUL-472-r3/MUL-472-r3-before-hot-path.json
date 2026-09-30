@@ -1,0 +1,346 @@
+{
+  "phase": "before",
+  "main": "36fb03c47eba7914be7a4d026f19e360b83a0f83",
+  "total": 53,
+  "initialIssues": 28,
+  "inboxLeg": 22,
+  "detailLeg": 3,
+  "hotTotal": 25,
+  "requests": [
+    {
+      "path": "/api/config",
+      "t": 1200.2999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/me",
+      "t": 1201.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/workspaces",
+      "t": 1202.8999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/agents?workspace_id=local&include_archived=true",
+      "t": 1907.3999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/runtimes?workspace_id=local",
+      "t": 1909.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/agent-task-snapshot",
+      "t": 1911.8999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/squads",
+      "t": 1913.8999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/invitations",
+      "t": 1917.2999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/inbox/summary?timezone_offset=-480",
+      "t": 1919.5,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/cli/latest-version",
+      "t": 1921.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?limit=200&status=in_review",
+      "t": 1924.2000007629395,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?limit=200&status=blocked",
+      "t": 1926.2999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/pins",
+      "t": 1928.2000007629395,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/workspaces/local/members",
+      "t": 1930.7000007629395,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/chat/pending-tasks",
+      "t": 1933.3999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/runtime-workspaces?workspace_id=local",
+      "t": 1935.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/projects",
+      "t": 1938,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/chat/sessions?status=all",
+      "t": 2210,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=backlog&sort=position",
+      "t": 2473.8999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=todo&sort=position",
+      "t": 2475.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=in_progress&sort=position",
+      "t": 2477.3999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=in_review&sort=position",
+      "t": 2479.099998474121,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=done&sort=position",
+      "t": 2480.7999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?top_level_only=true&limit=50&status=blocked&sort=position",
+      "t": 2482.3999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues?limit=1&archived_only=true",
+      "t": 2484.2999992370605,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/child-progress",
+      "t": 2486.599998474121,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/assignee-frequency",
+      "t": 2906.3999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_pin_me",
+      "t": 3171.8999977111816,
+      "route": "/local/issues",
+      "method": "GET"
+    },
+    {
+      "path": "/api/inbox/page?limit=50",
+      "t": 7661,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/timeline?limit=40&issue_session_id=%40default",
+      "t": 9297.79999923706,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/sessions",
+      "t": 9300,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail",
+      "t": 9302.099998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/usage",
+      "t": 9304.099998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/labels",
+      "t": 9306.099998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/inbox/inb_probe_2/read",
+      "t": 9310,
+      "route": "/local/inbox",
+      "method": "POST"
+    },
+    {
+      "path": "/api/inbox/summary?timezone_offset=-480",
+      "t": 9364.599998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/inbox/page?limit=50",
+      "t": 9365.20000076294,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/children",
+      "t": 9371.79999923706,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail",
+      "t": 9625.70000076294,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/attachments",
+      "t": 9628.099998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/subscribers",
+      "t": 9630.099998474121,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/active-task",
+      "t": 9632.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/session-results",
+      "t": 9634.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/workspace",
+      "t": 9636.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/task-runs",
+      "t": 9638.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/dependencies",
+      "t": 9652.79999923706,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/decisions",
+      "t": 9654.79999923706,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/change-requests",
+      "t": 9658,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/session-archives",
+      "t": 9660.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/active-task",
+      "t": 9665.5,
+      "route": "/local/inbox",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/active-task",
+      "t": 12271.29999923706,
+      "route": "/local/issues/iss_detail",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/timeline?limit=40&issue_session_id=%40default",
+      "t": 12279.899997711182,
+      "route": "/local/issues/iss_detail",
+      "method": "GET"
+    },
+    {
+      "path": "/api/issues/iss_detail/active-task",
+      "t": 12285.79999923706,
+      "route": "/local/issues/iss_detail",
+      "method": "GET"
+    }
+  ],
+  "clicks": [
+    {
+      "t": 6256.5,
+      "href": "http://localhost:3560/local/inbox",
+      "label": "Inbox"
+    },
+    {
+      "t": 9275.2,
+      "href": null,
+      "label": "LUProbe notification 2Assigned4h"
+    },
+    {
+      "t": 10805.5,
+      "href": "http://localhost:3560/local/issues/iss_detail",
+      "label": "MUL-4 Detail page fixture"
+    }
+  ]
+}

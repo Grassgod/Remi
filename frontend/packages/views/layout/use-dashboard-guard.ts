@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigationStore } from "@multiremi/core/navigation";
-import { useAuthStore } from "@multiremi/core/auth";
+import { useSSRUser } from "@multiremi/core/platform/ssr-workspace";
 import {
   paths,
   resolvePostAuthDestination,
@@ -46,8 +46,7 @@ import { useNavigation } from "../navigation";
  */
 export function useDashboardGuard() {
   const { pathname, replace } = useNavigation();
-  const user = useAuthStore((s) => s.user);
-  const isLoading = useAuthStore((s) => s.isLoading);
+  const { user, isLoading } = useSSRUser();
   const workspace = useCurrentWorkspace();
   const hasOnboarded = useHasOnboarded();
   const { data: workspaces = [], isFetched: workspaceListFetched } = useQuery({
