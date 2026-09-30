@@ -1,3 +1,5 @@
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -90,7 +92,7 @@ describe("workspace bot menu API", () => {
     const publicRequest = await publish.json();
     expect(JSON.stringify(publicRequest)).not.toContain("resolved-open-id");
 
-    const heartbeat = store.heartbeatRuntime("rt_bot_menu", { supportsBotMenu: true });
+    const heartbeat = (await receiveRuntimeInputs(store, "rt_bot_menu"));
     expect(heartbeat.pending_bot_menu).toEqual({
       id: publicRequest.id,
       dry_run: true,
@@ -197,7 +199,9 @@ describe("workspace bot menu API", () => {
       body: JSON.stringify({ runtime_id: "rt_concierge", supports_bot_menu: true }),
     });
     expect(heartbeat.status).toBe(200);
-    expect((await heartbeat.json()).pending_bot_menu).toEqual({
+    expect(await heartbeat.json()).not.toHaveProperty("pending_bot_menu");
+    expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("pending");
+    expect((await receiveRuntimeInputs(store, "rt_concierge")).pending_bot_menu).toEqual({
       id: request.id,
       dry_run: false,
       config: { default: [{ name: "Default", behaviors: [{ type: "send_message" }] }] },
@@ -221,7 +225,7 @@ describe("workspace bot menu API", () => {
       body: JSON.stringify({ dry_run: false }),
     });
     const request = await publish.json();
-    expect(store.heartbeatRuntime("rt_concierge", { supportsBotMenu: true }).pending_bot_menu?.id).toBe(request.id);
+    expect((await receiveRuntimeInputs(store, "rt_concierge")).pending_bot_menu?.id).toBe(request.id);
 
     db?.run("UPDATE multiremi_bot_menu_publish_requests SET run_started_at = ? WHERE id = ?", [
       new Date(Date.now() - 10 * 60 * 1000).toISOString(),
@@ -229,22 +233,14 @@ describe("workspace bot menu API", () => {
     ]);
     expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("timeout");
 
-    const late = await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
-      method: "POST",
-      headers: MASTER,
-      body: JSON.stringify({ status: "failed", error: "Bot menu sync failed: no permission to bot menu" }),
-    });
-    expect(late.status).toBe(200);
+    const late = await reportFrame(store, "runtime.bot_menu_result", { runtime_id: "rt_concierge", request_id: request.id, status: "failed", error: "Bot menu sync failed: no permission to bot menu" }, { headers: MASTER, authToken: "MASTER" });
+    expect(late.ok).toBe(true);
     const settled = store.getBotMenuPublishRequest("rt_concierge", request.id);
     expect(settled?.status).toBe("failed");
     expect(settled?.error).toBe("Bot menu sync failed: no permission to bot menu");
 
     // A recorded answer stays put: a duplicate report cannot flip it.
-    await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
-      method: "POST",
-      headers: MASTER,
-      body: JSON.stringify({ status: "completed", result: { dryRun: false, defaultPublished: true, userMenuCount: 0 } }),
-    });
+    await reportFrame(store, "runtime.bot_menu_result", { runtime_id: "rt_concierge", request_id: request.id, status: "completed", result: { dryRun: false, defaultPublished: true, userMenuCount: 0 } }, { headers: MASTER, authToken: "MASTER" });
     expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("failed");
   });
 
@@ -261,7 +257,7 @@ describe("workspace bot menu API", () => {
       body: JSON.stringify({ dry_run: false }),
     });
     const request = await publish.json();
-    store.heartbeatRuntime("rt_concierge", { supportsBotMenu: true });
+    (await receiveRuntimeInputs(store, "rt_concierge"));
     db?.run("UPDATE multiremi_bot_menu_publish_requests SET run_started_at = ? WHERE id = ?", [
       new Date(Date.now() - 90 * 1000).toISOString(),
       request.id,

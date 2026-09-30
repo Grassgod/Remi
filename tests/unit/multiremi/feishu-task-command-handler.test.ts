@@ -67,7 +67,6 @@ function handler(store: MultiremiStore, revision: number) {
     getFeishuBotHumanRequest: async () => null,
     respondFeishuBotHumanRequest: async () => { throw new Error("not expected"); },
     uploadFeishuBotAttachment: async () => { throw new Error("not expected"); },
-    listFeishuBotTaskMessages: async () => [],
     getFeishuBotTaskSnapshot: async () => ({ taskId: "unused", status: "running", result: null,
       error: null, sessionId: null, workDir: null, usage: [] }),
   } as unknown as MultiremiDaemon;

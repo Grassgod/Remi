@@ -28,7 +28,14 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
-    "loading_older": "Loading older messages…"
+    "loading_older": "Loading older messages…",
+    "expand_older": "Show 30 earlier messages",
+    "earliest": "Start of chat",
+    "sending": "Sending…",
+    "sent": "Sent",
+    "send_failed": "Failed to send ·",
+    "retry": "Retry",
+    "retry_send": "Retry sending this message"
   },
   "session_history": {
     "untitled": "Untitled",
@@ -175,5 +182,13 @@
     "fixed_hint": "The project is fixed when the chat is created. Start a new chat to use a different project.",
     "load_failed": "Could not load projects. Try again.",
     "unavailable": "Linked project unavailable"
+  },
+  "session_log": {
+    "copy_code": "Copy code",
+    "copied": "Copied",
+    "new_messages_one": "{{count}} new message",
+    "new_messages_other": "{{count}} new messages",
+    "new_messages_overflow": "99+ new messages",
+    "new_messages_jump": "Jump to the end, {{count}} new messages"
   }
 }

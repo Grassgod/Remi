@@ -36,6 +36,12 @@ export function isDaemonPath(pathname: string): boolean {
   return pathname.startsWith("/api/daemon/");
 }
 
+/** Browser trace reads share the runtime process with the trace socket. */
+export function isTraceReadPath(pathname: string): boolean {
+  return /^\/api\/tasks\/[^/]+\/trace$/.test(pathname)
+    || /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname);
+}
+
 /**
  * Resolve the role. Unset, empty and unrecognized values all mean `all`, which is
  * the only value allowed to be a default here: a typo must degrade to main's
@@ -61,19 +67,28 @@ export function isApiRoleConfigured(env: Record<string, string | undefined> = pr
 
 /**
  * Paths the `runtime` role serves: the daemon protocol, the health trio every
- * container probe uses, and the peer channel (`/internal/*`, MUL-462).
+ * container probe uses, the peer channel (`/internal/*`, MUL-462), and the
+ * browser trace socket (`/api/trace/ws`, MUL-438), and the two B5 trace reads.
  *
  * An allowlist of exact paths and prefixes rather than a prefix sweep, so
  * `/api/cloud-runtime/healthz` (a browser route) is not mistaken for `/healthz`.
  */
 export function isRuntimeAllowedPath(pathname: string): boolean {
   if (isDaemonPath(pathname)) return true;
+  // MUL-438: the trace stream lives in the runtime process (ADR 0007 decision
+  // 1), so its browser socket is the one browser endpoint this role serves.
+  // `nginx` routes `/api/trace/ws` here (MUL-464); without this entry the
+  // upgrade would answer 421 in the process that owns the stream.
+  if (pathname === "/api/trace/ws") return true;
+  if (isTraceReadPath(pathname)) return true;
   if (pathname === "/health" || pathname.startsWith("/health/")) return true;
   if (pathname === "/healthz" || pathname === "/readyz") return true;
   // `/api/multiremi/health` sits in the "mounted for every role" row of §3.2 and
   // backs `remi platform health`.
   if (pathname === "/api/multiremi/health") return true;
   if (pathname === "/internal" || pathname.startsWith("/internal/")) return true;
+  if (/^\/api\/tasks\/[^/]+\/trace$/.test(pathname)) return true;
+  if (/^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname)) return true;
   return false;
 }
 
@@ -83,7 +98,9 @@ export function isRuntimeAllowedPath(pathname: string): boolean {
  */
 export function isMisdirectedPath(role: ApiRole, pathname: string): boolean {
   if (role === "all") return false;
-  if (role === "ui") return isDaemonPath(pathname);
+  // Trace reads and the trace socket belong to runtime, including upgrades
+  // that bypass Hono routing. The UI process refuses each with 421.
+  if (role === "ui") return isDaemonPath(pathname) || isTraceReadPath(pathname) || pathname === "/api/trace/ws";
   return !isRuntimeAllowedPath(pathname);
 }
 

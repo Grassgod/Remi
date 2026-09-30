@@ -1,8 +1,26 @@
 # Feishu Task presentation
 
 New inbound chats, Issue topic replies and proactive Task reports use
-`FeishuTaskPresentation`. Agent execution, Chat Session identity, Task messages
+`FeishuTaskPresentation`. Agent execution, Chat Session identity, trace events
 and human responses remain on the existing Task pipeline.
+
+The co-resident connector consumes `daemon.subscribeTrace(taskId, throughSeq,
+onEvents)`. `throughSeq` comes from `presentation_checkpoint` and means the last
+acknowledged event; the next delivered event is `throughSeq + 1`. Subscription
+code owns reconnect replay and gap filling. The connector performs no messages
+or status polling, and reads a final display snapshot once after `closed`.
+`FeishuCotTimeline` accepts canonical `TraceEvent`, including `tool_call_id` and
+`ts`; unknown types retain their type and complete payload in the native stream.
+If a tool result arrives after a checkpoint without its earlier invocation,
+`tool_call_id` reconstructs the same display ID. The renderer sends the result
+without re-sending the acknowledged tool start or reading older trace events.
+An unpinned provider session remains unnamed until the final snapshot arrives.
+
+Human-request updates for the separate interaction lane still use the existing
+750 ms read loop. E5's `subscribeHumanRequests` is API-process local (MUL-436),
+and the daemon's declared `task.human_request.settled` frame currently has no
+producer or receiver. Removing that loop requires the existing event transport
+to be wired into the connector process; this change adds no protocol or contract.
 
 | Stage | Transport | Visible content |
 | --- | --- | --- |
@@ -48,7 +66,7 @@ provider process events; a silent wait is represented by the receipt.
 
 The display follows aiden-bot's native CoT protocol and timeline conventions
 (reviewed at `8c4e7e49b6d1e403b918e2f5068aea330b87f0fb`), adapted to Remi's
-canonical Task events rather than its SDK-specific event feed:
+canonical trace events rather than its SDK-specific event feed:
 
 - Narrative uses segmented `REASONING_MESSAGE_*` events. A tool/plan separates
   the surrounding paragraphs into distinct groups, preserving chronological order.
@@ -97,9 +115,27 @@ replace interactive question/approval forms; those use `card.action.trigger`.
 
 ## Recovery and rollout
 
-The existing outbound queue stores `presentation_checkpoint` and
+MUL-440 splits newly claimed Tasks into server-written `cot`,
+`interaction_card`, `result_card`, and `receipt` deliveries. Each row has its
+own claim token, lease, backoff and six-attempt budget. `previous_delivery_id`
+orders rows; failure propagates only through `cascade_failure=1` edges. The
+result waits for its CoT delivery to finish or fail, without inheriting failure.
+Receipts never serve as predecessors. Final receipt failure records an audit
+and log; it changes neither the result nor the binding. The split CoT renderer
+keeps native waiting steps while independent interaction handlers own the forms.
+
+A daemon declares `feishu_outbound_kinds: 1` on its claiming heartbeat and
+receives `pending_feishu_outbounds`. Undeclared daemons retain the original
+singular response and bundled Task handler. The first successful carrier lease
+pins a Task to legacy or split for its entire delivery, including retries and
+handover; previously attempted rows stay legacy. See
+[schema, compatibility and rollback](feishu-outbound-kind-migration.md).
+
+The outbound queue stores `presentation_checkpoint` and
 `interaction_open_id`. The checkpoint contains the renderer version, native IDs,
-acknowledged Task sequence, final message ID and request-to-card mapping. Updates
+acknowledged Task sequence, and (for legacy Tasks) final message ID and
+request-to-card mapping. Split result/interaction rows persist their own message
+IDs rather than changing the legacy checkpoint fields. Updates
 require the current runtime and unexpired claim token; acknowledged IDs and
 receipt states cannot be discarded. Inbound event deduplication and queue
 insertion commit together. Callback recovery reconstructs handlers from the

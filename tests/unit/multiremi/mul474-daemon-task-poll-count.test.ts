@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 // MUL-474 (MUL-383 S8e): the daemon's task-level polls must stay cheap.
 //
 // A running task hits `GET :id/status` and `GET :id/steer` every 2.5 s, and
@@ -24,6 +25,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
+import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
+import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -32,13 +36,6 @@ import {
   seedDaemonTaskPollResultCases,
   type DaemonTaskPollFixture,
 } from "../../fixtures/multiremi/daemon-task-poll-fixture.js";
-import { notifyBrowserTaskMessages } from "@multiremi/api/realtime.js";
-import {
-  driveTaskMessageFanout,
-  fanoutFixtureStore,
-  installDeterministicFanoutClock,
-} from "../../fixtures/multiremi/task-message-fanout-fixture.js";
-import fanoutGolden from "../../fixtures/multiremi/task-message-fanout-golden.json";
 import golden from "../../fixtures/multiremi/daemon-task-poll-golden.json";
 
 const AUTH_TOKEN = "mul474-count-token";
@@ -79,6 +76,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     },
   });
   return markSqliteDialect<SqlDatabase>({
+    get inTransaction() { return raw.inTransaction; },
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -150,7 +148,8 @@ async function countRoute(
  *   - putting the task payload back is caught by the column assertions below
  *     rather than by the count, because the projection is what changes.
  */
-const MAX_STATEMENTS = { status: 6, steer: 5, messages: 9 } as const;
+// The v2 steer snapshot also checks runtime workspace identity and bot-host cards.
+const MAX_STATEMENTS = { status: 6, steer: 7, messages: 9 } as const;
 
 /** Statements that must never appear on a task-level poll. */
 const FORBIDDEN_SQL = [
@@ -175,18 +174,25 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds GET steer and never reads the task payload", async () => {
+  it("bounds the steer push snapshot and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "GET", `/api/daemon/tasks/${scaffolded.fixture.taskId}/steer`);
+    scaffolded.probe.reset();
+    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId,
+      scaffolded.store.getRuntimeLite(scaffolded.fixture.runtimeId)!.daemonId!,
+      new Set([scaffolded.fixture.taskId]), () => {});
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.steer);
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds POST messages for one message and never reads the task payload", async () => {
+  it("bounds trace.append for one event and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "POST", `/api/daemon/tasks/${scaffolded.fixture.taskId}/messages`, {
-      messages: [{ type: "text", content: "one message" }],
-    });
+    scaffolded.probe.reset();
+    const response = await reportFrame(scaffolded.store, "trace.append", { task_id: scaffolded.fixture.taskId, closed: false,
+      events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "one message" }],
+    }, { headers: scaffolded.headers, authToken: AUTH_TOKEN, beforeFrame: () => scaffolded.probe.reset() });
+    expect(response).toEqual({ ok: true, hub_head: 1 });
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.messages);
     expectNoTaskPayloadReads(sql);
   });
@@ -196,17 +202,12 @@ describe("MUL-474 daemon task-level polls", () => {
     // The guard reads identity, the handler reads the row, `completeTask` writes
     // and then re-reads the row to build its response.
     scaffolded.probe.reset();
-    const response = await scaffolded.app.request(`/api/daemon/tasks/${scaffolded.fixture.taskId}/complete`, {
-      method: "POST",
-      headers: scaffolded.headers,
-      body: JSON.stringify({ output: "MUL-474 completed" }),
-    });
-    expect(response.status).toBe(200);
-    const body = await response.json() as { status?: string; result?: { output?: string } };
-    // The response is built from the post-write row: a stale cached row would
-    // report `running` and no result.
+    const response = await reportFrame(scaffolded.store, "task.complete", { task_id: scaffolded.fixture.taskId, output: "MUL-474 completed" }, { headers: scaffolded.headers, authToken: AUTH_TOKEN });
+    expect(response.ok).toBe(true);
+    const body = scaffolded.store.getTask(scaffolded.fixture.taskId)!;
+    // The post-write read must see completion, not a cached running row.
     expect(body.status).toBe("completed");
-    expect(body.result?.output).toBe("MUL-474 completed");
+    expect(body.result).toBe("MUL-474 completed");
 
     const sql = [...scaffolded.probe.statements];
     const writeIndex = sql.findIndex((statement) => /^UPDATE\s+multiremi_tasks\s+SET\s+status/i.test(statement));
@@ -338,7 +339,7 @@ describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () 
     });
     const headers = { Authorization: `Bearer ${token.token}`, "content-type": "application/json" };
     const requests = [0, 1].map(() =>
-      app.request("/api/daemon/runtimes/rt_mul474_claim/tasks/claim", { method: "POST", headers }));
+      taskOfferResponse(store, "rt_mul474_claim", { headers, authToken: AUTH_TOKEN, projectKnowledge: projectKnowledge as never }));
     await entered;
     // The single-flight guard means only the first poll hydrates, and it is now
     // parked inside hydration with its pre-cancel read already done.
@@ -376,13 +377,21 @@ describe("MUL-474 daemon task authority matrix", () => {
     const foreign = { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" };
 
     expect((await app.request(`${taskPath}/status`, { headers: owner })).status).toBe(200);
-    expect((await app.request(`${taskPath}/steer`, { headers: owner })).status).toBe(200);
+    const steer = store.createTaskSteerMessage({ taskId: fixture.taskId, kind: "steer", content: "owner-only" });
+    const connection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.daemonToken), masterToken: false } });
+    try {
+      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer.id)).toEqual([steer.id]);
+    } finally { await connection.close(); }
+    const foreignConnection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.foreignDaemonToken), masterToken: false } });
+    try { expect(foreignConnection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0); }
+    finally { await foreignConnection.close(); }
 
     // A non-owner daemon keeps the exact refusal it had before the reorder. This
     // Task has no Feishu transport binding, so neither exception applies.
     for (const [method, path, body] of [
       ["GET", `${taskPath}/status`, undefined],
-      ["GET", `${taskPath}/steer`, undefined],
       ["GET", `${taskPath}/messages`, undefined],
       ["POST", `${taskPath}/messages`, JSON.stringify({ messages: [{ type: "text", content: "x" }] })],
       ["POST", `${taskPath}/complete`, JSON.stringify({ output: "x" })],
@@ -410,13 +419,10 @@ describe("MUL-474 daemon task authority matrix", () => {
 
   it("refuses a non-owner on the steer/consume write path too", async () => {
     const { scaffolded } = await authorityScaffold();
-    const { app, fixture } = scaffolded;
-    const response = await app.request(`/api/daemon/tasks/${fixture.taskId}/steer/consume`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ ids: [] }),
-    });
-    expect(response.status).toBe(403);
+    const { store, fixture } = scaffolded;
+    const response = await requestRuntimeRpc(store, fixture.foreignRuntimeId, "steer.consume",
+      { task_id: fixture.taskId, steer_ids: [] }, fixture.foreignDaemonToken, AUTH_TOKEN);
+    expect(response).toMatchObject({ ok: false, code: "authority_revoked" });
   });
 
   it("keeps the Feishu host exception working for a Chat task on another daemon", async () => {
@@ -467,19 +473,11 @@ describe("MUL-474 daemon task authority matrix", () => {
     // Exception holds: the hosting daemon may read the snapshot ...
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(200);
     // ... but not mutate the run it does not execute.
-    expect((await app.request(`${taskPath}/complete`, {
-      method: "POST",
-      headers: { ...host, "content-type": "application/json" },
-      body: JSON.stringify({ output: "not mine" }),
-    })).status).toBe(403);
+    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "not mine" }, { headers: { ...host, "content-type": "application/json" }, authToken: "" })).ok).toBe(false);
     // The executing daemon reads and writes it normally.
     const executing = { Authorization: `Bearer ${executor.token}` };
     expect((await app.request(`${taskPath}/status`, { headers: executing })).status).toBe(200);
-    expect((await app.request(`${taskPath}/complete`, {
-      method: "POST",
-      headers: { ...executing, "content-type": "application/json" },
-      body: JSON.stringify({ output: "Mine" }),
-    })).status).toBe(200);
+    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "Mine" }, { headers: { ...executing, "content-type": "application/json" }, authToken: "" })).ok).toBe(true);
     // Once the connector is reassigned away, the exception no longer holds.
     store.heartbeatRuntime("rt_mul474_executor", { supportsFeishuBotConfig: true });
     store.upsertFeishuBotConfig("local", {
@@ -491,37 +489,5 @@ describe("MUL-474 daemon task authority matrix", () => {
       domain: "feishu",
     });
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(403);
-  });
-});
-
-/**
- * The browser task-message frames are a contract as well: the fan-out now takes a
- * `TaskMessageFanoutSubject` instead of a whole Task, and the payload must not
- * have moved with it. The golden was captured on the pre-change commit with the
- * same fixture (both fan-out branches, a visible and a denied recipient), and the
- * comparison is on the emitted frame text — what a browser actually receives.
- */
-describe("MUL-474 browser task-message fan-out wire payload", () => {
-  it("emits the same frames the pre-change implementation emitted, byte for byte", () => {
-    const restoreClock = installDeterministicFanoutClock();
-    const db = openSqliteDatabase(":memory:");
-    databases.push(db);
-    try {
-      const store = fanoutFixtureStore(db);
-      const frames = driveTaskMessageFanout(store, notifyBrowserTaskMessages);
-
-      expect(frames.workspaceFrames).toEqual(fanoutGolden.workspaceFrames);
-      expect(frames.chatFrames).toEqual(fanoutGolden.chatFrames);
-      // A recipient without access to the Task receives nothing, before and after.
-      expect(frames.deniedFrames).toEqual(fanoutGolden.deniedFrames);
-      // Serialized comparison too: the daemon-facing consumers read the bytes.
-      expect(JSON.stringify(frames)).toBe(JSON.stringify({
-        workspaceFrames: fanoutGolden.workspaceFrames,
-        chatFrames: fanoutGolden.chatFrames,
-        deniedFrames: fanoutGolden.deniedFrames,
-      }));
-    } finally {
-      restoreClock();
-    }
   });
 });

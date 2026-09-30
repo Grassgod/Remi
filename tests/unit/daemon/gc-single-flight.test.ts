@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { writeIssueSessionArchiveReceipt } from "@daemon/agent-runtime/workspace/session-archive.js";
 import type { MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
@@ -10,8 +11,15 @@ import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multi
 
 describe("daemon Session archive GC orchestration", () => {
   const roots: string[] = [];
+  const outboxes: MultiremiTaskReportOutbox[] = [];
+  const reports = () => {
+    const outbox = new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async () => {} });
+    outboxes.push(outbox);
+    return () => outbox;
+  };
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const outbox of outboxes.splice(0)) await outbox.close();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -65,9 +73,9 @@ describe("daemon Session archive GC orchestration", () => {
     const blockedGc = new Promise<void>((resolve) => {
       finishGc = resolve;
     });
-    let heartbeatEntered!: () => void;
-    const heartbeatStarted = new Promise<void>((resolve) => {
-      heartbeatEntered = resolve;
+    let loopEntered!: () => void;
+    const loopStarted = new Promise<void>((resolve) => {
+      loopEntered = resolve;
     });
     Object.assign(daemon, {
       stopped: false,
@@ -79,14 +87,17 @@ describe("daemon Session archive GC orchestration", () => {
       gcTimer: null,
       gcInFlight: null,
       inflight: new Set<Promise<void>>(),
+      runtimeGoneInflight: new Set<string>(),
+      activeTaskCount: 0,
+      pendingClaimCount: 0,
       feishuOutboundRuns: new Map(),
-      options: { once: false, pollIntervalMs: 1, runtimeId: "rt_shutdown" },
+      options: { once: false, pollIntervalMs: 1, pluginDesiredRefreshMs: 30_000, maxConcurrency: 1, runtimeId: "rt_shutdown" },
       client: {
         recoverOrphans: async () => {},
-        heartbeatRuntime: async () => {
-          heartbeatEntered();
+        claimTask: async () => {
+          loopEntered();
           daemon.stop();
-          return {};
+          return null;
         },
       },
       sshMeshManager: {
@@ -97,6 +108,8 @@ describe("daemon Session archive GC orchestration", () => {
         }),
       },
       registerCurrentRuntime: async () => "rt_shutdown",
+      ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},
@@ -120,14 +133,16 @@ describe("daemon Session archive GC orchestration", () => {
       runtimeModelRetryWake: null,
       workspaceRootFence: null,
       supervisorReady: () => true,
-      onReadyChange: () => {},
+      onReadyChange: (ready: boolean) => {
+        if (ready) { loopEntered(); daemon.stop(); }
+      },
     });
 
     let stopped = false;
     const run = daemon.start().then(() => {
       stopped = true;
     });
-    await heartbeatStarted;
+    await loopStarted;
     await Promise.resolve();
     const daemonState = daemon as unknown as Record<string, unknown>;
     expect(daemonState.stopped).toBe(true);
@@ -156,6 +171,9 @@ describe("daemon Session archive GC orchestration", () => {
       activeTaskIds: new Set<string>(),
       activeTaskAborts: new Set<AbortController>(),
       issueWorkspaceLifecycleLocks: locker,
+      taskDownlinks: { observeCancellation: () => () => {}, release: () => {} },
+      ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
         renewTaskDispatchLease: async () => "dispatched",
@@ -269,6 +287,7 @@ describe("daemon Session archive GC orchestration", () => {
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     let barrierReady = false;
     let claims = 0;
+    let connections = 0;
     let providerReady!: () => void;
     const providerReachedBarrier = new Promise<void>((resolve) => { providerReady = resolve; });
     Object.assign(daemon, {
@@ -280,6 +299,7 @@ describe("daemon Session archive GC orchestration", () => {
       restartRequestedFlag: false,
       workspaceOwnershipLost: false,
       inflight: new Set<Promise<void>>(),
+      runtimeGoneInflight: new Set<string>(),
       feishuOutboundRuns: new Map(),
       gcInFlight: null,
       runtimeModelRefreshTask: null,
@@ -294,10 +314,15 @@ describe("daemon Session archive GC orchestration", () => {
           return null;
         },
       },
+      protocolClient: {
+        startLane: () => { connections++; daemon.stop(); }, stopLane: () => {}, drain: async () => {},
+      },
       sshMeshManager: {
         getHeartbeatStatus: () => ({ protocol_version: 1, state: "disabled", peers: [] }),
       },
       registerCurrentRuntime: async () => "rt_barrier",
+      ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},
@@ -316,10 +341,12 @@ describe("daemon Session archive GC orchestration", () => {
     await providerReachedBarrier;
     await Bun.sleep(30);
     expect(claims).toBe(0);
+    expect(connections).toBe(0);
 
     barrierReady = true;
     await run;
-    expect(claims).toBe(1);
+    expect(connections).toBe(1);
+    expect(claims).toBe(0);
   });
 
   it("runs snapshot GC even when workspace GC fails, then reports the workspace error", async () => {
@@ -439,7 +466,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async (...args: unknown[]) => {
+        getSessionArchiveStatus: async (...args: unknown[]) => {
           requests.push(args);
           return {
             latest: null,
@@ -458,7 +485,12 @@ describe("daemon Session archive GC orchestration", () => {
       sourceRevision: "a".repeat(64),
       sha256: "b".repeat(64),
     });
-    expect(requests).toEqual([["rt_1", "iss_1", "a".repeat(64), "b".repeat(64)]]);
+    expect(requests).toEqual([[
+      "rt_1",
+      { kind: "issue", id: "iss_1" },
+      "a".repeat(64),
+      "b".repeat(64),
+    ]]);
   });
 
   it("requests physical verification for the deletion-time fresh snapshot", async () => {
@@ -473,7 +505,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async (...args: unknown[]) => {
+        getSessionArchiveStatus: async (...args: unknown[]) => {
           requests.push(args);
           return {
             latest: null,
@@ -493,8 +525,8 @@ describe("daemon Session archive GC orchestration", () => {
       ): Promise<unknown>;
     }).ensureIssueSessionArchive("iss_1", root, true)).toMatchObject({ archiveId: "isar_1" });
     expect(requests).toHaveLength(2);
-    expect(requests[0]).toEqual(["rt_1", "iss_1"]);
-    expect(requests[1]?.slice(0, 2)).toEqual(["rt_1", "iss_1"]);
+    expect(requests[0]).toEqual(["rt_1", { kind: "issue", id: "iss_1" }]);
+    expect(requests[1]?.slice(0, 2)).toEqual(["rt_1", { kind: "issue", id: "iss_1" }]);
     expect(requests[1]?.[4]).toBe(true);
   });
 
@@ -506,23 +538,23 @@ describe("daemon Session archive GC orchestration", () => {
     mkdirSync(join(root, ".multiremi"), { recursive: true });
     symlinkSync(outside, join(root, ".multiremi", "sessions"));
 
-    const reports: Array<{ runtimeId: string; issueId: string; input: unknown }> = [];
+    const reports: Array<{ runtimeId: string; subject: { kind: string; id: string }; input: unknown }> = [];
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => ({
+        getSessionArchiveStatus: async () => ({
           latest: null,
           latest_ready: null,
           requested_ready: null,
           gc_ready: false,
         }),
-        reportIssueSessionArchiveFailure: async (
+        reportSessionArchiveFailure: async (
           runtimeId: string,
-          issueId: string,
+          subject: { kind: string; id: string },
           input: unknown,
         ) => {
-          reports.push({ runtimeId, issueId, input });
+          reports.push({ runtimeId, subject, input });
           return { id: "sar_failure", status: "failed" };
         },
       },
@@ -534,7 +566,7 @@ describe("daemon Session archive GC orchestration", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]).toMatchObject({
       runtimeId: "rt_1",
-      issueId: "iss_1",
+      subject: { kind: "issue", id: "iss_1" },
       input: {
         stage: "prepare",
         error: expect.stringContaining("must not contain symlinks"),
@@ -554,7 +586,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => ({
+        getSessionArchiveStatus: async () => ({
           latest: {
             id: "sar_failure",
             status: "pending",
@@ -564,7 +596,7 @@ describe("daemon Session archive GC orchestration", () => {
           requested_ready: { id: "sar_ready", status: "ready" },
           gc_ready: true,
         }),
-        initIssueSessionArchive: async (...args: unknown[]) => {
+        initSessionArchive: async (...args: unknown[]) => {
           initialized.push(args);
           return {
             archive: { id: "sar_ready", status: "ready" },

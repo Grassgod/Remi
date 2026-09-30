@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
@@ -14,9 +15,10 @@ import { questionCardIdempotencyKey } from "@shared/feishu-task-card.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
-import { setFeishuMessageReceipt, type FeishuMessageReceipt } from "./message-receipt.js";
+import { FeishuLegacyTaskReceipts } from "./legacy-task-receipts.js";
 
 export interface TaskPresentationOptions {
+  lane?: "cot";
   receiptMessageIds?: string[];
   appId: string;
   replyToMessageId?: string;
@@ -53,7 +55,6 @@ export class FeishuTaskPresentation {
   private context: ContextUsage | null = null;
   private lastFlush = Date.now();
   private lastBatch = 0;
-  private readonly receiptMessageIds = new Set<string>();
 
   constructor(private readonly client: Lark.Client, private readonly chatId: string,
     private readonly meta: TaskStreamMeta, private readonly options: TaskPresentationOptions) {
@@ -64,7 +65,6 @@ export class FeishuTaskPresentation {
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
     this.execution = { agentName: options.displayName ?? meta.displayName };
     this.sessionId = meta.sessionId;
-    for (const id of options.receiptMessageIds ?? []) this.receiptMessageIds.add(id);
   }
 
   isActive(): boolean { return this.active; }
@@ -72,30 +72,10 @@ export class FeishuTaskPresentation {
   detach(): void { this.active = false; }
 
   async consume(stream: AsyncIterable<TaskStreamEvent>): Promise<{ messageId: string }> {
-    // A retry after acknowledged result delivery only reconciles the terminal
-    // receipt. Do not flash THINKING again, including after a daemon restart.
-    if (!this.state.resultMessageId) await this.receipt("received");
-    try { return await this.consumeTask(stream); }
-    catch (error) {
-      // Handover/shutdown is not a task failure; the next leased consumer will resume.
-      // The marker is best effort: the original error decides whether the outbox retries.
-      if (!this.signal.aborted && !this.state.resultMessageId) {
-        await this.receipt("failed").catch(failure =>
-          this.options.log?.(`Failure receipt update failed: ${String(failure)}`));
-      }
-      throw error;
-    }
-  }
-
-  private async receipt(state: FeishuMessageReceipt): Promise<void> {
-    for (const id of this.receiptMessageIds) {
-      try { await setFeishuMessageReceipt(this.client, this.options.appId, id, state, this.signal); }
-      catch (error) {
-        this.signal.throwIfAborted();
-        if (state !== "received") throw error; // Durable outbox retries without resending its checkpointed result.
-        this.options.log?.(`Message receipt update failed: ${String(error)}`);
-      }
-    }
+    if (this.options.lane === "cot") return this.consumeTask(stream);
+    return new FeishuLegacyTaskReceipts(this.client, this.options.appId, this.signal,
+      () => Boolean(this.state.resultMessageId), this.options.receiptMessageIds, this.options.log)
+      .consume(stream, events => this.consumeTask(events));
   }
 
   private async consumeTask(stream: AsyncIterable<TaskStreamEvent>): Promise<{ messageId: string }> {
@@ -131,10 +111,7 @@ export class FeishuTaskPresentation {
         if (event.kind === "message") {
           await this.message(event.message);
         } else {
-          for (const id of event.snapshot.receiptMessageIds ?? []) this.receiptMessageIds.add(id);
-          // Snapshots are polled while the Task runs, so the conversation label
-          // settles as soon as the provider session is pinned. A command reply
-          // reports no session and keeps the plain agent name.
+          // The subscription's closed callback supplies the final display snapshot.
           if (event.snapshot.sessionId) this.sessionId = event.snapshot.sessionId;
           finalStatus = event.snapshot.status;
           error = event.snapshot.error;
@@ -153,6 +130,13 @@ export class FeishuTaskPresentation {
     if (!["completed", "failed", "cancelled"].includes(finalStatus)) throw new Error("Task stream ended before a terminal snapshot");
     await this.flush(true);
     await this.finishCot(finalStatus);
+    if (this.options.lane === "cot") {
+      this.active = false;
+      if (this.state.cot?.status === "disabled" && this.state.cot.error) {
+        throw new FeishuDeliveryError(this.state.cot.error, false);
+      }
+      return { messageId: this.state.cot?.messageId ?? "" };
+    }
     const answer = this.timeline.answer(snapshotText);
     const text = finalStatus === "failed" ? `${answer}${answer ? "\n\n" : ""}**执行失败：** ${error || "请查看工作台任务详情"}`
       : finalStatus === "cancelled" ? `${answer}${answer ? "\n\n" : ""}任务已取消。` : answer || "任务已完成，未返回文字结果。";
@@ -171,12 +155,11 @@ export class FeishuTaskPresentation {
       this.state.resultMessageId = sent.messageId;
       await this.save();
     }
-    await this.receipt(finalStatus === "completed" ? "completed" : "failed");
     this.active = false;
     return { messageId: this.state.resultMessageId };
   }
 
-  private async message(message: MultiremiTaskMessage): Promise<void> {
+  private async message(message: TraceEvent): Promise<void> {
     this.timeline.accept(message);
     // Nested agent prose must never become the main agent's final answer.
     const nested = Boolean(message.meta?.parent_tool_call_id);
@@ -197,6 +180,10 @@ export class FeishuTaskPresentation {
     if (Date.now() - this.lastFlush >= 500) await this.flush();
     if (message.type === "permission_request" || message.type === "question_request") {
       await this.flush(true);
+      if (this.options.lane === "cot") {
+        await this.waitForInteraction(message);
+        return;
+      }
       await this.interaction(message);
     }
   }
@@ -279,13 +266,26 @@ export class FeishuTaskPresentation {
     await this.save();
   }
 
-  private async interaction(message: MultiremiTaskMessage): Promise<void> {
+  private async waitForInteraction(message: TraceEvent): Promise<void> {
+    const requestId = String(message.input?.request_id ?? "");
+    if (!requestId) return;
+    let request = await this.meta.getHumanRequest?.(requestId);
+    if (!request || request.status !== "pending") return;
+    await this.writeProcess(this.timeline.waitForUser(requestId, request.kind, message.seq), message.seq);
+    while (request.status === "pending") {
+      await delay(750, this.signal);
+      request = await this.meta.getHumanRequest?.(requestId) ?? request;
+    }
+    await this.writeProcess(this.timeline.resume(requestId, request.status), message.seq);
+  }
+
+  private async interaction(message: TraceEvent): Promise<void> {
     const requestId = String(message.input?.request_id ?? "");
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (this.meta.getHumanRequest && !request) throw new Error("Task human request unavailable");
     request ??= { id: requestId, taskId: this.meta.taskId, kind: message.type === "question_request" ? "question" : "permission",
-      payload: message.input ?? {}, status: "pending", response: null, respondedBy: null, createdAt: message.createdAt, respondedAt: null };
+      payload: message.input ?? {}, status: "pending", response: null, respondedBy: null, createdAt: message.ts, respondedAt: null };
     if (request.taskId !== this.meta.taskId) throw new Error("Interaction Task mismatch");
     let entry = this.state.interactions[requestId];
     if (!entry && request.status !== "pending") return; // historical request already answered on web

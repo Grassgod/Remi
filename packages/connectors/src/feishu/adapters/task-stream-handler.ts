@@ -110,7 +110,7 @@ export async function handleTaskStream(
         break;
       case "tool_use": {
         const name = message.tool || String(message.meta?.title ?? "Tool");
-        const existingIndex = message.toolCallId ? toolIndexes.get(message.toolCallId) : undefined;
+        const existingIndex = message.tool_call_id ? toolIndexes.get(message.tool_call_id) : undefined;
         if (existingIndex != null) {
           const existing = tools[existingIndex]!;
           existing.input = { ...existing.input, ...message.input };
@@ -126,14 +126,14 @@ export async function handleTaskStream(
           thinkingBefore: thinkingText,
         };
         const index = tools.push(entry) - 1;
-        if (message.toolCallId) toolIndexes.set(message.toolCallId, index);
+        if (message.tool_call_id) toolIndexes.set(message.tool_call_id, index);
         const summary = formatToolInputSummary(name, message.input ?? undefined);
         session.addStep(name, `${name}${summary ? ` ${summary}` : ""}`);
         await session.updateStatus(`Running ${name}...`);
         break;
       }
       case "tool_result": {
-        const index = message.toolCallId ? toolIndexes.get(message.toolCallId) : undefined;
+        const index = message.tool_call_id ? toolIndexes.get(message.tool_call_id) : undefined;
         const entry = index == null ? tools.findLast((item) => item.status === "pending") : tools[index];
         if (entry) {
           entry.status = "done";

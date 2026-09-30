@@ -3,6 +3,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 // The answered-window cases pin "now" so created_at / answered_at are ordered.
@@ -47,9 +48,10 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     const second = await create(source.id, sourceToken.token, "permission", "Access the resource");
     expect(first).toMatchObject({ status: "pending", issueId: parent.id, createdByAgentId: sourceAgent.id, sourceTaskId: sourceTask.id });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.agentId === owner.id && task.status === "queued")).toHaveLength(1);
-    const parentPrompt = store.getTask(ownerTask.id)?.prompt ?? "";
-    expect(parentPrompt).toContain(first.id);
-    expect(parentPrompt).toContain(second.id);
+    const parentInbox = inboxReportBody(store, ownerTask);
+    expect(parentInbox).toContain(first.id);
+    expect(parentInbox).toContain(second.id);
+    expect(store.getTask(ownerTask.id)!.prompt).toBe(ownerTask.prompt);
     expect(store.listInboxItems(member.id).filter((item) => item.type === "decision_requested")).toHaveLength(0);
 
     const answerPath = `/api/issues/${parent.id}/decisions/${first.id}/answer`;
@@ -68,7 +70,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
       status: "answered", answeredByMemberId: null, answer: { answererType: "agent", answererId: owner.id,
         answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
     });
-    expect(store.getTask(sourceTask.id)?.prompt).toContain(`decision:${first.id}`);
+    expect(inboxReportBody(store, sourceTask)).toContain(`decision:${first.id}`);
+    expect(store.listTasksForIssue(source.id).filter(task => task.status === "queued")).toHaveLength(1);
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_answered" && entry.actorType === "agent")).toBe(true);
     expect(store.listIssueActivity(source.id).some((entry) => entry.type === "decision_received")).toBe(true);
 
@@ -81,8 +84,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect(history[1]?.answererId).toBe(member.id);
     expect(store.getIssueDecision(parent.id, first.id)?.answeredByMemberId).toBe(member.id);
     expect(store.getIssueDecision(parent.id, first.id)?.answeredAt).toBe(history[1]?.answeredAt);
-    expect(store.getTask(ownerTask.id)?.prompt).toContain(`member changed your answer to decision ${first.id}`);
-    expect(store.getTask(sourceTask.id)?.prompt).toContain("Hold for QA");
+    expect(inboxReportBody(store, ownerTask)).toContain(`member changed your answer to decision ${first.id}`);
+    expect(inboxReportBody(store, sourceTask)).toContain("Hold for QA");
 
     const escalated = await request(`/api/issues/${parent.id}/decisions/${second.id}/escalate`, ownerToken.token, {});
     expect(escalated.status, await escalated.clone().text()).toBe(200);
@@ -443,6 +446,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
   let database: PostgresSyncDatabase;
   let store: MultiremiStore;
   let maxDepth = 0;
+  const controls: { sql: string; invocationDepth: number; callbackDepth: number; inTransaction: boolean }[] = [];
 
   beforeAll(async () => {
     admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
@@ -452,8 +456,22 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
     database = new PostgresSyncDatabase(url.toString());
     const original = database.transaction.bind(database);
     let depth = 0;
+    let callbackDepth = 0;
+    const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+    const execute = target.execute.bind(database);
+    target.execute = (sql, params) => {
+      const command = sql.trim().toUpperCase();
+      if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+        controls.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
+      }
+      return execute(sql, params);
+    };
     (database as unknown as { transaction: unknown }).transaction = (fn: () => unknown) => {
-      const run = original(fn);
+      const run = original(() => {
+        callbackDepth++;
+        try { return fn(); } finally { callbackDepth--; }
+      });
+      // Every frame counts, a nested SAVEPOINT included (ADR 0011).
       return () => {
         depth++;
         maxDepth = Math.max(maxDepth, depth);
@@ -472,13 +490,49 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
   });
 
   it("runs the acceptance flow without nested transactions", async () => {
+    controls.length = 0;
     await exerciseDecisions(store);
     expect(maxDepth).toBe(1);
+    let outerOpen = false;
+    const savepoints: string[] = [];
+    expect(controls.some((control) => control.sql === "BEGIN")).toBe(true);
+    for (const control of controls) {
+      const detail = `PG transaction control: ${control.sql}`;
+      if (control.sql === "BEGIN") {
+        expect(outerOpen, detail).toBe(false);
+        expect(control.inTransaction, detail).toBe(false);
+        expect(control.invocationDepth, detail).toBe(1);
+        expect(control.callbackDepth, detail).toBe(0);
+        outerOpen = true;
+      } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.invocationDepth, detail).toBe(1);
+        expect(control.callbackDepth, detail).toBe(0);
+        expect(savepoints, detail).toHaveLength(0);
+        outerOpen = false;
+      } else {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.invocationDepth, detail).toBeGreaterThan(1);
+        expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+        const name = control.sql.split(" ").at(-1)!;
+        if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+        else {
+          // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
+          expect(savepoints.at(-1), detail).toBe(name);
+          savepoints.pop();
+        }
+      }
+    }
+    expect(outerOpen).toBe(false);
+    expect(savepoints).toHaveLength(0);
   });
 
+  // The 55-answer PG fixture also persists an inbox entry and wake for each reply.
   it("windows recently answered decisions by answered_at and exposes history", async () => {
     await exerciseAnsweredWindow(store);
-  });
+  }, 15_000);
 
   it("falls back to the issue creator, then workspace owners, when an escalated decision has no explicit audience", async () => {
     await exerciseDecisionRecipientFallback(store);

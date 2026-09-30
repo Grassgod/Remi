@@ -5,11 +5,12 @@ import { useChatStore } from "@multiremi/core/chat";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useNavigation } from "../../navigation";
 import { ChatWindow } from "./chat-window";
+import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 
-export function ChatPage() {
+export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueLogBootstrap; initialSessionId?: string } = {}) {
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
-  const querySession = navigation.searchParams.get("session");
+  const querySession = navigation.searchParams.get("session") ?? initialSessionId;
   const queryAgent = navigation.searchParams.get("agent");
   const mounted = useRef(false);
   useEffect(() => {
@@ -27,5 +28,6 @@ export function ChatPage() {
     },
     [navigation, paths],
   );
-  return <ChatWindow presentation="page" onSessionChange={onSessionChange} />;
+  return <ChatWindow presentation="page" onSessionChange={onSessionChange}
+    initialLog={initialLog} initialSessionId={querySession ?? undefined} />;
 }

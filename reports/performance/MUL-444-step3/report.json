@@ -1,0 +1,30 @@
+{
+  "base": "fd90a83a8eef2ac981f254f28d449f799248c793",
+  "artifact_commit_note": "The browser scripts record git HEAD fd90a83a while testing the uncommitted step 3 worktree that was subsequently committed. Their generated commit field alone is not the tested source identity.",
+  "scope": "MUL-444 step 3, Chat page and floating window",
+  "checks": {
+    "chat_browser": "12/12, including ten individual pinned sends, single-row reconnect, manual pagination and four SSR degradation paths",
+    "step1_regression": "68/68",
+    "step2_regression": "26/26",
+    "zero_jump": "27/27, jumps=0",
+    "backend_types": "bunx tsc --noEmit: 0 errors",
+    "frontend_types": "bun run typecheck:frontend: passed",
+    "chat_attachment_read": "bun test tests/unit/multiremi/conversation-log.test.ts: 10/10",
+    "frontend_full": {
+      "core": "1232 pass, 0 fail",
+      "views": "2435 pass, 38 fail, 18 skipped",
+      "web": "60 pass, 0 fail",
+      "failure_scope": "All 38 failures are in issues/components/issue-detail.test.tsx, already present on fd90a83a before step 3. Step 1+2 QA and the parent owner are handling test migration separately."
+    },
+    "architecture": "150 pass, 1 inherited failure in tests/arch/api-role-resolution.test.ts: resolveApiRole and read-pool env fallback"
+  },
+  "artifacts": [
+    "chat-check.json",
+    "chat-page.png",
+    "step1-regression/report.json",
+    "step2-regression/report.json",
+    "zero-jump.json",
+    "mutations.json"
+  ],
+  "note": "The Chat log route hydrates message and turn attachments on read. Live Issue comments and Chat rows are hydrated before reaching the browser replica; local uploads are shared between the panel and full page until the authoritative row replaces them."
+}

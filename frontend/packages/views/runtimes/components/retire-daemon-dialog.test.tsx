@@ -261,6 +261,24 @@ describe("RetireDaemonDialog", () => {
     }));
   });
 
+  it.each([
+    ["alongside an Issue workspace", [{ issue_id: "issue-stale", status: "runtime_offline",
+      runtime_id: "runtime-1", root_path: "/work/stale" }], ["active_issue_workspaces", "unarchived_hot_traces"]],
+    ["without an Issue workspace", [], ["unarchived_hot_traces"]],
+  ])("does not offer abandon for hot traces %s", async (_name, issueWorkspaces, blockingReasons) => {
+    fetchPlan.mockResolvedValue(makePlan({
+      can_retire: false,
+      can_abandon_issue_workspaces: true,
+      blocking_reasons: blockingReasons,
+      issue_workspaces: issueWorkspaces,
+    }));
+    renderDialog();
+    const submit = await screen.findByRole("button", { name: "Deactivate and remove" });
+    expect(screen.queryByRole("checkbox", { name: /Abandon these issue workspace records/ })).toBeNull();
+    expect(submit).toBeDisabled();
+    expect(retireDaemon).not.toHaveBeenCalled();
+  });
+
   it("rejects a conflict plan for another daemon", async () => {
     fetchPlan.mockResolvedValue(makePlan());
     retireDaemon.mockRejectedValue(

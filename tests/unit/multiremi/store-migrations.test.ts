@@ -211,6 +211,8 @@ describe("store migrations", () => {
   it("adds continuation lineage to an existing task table idempotently without losing rows", () => {
     const database = freshDb();
     migrate(database);
+    database.exec("DROP INDEX idx_multiremi_tasks_one_pending_turn_session");
+    database.exec("DROP INDEX idx_multiremi_tasks_one_pending_turn_chat");
     database.exec("ALTER TABLE multiremi_tasks DROP COLUMN continued_from_task_id");
     const timestamp = "2026-09-18T00:00:00.000Z";
     database.run(

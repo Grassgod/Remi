@@ -2,21 +2,24 @@
  * MUL-400 S1: every path the parent-status work touches must reach the database
  * with a transaction depth of at most 1.
  *
- * `PostgresSyncDatabase.transaction()` is a bare BEGIN/COMMIT with no savepoint
- * support, so a nested `transaction()` commits the outer one early, releases its
- * locks, and makes the outer ROLLBACK a no-op. The store's convention is that
- * the outermost caller owns the only transaction and everything inside it uses a
- * `...WithinTransaction` variant. This file wraps `db.transaction` in a depth
- * counter and asserts that ceiling for each entry point, plus the atomicity of
- * the E2 hook itself.
+ * Depth 1 is a hard contract for these entry points, not a bridge limit (Senior
+ * ruling cmt_96e1yqxgifms §1, docs/adr/0011-transaction-ownership-and-side-effect-timing.md).
+ * A nested `transaction()` is a SAVEPOINT on both backends (MUL-405), so it no
+ * longer commits the outer one early, but it is still an extra frame a helper
+ * added. The store's convention is that the outermost caller owns the only
+ * transaction and everything inside it uses a `...WithinTransaction` variant.
+ * This file wraps `db.transaction` in a depth counter that counts every frame,
+ * outer and nested, and asserts that ceiling for each entry point, plus the
+ * atomicity of the E2 hook itself.
  *
- * The counters run on both backends: SQLite here, and the same assertions run
- * against real Postgres when `MULTIREMI_TEST_POSTGRES_URL` points at one (the
- * PG suite imports this file's helpers, see `multiremi-postgres-tx-depth`).
+ * This file runs the counter on SQLite; multiremi-parent-status-pg-depth.test.ts
+ * runs the same full-frame count, plus the SQL control assertions, on real
+ * PostgreSQL.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -28,23 +31,52 @@ type Store = ReturnType<typeof createStore>;
  * target on every read, so wrapping the target observes every call the store
  * makes, including the ones that start from a repo.
  */
-export function transactionDepthCounter(database: unknown): { max: number; reset(): void } {
-  const target = database as { transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown };
+interface DepthCounter {
+  max: number;
+  maxTopLevel: number;
+  maxNested: number;
+  taskInserts: Array<{ depth: number; inTransaction: boolean }>;
+  reset(): void;
+}
+
+export function transactionDepthCounter(database: unknown): DepthCounter {
+  const target = database as {
+    readonly inTransaction?: boolean;
+    transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown;
+    run: (sql: string, params?: unknown[]) => unknown;
+  };
   const original = target.transaction;
-  const counter = {
+  const counter: DepthCounter = {
     max: 0,
-    reset() { counter.max = 0; },
+    maxTopLevel: 0,
+    maxNested: 0,
+    taskInserts: [],
+    reset() { counter.max = 0; counter.maxTopLevel = 0; counter.maxNested = 0; counter.taskInserts = []; },
   };
   let depth = 0;
+  let topLevelDepth = 0;
+  let nestedDepth = 0;
+  const execute = target.run.bind(target);
+  target.run = (sql, params) => {
+    if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) {
+      counter.taskInserts.push({ depth: topLevelDepth + nestedDepth, inTransaction: target.inTransaction === true });
+    }
+    return execute(sql, params);
+  };
   target.transaction = (fn: (...args: never[]) => unknown) => {
     const run = original.call(target, fn);
     return (...args: unknown[]) => {
+      const nested = target.inTransaction === true;
+      if (nested) nestedDepth += 1; else topLevelDepth += 1;
+      counter.maxTopLevel = Math.max(counter.maxTopLevel, topLevelDepth);
+      counter.maxNested = Math.max(counter.maxNested, nestedDepth);
       depth += 1;
       counter.max = Math.max(counter.max, depth);
       try {
         return run(...args);
       } finally {
         depth -= 1;
+        if (nested) nestedDepth -= 1; else topLevelDepth -= 1;
       }
     };
   };
@@ -57,7 +89,7 @@ export function transactionDepthCounter(database: unknown): { max: number; reset
  * the tests count the target sqlite handle the helper created instead — same
  * call tree one `transaction()` layer down.
  */
-function wrapStore(store: Store): { max: number; reset(): void } {
+function wrapStore(store: Store): DepthCounter {
   return transactionDepthCounter(db);
 }
 
@@ -107,7 +139,10 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
-      expect(counter.max).toBe(1);
+      expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
+      expect(counter.maxTopLevel + counter.maxNested).toBe(1);
       // The report still landed as exactly one queued round.
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
@@ -119,10 +154,24 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
-      expect(counter.max).toBe(1);
+      expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
+      expect(counter.maxTopLevel + counter.maxNested).toBe(1);
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
   }
+
+  it("inserts the E4 pending turn inside the decision transaction at depth 1", () => {
+    const { store } = setupDepthStore();
+    const flow = inboxFlowFixture(store, "e4");
+    const counter = wrapStore(store);
+    counter.reset();
+    triggerInboxFlow(store, flow);
+    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
+  });
 
   it("keeps the in_review-parent re-derivation for a new child at depth 1", () => {
     const { store } = setupDepthStore();
@@ -1323,8 +1372,8 @@ describe("MUL-400 E2 hook atomicity", () => {
     }
     ctx.appendIssueActivity = original;
 
-    // ADR 0003: the child's own status was committed before the hook ran.
-    expect(store.getIssue(child.id)?.status).toBe("done");
+    // ADR 0012: the source status and wake belong to the same transaction.
+    expect(store.getIssue(child.id)?.status).toBe("in_progress");
     // The failure is observable at the call site ...
     expect(thrown?.message).toBe("injected hook failure");
     // ... and nothing half-written is left behind: no round, no notification

@@ -2,16 +2,19 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
+import { api } from "@multiremi/core/api";
+import { defaultStorage } from "@multiremi/core/platform";
 import { ChevronLeft } from "lucide-react";
+import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { useNavigation } from "../../navigation";
-import { useAfterFirstScreen, useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useScmSettings } from "@multiremi/core/scm";
-import { useAuthStore } from "@multiremi/core/auth";
+import { useSSRUser } from "@multiremi/core/platform/ssr-workspace";
+import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -20,10 +23,8 @@ import {
   childIssuesOptions,
   findCachedIssue,
   issueDetailOptions,
-  issueTimelinePrimerOptions,
   issueUsageOptions,
 } from "@multiremi/core/issues/queries";
-import { seedIssueTimelinePage } from "@multiremi/core/issues/timeline-cache";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { issueLabelsOptions } from "@multiremi/core/labels";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
@@ -39,6 +40,7 @@ import { IssueDetailMain } from "./issue-detail-main";
 import { IssueDetailSidebar } from "./issue-detail-sidebar";
 import { IssueDetailSkeleton } from "./issue-detail-skeleton";
 import { useT } from "../../i18n";
+import { useAfterFirstScreen, useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -46,6 +48,7 @@ import { useT } from "../../i18n";
 
 interface IssueDetailProps {
   issueId: string;
+  initialLog?: IssueLogBootstrap;
   onDelete?: () => void;
   /** Called after the issue is marked as done via the toolbar button. */
   onDone?: () => void;
@@ -70,6 +73,7 @@ interface IssueDetailProps {
  */
 export function IssueDetail({
   issueId,
+  initialLog,
   onDelete,
   onDone,
   defaultSidebarOpen = true,
@@ -80,40 +84,49 @@ export function IssueDetail({
 }: IssueDetailProps) {
   const { t } = useT("issues");
   const id = issueId;
+  const { registerRightRail } = useFloatingPanelLayout();
   const router = useNavigation();
   const { pathname } = router;
-  const user = useAuthStore((s) => s.user);
+  const { user } = useSSRUser();
   const paths = useWorkspacePaths();
 
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const timelinePrimerStartRef = useRef({ issueId: id, startedAt: Date.now() });
-  if (timelinePrimerStartRef.current.issueId !== id) {
-    timelinePrimerStartRef.current = { issueId: id, startedAt: Date.now() };
-  }
-  const timelinePrimer = useQuery({
-    ...issueTimelinePrimerOptions(id),
-    enabled: !initialIssueSessionId,
-  });
-  useEffect(() => {
-    if (timelinePrimer.data) {
-      seedIssueTimelinePage(
-        queryClient,
-        id,
-        timelinePrimer.data,
-        timelinePrimerStartRef.current.startedAt,
-      );
-    }
-  }, [id, queryClient, timelinePrimer.data]);
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
   const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
+  const resolveDeepLinkSession = Boolean(highlightCommentId && !initialIssueSessionId
+    && initialLog?.targetCommentId !== highlightCommentId);
   const sessions = useIssueSessionSelection(
     id,
     initialIssueSessionId,
     onIssueSessionChange,
+    resolveDeepLinkSession,
   );
+  const [locatedSession, setLocatedSession] = useState<{ issueId: string; commentId: string; sessionId: string } | null>(null);
+  const matchedSession = resolveDeepLinkSession && locatedSession?.issueId === id
+    && locatedSession.commentId === highlightCommentId ? locatedSession.sessionId : null;
+  useEffect(() => {
+    if (!resolveDeepLinkSession || !highlightCommentId || sessions.list.length === 0 || matchedSession !== null) return;
+    let active = true;
+    void Promise.all(sessions.list.map(async session => {
+      try {
+        const location = await api.locateSessionLogEntry(session.id, highlightCommentId);
+        return location.id === highlightCommentId ? session.id : null;
+      } catch { return null; }
+    })).then(ids => {
+      if (!active) return;
+      const sessionId = ids.find((value): value is string => value !== null) ?? "";
+      setLocatedSession({ issueId: id, commentId: highlightCommentId, sessionId });
+      if (sessionId) sessions.select(sessionId);
+    });
+    return () => { active = false; };
+  }, [id, highlightCommentId, matchedSession, resolveDeepLinkSession, sessions.list, sessions.select]);
+  const activitySessions = resolveDeepLinkSession
+    ? { ...sessions, activeId: matchedSession ?? "", active: sessions.list.find(s => s.id === matchedSession) ?? null,
+        pending: matchedSession === null || sessions.pending }
+    : sessions;
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
   // rendering doesn't have to re-derive it for every row.
@@ -125,6 +138,7 @@ export function IssueDetail({
   const { getActorName } = useActorName();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
+    storage: defaultStorage,
   });
   const sidebarRef = usePanelRef();
   const isMobile = useIsMobile();
@@ -250,15 +264,6 @@ export function IssueDetail({
   const loading = issueLoading
     || membersQuery.isPending
     || (!!issue && childIssuesQuery.isPending);
-
-  // MUL-472 b: the *main* content of an issue route is the scroll body, and
-  // `IssueDetailMain` publishes for it once the timeline settled and the reveal
-  // hook un-hid it. This component only covers the states with no body at all:
-  // a settled query with no issue (404 / deleted) or a failed load must still
-  // open the gate, or the deferred shell chrome would never appear on them.
-  // Publishing "the issue row exists" here would be wrong: that row lives inside
-  // the still-hidden content wrapper and lands ~400 ms before the timeline row
-  // the user actually reads.
   useRouteContentReady(pathname, !issueLoading && !issue);
 
   // Shared issue actions (mutations, pin, copy-link, modal dispatch, etc.).
@@ -354,13 +359,14 @@ export function IssueDetail({
       isMobile={isMobile}
       sessionSidebarOpen={visibleSessionSidebarOpen}
       onToggleSessionSidebar={handleToggleSessionSidebar}
-      sessions={sessions}
+      sessions={activitySessions}
       members={members}
       agents={agents}
       currentUserId={user?.id}
       canModerateComments={canModerateComments}
       getActorName={getActorName}
       highlightCommentId={highlightCommentId}
+      initialLog={initialLog}
       onShowKeyResults={handleShowKeyResults}
       onScrollContainerRef={setScrollContainerEl}
       scrollContainerEl={scrollContainerEl}
@@ -397,7 +403,7 @@ export function IssueDetail({
         panelRef={sidebarRef}
         onResize={(size) => setDesktopSidebarOpen(size.inPixels > 0)}
       >
-      <div className="overflow-y-auto border-l h-full">
+      <div ref={registerRightRail} data-issue-detail-sidebar="" className="overflow-y-auto border-l h-full">
         <div className="p-4">
           {sidebarContent}
         </div>

@@ -1,27 +1,30 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
-import { appendTaskMessagesToHydratedCache } from "@multiremi/core/chat/queries";
-import { createTaskHandlers } from "../../test/task-handlers";
 import type { AgentTask } from "@multiremi/core/types/agent";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import enAgents from "../../locales/en/agents.json";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
 const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon, issues: enIssues } };
 
-const { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages } = vi.hoisted(() => ({
+const { getAgent, getTaskPrompt, getTaskTrace, listRuntimes, listTasksByIssue } = vi.hoisted(() => ({
   getAgent: vi.fn(),
   getTaskPrompt: vi.fn(),
+  getTaskTrace: vi.fn(),
   listRuntimes: vi.fn(),
   listTasksByIssue: vi.fn(),
-  listTaskMessages: vi.fn(),
 }));
 
-vi.mock("@multiremi/core/api", () => ({
-  api: { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages },
+vi.mock("@multiremi/core/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(),
+  api: { getAgent, getTaskPrompt, getTaskTrace, listRuntimes, listTasksByIssue },
+}));
+
+vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
+  useTraceStreamSubscription: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -59,28 +62,6 @@ function task(over: Partial<AgentTask> = {}): AgentTask {
   } as AgentTask;
 }
 
-function message(over: Partial<TaskMessagePayload>): TaskMessagePayload {
-  return { task_id: "tsk_abc123", issue_id: "issue-1", seq: 1, type: "tool_use", ...over } as TaskMessagePayload;
-}
-
-function productionMessages(): TaskMessagePayload[] {
-  const types: Array<[TaskMessagePayload["type"], number]> = [
-    ["tool_use", 61],
-    ["tool_result", 60],
-    ["usage", 137],
-    ["plan", 11],
-    ["text", 19],
-  ];
-  let seq = 0;
-  return types.flatMap(([type, count]) =>
-    Array.from({ length: count }, () => message({
-      seq: ++seq,
-      type,
-      tool: type === "tool_use" ? "Bash" : undefined,
-    })),
-  );
-}
-
 function renderRow(
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }),
 ) {
@@ -96,50 +77,36 @@ function renderRow(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  HTMLElement.prototype.scrollTo = vi.fn();
   getAgent.mockResolvedValue({});
   getTaskPrompt.mockResolvedValue(null);
+  getTaskTrace.mockResolvedValue({ events: [], next_after_seq: 0, head: 0, eof: true, closed: false, source: "daemon", state: "ok" });
   listRuntimes.mockResolvedValue([]);
-  listTaskMessages.mockResolvedValue([]);
 });
 
 describe("session agent stream row", () => {
-  it("still refetches the visible issue transcript on a degraded header", async () => {
+  it("uses trace for current-step history and opens its dialog on demand", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
-    const { qc, unmount } = renderRow();
-    const sync = createTaskHandlers({ qc } as Parameters<typeof createTaskHandlers>[0]);
-    try {
-      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
-      listTaskMessages.mockClear();
-      await act(async () => { sync.handlers["task:message"]?.({ task_id: "tsk_abc123", degraded: true, seq_start: 1, seq_end: 2 }); });
-      expect(listTaskMessages).toHaveBeenCalledTimes(1);
-    } finally { unmount(); sync.dispose?.(); qc.clear(); }
-  });
-  it("fetches the full 288-message history and shows all 61 tool calls", async () => {
-    listTasksByIssue.mockResolvedValue([task()]);
-    listTaskMessages.mockResolvedValue(productionMessages());
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-
-    expect(appendTaskMessagesToHydratedCache(qc, "tsk_abc123", [
-      message({ seq: 281 }),
-      message({ seq: 283 }),
-    ])).toBe(false);
-    expect(qc.getQueryData(["task-messages", "tsk_abc123"])).toBeUndefined();
-
-    renderRow(qc);
-
+    getTaskTrace.mockResolvedValue({
+      events: Array.from({ length: 61 }, (_, index) => ({
+        seq: index + 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Bash",
+      })),
+      next_after_seq: 61, head: 61, eof: true, closed: false, source: "daemon", state: "ok",
+    });
+    renderRow();
     const row = await screen.findByText("Agent a1 is working");
-    await waitFor(() => expect(listTaskMessages).toHaveBeenCalledWith("tsk_abc123"));
     fireEvent.click(row.closest("button")!);
 
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0));
     expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
   });
 
   it("announces the working agent with its current step", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
-    listTaskMessages.mockResolvedValue([
-      message({ seq: 1, tool: "Read", input: { file_path: "/a/b/c/d.ts" } }),
-      message({ seq: 2, tool: "Bash", input: { command: "bun test" } }),
-    ]);
+    getTaskTrace.mockResolvedValue({ events: [
+      { seq: 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Read", input: { file_path: "/a/b/c/d.ts" } },
+      { seq: 2, ts: "2026-08-08T00:00:01Z", type: "tool_use", tool: "Bash", input: { command: "bun test" } },
+    ], next_after_seq: 2, head: 2, eof: true, closed: false, source: "daemon", state: "ok" });
 
     renderRow();
 

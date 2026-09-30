@@ -17,6 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type {
   FeishuBotCancelCandidate,
   FeishuBotCancelResult,
@@ -26,6 +27,9 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
+import { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
+import { locksForRole, startHubRoleGuard } from "@multiremi/api/hub/hub-role-guard.js";
+import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
 import { createLogger, setLogLevel } from "@shared/logger.js";
 
 const log = createLogger("multiremi-cli");
@@ -41,9 +45,12 @@ import { bootFeishuChannel, type FeishuChannelHandle } from "./agent.js";
 import { feishuTransportError } from "@connectors/feishu/native-cot.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import { formatMentionForCard } from "@connectors/feishu/mention.js";
+import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
 import {
   registerDecisionCardInteraction,
   registerIssueDecisionCardInteraction,
+  registerTaskInteraction,
+  buildTaskInteractionCard,
   registerQuestionCardClient,
 } from "@connectors/feishu/task-interaction.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
@@ -191,9 +198,24 @@ async function serve(options: CliOptions): Promise<void> {
   const port = numberOpt(options.port, process.env.MULTIREMI_PORT, 6120);
   const host = stringOpt(options.host, process.env.MULTIREMI_HOST) ?? "0.0.0.0";
   const token = stringOpt(options.token, process.env.MULTIREMI_TOKEN);
-  const server = startMultiremiServer({ port, hostname: host, authToken: token });
+  // MUL-403 C1: the per-role advisory lock, taken before the listener exists.
+  // `serve` is the production entry point and the only startup path allowed to
+  // await the 30s retry; a process that cannot take its lock exits non-zero, and
+  // compose's `restart: unless-stopped` starts a fresh attempt. The local SQLite
+  // arm has no cross-process fan-out, so the guard is a no-op there.
+  const apiRoleConfiguration = resolveStartupApiRole(process.env);
+  const roleGuard = await startHubRoleGuard({
+    databaseUrl: process.env.MULTIREMI_DATABASE_URL,
+    locks: locksForRole(apiRoleConfiguration.role, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
+  });
+  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRoleConfiguration });
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
-  await waitForShutdown(() => server.stop(true));
+  await waitForShutdown(async () => {
+    server.stop(true);
+    // Release the locks only after the listener is down: a second process must not
+    // be able to start while this one can still answer a request.
+    await roleGuard?.close();
+  });
 }
 
 function setup(options: CliOptions, programName: string): boolean {
@@ -409,12 +431,25 @@ export function instantiateCoResidentWorkerDaemons(
     ? new MultiremiCliUpdateCoordinator()
     : null;
   const readyProviders = new Set<number>();
+  const first = options[0];
+  const protocolClient = first?.protocolClient ?? (first ? new DaemonProtocolClient({
+    serverUrl: first.serverUrl,
+    token: first.token ?? process.env.MULTIREMI_TOKEN,
+    daemonId: first.daemonId ?? process.env.MULTIREMI_DAEMON_ID
+      ?? first.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID
+      ?? first.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`,
+    cliVersion: multiremiVersion,
+    launchedBy: first.launchedBy,
+    log,
+    ...first.protocolClientOptions,
+  }) : undefined);
   const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
     const extraReadyCheck = daemonOptions.supervisorReady;
     const notifyReadyChange = daemonOptions.onReadyChange;
     return new MultiremiDaemon({
       ...daemonOptions,
+      protocolClient,
       issueWorkspaceLifecycleLocker,
       ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
       // Provider lanes share one Issue workspace tree. A single lane owns its
@@ -648,7 +683,10 @@ export function controlPlaneConciergeHost(deps: {
     async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
-      if (delivery.kind) {
+      if (delivery.kind === "receipt") return sendReceiptLane(handle, delivery, options);
+      if (delivery.kind === "result_card") return sendResultCardLane(handle, delivery, options);
+      if (delivery.kind === "interaction_card") return sendInteractionCardLane(handle, delivery, options, deps.daemon(), displayName);
+      if (delivery.kind && delivery.kind !== "cot") {
         // Two card families share the lane and the kinds (MUL-407, MUL-412).
         // A decision delivery names its decision; everything else is a
         // human-request card.
@@ -695,7 +733,7 @@ export function controlPlaneConciergeHost(deps: {
         const threadId = delivery.threadId ?? delivery.replyToMessageId;
         const sessionKey = threadId ? `${delivery.chatId}:thread:${threadId}` : delivery.chatId;
         return handle.streamProactiveTask(delivery.chatId, sessionKey,
-          pollFeishuTask(daemon, taskId, options.signal), {
+          subscribeFeishuTask(daemon, taskId, options.signal, delivery.presentation?.throughSeq ?? 0), {
             // `null` until the first snapshot pins the provider session, so the
             // card opens as "刚醒来的 <agent>" instead of a bare agent name.
             taskId, displayName, sessionId: null, signal: options.signal,
@@ -704,6 +742,7 @@ export function controlPlaneConciergeHost(deps: {
             prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(taskId, requestId, openId),
             respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
           }, {
+            ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
             receiptMessageIds: delivery.receiptMessageIds,
             mentionOpenId: mentionOpenId ?? undefined,
@@ -727,6 +766,71 @@ export function controlPlaneConciergeHost(deps: {
       return handle.uploadImage(image);
     },
   };
+}
+
+export async function sendReceiptLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
+  if (!handle.sendProactiveReceipt || !delivery.targetMessageId || !delivery.receiptState) {
+    throw new FeishuDeliveryError("Receipt delivery is missing its target or state", false);
+  }
+  options?.signal.throwIfAborted();
+  await handle.sendProactiveReceipt(delivery.targetMessageId, delivery.receiptState, options?.signal);
+  return { messageId: delivery.targetMessageId };
+}
+
+export async function sendResultCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
+  options?.signal.throwIfAborted();
+  let mentionOpenId = delivery.mention?.resolvedOpenId;
+  if (delivery.mention && mentionOpenId === undefined) {
+    if (!options?.prepareMention) throw new Error("Feishu mention checkpoint is unavailable");
+    mentionOpenId = await options.prepareMention(await handle.resolveProactiveMention(delivery.chatId, delivery.mention, options.signal));
+  }
+  const cardInput = JSON.parse(delivery.body) as Parameters<typeof buildFinalCard>[0];
+  const sent = await handle.sendProactiveCard({ chatId: delivery.chatId, replyToMessageId: delivery.replyToMessageId ?? undefined,
+    card: buildFinalCard({ ...cardInput, mentionOpenId: mentionOpenId ?? undefined }), idempotencyKey: delivery.idempotencyKey });
+  if (!sent.messageId || sent.messageId === "unknown") throw new FeishuDeliveryError("Result acknowledgement missing", true);
+  return sent;
+}
+
+export async function sendInteractionCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions, daemon?: MultiremiDaemon, displayName?: string): Promise<{ messageId: string }> {
+  const taskId = delivery.taskId, requestId = delivery.humanRequestId;
+  if (!daemon || !options || !taskId || !requestId) throw new FeishuDeliveryError("Interaction transport is unavailable", false);
+  options.signal.throwIfAborted();
+  let request = await daemon.getFeishuBotHumanRequest(taskId, requestId);
+  if (!request) throw new FeishuDeliveryError("Interaction request is unavailable", true);
+  if (!delivery.resumeMessageId && request.status !== "pending") return { messageId: "" };
+  const recipientOpenId = delivery.interactionOpenId
+    ?? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) ?? undefined;
+  const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
+  const agentName = cardInput.agentName ?? displayName;
+  const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
+  const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
+    replyToMessageId: delivery.replyToMessageId ?? undefined,
+    card: card!,
+    idempotencyKey: questionCardIdempotencyKey(card!, delivery.idempotencyKey) })).messageId;
+  if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
+  await options.onStarted?.(messageId);
+  const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });
+  const waitAbort = new AbortController();
+  const waitSignal = AbortSignal.any([options.signal, waitAbort.signal]);
+  try {
+    if (request.status === "pending") {
+      const settled = await Promise.race([
+        registration.wait(waitSignal).then(value => ({ source: "local" as const, value })),
+        daemon.waitFeishuBotHumanRequestSettled(requestId, waitSignal).then(value => ({ source: "daemon" as const, value })),
+      ]);
+      options.signal.throwIfAborted();
+      if (settled.source === "local" && settled.value) request = settled.value;
+      else request = await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+      if (request.status === "pending") throw new FeishuDeliveryError("Interaction request has not settled", true);
+    }
+    await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName, sessionId, receipt: true }));
+    return { messageId };
+  } finally { waitAbort.abort(); registration.dispose(); }
 }
 
 /**
@@ -1104,7 +1208,7 @@ export function createFeishuTaskHandler(
     // second card.
     if (submitted.steered || submitted.duplicate || submitted.deliveryQueued) return;
 
-    await consumer(pollFeishuTask(daemon, submitted.taskId), {
+    await consumer(subscribeFeishuTask(daemon, submitted.taskId), {
       taskId: submitted.taskId,
       displayName: submitted.agentName,
       sessionId: null,
@@ -1253,43 +1357,51 @@ function renderFeishuStatus(snapshot: FeishuBotSessionSnapshot): string {
   ].join("\n");
 }
 
-async function* pollFeishuTask(
-  daemon: MultiremiDaemon,
+export async function* subscribeFeishuTask(
+  daemon: Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">,
   taskId: string,
   signal?: AbortSignal,
+  throughSeq = 0,
 ): AsyncGenerator<TaskStreamEvent> {
-  let sinceSeq = 0;
-  let reportedSessionId: string | null = null;
-  for (;;) {
-    signal?.throwIfAborted();
-    const messages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
-    for (const message of messages) {
+  const batches: Array<{ events: TraceEvent[]; closed: boolean }> = [];
+  let wake: (() => void) | undefined;
+  let active = true;
+  let unsubscribe: (() => Promise<void>) | undefined;
+  const onAbort = () => wake?.();
+  signal?.throwIfAborted();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    // A-0's cursor is exclusive. Reconnects and gap filling belong to subscribeTrace.
+    unsubscribe = await daemon.subscribeTrace(taskId, throughSeq, (events, closed) => {
+      if (!active) return;
+      batches.push({ events, closed });
+      wake?.();
+    });
+    for (;;) {
       signal?.throwIfAborted();
-      sinceSeq = Math.max(sinceSeq, message.seq);
-      yield { kind: "message", message };
-    }
-    const snapshot = await daemon.getFeishuBotTaskSnapshot(taskId);
-    if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "cancelled") {
-      // Completion and Task messages commit together, but they are read over
-      // separate HTTP calls. Drain once more so a completion that landed
-      // between the first list and this snapshot cannot hide the final tool,
-      // thinking, or text events.
-      const finalMessages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
-      for (const message of finalMessages) {
-        sinceSeq = Math.max(sinceSeq, message.seq);
+      const batch = batches.shift();
+      if (!batch) {
+        await new Promise<void>(resolve => { wake = resolve; });
+        wake = undefined;
+        continue;
+      }
+      for (const message of batch.events) {
+        signal?.throwIfAborted();
         yield { kind: "message", message };
       }
-      yield { kind: "snapshot", snapshot };
-      return;
+      if (batch.closed) {
+        // One final read supplies display metadata; closed alone ends the subscription.
+        signal?.throwIfAborted();
+        const snapshot = await daemon.getFeishuBotTaskSnapshot(taskId);
+        signal?.throwIfAborted();
+        yield { kind: "snapshot", snapshot };
+        return;
+      }
     }
-    // The provider session is pinned before the Task finishes on a continued
-    // conversation. Surface it early so the live approval and question cards
-    // carry the same session label as the result card.
-    if (snapshot.sessionId && snapshot.sessionId !== reportedSessionId) {
-      reportedSessionId = snapshot.sessionId;
-      yield { kind: "snapshot", snapshot };
-    }
-    await sleep(400);
+  } finally {
+    active = false;
+    signal?.removeEventListener("abort", onAbort);
+    await unsubscribe?.();
   }
 }
 
@@ -1297,18 +1409,16 @@ async function* singleMessageStream(text: string): AsyncGenerator<TaskStreamEven
   yield {
     kind: "message",
     message: {
-      id: "feishu-command-message",
-      taskId: "feishu-command",
       seq: 1,
       type: "text",
       tool: null,
       content: text,
       input: null,
       output: null,
-      toolCallId: null,
+      tool_call_id: null,
       status: null,
       meta: null,
-      createdAt: new Date().toISOString(),
+      ts: new Date().toISOString(),
     },
   };
   yield {

@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuBotTaskSnapshot, FeishuPresentationCheckpoint, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
+import { taskMessageToTraceEvent } from "@multiremi/contracts/trace.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
@@ -56,7 +57,7 @@ const client = {
 let saved: FeishuPresentationCheckpoint | undefined;
 async function* stream(): AsyncGenerator<TaskStreamEvent> {
   for (const message of fixture.messages) {
-    yield { kind: "message", message };
+    yield { kind: "message", message: { seq: message.seq, ...taskMessageToTraceEvent(message, message.createdAt), ts: message.createdAt } };
     if (message.type === "tool_result") await Bun.sleep(1000);
   }
   yield { kind: "snapshot", snapshot: fixture.snapshot };

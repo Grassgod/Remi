@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore } from "../multiremi/fixtures/conversation-log-store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import {
   BOOTSTRAP_COMPATIBILITY_PATHS,
@@ -34,6 +37,166 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  for (const backend of ["sqlite", "pg"] as const) {
+    it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
+      `${backend}: session log get reports Issue claim, Chat reply and symbolic recipient delivery`, async () => {
+        await withConversationLogStore(backend, async (store, db) => {
+          store.ensureLocalWorkspace();
+          const runtime = store.registerRuntime({ name: "Delivery CLI runtime", provider: "codex" });
+          const agent = store.createAgent({ name: "Delivery CLI owner", provider: "codex", runtimeId: runtime.id });
+          const issue = store.createIssue({ title: "Delivery CLI issue", status: "in_progress",
+            assigneeType: "agent", assigneeId: agent.id });
+          const session = store.getOrCreateDefaultIssueSession(issue.id);
+          const issueTask = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read issue" });
+          const [issueDelivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "now",
+            body: "Symbolic Issue request", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(issueDelivery.task?.id).toBe(issueTask.id);
+          expect(store.findTurnEntry(issueTask.id)!.seq).toBeLessThan(issueDelivery.entry.seq);
+          expect(issueDelivery.entry.metadata.envelope?.recipient_agent_id).toBe(agent.id);
+          const chat = store.createChatSession({ agentId: agent.id });
+          const [chatDelivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "chat", chatSessionId: chat.id, agentId: agent.id },
+            kind: "request", wake: "now", body: "Chat request", source: {},
+          }, [], createCommitEventQueue()))();
+          const legacy = store.appendConversationLog({ sessionId: session.id, kind: "message",
+            authorType: "member", authorId: "local", bodyMd: "Before recipient metadata" });
+          const app = createMultiremiApp({ store });
+          useCliEnv();
+          const get = specById("session.log.get");
+          globalThis.fetch = capabilityFetch(get.id, (request) => {
+            const url = new URL(request.url);
+            return app.request(`${url.pathname}${url.search}`, { method: request.method, headers: request.headers });
+          });
+          const registry = registryFor([get]);
+          const delivered = async (sessionId: string, seq: number) => {
+            const result = await capture(() => registry.execute([...get.path, sessionId, String(seq), "--output", "json"]));
+            return JSON.parse(result.stdout).delivered as boolean | null;
+          };
+          expect(await delivered(session.id, issueDelivery.entry.seq)).toBe(false);
+          expect(await delivered(chat.id, chatDelivery.entry.seq)).toBe(false);
+          expect(await delivered(session.id, legacy.seq)).toBeNull();
+
+          expect(store.claimTask(runtime.id)?.id).toBe(issueTask.id);
+          daemonTaskClaimResponse(store, store.getTaskWithAgent(issueTask.id)!);
+          expect(store.getSessionAgentLane(session.id, agent.id)?.cursorSeq ?? 0).toBeLessThan(issueDelivery.entry.seq);
+          expect(store.findTurnEntry(issueTask.id)?.metadata.inbox?.delivered_to_seq)
+            .toBeGreaterThanOrEqual(issueDelivery.entry.seq);
+          expect(await delivered(session.id, issueDelivery.entry.seq)).toBe(true);
+          store.startTask(issueTask.id);
+          store.completeTask(issueTask.id, { output: "Issue reply" });
+
+          const [cursorOnly] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+            body: "Covered only by cursor", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(false);
+          store.getOrCreateSessionAgentLane(session.id, agent.id, "");
+          db.run("UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+            [cursorOnly.entry.seq, session.id, agent.id, ""]);
+          expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(true);
+
+          const other = store.createAgent({ name: "Other receipt author", provider: "codex" });
+          const [uncovered] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+            body: "Not covered by recipient", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
+          store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent", authorId: other.id,
+            metadata: { inbox: { delivered_to_seq: uncovered.entry.seq } } });
+          expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
+
+          expect(store.claimTask(runtime.id)?.id).toBe(chatDelivery.task?.id);
+          daemonTaskClaimResponse(store, store.getTaskWithAgent(chatDelivery.task!.id)!);
+          store.startTask(chatDelivery.task!.id);
+          store.completeTask(chatDelivery.task!.id, { output: "Chat reply" });
+          expect(store.findTurnEntry(chatDelivery.task!.id)?.metadata.inbox?.delivered_to_seq)
+            .toBeGreaterThanOrEqual(chatDelivery.entry.seq);
+          expect(await delivered(chat.id, chatDelivery.entry.seq)).toBe(true);
+        });
+      }, 30_000,
+    );
+
+    for (const { author, expected, label } of [
+      { author: "other", expected: false, label: "explicit foreign author cannot deliver recipient task receipt" },
+      { author: "mirror", expected: true, label: "null author mirrored turn uses recipient task receipt" },
+    ] as const) {
+      it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
+        `${backend}: session log get ${label}`, async () => {
+          await withConversationLogStore(backend, async (store, db) => {
+            store.ensureLocalWorkspace();
+            const recipient = store.createAgent({ name: "Receipt recipient", provider: "codex" });
+            const other = store.createAgent({ name: "Other receipt author", provider: "codex" });
+            const issue = store.createIssue({ title: "Receipt attribution", status: "in_progress",
+              assigneeType: "agent", assigneeId: recipient.id });
+            const session = store.getOrCreateDefaultIssueSession(issue.id);
+            const task = store.createSessionTask(session.id, { agentId: recipient.id, prompt: "Read issue" });
+            const [delivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+              to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+              body: "Receipt attribution probe", source: {},
+            }, [], createCommitEventQueue()))();
+            const app = createMultiremiApp({ store });
+            useCliEnv();
+            const get = specById("session.log.get");
+            globalThis.fetch = capabilityFetch(get.id, (request) => {
+              const url = new URL(request.url);
+              return app.request(`${url.pathname}${url.search}`, { method: request.method, headers: request.headers });
+            });
+            const registry = registryFor([get]);
+            const delivered = async () => {
+              const result = await capture(() => registry.execute([
+                ...get.path, session.id, String(delivery.entry.seq), "--output", "json",
+              ]));
+              return JSON.parse(result.stdout).delivered as boolean;
+            };
+            expect(await delivered()).toBe(false);
+            const turn = store.appendConversationLog({ sessionId: session.id, kind: "turn",
+              authorType: author === "other" ? "agent" : "system",
+              authorId: author === "other" ? other.id : null, taskId: task.id,
+              metadata: { inbox: { delivered_to_seq: delivery.entry.seq } },
+            });
+            expect(turn.seq).toBeGreaterThan(delivery.entry.seq);
+            expect(await delivered()).toBe(expected);
+          });
+        }, 30_000,
+      );
+    }
+  }
+
+  it("expands Session entries by seq or id and forwards event sequence bounds", async () => {
+    useCliEnv();
+    const get = specById("session.log.get");
+    const list = specById("session.event.list");
+    const paths: string[] = [];
+    globalThis.fetch = capabilityFetch(get.id, (request) => {
+      const url = new URL(request.url);
+      paths.push(`${url.pathname}${url.search}`);
+      return Response.json({ session_id: "ises_1", seq: 12, id: "cmt_12", body_md: "complete\nsecond line", metadata: {}, delivered: null });
+    });
+    const getRegistry = registryFor([get]);
+    const json = await capture(() => getRegistry.execute([...get.path, "ises_1", "12", "--output", "json"]));
+    expect(JSON.parse(json.stdout).delivered).toBeNull();
+    await capture(() => getRegistry.execute([...get.path, "ises_1", "cmt_12", "--output", "json"]));
+    const table = await capture(() => getRegistry.execute([...get.path, "ises_1", "12"]));
+    expect(table.stdout).toContain("Delivered: 未知（旧条目无收件人）");
+    expect(table.stdout).toContain("Body:\ncomplete\nsecond line");
+    expect(paths).toEqual([
+      "/api/sessions/ises_1/log/entry?seq=12",
+      "/api/sessions/ises_1/log/entry?id=cmt_12",
+      "/api/sessions/ises_1/log/entry?seq=12",
+    ]);
+    globalThis.fetch = capabilityFetch(list.id, (request) => {
+      const url = new URL(request.url);
+      expect(url.searchParams.get("since_seq")).toBe("3");
+      expect(url.searchParams.get("to_seq")).toBe("12");
+      return Response.json([]);
+    });
+    await capture(() => registryFor([list]).execute([
+      ...list.path, "MUL-485", "ises_1", "--since-seq", "3", "--to-seq", "12", "--output", "json",
+    ]));
+  });
+
   it("executes assignee grouped lists with the opt-in workspace archive count", async () => {
     useCliEnv();
     const spec = specById("issue.grouped");
@@ -153,18 +316,13 @@ describe("native collaboration CLI contracts", () => {
     ]));
     expect(JSON.parse(output.stdout).archived_total).toBe(3);
   });
-  it("passes the previous Chat page cursor to the route and resends file contents unchanged", async () => {
+  it("routes the deprecated Chat list alias to Session log and resends file contents unchanged", async () => {
     useCliEnv();
-    const list = specById("chat.message.list");
+    const list = specById("session.log.window");
     const create = specById("chat.message.create");
     const registry = registryFor([list, create]);
     const content = "I can't retry\n\n  Keep inner spaces  \nlast line";
     expect(content).toBe(content.trim());
-    const messages = Array.from({ length: 65 }, (_, index) => ({
-      id: `msg_${index}`, task_id: index === 0 ? "tsk_original" : `tsk_${index}`,
-      role: "user", content: index === 0 ? content : `later ${index}`,
-      created_at: new Date(1_700_000_000_000 + index * 1_000).toISOString(),
-    }));
     const requests: URL[] = [];
     let sent: unknown;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -178,23 +336,15 @@ describe("native collaboration CLI contracts", () => {
         sent = await request.json();
         return Response.json({ task_id: "tsk_replayed" }, { status: 201 });
       }
-      const beforeId = url.searchParams.get("before_id");
-      const beforeCreatedAt = url.searchParams.get("before_created_at");
-      const end = beforeId ? messages.findIndex((message) => message.id === beforeId && message.created_at === beforeCreatedAt) : messages.length;
-      const page = messages.slice(Math.max(0, end - 50), end);
-      return Response.json({ messages: page, next_cursor: end > 50
-        ? { created_at: page[0]!.created_at, id: page[0]!.id } : null });
+      return Response.json({ entries: [{ seq: 3, content }] });
     }) as typeof fetch;
     const common = ["--output", "json"];
-    const first = JSON.parse((await capture(() => registry.execute([...list.path, "chat_1", ...common]))).stdout);
-    expect(first.messages).toHaveLength(50);
-    const older = JSON.parse((await capture(() => registry.execute([
-      ...list.path, "chat_1", "--cursor", JSON.stringify(first.next_cursor), ...common,
+    const first = JSON.parse((await capture(() => registry.execute([
+      "chat", "message", "list", "chat_1", "--anchor", "3", ...common,
     ]))).stdout);
-    expect(older.messages.find((message: { task_id: string }) => message.task_id === "tsk_original")?.content).toBe(content);
-    expect(requests[1]!.searchParams.get("before_created_at")).toBe(first.next_cursor.created_at);
-    expect(requests[1]!.searchParams.get("before_id")).toBe(first.next_cursor.id);
-    expect(requests[1]!.searchParams.has("cursor")).toBe(false);
+    expect(first.entries).toEqual([{ seq: 3, content }]);
+    expect(requests[0]!.pathname).toBe("/api/sessions/chat_1/log");
+    expect(requests[0]!.searchParams.get("anchor")).toBe("3");
     const dir = await mkdtemp(resolve(tmpdir(), "chat-resend-"));
     try {
       const file = resolve(dir, "original.txt");
@@ -744,8 +894,9 @@ describe("native collaboration CLI contracts", () => {
     }
 
     const taskMessages = registry.resolve(["task", "messages", "tsk_1", "--since", "4"]);
-    expect(taskMessages?.spec.id).toBe("task.message.list");
+    expect(taskMessages?.spec.id).toBe("task.trace.read");
     expect(taskMessages?.options.since).toBe(4);
+    expect(registry.resolve(["task", "message", "list", "tsk_1"])?.spec.id).toBe("task.trace.read");
   });
 
   it("keeps issue list output byte-compatible with the legacy handler", async () => {

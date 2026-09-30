@@ -1,6 +1,7 @@
 import {
   AsyncOperationController,
   CliError,
+  CliRenderer,
   ResourceResolver,
   sanitizeCliDetails,
   type CliApiClient,
@@ -13,6 +14,7 @@ import {
   type CommandInvocation,
   type CommandSpec,
 } from "../core/index.js";
+import { formatRuntimeProtocol, type RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -1216,7 +1218,26 @@ function op(definition: OperationDefinition): CommandSpec {
         query: definition.query?.(invocation) ?? (mutation === "read" ? queryOptions(invocation) : undefined),
         body,
       });
-      renderSafe(invocation, response.data, definition.collections);
+      if (definition.id === "runtime.list" && outputMode(invocation) === "table") {
+        const safe = omitSecretFields(sanitizeCliDetails(response.data));
+        const rows = extractRecords(safe, definition.collections ?? []);
+        new CliRenderer().render(safe, {
+          mode: "table", rows: () => rows,
+          columns: [
+            { header: "ID", value: row => row.id ?? "-", maxWidth: 28 },
+            { header: "NAME", value: row => row.name ?? "-", maxWidth: 48 },
+            { header: "STATUS", value: row => row.status ?? "-", maxWidth: 24 },
+            { header: "DETAIL", value: row => row.email ?? row.url ?? row.description ?? "-", maxWidth: 72 },
+            { header: "PROTOCOL", value: row => row.protocol ? formatRuntimeProtocol(row.protocol as RuntimeProtocolStatus) : "-" },
+          ],
+        });
+      } else {
+        renderSafe(invocation, response.data, definition.collections);
+        if (definition.id === "platform.status" && outputMode(invocation) === "table") {
+          const summary = (response.data as { daemonProtocol?: { pending: number; failed: number } }).daemonProtocol;
+          if (summary) console.log(`待升级 ${summary.pending} 台 / 失败 ${summary.failed} 台`);
+        }
+      }
     },
   };
 }

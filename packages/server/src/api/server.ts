@@ -1,4 +1,5 @@
-import { Hono } from "hono";
+import { Hono, type Handler } from "hono";
+import { registerDaemonTraceHandlers } from "./daemon-protocol/trace-handlers.js";
 import { resolveRequestWorkspaceId } from "./helpers/workspace-context.js";
 import { cors } from "hono/cors";
 import { getCookie } from "hono/cookie";
@@ -69,6 +70,19 @@ import {
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
+import {
+  createHub,
+  type HubFillReader,
+  type HubImpl,
+  type ObservableLiveHub,
+} from "./hub/hub-core.js";
+import type { HubRingLimits } from "./hub/ring-buffer.js";
+import type { LiveHub } from "./hub/live-hub.js";
+import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { createHubTraceSink } from "./hub/trace-sink-adapter.js";
+import { createPeerHubTransport } from "./hub/peer-hub-transport.js";
+import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
+import { hubHealthPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -104,7 +118,6 @@ import {
   createFeedbackOrApiError,
   createWebhookRateLimiter,
   denyCurrentUserWorkspaceAccess,
-  isDaemonOwnerWorkspaceMember,
   denyDaemonTokenAutopilotRunWorkspace,
   denyDaemonTokenChatSessionWorkspace,
   denyDaemonTokenIssueWorkspace,
@@ -123,8 +136,12 @@ import {
   withFeedbackRequestMetadata,
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
+import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { organizerTurnStats } from "./helpers/organizer.js";
 import {
   createRequestMetricsMiddleware,
+  readProcessDbCounters,
   resolveRequestMetricsOptions,
   startRequestMetricsSummary,
   type RequestMetricsOptions,
@@ -136,9 +153,25 @@ import {
   type ApiRole,
   type ApiRoleConfiguration,
 } from "../config/api-role.js";
+import { DAEMON_PROTOCOL_MIN, DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { multiremiVersion } from "@multiremi/version.js";
+import {
+  DaemonProtocolLayer,
+  type DaemonProtocolSocket,
+} from "./daemon-protocol/index.js";
+import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
+import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
+import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
+import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
+import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
+import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
+import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "./daemon-protocol/report-handlers.js";
+import { registerSessionArchiveRequestHandlers, sessionArchiveRequestSnapshot } from "./daemon-protocol/session-archive-requests.js";
+import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
+import { BodyHtmlBackfillTask } from "@multiremi/render/body-html-backfill.js";
 import { retitleIssue } from "@multiremi/issue-title/service.js";
 import {
   createScmConnectionVerifier,
@@ -153,31 +186,32 @@ import {
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
-  authorizeDaemonWebSocketRequest,
-  handleBrowserScopeSubscribe,
-  handleBrowserScopeUnsubscribe,
   isWebSocketUpgrade,
-  parseDaemonWebSocketHeartbeat,
   parseDaemonWebSocketMessage,
-  parseDaemonWebSocketRuntimeIds,
   registerBrowserUserWebSocketClient,
   registerBrowserWebSocketClient,
-  registerDaemonWebSocketClient,
   resolveBrowserWebSocketWorkspaceId,
-  unregisterBrowserScopeWebSocketClient,
   unregisterBrowserUserWebSocketClient,
   unregisterBrowserWebSocketClient,
-  unregisterDaemonWebSocketClient,
 } from "./realtime.js";
 import type {
-  BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
-  DaemonWebSocketRegistry,
   MultiremiRealtimeState,
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import {
+  createPostgresStreamAuthReader,
+  createStreamAuthReader,
+} from "@multiremi/api/hub/stream-auth.js";
+import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
+import { createReadPool } from "@multiremi/store/db/read-pool.js";
+import { createConversationLogFillReader } from "./hub/conversation-log-fill-reader.js";
+import { stopHubReadResources } from "./hub/hub-lifecycle.js";
+import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import {
   createRealtimeFanout,
   type RealtimeFanout,
@@ -190,6 +224,62 @@ import {
   type PeerChannel,
 } from "./peer/peer-channel.js";
 import { registerPeerRoutes } from "./peer/peer-routes.js";
+
+// Only routes removed from the v1 daemon API get the upgrade response. Unknown
+// method/path combinations remain not-found after these registrations.
+export const RETIRED_DAEMON_HTTP_ROUTES = [
+  { method: "GET", path: "/api/daemon/runtimes/:runtimeId/tasks/pending" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/human-requests/:requestId" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/messages" },
+  { method: "GET", path: "/api/daemon/tasks/:taskId/steer" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/commands/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/feishu-bot/status" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/local-skills/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result" },
+  { method: "POST", path: "/api/daemon/runtimes/:runtimeId/models/:requestId/result" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/complete" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/dispatch-lease" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/fail" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/human-requests" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/human-requests/:requestId/expire" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/messages" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/progress" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/prompt" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/session" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/steer/consume" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/usage" },
+  { method: "POST", path: "/api/daemon/tasks/:taskId/workspace" },
+  { method: "PUT", path: "/api/daemon/runtimes/:runtimeId/models" },
+] as const;
+
+// The snapshot excludes this handler by identity, while still recording any
+// live handler accidentally registered at the same method and path.
+export const retiredDaemonRouteHandler: Handler = c => {
+  // Hono dispatches HEAD as GET; no retired HEAD route exists in the v1 inventory.
+  if (c.req.method === "HEAD") return c.notFound();
+  return c.json({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN }, 426);
+};
+
+/**
+ * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
+ *
+ * `send` must return Bun's raw status rather than swallow it: `-1` (backpressure)
+ * and `0` (dropped) are the two signals the connection layer's flow control is
+ * built on, and a wrapper that returned `void` would silently disable both.
+ */
+function sessionSocket(ws: { send(data: string): number; close(code?: number, reason?: string): void; bufferedAmount?: number }): DaemonProtocolSocket {
+  return {
+    send: (text: string) => ws.send(text),
+    close: (code?: number, reason?: string) => ws.close(code, reason),
+    get bufferedAmount() {
+      return ws.bufferedAmount ?? 0;
+    },
+  };
+}
 
 let authDisabledWarningEmitted = false;
 
@@ -218,6 +308,8 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
 }
 
 export interface MultiremiApiOptions {
+  /** Transport injection for protocol integration tests; no store subscriptions. */
+  onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
   /** Undefined reads the opt-in env config; null explicitly disables it. */
@@ -234,6 +326,8 @@ export interface MultiremiApiOptions {
   projectKnowledge?: ProjectKnowledgeServiceContract;
   repositoryWiki?: RepositoryWikiServiceContract;
   sessionArchives?: SessionArchiveService;
+  daemonTraceReader?: import("./trace/daemon-trace-reader.js").DaemonTraceReader;
+  getOrganizerTurnStats?: (taskId: string) => import("./helpers/organizer.js").OrganizerTurnStats | null;
   /** Absolute API origin advertised to daemons for direct archive uploads. */
   daemonDirectBaseUrl?: string | null;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
@@ -246,12 +340,31 @@ export interface MultiremiApiOptions {
   feishuBotRegistrations?: FeishuBotRegistrationOptions;
   /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
   issueTitleScheduler?: IssueTitleScheduler | null;
+  /**
+   * MUL-439: the idle `body_html` backfill. Defaults to a real task when
+   * background jobs run; pass null to disable it in a test.
+   */
+  bodyHtmlBackfill?: BodyHtmlBackfillTask | null;
   issueRetitle?: typeof retitleIssue;
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
+  /**
+   * MUL-403 C1: the Live Hub this app serves subscriptions from.
+   *
+   * Undefined builds the real one (`HubImpl` over the local transport) so every
+   * entry point — `startMultiremiServer`, the snapshot harness, tests — gets a hub
+   * without a second wiring path. This is an alias of `liveHub`. Pass a prepared
+   * hub to share one instance, or `null` to leave the app without one (the health
+   * routes then omit the `hub.*` fields rather than reporting zeros).
+   */
+  hub?: LiveHub | ObservableLiveHub | null;
+  /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
+  hubRingLimits?: Partial<HubRingLimits>;
+  /** B1 reader for log warm-up and peer reconciliation. */
+  hubFill?: HubFillReader | null;
   /**
    * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
@@ -279,8 +392,45 @@ export interface MultiremiApiOptions {
    * effective role.
    */
   createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
+  /**
+   * The shared Hub for browser sockets, health and human requests. Undefined
+   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
+   */
+  liveHub?: LiveHub;
+  /**
+   * MUL-438: how `stream.subscribe` is authorized. Undefined picks the reader for
+   * the configured backend (read-only pool on Postgres, the store on SQLite).
+   */
+  streamAuth?: StreamAuthReader;
+  /**
+   * MUL-438: the read pool a Postgres subscription check borrows, and the one the
+   * server closes on shutdown. Undefined builds one from `MULTIREMI_DATABASE_URL`.
+   */
+  readPool?: ReturnType<typeof createReadPool> | null;
 }
 
+function resolveAppHub(
+  options: MultiremiApiOptions,
+  apiRole: ApiRole,
+  defaultFill: HubFillReader | null,
+  peer: PeerChannel | null = options.peerChannel ?? null,
+): LiveHub | null {
+  if (options.liveHub !== undefined) return options.liveHub;
+  if (options.hub !== undefined) return options.hub;
+  return createHub({
+    transport: peer?.enabled ? createPeerHubTransport({ peer }) : createLocalHubTransport(),
+    role: apiRole,
+    fill: options.hubFill === undefined ? defaultFill : options.hubFill,
+    ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
+  });
+}
+
+function attachOwnedConversationLogHub(store: MultiremiStore, hub: LiveHub | null, options: MultiremiApiOptions): () => void {
+  if (!hub || options.liveHub !== undefined || options.hub !== undefined) return () => {};
+  return store.subscribeConversationLog({ onEntry: (sessionId, payload) => {
+    hub.onEntry(sessionId, "target_seq" in payload ? { ...payload, session_id: sessionId } : payload);
+  } });
+}
 /**
  * The only two `/internal/` routes that exist, and so the only two the dashboard
  * auth middleware may skip. A prefix rule would silently exempt whatever route
@@ -292,7 +442,7 @@ const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/he
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const platformUpdaterToken = options.platformUpdaterToken
     ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
     ?? "";
@@ -307,6 +457,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
+  const traceReader = new TraceReader({
+    store,
+    daemon: options.daemonTraceReader ?? {
+      read: async ({ runtimeId }) => ({ ok: false, code: "daemon_unreachable", runtime_id: runtimeId }),
+    },
+    archive: new SessionArchiveReader({ store, root: sessionArchives.config.root }),
+  });
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   // MUL-461: the process's ONE effective role. The guard middleware, the health
   // payloads, the realtime fanout and the metrics lines all read this value, so
@@ -333,6 +490,27 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
       : options.daemonDirectBaseUrl,
   );
+  // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
+  // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
+  // an explicitly injected hub is shared rather than rebuilt.
+  // An app factory has no shutdown hook; only a server-owned Hub may keep an
+  // asynchronous reader alive after the caller closes the store.
+  const hub = resolveAppHub(options, effectiveApiRole, null);
+  attachOwnedConversationLogHub(store, hub, options);
+
+  // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
+  // detach handle, but an app has no shutdown hook — the listener lives exactly as
+  // long as the store and the hub it points at, which is the app's own lifetime.
+  //
+  // "Who consumes" follows the same flag that decides who runs background jobs,
+  // resolved the same way so an explicitly constructed app and an env-configured one
+  // cannot disagree: `backgroundJobs: false` is a read-only candidate, and it must
+  // not subscribe even on a host whose environment says otherwise.
+  if (hub) {
+    const backgroundJobs = options.backgroundJobs ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+    attachHumanRequestFeed({ store, hub, enabled: backgroundJobs });
+  }
+
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -350,6 +528,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     projectKnowledge,
     repositoryWiki,
     sessionArchives,
+    traceReader,
+    getOrganizerTurnStats: options.getOrganizerTurnStats ?? ((taskId) => organizerTurnStats(store, taskId)),
     messagingProviders,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
@@ -583,7 +763,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
     ...extra,
   });
-  app.get("/health", (c) => c.json(healthBody()));
+  app.get("/health", (c) => c.json(healthBody(hubHealthPayload(hub))));
   app.get("/readyz", (c) => c.json(healthBody()));
   app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
@@ -695,6 +875,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     enabled: realtimeState.enabled,
     upgrade_required: true,
   }, 426));
+  app.get("/api/trace/ws", (c) => c.json({
+    error: "websocket upgrade required",
+    enabled: realtimeState.enabled,
+    upgrade_required: true,
+  }, 426));
   registerCloudRuntimeRoutes(app, deps);
   registerCloudBillingRoutes(app, deps);
   app.post("/api/contact-sales", async (c) => {
@@ -790,10 +975,44 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerTaskRoutes(app, deps);
 
+  for (const { method, path } of RETIRED_DAEMON_HTTP_ROUTES) {
+    app.on(method, path, retiredDaemonRouteHandler);
+  }
+
   return app;
 }
 
-export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
+/**
+ * The running API server, plus the one hook C3 adds to it.
+ *
+ * `Bun.serve`'s own value stays exactly what the rest of the codebase expects —
+ * this is a widening of the return type, not a wrapper — so an existing caller
+ * keeps working unchanged.
+ */
+export type MultiremiApiServer = ReturnType<typeof Bun.serve> & {
+  /**
+   * MUL-438: tell every browser socket this process holds to re-subscribe its
+   * streams and re-run its reconnect work, spread over 0–2 s. The Hub's peer
+   * adapter calls this after the cross-process link recovers.
+   */
+  broadcastResync: (options?: { jitterMs?: () => number }) => BrowserResyncHandle;
+};
+
+export async function handleDaemonProtocolMessage(
+  session: Pick<DaemonProtocolSession, "sessionId" | "handleMessage"> | null | undefined,
+  message: string | Uint8Array,
+): Promise<void> {
+  try {
+    await session?.handleMessage(message);
+  } catch (error) {
+    log.warn("daemon_protocol_frame_failed", {
+      session_id: session?.sessionId ?? null,
+      error_class: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
+export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): MultiremiApiServer {
   const startupEnv = {
     ...process.env,
     ...(options.authToken !== undefined
@@ -814,6 +1033,24 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
+  // Create the shared channel before the Hub so both server subscriptions and
+  // the realtime fanout use the same process identity and queue.
+  const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
+    : options.peerChannel;
+  const store = options.store ?? new MultiremiStore();
+  // The Hub fill and stream auth share this pool; only the server-created one is ours to close.
+  const readPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
+    ? null
+    : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole }));
+  const ownedReadPool = options.readPool === undefined ? readPool : null;
+  const liveHub = resolveAppHub(options, effectiveApiRole,
+    createConversationLogFillReader(store, readPool), peer);
+  if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
   log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
@@ -821,7 +1058,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     log.warn(`[configuration-degradation] ${degradation.message}`);
   }
 
-  const store = options.store ?? new MultiremiStore();
+  const detachConversationLogHub = attachOwnedConversationLogHub(store, liveHub, options);
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
   const scheduler = backgroundJobs
@@ -859,15 +1096,24 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ? createControlPlaneSshMeshFromEnv(store)
       : options.controlPlaneSshMesh)
     : null;
+  // MUL-439: refuses to start when B1's `body_html`/`render_version` columns are
+  // absent, so this is a no-op on a database that predates MUL-426.
+  const bodyHtmlBackfill = backgroundJobs
+    ? (options.bodyHtmlBackfill === undefined
+      ? new BodyHtmlBackfillTask({ store })
+      : options.bodyHtmlBackfill)
+    : null;
   scheduler?.start();
   scmPolling?.start();
   messaging?.start();
   issueTitleScheduler?.start();
   if (backgroundJobs) store.startNotificationDeliverySweeper();
+  bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
+  if (backgroundJobs) sessionArchives.startOrphanedArchiveFileSweep();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   if (backgroundJobs) repositoryWiki.startStorageWorker?.();
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
@@ -878,13 +1124,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // `options.peerChannel` is the injection point the two-server tests use.
   // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
   // no sender, no subscriber, and the routes uniformly answer 401.
-  const peerUrl = resolvePeerUrl();
-  const peerSecret = options.peerSecret === undefined
-    ? resolvePeerSecret()
-    : (options.peerSecret ?? "");
-  const peer = options.peerChannel === undefined
-    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
-    : options.peerChannel;
   // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
   // resolved once by startup-env, including an injected role). Resolving it
   // again here from env would disagree with an injected `apiRole`: a process
@@ -894,6 +1133,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ...options,
     apiRoleConfiguration: roleConfiguration,
     store,
+    liveHub,
     scheduler,
     realtimeState,
     sessionArchives,
@@ -901,29 +1141,87 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
     peerChannel: peer,
+    // The app is assembled before the socket layer; requests arrive only after
+    // startup completes. Delegate to the same runtime-owned trace service.
+    daemonTraceReader: options.daemonTraceReader ?? (effectiveApiRole === "ui" ? undefined
+      : { read: request => daemonTrace.reader.read(request) }),
   });
   // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
   // build apps with `createMultiremiApp` and must not inherit a timer.
   const requestMetricsSummary = startRequestMetricsSummary(requestMetricsOptions);
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
-  const daemonWebSockets: DaemonWebSocketRegistry = new Map();
+  const daemonProtocol = new DaemonProtocolLayer({
+    store,
+    serverVersion: multiremiVersion,
+    // Same resolved window as `api_minute_summary`; WS frame attribution overlaps
+    // the process DB totals there, so the two lines must not be added together.
+    metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
+    dbCounters: () => readProcessDbCounters(),
+  });
+  const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
+  const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
+    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki),
+    onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
+  const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
+    nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
+    snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
+      ...sessionArchiveRequestSnapshot(store, rt),
+      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id))] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
+  const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
+    effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
+      ? createHubTraceSink(liveHub as HubImpl) : undefined);
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
+  registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
+  registerSessionArchiveRequestHandlers(daemonProtocol, store);
+  options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
-  const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
+  const streamAuth: StreamAuthReader = options.streamAuth
+    ?? (readPool
+      ? createPostgresStreamAuthReader(readPool)
+      : createStreamAuthReader(store, { role: effectiveApiRole }));
+  const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "log",
+  });
+  const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "trace",
+  });
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
-  // is exactly the two deliveries that used to live inline here.
+  // retains both browser and daemon delivery.
   const buildFanout = options.createRealtimeFanout ?? createRealtimeFanout;
   const realtimeFanout = buildFanout({
     role: effectiveApiRole,
     store,
     peer,
     registries: {
-      daemon: daemonWebSockets,
       browser: browserWebSockets,
       browserUser: browserUserWebSockets,
-      browserScope: browserScopeWebSockets,
+    },
+    onDaemonTask: ({ type, task }) => {
+      if (type === "task:queued") {
+        offers.enqueued(task);
+        return;
+      }
+      downlinks.taskChanged(task.runtimeId, task.id);
+      if (["task:completed", "task:failed", "task:cancelled"].includes(type)) {
+        offers.terminal(task.id, task.runtimeId);
+        downlinks.kickWorkspace(task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      }
+    },
+    onDaemonWorkspaceEvent: (event) => {
+      downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      if (event.type === "daemon:models_updated") {
+        offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
+      } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
+        offers.kickWorkspace(event.workspaceId);
+      }
     },
   });
   const server = Bun.serve<MultiremiWebSocketData>({
@@ -955,23 +1253,41 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ) {
         return app.fetch(req);
       }
-      if (url.pathname === "/api/daemon/ws") {
-        const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
+      if (url.pathname === "/api/daemon/ws" && isWebSocketUpgrade(req)) {
+        if (url.searchParams.get("protocol") !== "2") {
+          return Response.json({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN }, { status: 426 });
+        }
+        const resolved = await daemonProtocol.resolveIdentity(req, authToken);
+        if ("response" in resolved) return resolved.response;
+        if (server.upgrade(req, { data: {
+          connectedAt: new Date().toISOString(),
+          kind: "daemon-protocol",
+          accessToken: resolved.identity.accessToken,
+          masterToken: resolved.identity.masterToken,
+          session: null,
+        } })) return undefined;
+        return Response.json({ error: "websocket upgrade failed" }, { status: 400 });
+      }
+      if (url.pathname === "/api/trace/ws") {
+        // MUL-438: the trace stream's home is the runtime process (ADR 0007
+        // decision 1), so `nginx` sends this path there (MUL-464). The endpoint
+        // exists in every role so the route inventory stays role-independent: a
+        // trace socket on a ui process is refused by the role guard before it
+        // reaches here, and one on `all` is served locally.
         if (isWebSocketUpgrade(req)) {
-          if (runtimeIds.length === 0) {
-            return Response.json({ error: "runtime_ids required" }, { status: 400 });
-          }
-          const authorization = await authorizeDaemonWebSocketRequest(req, store, authToken, runtimeIds);
+          const workspaceId = resolveBrowserWebSocketWorkspaceId(store, url);
+          if ("response" in workspaceId) return workspaceId.response;
+          const authorization = await authorizeBrowserWebSocketUpgrade(req, store, authToken, workspaceId.workspaceId);
           if ("response" in authorization) return authorization.response;
           const upgraded = server.upgrade(req, {
             data: {
               connectedAt: new Date().toISOString(),
-              kind: "daemon",
-              runtimeId: runtimeIds[0] ?? null,
-              runtimeIds,
+              kind: "browser",
+              workspaceId: workspaceId.workspaceId,
+              authenticated: authorization.authenticated,
+              userId: authorization.userId,
               accessToken: authorization.accessToken,
-              canReportAgentPluginProtocol:
-                authorization.canReportAgentPluginProtocol,
+              streamEndpoint: "trace" as const,
             },
           });
           if (upgraded) return undefined;
@@ -992,7 +1308,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
               authenticated: authorization.authenticated,
               userId: authorization.userId,
               accessToken: authorization.accessToken,
-              scopeSubscriptions: [],
+              streamEndpoint: "log" as const,
             },
           });
           if (upgraded) return undefined;
@@ -1002,17 +1318,26 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       return app.fetch(req);
     },
     websocket: {
+      // MUL-417 §8. `maxPayloadLength` sits above the protocol's own 1 MiB frame
+      // cap so an oversized frame arrives whole and can be answered with a close
+      // code the daemon can read, instead of being severed mid-frame. Backpressure
+      // pauses rather than disconnects: `closeOnBackpressureLimit: false` is what
+      // makes `ws.send === -1` a recoverable state. `perMessageDeflate` stays off
+      // (one internal hop; compression buys nothing here) and `idleTimeout: 120`
+      // above is unchanged.
+      maxPayloadLength: DAEMON_WS_MAX_PAYLOAD_BYTES,
+      backpressureLimit: DAEMON_WS_MAX_PAYLOAD_BYTES,
+      closeOnBackpressureLimit: false,
       open(ws) {
         realtimeState.connections += 1;
-        if (ws.data.kind === "daemon") {
-          registerDaemonWebSocketClient(daemonWebSockets, ws);
-          ws.sendText(JSON.stringify({
-            type: "ready",
-            transport: "websocket",
-            runtime_id: ws.data.runtimeId,
-            runtime_ids: ws.data.runtimeIds,
-            connected_at: ws.data.connectedAt,
-          }));
+        if (ws.data.kind === "daemon-protocol") {
+          // A v2 session answers every frame itself; nothing is sent here,
+          // because the daemon speaks first and one greeting must not race
+          // another.
+          ws.data.session = daemonProtocol.openSession(sessionSocket(ws), {
+            accessToken: ws.data.accessToken,
+            masterToken: ws.data.masterToken,
+          });
           return;
         }
         if (ws.data.authenticated) {
@@ -1022,6 +1347,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
         }
       },
       async message(ws, message) {
+        if (ws.data.kind === "daemon-protocol") {
+          await handleDaemonProtocolMessage(ws.data.session, message as string | Uint8Array);
+          return;
+        }
         if (ws.data.kind === "browser") {
           const event = parseDaemonWebSocketMessage(message);
           if (!ws.data.authenticated) {
@@ -1039,93 +1368,71 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
             ws.sendText(JSON.stringify({ type: "auth_ack" }));
             return;
           }
-          if (event.type === "subscribe") {
-            handleBrowserScopeSubscribe(browserScopeWebSockets, store, ws, event);
+          // MUL-438 v2 frames. Each endpoint serves exactly one stream kind:
+          // `/ws` carries `log:*`, `/api/trace/ws` carries `trace:*`.
+          if (event.type === "stream.subscribe") {
+            const handler = ws.data.streamEndpoint === "trace" ? traceStreams : browserStreams;
+            await handler.handleSubscribe(ws, event);
             return;
           }
-          if (event.type === "unsubscribe") {
-            handleBrowserScopeUnsubscribe(browserScopeWebSockets, ws, event);
+          if (event.type === "stream.unsubscribe") {
+            const handler = ws.data.streamEndpoint === "trace" ? traceStreams : browserStreams;
+            handler.handleUnsubscribe(ws, event);
             return;
           }
           if (event.type === "ping") ws.sendText(JSON.stringify({ type: "pong" }));
           return;
         }
-        if (!isDaemonOwnerWorkspaceMember(store, ws.data.accessToken)) {
-          ws.sendText(JSON.stringify({
-            type: "error",
-            error: "daemon owner is no longer a workspace member",
-            code: "daemon_owner_membership_required",
-          }));
-          ws.close();
-          return;
+      },
+      drain(ws) {
+        // The socket caught up: pausable traffic (offers, non-critical pushes)
+        // may resume. `res` and `ack` were never paused, so nothing else to do.
+        if (ws.data.kind === "daemon-protocol") ws.data.session?.handleDrain();
+        if (ws.data.kind === "browser") {
+          const handler = ws.data.streamEndpoint === "trace" ? traceStreams : browserStreams;
+          handler.notifyDrain(ws);
         }
-        const event = parseDaemonWebSocketMessage(message);
-        if (event.type === "daemon:heartbeat") {
-          const heartbeat = parseDaemonWebSocketHeartbeat(event);
-          if (!heartbeat.runtimeId) return;
-          if (!ws.data.runtimeIds.includes(heartbeat.runtimeId)) return;
-          if (
-            (heartbeat.agentPluginProtocol !== undefined || heartbeat.sshMeshProtocol !== undefined) &&
-            !ws.data.canReportAgentPluginProtocol
-          ) {
-            ws.sendText(JSON.stringify({
-              type: "error",
-              error: "daemon token required",
-              code: "daemon_token_required",
-            }));
-            return;
-          }
-          ws.data.runtimeId = heartbeat.runtimeId;
-          const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
-            supportsBatchImport: heartbeat.supportsBatchImport,
-            supportsDirectoryScan: heartbeat.supportsDirectoryScan,
-            supportsSkillDirectory: heartbeat.supportsSkillDirectory,
-            agentPluginProtocol: heartbeat.agentPluginProtocol,
-          });
-          if (heartbeat.sshMeshProtocol !== undefined) {
-            const meshAck = store.recordSshMeshHeartbeat(
-              heartbeat.runtimeId,
-              heartbeat.sshMeshProtocol,
-              heartbeat.sshMeshStatus,
-            );
-            if (meshAck) ack.ssh_mesh = meshAck;
-          } else {
-            store.recordSshMeshHeartbeat(heartbeat.runtimeId, 0);
-          }
-          ws.sendText(JSON.stringify({
-            type: "daemon:heartbeat_ack",
-            payload: ack,
-          }));
-          return;
-        }
-        if (event.runtime_id) {
-          ws.data.runtimeId = String(event.runtime_id);
-        }
-        ws.sendText(JSON.stringify({
-          type: event.type === "ping" ? "pong" : "ack",
-          received_type: event.type ?? null,
-          runtime_id: ws.data.runtimeId,
-          ok: true,
-          ts: new Date().toISOString(),
-        }));
       },
       close(ws) {
         realtimeState.connections = Math.max(0, realtimeState.connections - 1);
-        if (ws.data.kind === "daemon") unregisterDaemonWebSocketClient(daemonWebSockets, ws);
+        if (ws.data.kind === "daemon-protocol") ws.data.session?.handleSocketClose();
         else {
           unregisterBrowserWebSocketClient(browserWebSockets, ws);
           unregisterBrowserUserWebSocketClient(browserUserWebSockets, ws);
-          unregisterBrowserScopeWebSocketClient(browserScopeWebSockets, ws);
+          browserStreams.disposeClient(ws);
+          traceStreams.disposeClient(ws);
         }
       },
     },
+  });
+  /**
+   * MUL-438: the single resync broadcast entry point.
+   *
+   * The Hub's peer adapter calls this once the cross-process link recovers (ADR
+   * 0007: "peer 断连的表现是晚到，恢复后对账一次"): every browser socket this
+   * process holds is told to re-subscribe its streams and re-run its reconnect
+   * work, spread over 0–2 s so the whole fleet does not refetch on one tick.
+   *
+   * It hangs off the server object because that is the only handle the caller
+   * has — the adapter is constructed beside the hub, which does not own the
+   * socket registries.
+   */
+  const serverWithResync = server as unknown as MultiremiApiServer;
+  serverWithResync.broadcastResync = (options = {}) => broadcastBrowserResync({
+    browserWebSockets,
+    jitterMs: options.jitterMs,
   });
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
     requestMetricsSummary?.stop();
+    // Daemons are told 4001 rather than dropped: that code means "server is
+    // going away, reconnect with backoff", which is the deploy path.
+    daemonProtocol.closeAll();
+    daemonProtocol.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
+    if (backgroundJobs) sessionArchives.stopOrphanedArchiveFileSweep();
     controlPlaneSshMesh?.stop();
     // Closes the four store subscriptions and the peer channel (queue flush +
     // its timers), so a stopped server stops POSTing to its peer.
@@ -1135,7 +1442,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     messaging?.stop();
     issueTitleScheduler?.stop();
     store.stopNotificationDeliverySweeper();
+    bodyHtmlBackfill?.stop();
+    stopHubReadResources(
+      detachConversationLogHub,
+      options.liveHub === undefined && options.hub === undefined ? liveHub as HubImpl : null,
+      ownedReadPool,
+    );
     return stopServer(closeActiveConnections);
   };
-  return server;
+  return serverWithResync;
 }

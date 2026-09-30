@@ -6,9 +6,12 @@
  * degradation, reminder dedupe, and the terminal in-place rewrite.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { receiveNormalizedRuntimeInputs, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
+import { bindReportFrames } from "../../fixtures/report-session.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_CAPABILITY,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -23,6 +26,9 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { FeishuConciergeHost, FeishuConciergeSupervisor } from "@multiremi/worker/feishu-concierge.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import {
   controlPlaneConciergeHost,
   sendDecisionLane as sendDecisionLaneForTest,
@@ -89,7 +95,7 @@ function scaffold(options: {
       },
     },
   });
-  return { store, agentId, app: createMultiremiApp({ store, authToken: "MASTER" }) };
+  return { store, agentId, config, app: createMultiremiApp({ store, authToken: "MASTER" }) };
 }
 
 /** An Issue whose topic root message has been sent, so replies have a seed. */
@@ -480,13 +486,12 @@ describe("Feishu decision cards for Issue human requests", () => {
     const request = askQuestion(store, taskId);
     const hostToken = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const host = { Authorization: `Bearer ${hostToken.token}`, "content-type": "application/json" };
-    const exec = { Authorization: `Bearer ${executor.token}`, "content-type": "application/json" };
     const requestPath = `/api/daemon/tasks/${taskId}/human-requests/${request.id}`;
 
     // (1) The topic's host may read the request.
-    const read = await app.request(requestPath, { headers: host });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ request: { id: request.id, status: "pending" } });
+    const read = await requestRuntimeRpc(store, "rt_bot", "human_request.get",
+      { task_id: taskId, request_id: request.id }, hostToken.token, "MASTER");
+    expect(read).toMatchObject({ ok: true, request: { id: request.id, status: "pending" } });
     // (2) The topic's host may answer it.
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
@@ -500,23 +505,25 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(respond.status).toBe(200);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
     // (3) The topic's host still may not create or expire requests.
-    const create = await app.request(`/api/daemon/tasks/${taskId}/human-requests`, {
-      method: "POST", headers: host, body: JSON.stringify({ kind: "question", payload: {} }),
-    });
-    expect(create.status).toBe(403);
+    const create = await requestRuntimeRpc(store, "rt_bot", "human_request.create", {
+      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
+    }, hostToken.token, "MASTER");
+    expect(create).toMatchObject({ ok: false, code: "authority_revoked" });
     const second = store.createTaskHumanRequest({ taskId, kind: "question", payload: {} });
-    const expire = await app.request(`/api/daemon/tasks/${taskId}/human-requests/${second.id}/expire`, {
-      method: "POST", headers: host, body: JSON.stringify({ status: "cancelled" }),
-    });
-    expect(expire.status).toBe(403);
+    const expire = await requestRuntimeRpc(store, "rt_bot", "human_request.expire", {
+      task_id: taskId, request_id: second.id, status: "cancelled",
+    }, hostToken.token, "MASTER");
+    expect(expire).toMatchObject({ ok: false, code: "authority_revoked" });
     expect(store.getTaskHumanRequest(second.id)?.status).toBe("pending");
     // (4) S2: a genuinely different daemon is refused, on read and on create.
     const stranger = await store.createAccessToken({ name: "stranger", type: "daemon", workspaceId: "local", daemonId: "someone-else" });
-    const strangerHeaders = { Authorization: `Bearer ${stranger.token}`, "content-type": "application/json" };
-    expect((await app.request(requestPath, { headers: strangerHeaders })).status).toBe(403);
-    expect((await app.request(`/api/daemon/tasks/${taskId}/human-requests`, {
-      method: "POST", headers: strangerHeaders, body: JSON.stringify({ kind: "question", payload: {} }),
-    })).status).toBe(403);
+    store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude", workspaceId: "local", daemonId: "someone-else" });
+    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.get",
+      { task_id: taskId, request_id: request.id }, stranger.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
+    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.create", {
+      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
+    }, stranger.token, "MASTER")).toMatchObject({ ok: false, code: "authority_revoked" });
     // (5) S2: a daemon in another workspace has no access either.
     const otherWorkspace = store.createWorkspace({ name: "Other", slug: "other" });
     store.registerRuntime({ id: "rt_other", name: "Other host", provider: "codex",
@@ -524,13 +531,13 @@ describe("Feishu decision cards for Issue human requests", () => {
     store.heartbeatRuntime("rt_other", { supportsFeishuBotConfig: true });
     const outsider = await store.createAccessToken({ name: "outsider", type: "daemon",
       workspaceId: otherWorkspace.id, daemonId: "other-host" });
-    expect((await app.request(requestPath, {
-      headers: { Authorization: `Bearer ${outsider.token}`, "content-type": "application/json" },
-    })).status).toBe(403);
+    expect(await requestRuntimeRpc(store, "rt_other", "human_request.get",
+      { task_id: taskId, request_id: request.id }, outsider.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     // The executing daemon keeps full control.
-    expect((await app.request(`${requestPath}/expire`, {
-      method: "POST", headers: exec, body: JSON.stringify({ status: "cancelled" }),
-    })).status).toBe(200);
+    expect(await requestRuntimeRpc(store, "rt_exec", "human_request.expire", {
+      task_id: taskId, request_id: request.id, status: "cancelled",
+    }, executor.token, "MASTER")).toMatchObject({ ok: true, request: { id: request.id, status: "responded" } });
   });
 
   it("S3: the decision lane never calls a receipt or reaction API", async () => {
@@ -646,6 +653,353 @@ describe("Feishu decision cards for Issue human requests", () => {
     // A settled request is no longer clickable, so it drops out.
     store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
     expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toEqual([]);
+  });
+
+  it("sends settled decision snapshots only to the executor and authorized bot host", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_settled",
+      interactionOpenId: "ou_the_person",
+    });
+    const snapshot = (runtimeId: string, daemonId: string) => taskInputSnapshot(store, runtimeId, daemonId,
+      new Set(runtimeId === `rt_worker_${taskId}` || runtimeId === "rt_bot" ? [taskId] : []), () => {})
+      .filter(entity => entity.type === "task.human_request.settled");
+    expect(snapshot("rt_bot", "bot-host")).toEqual([]);
+    const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
+    const payload = { task_id: taskId, request: settled };
+    expect(snapshot(`rt_worker_${taskId}`, `worker-${taskId}`)).toEqual([
+      expect.objectContaining({ payload }),
+    ]);
+    expect(snapshot("rt_bot", "bot-host")).toEqual([expect.objectContaining({ payload })]);
+    store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude",
+      workspaceId: "local", daemonId: "stranger" });
+    const foreign = store.createWorkspace({ name: "Foreign", slug: "settled-foreign" });
+    store.registerRuntime({ id: "rt_foreign", name: "Foreign", provider: "claude",
+      workspaceId: foreign.id, daemonId: "foreign" });
+    expect(snapshot("rt_stranger", "stranger")).toEqual([]);
+    expect(snapshot("rt_foreign", "foreign")).toEqual([]);
+    expect(snapshot("rt_bot", "stranger")).toEqual([]);
+    db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [taskId]);
+    expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
+    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", request.id]);
+    expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
+    const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(patch.kind).toBe("decision_card_patch");
+    store.reportFeishuBotOutbound("local", "rt_bot", patch.id, {
+      claimToken: patch.claimToken, status: "sent", externalMessageId: "om_settled_patch",
+    });
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
+  });
+
+  it("settles an offline cancellation with its Issue card in the task transaction", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_offline_cancel",
+      interactionOpenId: "ou_the_person",
+    });
+    const storeDb = (store as unknown as { db: SqlDatabase }).db;
+    const notifications: string[] = [];
+    const offWorkspace = store.onWorkspaceEvent(event => notifications.push(event.type));
+    const offTask = store.onTaskEvent(event => notifications.push(event.type));
+    try {
+      expect(() => storeDb.transaction(() => {
+        store.cancelTask(taskId);
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(notifications).toEqual([]);
+        throw new Error("rollback cancellation");
+      })()).toThrow("rollback cancellation");
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+      expect(notifications).toEqual([]);
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 0 });
+
+      store.cancelTask(taskId);
+      const cancelled = store.getTaskHumanRequest(request.id)!;
+      expect(cancelled.status).toBe("cancelled");
+      expect(cancelled.response).toBeNull();
+      expect(cancelled.respondedAt).not.toBeNull();
+      expect(notifications).toContain("daemon:task_input");
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 1 });
+      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {})
+        .filter(entity => entity.type === "task.human_request.settled"))
+        .toEqual([expect.objectContaining({ payload: { task_id: taskId, request: cancelled } })]);
+      expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 1 });
+      expect(store.getTaskHumanRequest(request.id)).toEqual(cancelled);
+    } finally {
+      offWorkspace();
+      offTask();
+    }
+  });
+
+  it("fans out a Chat-bound request without a decision card and rejects a disabled host", () => {
+    const { store, agentId, config } = scaffold();
+    const chat = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision: config.revision, externalSessionKey: "oc_settled_chat",
+      externalMessageId: "om_settled_chat", senderOpenId: "ou_the_person", text: "Need a decision",
+    });
+    store.registerRuntime({ id: "rt_chat_executor", name: "Chat executor", provider: "claude",
+      workspaceId: "local", daemonId: "chat-executor" });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
+    const request = askQuestion(store, chat.taskId);
+    expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(true);
+    expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+    const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
+      .toContainEqual({ requestId: request.id, taskId: chat.taskId });
+    expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => []))
+      .toEqual([expect.objectContaining({ payload: { task_id: chat.taskId, request: settled } })]);
+    expect(taskInputSnapshot(store, "rt_bot", "other-daemon", new Set(), () => [])).toEqual([]);
+    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", request.id]);
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
+    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+      [new Date().toISOString(), request.id]);
+    store.upsertFeishuBotConfig("local", { agentId, runtimeId: "rt_bot", appId: config.appId,
+      appSecretOp: "keep", domain: "feishu", enabled: false });
+    expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(false);
+    expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+  });
+
+  it("does not replay a card sent by a previous bot app after the configured app changes", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_previous_app",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
+      .toContainEqual({ requestId: request.id, taskId });
+    store.upsertFeishuBotConfig("local", { agentId, runtimeId: "rt_bot", appId: "cli_replacement_app",
+      appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true });
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
+  });
+
+  for (const status of ["timeout", "cancelled"] as const) {
+    it(`fans out ${status} decision snapshots to both authorized runtimes`, () => {
+      const { store, agentId } = scaffold();
+      const issue = issueWithTopic(store, agentId);
+      const taskId = sourceTask(store, agentId, issue.id);
+      const request = askQuestion(store, taskId);
+      const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+      store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+        claimToken: card.claimToken, status: "sent", externalMessageId: `om_${status}`,
+        interactionOpenId: "ou_the_person",
+      });
+      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+      const settled = store.expireTaskHumanRequest(request.id, status)!;
+      const frame = expect.objectContaining({ type: "task.human_request.settled",
+        payload: { task_id: taskId, request: settled } });
+      expect(taskInputSnapshot(store, `rt_worker_${taskId}`, `worker-${taskId}`,
+        new Set([taskId]), () => [])).toEqual([frame]);
+      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([frame]);
+    });
+  }
+
+  it("caps unconfirmed settled-card replay at the newest 1024 requests", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_replay_oldest",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", request.id]);
+    db!.transaction(() => {
+      for (let index = 0; index < 1024; index++) {
+        const id = `hrq_replay_${index}`;
+        db!.run(`INSERT INTO multiremi_task_human_requests
+          (id, task_id, kind, payload, status, created_at, responded_at)
+          SELECT ?, task_id, kind, payload, 'responded', created_at, ?
+          FROM multiremi_task_human_requests WHERE id = ?`,
+        [id, "2026-09-30T00:00:00.000Z", request.id]);
+        db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
+           created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
+          SELECT ?, workspace_id, binding_id, NULL, chat_id, body, 'sent', available_at,
+                 created_at, updated_at, 'decision_card', ?, ?, ?
+          FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
+        [`fbo_replay_${index}`, id, taskId, `om_replay_${index}`, card.id]);
+      }
+    })();
+    const candidates = store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot");
+    expect(candidates).toHaveLength(1024);
+    expect(candidates.some(candidate => candidate.requestId === request.id)).toBe(false);
+    expect(new Set(candidates.map(candidate => candidate.requestId)).size).toBe(1024);
+  });
+
+  it("keeps bot host snapshot SELECTs constant with 1024 settled candidates", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_budget",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    const database = db!;
+    const originalQuery = database.query.bind(database);
+    const selectCounts: number[] = [];
+    const snapshotCount = () => {
+      let selects = 0;
+      Object.defineProperty(database, "query", { configurable: true, value: (sql: string) => {
+        if (/^\s*(?:SELECT|WITH)\b/i.test(sql)) selects += 1;
+        return originalQuery(sql);
+      } });
+      try {
+        const frames = taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {});
+        selectCounts.push(selects);
+        return frames;
+      } finally {
+        delete (database as unknown as { query?: typeof database.query }).query;
+      }
+    };
+    expect(snapshotCount()).toHaveLength(1);
+    db!.transaction(() => {
+      for (let index = 0; index < 1023; index++) {
+        const id = `hrq_budget_${index}`;
+        db!.run(`INSERT INTO multiremi_task_human_requests
+          (id, task_id, kind, payload, status, created_at, responded_at)
+          SELECT ?, task_id, kind, payload, 'responded', created_at, responded_at
+          FROM multiremi_task_human_requests WHERE id = ?`, [id, request.id]);
+        db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
+           created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
+          SELECT ?, workspace_id, binding_id, NULL, chat_id, body, 'sent', available_at,
+                 created_at, updated_at, 'decision_card', ?, ?, ?
+          FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
+        [`fbo_budget_${index}`, id, taskId, `om_budget_${index}`, card.id]);
+      }
+    })();
+    expect(snapshotCount()).toHaveLength(1024);
+    expect(selectCounts).toEqual([3, 3]);
+  });
+
+  it("excludes an archived topic, removed binding and same-workspace non-host runtime", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_audience",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    const settled = (runtimeId: string, daemonId: string) => taskInputSnapshot(store, runtimeId, daemonId,
+      new Set(), () => {}).filter(entity => entity.type === "task.human_request.settled");
+    expect(settled("rt_bot", "bot-host")).toHaveLength(1);
+    store.registerRuntime({ id: "rt_not_host", name: "Other runtime", provider: "claude",
+      workspaceId: "local", daemonId: "not-host" });
+    expect(settled("rt_not_host", "not-host")).toEqual([]);
+    const binding = db!.query("SELECT id, chat_session_id FROM multiremi_feishu_bot_chat_bindings WHERE issue_id = ?")
+      .get(issue.id) as { id: string; chat_session_id: string };
+    db!.run("UPDATE multiremi_chat_sessions SET status = 'archived' WHERE id = ?", [binding.chat_session_id]);
+    expect(settled("rt_bot", "bot-host")).toEqual([]);
+    db!.run("UPDATE multiremi_chat_sessions SET status = 'active' WHERE id = ?", [binding.chat_session_id]);
+    expect(settled("rt_bot", "bot-host")).toHaveLength(1);
+    db!.run("DELETE FROM multiremi_feishu_bot_chat_bindings WHERE id = ?", [binding.id]);
+    expect(settled("rt_bot", "bot-host")).toEqual([]);
+  });
+
+  it("publishes respond, timeout and cancelled wakes only after the outer commit", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const storeDb = (store as unknown as { db: SqlDatabase }).db;
+    const events: string[] = [];
+    const taskEvents: Array<{ type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent(event => {
+      if (event.type === "daemon:task_input" && event.payload.task_id === taskId) events.push(event.type);
+    });
+    const unsubscribeTask = store.onTaskEvent(event => {
+      if (event.type === "task:running" && event.task.id === taskId) {
+        taskEvents.push({ type: event.type, inTransaction: storeDb.inTransaction === true });
+      }
+    });
+    try {
+      for (const status of ["responded", "timeout", "cancelled"] as const) {
+        const request = askQuestion(store, taskId);
+        db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
+        events.length = 0;
+        taskEvents.length = 0;
+        storeDb.transaction(() => {
+          if (status === "responded") store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+          else store.expireTaskHumanRequest(request.id, status);
+          expect(events).toEqual([]);
+          expect(taskEvents).toEqual([]);
+        })();
+        expect(events).toEqual(["daemon:task_input"]);
+        expect(taskEvents).toEqual([{ type: "task:running", inTransaction: false }]);
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe(status);
+      }
+      const rolledBack = askQuestion(store, taskId);
+      db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
+      events.length = 0;
+      taskEvents.length = 0;
+      expect(() => storeDb.transaction(() => {
+        store.respondTaskHumanRequest(rolledBack.id, { response: { answer: "rollback" } });
+        throw new Error("rollback outer transaction");
+      })()).toThrow("rollback outer transaction");
+      expect(events).toEqual([]);
+      expect(taskEvents).toEqual([]);
+      expect(store.getTaskHumanRequest(rolledBack.id)?.status).toBe("pending");
+    } finally { unsubscribe(); unsubscribeTask(); }
+  });
+
+  it("publishes terminal human-request cancellation once after commit and never on rollback", () => {
+    const { store, agentId } = scaffold();
+    const storeDb = (store as unknown as { db: SqlDatabase }).db;
+    const issue = issueWithTopic(store, agentId);
+    const makePending = () => {
+      const taskId = sourceTask(store, agentId, issue.id);
+      db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [taskId]);
+      return { taskId, request: askQuestion(store, taskId) };
+    };
+    const committed = makePending();
+    const transitions: Array<{ requestId: string; type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onHumanRequest(event => transitions.push({
+      requestId: event.request.id, type: event.type, inTransaction: storeDb.inTransaction === true,
+    }));
+    try {
+      storeDb.transaction(() => {
+        store.completeTask(committed.taskId, { output: "finished" });
+        expect(transitions).toEqual([]);
+      })();
+      expect(transitions).toEqual([{ requestId: committed.request.id, type: "cancelled", inTransaction: false }]);
+      expect(store.getTaskHumanRequest(committed.request.id)?.status).toBe("cancelled");
+
+      const rolledBack = makePending();
+      transitions.length = 0;
+      expect(() => storeDb.transaction(() => {
+        store.completeTask(rolledBack.taskId, { output: "not committed" });
+        expect(transitions).toEqual([]);
+        throw new Error("rollback terminal cancellation");
+      })()).toThrow("rollback terminal cancellation");
+      expect(transitions).toEqual([]);
+      expect(store.getTaskHumanRequest(rolledBack.request.id)?.status).toBe("pending");
+    } finally { unsubscribe(); }
   });
 
   it("recovers a live card through the real route and the real daemon client", async () => {
@@ -963,7 +1317,7 @@ describe("Feishu decision card heartbeat delivery", () => {
   async function withRealClient<T>(
     app: ReturnType<typeof createMultiremiApp>,
     store: MultiremiStore,
-    fn: (client: MultiremiDaemonClient) => Promise<T>,
+    fn: (client: MultiremiDaemonClient, receive: () => ReturnType<typeof receiveNormalizedRuntimeInputs>) => Promise<T>,
   ): Promise<T> {
     const token = await store.createAccessToken({
       name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
@@ -974,7 +1328,9 @@ describe("Feishu decision card heartbeat delivery", () => {
       const parsed = new URL(url, "http://local");
       return app.request(parsed.pathname + parsed.search, init);
     }) as typeof fetch;
-    try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
+    const accessToken = await store.verifyAccessToken(token.token);
+    const receive = () => receiveNormalizedRuntimeInputs(store, "rt_bot", { identity: { accessToken, masterToken: false } });
+    try { return await fn(new MultiremiDaemonClient("http://local", token.token), receive); }
     finally { globalThis.fetch = realFetch; }
   }
 
@@ -988,8 +1344,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     // host actually receives.
     const taskId = sourceTask(store, agentId, issue.id);
     const request = askQuestion(store, taskId);
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered).toBeTruthy();
     expect(delivered.kind).toBe("decision_card");
     // The fields the host needs to register a click immediately...
@@ -1007,8 +1363,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
     const degradedTaskId = sourceTask(store, agentId, issue.id);
     const degradedRequest = askQuestion(store, degradedTaskId);
-    const degraded = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const degraded = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(degraded.degraded).toBe("notify_none");
     expect(degraded.humanRequestTaskId).toBe(degradedTaskId);
     expect(degraded.humanRequestId).toBe(degradedRequest.id);
@@ -1021,8 +1377,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const { store, agentId, app } = scaffold({ notifyMode: "none" });
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.id).toBeTruthy();
     expect(delivered.degraded).toBe("notify_none");
 
@@ -1049,8 +1405,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     writeInvalidPersonTopicConfig();
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.kind).toBe("decision_card");
     expect(delivered.degraded).toBe("invalid_recipient");
     expect(delivered.humanRequestId).toBe(request.id);
@@ -1094,8 +1450,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     writeInvalidPersonTopicConfig();
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
-    const first = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const first = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1118,8 +1474,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(relay.mentionOpenId()).toBeUndefined();
 
     // The next heartbeat is the same request's text degradation.
-    const second = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const second = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1159,8 +1515,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const legacy = queueLegacyRelayDelivery(store, agentId, issue.id);
     writePersonTopicConfig("ou_the_person");
 
-    const first = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const first = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1190,8 +1546,8 @@ describe("Feishu decision card heartbeat delivery", () => {
       const issue = issueWithTopic(store, agentId);
       db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [settings]);
       askQuestion(store, sourceTask(store, agentId, issue.id));
-      const result = await withRealClient(app, store, async (client) =>
-        client.heartbeatRuntime("rt_bot", undefined, undefined, false, true));
+      const result = await withRealClient(app, store, async (client, receive) =>
+        receive());
       expect(`${label}: ${result.status}`).toBe(`${label}: ok`);
       // The directive still tells the host to run; only the mention list is
       // empty, because there is no usable chat to suppress mentions in.
@@ -1275,8 +1631,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
     const request = askQuestion(store, taskId);
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.humanRequestTaskId).toBe(taskId);
 
     const handle = decisionLaneHandle();
@@ -1539,13 +1895,15 @@ describe("Feishu decision card heartbeat delivery", () => {
     //     -> real deliverFeishuOutbound -> real sendDecisionLane over the real
     //        FeishuConnector (only the SDK's HTTP layer is scripted)
     //     -> real MultiremiDaemonClient.reportFeishuBotOutboundResult
-    //     -> real POST /api/daemon/.../outbound/:id/result route
+    //     -> real v2 feishu.outbound_result session dispatcher
     //     -> real store.reportFeishuBotOutbound
     //
     // Only two things are test scaffolding: the channel handle (the process has
-    // no Feishu app) and the HTTP hop, which the real client reaches through the
-    // in-process app the way the existing heartbeat cases already do.
+    // no Feishu app) and the transport hop, which uses the in-process session
+    // dispatcher for reports and the app for the remaining HTTP calls.
     const { store, agentId, app } = scaffold();
+    // This case exercises delivery, not installing a CLI through an upgrade ack.
+    store.updateRuntime("rt_bot", { metadata: { ...store.getRuntimeLite("rt_bot")!.metadata, cli_version: DAEMON_MIN_CLI_VERSION } });
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
@@ -1559,7 +1917,7 @@ describe("Feishu decision card heartbeat delivery", () => {
         return { code: 230001, msg: "permission denied" };
       }
       return null;
-    }, async () => withRealBotHostClient(app, store, async (client) => {
+    }, async () => withRealBotHostClient(app, store, async (client, receive) => {
       // A real daemon over a real daemon token, with the real concierge host
       // attached: the delivery below runs through production code, not a stub.
       const daemon = outboundDaemon(store, client);
@@ -1572,7 +1930,10 @@ describe("Feishu decision card heartbeat delivery", () => {
       // gates delivery on, so the delivery below runs only because a real start
       // reported this runtime online.
       await supervisor.apply({ revision: 1, desired_state: "running", config_available: true });
-      const beat = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      const reportDeadline = Date.now() + 2_000;
+      while (store.feishuBotStatusSnapshot("local").status !== "online" && Date.now() < reportDeadline) await Bun.sleep(5);
+      expect(store.feishuBotStatusSnapshot("local").status).toBe("online");
+      const beat = await receive();
       const outbound = beat.pending_feishu_outbound!;
       expect(outbound).toBeTruthy();
       // The real ack path: queueFeishuBotOutbound -> handleFeishuBotOutbound ->
@@ -1721,7 +2082,7 @@ function outboundDaemon(store: MultiremiStore, client?: MultiremiDaemonClient): 
 async function withRealBotHostClient<T>(
   app: ReturnType<typeof createMultiremiApp>,
   store: MultiremiStore,
-  fn: (client: MultiremiDaemonClient) => Promise<T>,
+  fn: (client: MultiremiDaemonClient, receive: () => ReturnType<typeof receiveNormalizedRuntimeInputs>) => Promise<T>,
 ): Promise<T> {
   const token = await store.createAccessToken({
     name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
@@ -1735,8 +2096,18 @@ async function withRealBotHostClient<T>(
     }
     return scripted(input, init);
   }) as typeof fetch;
-  try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
-  finally { globalThis.fetch = scripted; }
+  const accessToken = await store.verifyAccessToken(token.token);
+  const receive = () => receiveNormalizedRuntimeInputs(store, "rt_bot", { identity: { accessToken, masterToken: false } });
+  const client = new MultiremiDaemonClient("http://local", token.token);
+  const drainReports = bindReportFrames(client, store, {
+    headers: { Authorization: `Bearer ${token.token}` },
+    capabilities: {
+      feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION,
+      feishu_decision_card: FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+    },
+  });
+  try { return await fn(client, receive); }
+  finally { await drainReports(); globalThis.fetch = scripted; }
 }
 
 /** A fake channel handle that records what the decision lane actually sends. */

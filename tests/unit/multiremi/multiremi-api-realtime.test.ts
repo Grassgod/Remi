@@ -1,13 +1,41 @@
 // Daemon and browser websocket upgrades, workspace-scoped fanout, and the
 // privacy boundaries on chat/member/invitation events.
 import { afterEach, describe, expect, it } from "bun:test";
+import { watchRuntimeFrames } from "../../fixtures/runtime-downlinks.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { notifyBrowserWorkspaceEvent } from "../../../packages/server/src/api/realtime.js";
 import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt, waitWebSocketOpen } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
+function v2Hello(daemonId: string, runtimeIds: string[],
+  capabilitiesByRuntime: Record<string, { agent_plugin_protocol: number }> = {}): string {
+  return JSON.stringify({ v: 2, t: "hello", ts: Date.now(), p: {
+    protocol: 2, daemon_id: daemonId, cli_version: "0.2.83", launched_by: null,
+    runtimes: runtimeIds.map(runtime_id => ({ runtime_id, provider: "codex", max_concurrency: 1,
+      active_task_ids: [], ...(capabilitiesByRuntime[runtime_id] ? { capabilities: capabilitiesByRuntime[runtime_id] } : {}) })), caps: [],
+  } });
+}
+
 describe("Multiremi API — realtime websockets", () => {
+  it("never broadcasts daemon-only input notifications to browsers", () => {
+    const frames: string[] = [];
+    const browser = { data: { kind: "browser", authenticated: true, workspaceId: "local", userId: "local",
+      accessToken: null, scopeSubscriptions: [] }, sendText: (frame: string) => frames.push(frame), close: () => {} };
+    const registry = new Map([["local", new Set([browser])]]) as any;
+    for (const type of ["daemon:dispatch_conditions_changed", "daemon:pending_changed", "daemon:maintenance_changed",
+      "daemon:feishu_changed", "daemon:ssh_mesh_changed", "daemon:task_input"]) {
+      notifyBrowserWorkspaceEvent(registry, new Map(), {
+        type, workspaceId: "local", payload: { task_id: "private_task", request_id: "private_request" },
+      });
+    }
+    expect(frames).toEqual([]);
+    notifyBrowserWorkspaceEvent(registry, new Map(), {
+      type: "daemon:models_updated", workspaceId: "local", payload: { runtime_id: "rt_public" },
+    });
+    expect(frames).toHaveLength(1);
+  });
+
   it("selects a human or restricted workspace-event frame per browser recipient", () => {
     const humanFrames: string[] = [];
     const taskFrames: string[] = [];
@@ -19,7 +47,6 @@ describe("Multiremi API — realtime websockets", () => {
         authenticated: true,
         userId: "local",
         accessToken,
-        scopeSubscriptions: [],
       },
       sendText: (frame: string) => frames.push(frame),
       close: () => {},
@@ -28,7 +55,7 @@ describe("Multiremi API — realtime websockets", () => {
     const task = client(taskFrames, { type: "task" });
     const workspaceRegistry = new Map([["local", new Set([human, task])]]) as any;
 
-    notifyBrowserWorkspaceEvent(workspaceRegistry, new Map(), new Map(), {
+    notifyBrowserWorkspaceEvent(workspaceRegistry, new Map(), {
       type: "autopilot:updated",
       workspaceId: "local",
       payload: {
@@ -175,143 +202,53 @@ describe("Multiremi API — realtime websockets", () => {
     }
   });
 
-  it("serves daemon websocket upgrades and realtime health", async () => {
+  it("serves process-wide v2 heartbeat, realtime health and task offers without v1 wake-up", async () => {
     const store = createStore();
-    const workspaceEvents: any[] = [];
-    const unsubscribeWorkspaceEvents = store.onWorkspaceEvent((event) => workspaceEvents.push(event));
     const runtime = store.registerRuntime({ id: "rt_ws", name: "WS runtime", provider: "codex" });
+    const second = store.registerRuntime({ id: "rt_ws_second", name: "Second WS runtime", provider: "claude" });
     const agent = store.createAgent({ name: "WS Codex", provider: "codex" });
-    const modelRequest = store.createRuntimeModelListRequest(runtime.id);
-    const localSkillRequest = store.createRuntimeLocalSkillListRequest(runtime.id);
-    const importOne = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "ws-one" });
-    const importTwo = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "ws-two" });
-    const camelRuntime = store.registerRuntime({
-      id: "rt_ws_camel",
-      name: "Camel WS runtime",
-      provider: "codex",
-      daemonId: "daemon-ws-camel",
-      metadata: { agent_plugin_protocol: 1 },
-    });
-    const camelImportOne = store.createRuntimeLocalSkillImportRequest(camelRuntime.id, { skill_key: "ws-camel-one" });
-    const camelImportTwo = store.createRuntimeLocalSkillImportRequest(camelRuntime.id, { skill_key: "ws-camel-two" });
+    const model = store.createRuntimeModelListRequest(runtime.id);
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`);
+    const inbox = watchRuntimeFrames(ws);
     try {
-      const baseUrl = `http://127.0.0.1:${server.port}`;
-      await expectWebSocketRejected(new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtimeId=rt_ws_camel`));
-      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws`);
-      const ready = await nextWebSocketMessage(ws);
-      expect(ready).toMatchObject({ type: "ready", transport: "websocket", runtime_id: "rt_ws", runtime_ids: ["rt_ws"] });
-      const camelWs = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_camel`);
-      expect(await nextWebSocketMessage(camelWs)).toMatchObject({ type: "ready", runtime_id: "rt_ws_camel" });
-
-      camelWs.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtimeId: "rt_ws_camel", supports_batch_import: true },
-      }));
-      await expectNoWebSocketMessage(camelWs);
-
-      camelWs.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: {
-          runtime_id: "rt_ws_camel",
-          supportsBatchImport: true,
-          ssh_mesh_protocol: 1,
-          ssh_mesh_status: { status: "disabled" },
-        },
-      }));
-      const camelHeartbeatAck = await nextWebSocketMessage(camelWs);
-      expect(camelHeartbeatAck).toMatchObject({
-        type: "daemon:heartbeat_ack",
-        payload: {
-          runtime_id: "rt_ws_camel",
-          status: "ok",
-          pending_local_skill_import: { id: camelImportOne.id, skill_key: "ws-camel-one" },
-          ssh_mesh: { enabled: false, rotation_state: "stable" },
-        },
-      });
-      expect(camelHeartbeatAck.payload.pending_local_skill_imports).toBeUndefined();
-      expect(workspaceEvents.find((event) => event.type === "daemon:heartbeat")).toMatchObject({
-        workspaceId: "local",
-        actorType: "daemon",
-        actorId: "daemon-ws-camel",
-        payload: {
-          runtime_id: "rt_ws_camel",
-          daemon_id: "daemon-ws-camel",
-          ssh_mesh: { status: "disabled", enabled: false, rotation_state: "stable" },
-        },
-      });
-      expect(store.getRuntime(camelRuntime.id)?.metadata.agent_plugin_protocol).toBe(1);
-      expect(store.getRuntimeLocalSkillImportRequest(camelRuntime.id, camelImportTwo.id)?.status).toBe("pending");
-      camelWs.close();
-      await Bun.sleep(25);
-
-      const connectedHealth = await fetch(`${baseUrl}/health/realtime`);
-      expect(await connectedHealth.json()).toMatchObject({ enabled: true, connections: 1, transport: "websocket" });
-
-      ws.send(JSON.stringify({ type: "ping", runtime_id: "rt_ws" }));
-      const pong = await nextWebSocketMessage(ws);
-      expect(pong).toMatchObject({ type: "pong", received_type: "ping", runtime_id: "rt_ws", ok: true });
-
-      const queued = store.createTask({ agentId: agent.id, prompt: "wake runtime" });
-      const wakeup = await nextWebSocketMessage(ws);
-      expect(wakeup).toMatchObject({
-        type: "daemon:task_available",
-        payload: { runtime_id: "rt_ws", task_id: queued.id },
-      });
-
-      expect(store.claimTask(runtime.id)?.id).toBe(queued.id);
-      store.markTaskWaitingLocalDirectory(queued.id, "/tmp/ws-runtime");
-      const waiting = await nextWebSocketMessage(ws);
-      expect(waiting).toMatchObject({
-        type: "task:waiting_local_directory",
-        payload: {
-          runtime_id: "rt_ws",
-          task_id: queued.id,
-          status: "waiting_local_directory",
-          wait_reason: "/tmp/ws-runtime",
-        },
-      });
-
+      await waitWebSocketOpen(ws);
+      ws.send(v2Hello("daemon-ws", [runtime.id, second.id]));
+      expect(await inbox.next("welcome")).toMatchObject({ v: 2, t: "welcome" });
+      expect((await inbox.next("runtime.model_list")).p).toEqual({ id: model.id });
+      expect(await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()).toMatchObject({ enabled: true, connections: 1, transport: "websocket" });
+      ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-1", p: { active_task_count: 0 } }));
+      const ack = await inbox.next("res", "hb-1");
+      expect(ack).toMatchObject({ t: "res", re: "hb-1", p: { runtime_acks: [
+        { runtime_id: runtime.id, status: "ok" },
+        { runtime_id: second.id, status: "ok" },
+      ] } });
+      expect(ack.p.runtime_acks[0].pending_model_list).toBeUndefined();
+      expect(store.getRuntimeModelListRequest(runtime.id, model.id)?.status).toBe("pending");
+      const nextOffer = inbox.next("task.offer");
+      const queued = store.createTask({ agentId: agent.id, prompt: "push dispatch" });
+      const offer = await nextOffer;
+      expect(offer).toMatchObject({ t: "task.offer", rt: runtime.id, p: { id: queued.id } });
+      ws.send(JSON.stringify({ v: 2, t: "res", re: String(offer.seq), ack: offer.seq, p: { ok: true } }));
+      expect(store.getTask(queued.id)?.status).toBe("dispatched");
       store.cancelTask(queued.id);
-      const updateRequest = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
-      ws.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtime_id: "rt_ws", supports_batch_import: true },
-      }));
-      const heartbeatAck = await nextWebSocketMessage(ws);
-      expect(heartbeatAck).toMatchObject({
-        type: "daemon:heartbeat_ack",
-        payload: {
-          runtime_id: "rt_ws",
-          status: "ok",
-          pending_update: { id: updateRequest.id, target_version: "v3.0.0" },
-          pending_model_list: { id: modelRequest.id },
-          pending_local_skills: { id: localSkillRequest.id },
-          pending_local_skill_import: { id: importOne.id, skill_key: "ws-one" },
-        },
-      });
-      expect(heartbeatAck.payload.pending_local_skill_imports.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
-
+      const update = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
+      ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-pending", p: { active_task_count: 0 } }));
+      const updateFrame = await inbox.next("runtime.update");
+      expect(updateFrame.p.id).toBe(update.id);
+      const pendingAck = await inbox.next("res", "hb-pending");
+      expect(pendingAck.p.runtime_acks[0].pending_update).toBeUndefined();
+      expect(store.getRuntimeUpdateRequest(runtime.id, update.id)?.status).toBe("pending");
       expect(store.deleteRuntime(runtime.id)).toBeTrue();
-      ws.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtime_id: "rt_ws" },
-      }));
-      const runtimeGoneAck = await nextWebSocketMessage(ws);
-      expect(runtimeGoneAck).toMatchObject({
-        type: "daemon:heartbeat_ack",
-        payload: { runtime_id: "rt_ws", status: "runtime_gone", runtime_gone: true },
-      });
-
+      ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-2", p: { active_task_count: 0 } }));
+      expect(await inbox.next("res", "hb-2")).toMatchObject({ t: "res", re: "hb-2", p: { runtime_acks: [
+        { runtime_id: runtime.id, status: "runtime_gone", runtime_gone: true },
+        { runtime_id: second.id, status: "ok" },
+      ] } });
       ws.close();
       await Bun.sleep(25);
-
-      const closedHealth = await fetch(`${baseUrl}/health/realtime`);
-      expect(await closedHealth.json()).toMatchObject({ enabled: true, connections: 0, transport: "websocket" });
-    } finally {
-      unsubscribeWorkspaceEvents();
-      server.stop(true);
-    }
+      expect(await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()).toMatchObject({ connections: 0 });
+    } finally { inbox.close(); ws.close(); server.stop(true); }
   });
 
   it("serves browser workspace websocket fanout with workspace isolation", async () => {
@@ -364,27 +301,6 @@ describe("Multiremi API — realtime websockets", () => {
 
       local.send(JSON.stringify({ type: "ping" }));
       expect(await nextWebSocketMessage(local)).toEqual({ type: "pong" });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "workspace", id: "local" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "workspace", id: "local" } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "user", id: "local" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "user", id: "local" } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: localTask.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "task", id: localTask.id } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "chat", id: chat.id } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "unknown", id: "scope-1" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "unknown", id: "scope-1", error: "unknown_scope" },
-      });
-      otherLocal.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(otherLocal)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "chat", id: chat.id, error: "forbidden" },
-      });
-      local.send(JSON.stringify({ type: "unsubscribe", payload: { scope: "task", id: localTask.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "unsubscribe_ack", payload: { scope: "task", id: localTask.id } });
-
       // A task inherits its agent's workspace, so the remote-workspace task
       // needs an agent that actually lives in the remote workspace.
       const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id });
@@ -446,7 +362,7 @@ describe("Multiremi API — realtime websockets", () => {
     }
   });
 
-  it("routes chat realtime events privately to the chat creator scope", async () => {
+  it("routes chat lifecycle events privately to the chat creator", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Chat Claude", provider: "claude", workspaceId: "local" });
     const runtime = store.registerRuntime({ id: "rt_chat_realtime", name: "chat runtime", provider: "claude", workspaceId: "local" });
@@ -463,15 +379,6 @@ describe("Multiremi API — realtime websockets", () => {
     try {
       await authenticateBrowserWebSocket(creator, creatorToken.token);
       await authenticateBrowserWebSocket(peer, peerToken.token);
-
-      creator.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(creator)).toEqual({ type: "subscribe_ack", payload: { scope: "chat", id: chat.id } });
-      // A workspace peer cannot subscribe to a chat it does not own.
-      peer.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(peer)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "chat", id: chat.id, error: "forbidden" },
-      });
 
       // Accumulate every frame each socket receives from here on.
       creator.addEventListener("message", (event) => creatorMessages.push(JSON.parse(String(event.data))));
@@ -492,10 +399,6 @@ describe("Multiremi API — realtime websockets", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
 
       const first = (type: string) => creatorMessages.find((m) => m.type === type);
-      expect(first("chat:message")).toMatchObject({
-        type: "chat:message",
-        payload: { chat_session_id: chat.id, message_id: sent.message.id, role: "user", content: "hello private", task_id: sent.task.id },
-      });
       expect(first("chat:done")).toMatchObject({
         type: "chat:done",
         actor_type: "system",
@@ -724,6 +627,8 @@ describe("Multiremi API — realtime websockets", () => {
     });
     store.registerRuntime({ id: "rt_ws_other_daemon", name: "Other daemon WS", provider: "codex", workspaceId: "local", daemonId: "daemon-other" });
     store.registerRuntime({ id: "rt_ws_remote", name: "Remote WS", provider: "codex", workspaceId: "remote" });
+    const otherDaemonHeartbeat = store.getRuntime("rt_ws_other_daemon")!.lastHeartbeatAt;
+    const remoteHeartbeat = store.getRuntime("rt_ws_remote")!.lastHeartbeatAt;
     const daemonToken = await store.createAccessToken({
       workspaceId: "local",
       daemonId: "daemon-local",
@@ -748,6 +653,8 @@ describe("Multiremi API — realtime websockets", () => {
       workspaceId: "local",
       prompt: "Do not assume daemon identity",
     });
+    expect(store.claimTask("rt_ws_local")?.id).toBe(task.id);
+    store.startTask(task.id);
     const taskToken = await store.createTaskAccessToken(task, "local");
     const removedMember = store.createWorkspaceMember({
       id: "member-removed-daemon-ws",
@@ -778,91 +685,65 @@ describe("Multiremi API — realtime websockets", () => {
       hostname: "127.0.0.1",
       authToken: "root-secret",
     });
+    const sockets: WebSocket[] = [];
+    const inboxes = new Map<WebSocket, ReturnType<typeof watchRuntimeFrames>>();
+    const connect = async (token: string, daemonId: string, ids: string[]) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`, { headers: { Authorization: `Bearer ${token}` } } as never);
+      sockets.push(socket);
+      const inbox = watchRuntimeFrames(socket);
+      inboxes.set(socket, inbox);
+      await waitWebSocketOpen(socket);
+      socket.send(v2Hello(daemonId, ids, daemonId === "daemon-local"
+        ? { rt_ws_local: { agent_plugin_protocol: 1 } } : {}));
+      expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
+      return socket;
+    };
     try {
-      const local = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
-        headers: { Authorization: `Bearer ${daemonToken.token}` },
-      } as any);
-      expect(await nextWebSocketMessage(local)).toMatchObject({
-        type: "ready",
-        runtime_id: "rt_ws_local",
-        runtime_ids: ["rt_ws_local"],
-      });
+      const local = await connect(daemonToken.token, "daemon-local", ["rt_ws_local", "rt_ws_other_daemon", "rt_ws_remote"]);
+      local.send(JSON.stringify({ v: 2, t: "hb", id: "hb-auth", p: { active_task_count: 0,
+        runtimes: [{ runtime_id: "rt_ws_local", capabilities: { agent_plugin_protocol: 1 } }] } }));
+      expect(await inboxes.get(local)!.next("res", "hb-auth")).toMatchObject({ t: "res", re: "hb-auth", p: { runtime_acks: [
+        { runtime_id: "rt_ws_local", status: "ok" },
+        { runtime_id: "rt_ws_other_daemon", status: "runtime_gone", runtime_gone: true },
+        { runtime_id: "rt_ws_remote", status: "runtime_gone", runtime_gone: true },
+      ] } });
       local.close();
-
-      const removedOwner = new WebSocket(
-        `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_removed_owner`,
-        { headers: { Authorization: `Bearer ${removedDaemonToken.token}` } } as any,
-      );
-      expect(await nextWebSocketMessage(removedOwner)).toMatchObject({ type: "ready" });
+      const removedOwner = await connect(removedDaemonToken.token, "daemon-removed-ws", ["rt_ws_removed_owner"]);
       const removedPlan = store.getDaemonRetirementPlan("local", "daemon-removed-ws");
-      expect(store.retireDaemon(
-        "local",
-        "daemon-removed-ws",
-        removedPlan.snapshot,
-        "local",
-      )).toMatchObject({ status: "retired" });
+      expect(store.retireDaemon("local", "daemon-removed-ws", removedPlan.snapshot, "local")).toMatchObject({ status: "retired" });
       store.archiveWorkspaceMember(removedMember.id);
-      removedOwner.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtime_id: "rt_ws_removed_owner" },
-      }));
-      expect(await nextWebSocketMessage(removedOwner)).toMatchObject({
-        type: "error",
-        code: "daemon_owner_membership_required",
-      });
-
-      const removedOwnerReconnect = new WebSocket(
-        `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_removed_owner`,
-        { headers: { Authorization: `Bearer ${removedDaemonToken.token}` } } as any,
-      );
-      await expectWebSocketRejected(removedOwnerReconnect);
-
-      const human = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
-        headers: { Authorization: `Bearer ${humanToken.token}` },
-      } as any);
-      await expectWebSocketRejected(human);
-
-      const taskSocket = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
-        headers: { Authorization: `Bearer ${taskToken.token}` },
-      } as any);
-      await expectWebSocketRejected(taskSocket);
+      const closed = new Promise<number>(resolve => removedOwner.addEventListener("close", event => resolve(event.code), { once: true }));
+      removedOwner.send(JSON.stringify({ v: 2, t: "hb", id: "hb-removed", p: { active_task_count: 0 } }));
+      // Retirement wins over the simultaneously revoked owner membership.
+      expect(await closed).toBe(4410);
+      for (const [token, status, code] of [
+        [humanToken.token, 403, "daemon_token_required"],
+        [taskToken.token, 403, "daemon_token_required"],
+        [unboundDaemonToken.token, 403, "daemon_identity_forbidden"],
+      ] as const) {
+        const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`, { headers: { Upgrade: "websocket", Connection: "Upgrade", Authorization: `Bearer ${token}` } });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({ code });
+      }
+      // Retirement revokes the credential itself: a reconnect is unauthorized,
+      // while the existing socket above observes the removed owner as 4401.
+      const retired = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`, { headers: { Upgrade: "websocket", Connection: "Upgrade", Authorization: `Bearer ${removedDaemonToken.token}` } });
+      expect(retired.status).toBe(401);
+      const master = await connect("root-secret", "daemon-local", ["rt_ws_local"]);
+      master.send(JSON.stringify({ v: 2, t: "hb", id: "hb-master", p: { active_task_count: 0,
+        runtimes: [{ runtime_id: "rt_ws_local", capabilities: { agent_plugin_protocol: 1 } }] } }));
+      expect(await inboxes.get(master)!.next("res", "hb-master")).toMatchObject({ t: "res", re: "hb-master", p: { runtime_acks: [{ runtime_id: "rt_ws_local", status: "ok" }] } });
       expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(1);
-
-      const master = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
-        headers: { Authorization: "Bearer root-secret" },
-      } as any);
-      expect(await nextWebSocketMessage(master)).toMatchObject({ type: "ready" });
-      master.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtime_id: "rt_ws_local", agent_plugin_protocol: 2 },
-      }));
-      expect(await nextWebSocketMessage(master)).toMatchObject({
-        type: "daemon:heartbeat_ack",
-        payload: { runtime_id: "rt_ws_local", status: "ok" },
-      });
-      expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(2);
-      master.close();
-
-      const otherDaemon = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_other_daemon`, {
-        headers: { Authorization: `Bearer ${daemonToken.token}` },
-      } as any);
-      await expectWebSocketRejected(otherDaemon);
-
-      const unboundDaemon = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
-        headers: { Authorization: `Bearer ${unboundDaemonToken.token}` },
-      } as any);
-      await expectWebSocketRejected(unboundDaemon);
-
-      const remote = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_remote`, {
-        headers: { Authorization: `Bearer ${daemonToken.token}` },
-      } as any);
-      await expectWebSocketRejected(remote);
+      expect(store.getRuntime("rt_ws_remote")?.lastHeartbeatAt).toBe(remoteHeartbeat);
+      expect(store.getRuntime("rt_ws_other_daemon")?.lastHeartbeatAt).toBe(otherDaemonHeartbeat);
     } finally {
+      for (const socket of sockets) socket.close();
+      for (const inbox of inboxes.values()) inbox.close();
       server.stop(true);
     }
   });
 
-  it("carries the desired Plugin revision in a websocket heartbeat ack", async () => {
+  it("preserves Plugin capability and pushes a revision matching the RPC snapshot", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_ws_plugin_revision",
@@ -892,29 +773,34 @@ describe("Multiremi API — realtime websockets", () => {
       hostname: "127.0.0.1",
       authToken: "root-secret",
     });
-    // The HTTP and websocket heartbeats share one store method, so a daemon that
-    // keeps its heartbeat on the socket must get the same skip-GET token.
     const socket = new WebSocket(
-      `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=${runtime.id}`,
+      `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
       { headers: { Authorization: `Bearer ${daemonToken.token}` } } as any,
     );
+    const inbox = watchRuntimeFrames(socket);
     try {
-      expect(await nextWebSocketMessage(socket)).toMatchObject({ type: "ready", runtime_id: runtime.id });
+      await waitWebSocketOpen(socket);
+      socket.send(v2Hello("daemon-ws-plugin", [runtime.id], { [runtime.id]: { agent_plugin_protocol: 1 } }));
+      expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
+      const revision = await inbox.next("plugin.desired_revision");
       socket.send(JSON.stringify({
-        type: "daemon:heartbeat",
-        payload: { runtime_id: runtime.id, agent_plugin_protocol: 1 },
+        v: 2, t: "hb", id: "hb-plugin", p: { active_task_count: 0,
+          runtimes: [{ runtime_id: runtime.id, capabilities: { agent_plugin_protocol: 1 } }] },
       }));
-      const ack = await nextWebSocketMessage(socket);
+      const ack = await inbox.next("res", "hb-plugin");
       expect(ack).toMatchObject({
-        type: "daemon:heartbeat_ack",
-        payload: { runtime_id: runtime.id, status: "ok" },
+        t: "res", re: "hb-plugin",
+        p: { runtime_acks: [{ runtime_id: runtime.id, status: "ok" }] },
       });
-      expect(ack.payload.agent_plugins.revision).toBe(
-        store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision,
-      );
-      expect(ack.payload.agent_plugins.revision).toMatch(/^[0-9a-f]{64}$/);
+      expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
+      socket.send(JSON.stringify({ v: 2, t: "plugin.desired", id: "desired-1", rt: runtime.id, p: {} }));
+      const desired = await inbox.next("res", "desired-1");
+      expect(desired.p.ok).toBe(true);
+      expect(desired.p.revision).toBe(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision);
+      expect(revision.p.revision).toBe(desired.p.revision);
     } finally {
       socket.close();
+      inbox.close();
       server.stop(true);
     }
   });

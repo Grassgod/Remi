@@ -40,7 +40,7 @@ summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Mess
 
 取消经已有内部路由 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel` 落到 `TasksRepo.cancelTask`：同一事务、同一 workspace 生命周期锁。内部路由与 `FeishuBotCancelResult` wire 契约未变。
 
-反馈以服务端 task 状态为唯一事实源：命令卡只说「已请求停止」，CoT 卡片的 `RUN_FINISHED{status:"interrupted"}` 仍由既有 `pollFeishuTask` 在看到 `cancelled` 快照后触发（见[原生任务呈现](feishu-native-task-presentation.md)）。服务端未确认前不会出现「已停止」字样。
+反馈以服务端 task 状态为唯一事实源：命令卡只说「已请求停止」，CoT 订阅收到 `closed` 后读取一次最终快照，确认 `cancelled` 才发送 `RUN_FINISHED{status:"interrupted"}`（见[原生任务呈现](feishu-native-task-presentation.md)）。服务端未确认前不会出现「已停止」字样。
 
 Issue 话题不出现在 Web/CLI 私聊和待处理列表中。旧关联按确定归属证据迁移，无法确认的关联暂停 Issue 通知，保留管理员审计记录；修复流程及数据回滚条件见[迁移手册](migrations/chat-issue-decoupling.md)。不得通过旧 Chat Issue 字段或历史任务重新恢复普通私聊的 Issue 上下文。
 
@@ -108,6 +108,12 @@ remi workspace feishu-bot sender revoke <workspace> <sender>
 这份账号白名单属于机器人对话链路，与下面 Messaging Source 的会话采集 allowlist 分开维护。
 
 ## 机器人消息回应
+
+MUL-440 为声明 `feishu_outbound_kinds: 1` 的守护进程把回执拆成独立服务端
+outbox 行；每个原消息及状态独立 lease、退避和最多六次尝试。结果卡
+投递行结束后才领取终态回执；回执永久失败只写审计与日志，不连坐结果、卡片或绑定。
+未声明能力的守护进程继续使用原来的整条任务投递，升级与交接不切换已领取
+任务的模式。迁移与回滚见 [C5 迁移说明](feishu-outbound-kind-migration.md)。
 
 普通入站消息和轮次收尾复用现有 wakeTask 时，[FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)调用 `createTaskSteerMessageWithinTransaction`，由外层事务统一提交 Chat 消息、steer、投递与收尾记录。steer primitive 保留 workspace → issue-session 锁顺序与终态拒绝，不开内层事务，也不发事件。轮次收尾的通知 flush 接收外层必填 `deferredEvents`；`chat:message` 保持消息内容和 Chat 间顺序，在提交后先于同一队列的终态广播发出，回滚则丢弃。真实 PG 回滚与锁检查见 [事务边界用例](../tests/unit/multiremi/multiremi-existing-pg-transaction-boundaries.test.ts)，SQLite 对照见 [Issue topics 用例](../tests/unit/multiremi/multiremi-feishu-issue-topics.test.ts)。
 

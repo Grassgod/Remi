@@ -55,8 +55,6 @@ const EXPECTED_EVENTS: readonly string[] = [
   "invitation:accepted",
   "invitation:declined",
   "invitation:revoked",
-  "task:message",
-  "chat:message",
   "chat:queue_updated",
   "chat:done",
   "task:queued",
@@ -110,6 +108,7 @@ function createRecordingWs(): RecordingWs {
       };
     },
     onReconnect: () => () => {},
+    onResync: () => () => {},
   } as unknown as WSClient;
 
   return {
@@ -512,25 +511,4 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     expect(result.current.data?.pages[0]?.entries.at(-1)?.id).toBe("agent-reply");
   });
 
-  it("flushes buffered task:message frames on unmount", () => {
-    vi.useFakeTimers();
-    const mock = createRecordingWs();
-    qc.setQueryData(["task-messages", "task-1"], []);
-    const { unmount } = renderHook(() => useRealtimeSync(mock.ws, stores), {
-      wrapper: createWrapper(qc),
-    });
-
-    mock.emit("task:message", {
-      task_id: "task-1",
-      seq: 1,
-      type: "text",
-      content: "hello",
-    });
-    // Still buffered — the 80ms coalescing window has not elapsed.
-    expect(qc.getQueryData(["task-messages", "task-1"])).toEqual([]);
-
-    unmount();
-
-    expect(qc.getQueryData(["task-messages", "task-1"])).toHaveLength(1);
-  });
 });

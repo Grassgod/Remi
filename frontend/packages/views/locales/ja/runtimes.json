@@ -1,4 +1,11 @@
 {
+  "protocol": {
+    "version": "プロトコル v{{version}}",
+    "ok": "正常",
+    "upgrade_pending": "更新待ち",
+    "upgrade_failed": "更新失敗：{{error}}",
+    "rejected": "プロトコル拒否"
+  },
   "codex_profile": {
     "auth": "認証方法",
     "api_key": "API キー",

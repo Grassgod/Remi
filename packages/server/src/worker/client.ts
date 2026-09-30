@@ -1,4 +1,8 @@
 import { createReadStream } from "node:fs";
+import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
+import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
+import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
+import type { DaemonArchiveSessionsResultPayload } from "@multiremi/contracts/daemon-protocol.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
@@ -8,6 +12,7 @@ import { CHAT_ATTACHMENT_MAX_BYTES, readChatAttachmentBytes } from "@daemon/agen
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiDaemonRuntimeInput,
   MultiremiAgent,
   ReportBotMenuPublishInput,
   MultiremiProjectDocIndexEntry,
@@ -21,7 +26,6 @@ import type {
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
-  TaskMessageInput,
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
@@ -110,7 +114,7 @@ export interface MultiremiDaemonRegisterResponse {
   runtimes: Array<{ id: string; provider?: string; type?: string; claude_profile?: RuntimeClaudeProfile | null; codex_profile?: RuntimeCodexProfile | null }>;
 }
 
-export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
+export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonRuntimeInput {
   claude_profile?: RuntimeClaudeProfile | null; codex_profile?: RuntimeCodexProfile | null;
   workspace_settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
@@ -227,6 +231,7 @@ function isTerminalDaemonAuthorityStatus(status: number): boolean {
 }
 
 export class MultiremiDaemonClient {
+  private reportTransport: import("./report-transport.js").DaemonReportTransport | null = null;
   private baseUrl: string;
   private token: string | null;
   private readonly requestTimeoutMs: number;
@@ -272,6 +277,49 @@ export class MultiremiDaemonClient {
       10_000,
       "MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS",
     );
+  }
+
+  setReportTransport(transport: import("./report-transport.js").DaemonReportTransport): void {
+    this.reportTransport = transport;
+  }
+
+  private report(type: string, partition: string, payload: Record<string, unknown>, wait: boolean | { timeoutMs: number } = false): Promise<Record<string, unknown>> {
+    if (!this.reportTransport) throw new Error("daemon WS report transport is not bound");
+    return this.reportTransport.report(type, partition, payload, wait);
+  }
+
+  private async waitForFeishuReport(runtimeId: string, deliveryId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/result`;
+    try {
+      const result = await this.report("feishu.outbound_result", `rt:${runtimeId}`, payload, { timeoutMs: this.requestTimeoutMs });
+      if (result.lease_lost === true) {
+        throw new MultiremiDaemonHttpError(409, "POST", path,
+          JSON.stringify({ error: "outbound delivery lease is stale", code: "stale_lease" }), "stale_lease");
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof DaemonProtocolRpcError && error.code === "daemon_timeout") {
+        throw new MultiremiDaemonRequestTimeoutError("POST", path, this.requestTimeoutMs);
+      }
+      throw error;
+    }
+  }
+
+  private async maintenanceRpc<T>(type: string, payload: Record<string, unknown>): Promise<T> {
+    if (!this.reportTransport) throw new Error("daemon WS report transport is not bound");
+    try { return await this.reportTransport.rpc(type, payload) as T; }
+    catch (error) {
+      if (error instanceof DaemonProtocolRpcError) {
+        const status = error.operationError?.status ?? ({ task_not_found: 404, authority_revoked: 403,
+          invalid_report: 400, server_error: 500 } as Record<string, number>)[error.code];
+        if (status) {
+          const code = error.operationError?.code ?? null;
+          const body = JSON.stringify({ error: error.operationError?.message ?? error.message, ...(code ? { code } : {}) });
+          throw new MultiremiDaemonHttpError(status, "RPC", type, body, code);
+        }
+      }
+      throw error;
+    }
   }
 
   async registerRuntime(input: RegisterRuntimeInput): Promise<{ runtime: { id: string } }> {
@@ -357,6 +405,7 @@ export class MultiremiDaemonClient {
               // cards. Declared on its own so a host without it is handed no
               // decision card rather than one whose buttons do nothing.
               feishu_issue_decision_card: FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+              feishu_outbound_kinds: 1,
             }
           : {}),
       }, undefined, signal);
@@ -367,8 +416,7 @@ export class MultiremiDaemonClient {
       throw error;
     }
     const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
-    const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
-      ? {
+    const normalizeOutbound = (rawOutbound: Record<string, unknown>): MultiremiFeishuBotOutboundDelivery => ({
           id: String(rawOutbound.id ?? ""),
           claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
           chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
@@ -401,6 +449,9 @@ export class MultiremiDaemonClient {
               decision_issue_id: rawOutbound.decision_issue_id,
             } : {}),
           } : {}),
+          ...(["received", "completed", "failed"].includes(String(rawOutbound.receipt_state)) ? {
+            receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
+          } : {}),
           ...(typeof rawOutbound.human_request_id === "string" ? {
             humanRequestId: rawOutbound.human_request_id,
             human_request_id: rawOutbound.human_request_id,
@@ -425,8 +476,14 @@ export class MultiremiDaemonClient {
             taskId: rawOutbound.task_id,
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
           } : {}),
-        }
-      : undefined;
+        });
+    const pendingFeishuOutbounds = Array.isArray(resp.pending_feishu_outbounds)
+      ? resp.pending_feishu_outbounds.map(outbound => normalizeOutbound(outbound as unknown as Record<string, unknown>)) : undefined;
+    const first = pendingFeishuOutbounds?.[0];
+    // Existing E5 callers consume the singular accessor; both accessors share
+    // the same delivery, whose ID the daemon's run map already deduplicates.
+    const pendingFeishuOutbound = rawOutbound ? normalizeOutbound(rawOutbound)
+      : first && (!first.kind || first.kind.startsWith("decision_")) ? first : undefined;
     // `agent_plugins.revision` is the daemon's change token for the desired
     // Plugin set: while it is unchanged the poll loop skips that GET entirely.
     // Normalize it here so a server that omits the field, or a proxy that
@@ -445,6 +502,7 @@ export class MultiremiDaemonClient {
       ...rest,
       ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
       ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
+      ...(pendingFeishuOutbounds ? { pending_feishu_outbounds: pendingFeishuOutbounds } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 
@@ -453,10 +511,7 @@ export class MultiremiDaemonClient {
     requestId: string,
     input: ReportBotMenuPublishInput,
   ): Promise<void> {
-    await this.post(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/bot-menu/${encodeURIComponent(requestId)}/result`,
-      input,
-    );
+    await this.report("runtime.bot_menu_result", `rt:${runtimeId}`, { ...input, request_id: requestId, runtime_id: runtimeId });
   }
 
   /**
@@ -503,10 +558,7 @@ export class MultiremiDaemonClient {
       error_message?: string | null;
     },
   ): Promise<void> {
-    await this.post(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/status`,
-      input,
-    );
+    this.reportTransport?.bestEffort("concierge.status", { ...input, runtime_id: runtimeId });
   }
 
   async reportFeishuBotOutboundResult(
@@ -523,19 +575,19 @@ export class MultiremiDaemonClient {
       degraded?: FeishuDecisionDegradeReason | null;
     },
   ): Promise<void> {
-    await this.post(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/result`,
-      {
-        claim_token: input.claimToken,
-        status: input.status,
-        external_message_id: input.externalMessageId ?? undefined,
-        error: input.error ?? undefined,
-        ...(input.interactionOpenId !== undefined ? { interaction_open_id: input.interactionOpenId } : {}),
-        ...(input.degraded !== undefined ? { degraded: input.degraded } : {}),
-        presentation: input.presentation,
-        retryable: input.retryable,
-      },
-    );
+    const payload = {
+      request_id: deliveryId, runtime_id: runtimeId,
+      claim_token: input.claimToken,
+      status: input.status,
+      external_message_id: input.externalMessageId ?? undefined,
+      error: input.error ?? undefined,
+      ...(input.interactionOpenId !== undefined ? { interaction_open_id: input.interactionOpenId } : {}),
+      ...(input.degraded !== undefined ? { degraded: input.degraded } : {}),
+      presentation: input.presentation,
+      retryable: input.retryable,
+    };
+    if (input.status === "streaming") await this.waitForFeishuReport(runtimeId, deliveryId, payload);
+    else await this.report("feishu.outbound_result", `rt:${runtimeId}`, payload);
   }
 
   /**
@@ -621,14 +673,13 @@ export class MultiremiDaemonClient {
   async prepareFeishuBotOutboundMention(
     runtimeId: string, deliveryId: string, claimToken: string, openId: string | null,
   ): Promise<string | null> {
-    const result = await this.post<{ status?: string; mention_open_id?: unknown }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/outbound/${encodeURIComponent(deliveryId)}/result`,
-      { claim_token: claimToken, status: "prepared", mention_open_id: openId },
-    );
-    if (result.status !== "ok" || (result.mention_open_id !== null && !isFeishuOpenId(result.mention_open_id))) {
+    const result = await this.waitForFeishuReport(runtimeId, deliveryId, {
+      request_id: deliveryId, runtime_id: runtimeId, claim_token: claimToken, status: "prepared", mention_open_id: openId,
+    });
+    if (result.ok !== true || (result.mention_open_id !== null && !isFeishuOpenId(result.mention_open_id))) {
       throw new Error("Invalid Feishu outbound mention checkpoint response");
     }
-    return result.mention_open_id;
+    return result.mention_open_id as string | null;
   }
 
   async fetchFeishuBotOutboundAttachment(
@@ -870,10 +921,7 @@ export class MultiremiDaemonClient {
     versionId: string,
     input: ReportAgentPluginRuntimeStateInput,
   ): Promise<void> {
-    await this.post(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/${encodeURIComponent(versionId)}/state`,
-      input,
-    );
+    await this.report("plugin.state", `rt:${runtimeId}`, { ...input, version_id: versionId, runtime_id: runtimeId });
   }
 
   async getWorkspaceRepos(workspaceId: string): Promise<MultiremiWorkspaceReposResponse> {
@@ -888,36 +936,12 @@ export class MultiremiDaemonClient {
     return response.allowed === true;
   }
 
-  async createTaskHumanRequest(taskId: string, input: {
-    kind: "permission" | "question";
-    payload: Record<string, unknown>;
-    /**
-     * MUL-407: the deadline the control plane records for this request. The
-     * daemon still decides when to expire it; the server publishes the time so
-     * the topic can remind the requester ten minutes before it elapses.
-     */
-    timeoutMs?: number;
-  }): Promise<MultiremiTaskHumanRequest> {
-    // The wire field is snake_case like every other daemon body; `timeoutMs` is
-    // only the ergonomic spelling at the call site.
-    const { timeoutMs, ...rest } = input;
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`,
-      timeoutMs === undefined ? rest : { ...rest, timeout_ms: timeoutMs });
-    return resp.request;
-  }
-
-  async getTaskHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.get<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`);
-    return resp.request ?? null;
-  }
-
-  async expireTaskHumanRequest(taskId: string, requestId: string, status: "timeout" | "cancelled"): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/expire`, { status });
-    return resp.request ?? null;
-  }
-
   async reportRuntimeUpdateResult(runtimeId: string, requestId: string, result: { status: string; output?: string; error?: string }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/update/${requestId}/result`, result);
+    if (!this.reportTransport || this.reportTransport.upgradeWaiting()) {
+      await this.post(`/api/daemon/runtimes/${runtimeId}/update/${requestId}/result`, result);
+      return;
+    }
+    await this.report("runtime.update_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeCommandResult(runtimeId: string, requestId: string, result: {
@@ -928,7 +952,15 @@ export class MultiremiDaemonClient {
     duration_ms: number;
     error?: string;
   }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/commands/${requestId}/result`, result);
+    await this.report("runtime.command_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
+  }
+
+  async reportSessionArchiveRequestResult(
+    runtimeId: string,
+    requestId: string,
+    result: Omit<DaemonArchiveSessionsResultPayload, "request_id">,
+  ): Promise<void> {
+    await this.report("runtime.archive_sessions_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
@@ -938,7 +970,7 @@ export class MultiremiDaemonClient {
     supported?: boolean;
     error?: string;
   }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/models/${requestId}/result`, result);
+    await this.report("runtime.model_list_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async updateRuntimeModels(
@@ -947,12 +979,9 @@ export class MultiremiDaemonClient {
     signal?: AbortSignal,
     modelProfile?: RuntimeCodexProfile | RuntimeClaudeProfile | null,
   ): Promise<MultiremiRuntimeModel[]> {
-    const response = await this.put<{ models: MultiremiRuntimeModel[] }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/models`,
-      { models, supported: true, model_profile: modelProfile },
-      signal,
-    );
-    return response.models;
+    signal?.throwIfAborted();
+    await this.report("runtime.model_list_result", `rt:${runtimeId}`, { runtime_id: runtimeId, models, supported: true, model_profile: modelProfile });
+    return models;
   }
 
   async reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, result: {
@@ -963,7 +992,7 @@ export class MultiremiDaemonClient {
     root?: string;
     warnings?: string[];
   }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/local-skills/${requestId}/result`, result);
+    await this.report("runtime.local_skills_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeDirectoryScanResult(runtimeId: string, requestId: string, result: {
@@ -973,7 +1002,7 @@ export class MultiremiDaemonClient {
     error?: string;
     resolvedRoot?: string;
   }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/directory-scans/${requestId}/result`, result);
+    await this.report("runtime.directory_scan_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, result: {
@@ -988,29 +1017,11 @@ export class MultiremiDaemonClient {
     } | null;
     error?: string;
   }): Promise<void> {
-    await this.post(`/api/daemon/runtimes/${runtimeId}/local-skills/import/${requestId}/result`, result);
+    await this.report("runtime.local_skill_import_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async startTask(taskId: string): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/start`, {});
-  }
-
-  async renewTaskDispatchLease(taskId: string): Promise<MultiremiTaskStatus> {
-    try {
-      const resp = await this.post<{ status: MultiremiTaskStatus }>(
-        `/api/daemon/tasks/${taskId}/dispatch-lease`,
-        {},
-      );
-      return resp.status;
-    } catch (error) {
-      // Rolling upgrades may briefly run a new daemon against an older control
-      // plane. Fall back to the legacy read-only status endpoint; a genuinely
-      // missing task also returns 404 there and remains distinguishable.
-      if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-        return await this.getTaskStatus(taskId);
-      }
-      throw error;
-    }
+    await this.report("task.start", taskId, {});
   }
 
   async markTaskWaitingLocalDirectory(taskId: string, reason: string): Promise<void> {
@@ -1020,16 +1031,12 @@ export class MultiremiDaemonClient {
   async reportProgress(taskId: string, summary: string, step?: number, total?: number, options?: { final?: boolean }): Promise<void> {
     // `final: true` marks a terminal summary, which the server accepts even
     // after the task reached a terminal status.
-    await this.post(`/api/daemon/tasks/${taskId}/progress`, {
+    await this.report("task.progress", taskId, {
       summary,
       step,
       total,
       ...(options?.final ? { final: true } : {}),
     });
-  }
-
-  async reportTaskMessages(taskId: string, messages: TaskMessageInput[]): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/messages`, { messages });
   }
 
   async listTaskMessages(taskId: string, sinceSeq = 0): Promise<MultiremiTaskMessage[]> {
@@ -1110,11 +1117,11 @@ export class MultiremiDaemonClient {
   }
 
   async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/prompt`, input);
+    await this.report("task.prompt", taskId, input);
   }
 
   async pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/session`, {
+    await this.report("task.session_pin", taskId, {
       session_id: sessionId ?? undefined,
       work_dir: workDir ?? undefined,
     });
@@ -1127,7 +1134,7 @@ export class MultiremiDaemonClient {
     status: MultiremiIssueWorkspaceStatus;
     repos: MultiremiIssueWorkspaceRepo[];
   }): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/workspace`, {
+    await this.report("task.workspace", taskId, {
       runtime_id: input.runtimeId,
       root_path: input.rootPath,
       branch_name: input.branchName,
@@ -1147,15 +1154,15 @@ export class MultiremiDaemonClient {
   }
 
   async completeTask(taskId: string, output: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/complete`, {
+    await this.report("task.complete", taskId, {
       output,
       session_id: sessionId ?? undefined,
       work_dir: workDir ?? undefined,
-    });
+    }, true);
   }
 
   async failTask(taskId: string, error: string, sessionId?: string | null, workDir?: string | null, failureReason?: string | null): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/fail`, {
+    await this.report("task.fail", taskId, {
       error,
       session_id: sessionId ?? undefined,
       work_dir: workDir ?? undefined,
@@ -1165,7 +1172,7 @@ export class MultiremiDaemonClient {
 
   async reportTaskUsage(taskId: string, usage: TaskUsageEntry[]): Promise<void> {
     if (usage.length === 0) return;
-    await this.post(`/api/daemon/tasks/${taskId}/usage`, {
+    await this.report("task.usage", taskId, {
       usage: usage.map((entry) => ({
         provider: entry.provider,
         model: entry.model,
@@ -1197,11 +1204,6 @@ export class MultiremiDaemonClient {
     );
   }
 
-  async getTaskStatus(taskId: string): Promise<MultiremiTaskStatus> {
-    const resp = await this.get<{ status: MultiremiTaskStatus }>(`/api/daemon/tasks/${taskId}/status`);
-    return resp.status;
-  }
-
   async listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]> {
     const resp = await this.get<{ messages?: MultiremiTaskSteerMessage[] }>(`/api/daemon/tasks/${taskId}/steer`);
     return Array.isArray(resp.messages) ? resp.messages : [];
@@ -1213,12 +1215,29 @@ export class MultiremiDaemonClient {
   }
 
   async getIssueGcCheck(issueId: string): Promise<MultiremiDaemonGcStatus> {
-    return this.get<MultiremiDaemonGcStatus>(`/api/daemon/issues/${encodeURIComponent(issueId)}/gc-check`);
+    return this.maintenanceRpc("gc.check_issue", { issue_id: issueId });
   }
 
-  async getIssueSessionArchiveStatus(
+  /**
+   * Session Archive upload protocol, for any subject.
+   *
+   * Issues, Chats and one-shot Tasks differ only in the route path segment and
+   * the subject id, so one implementation serves all three. The client names the
+   * v2 format itself: the server refuses an upload that does not, which is how an
+   * un-upgraded daemon is stopped before it claims an attempt.
+   */
+  private sessionArchiveSubjectBase(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
+  ): string {
+    return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
+      + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}`
+      + `/${encodeURIComponent(subject.id)}/session-archives`;
+  }
+
+  async getSessionArchiveStatus(
+    runtimeId: string,
+    subject: SessionArchiveClientSubject,
     sourceRevision?: string,
     sha256?: string,
     verifyReady = false,
@@ -1229,28 +1248,33 @@ export class MultiremiDaemonClient {
     if (verifyReady) query.set("verify_ready", "1");
     const suffix = query.size ? `?${query}` : "";
     return this.get<MultiremiDaemonSessionArchiveStatus>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/status${suffix}`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/status${suffix}`,
     );
   }
 
-  async initIssueSessionArchive(runtimeId: string, issueId: string, input: {
-    sourceRevision: string;
-    sha256: string;
-    sizeBytes: number;
-    fileCount: number;
-    metadata?: Record<string, unknown>;
-  }): Promise<MultiremiDaemonSessionArchiveInitResponse> {
+  async initSessionArchive(
+    runtimeId: string,
+    subject: SessionArchiveClientSubject,
+    input: {
+      sourceRevision: string;
+      sha256: string;
+      sizeBytes: number;
+      fileCount?: number | null;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<MultiremiDaemonSessionArchiveInitResponse> {
     const response = await this.post<MultiremiDaemonSessionArchiveInitResponse>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/init`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/init`,
       {
         source_revision: input.sourceRevision,
         sha256: input.sha256,
         size_bytes: input.sizeBytes,
-        file_count: input.fileCount,
-        metadata: input.metadata ?? {},
+        file_count: input.fileCount ?? null,
+        // The format marker is what tells the server this is a v2 container.
+        metadata: { ...(input.metadata ?? {}), format: SESSION_ARCHIVE_FORMAT_V2 },
       },
     );
-    const key = sessionArchiveAttemptKey(runtimeId, issueId, response.archive.id);
+    const key = sessionArchiveAttemptKey(runtimeId, subject, response.archive.id);
     if (Number.isSafeInteger(response.upload_attempt) && Number(response.upload_attempt) > 0) {
       this.sessionArchiveUploadAttempts.set(key, {
         attempt: Number(response.upload_attempt),
@@ -1264,26 +1288,26 @@ export class MultiremiDaemonClient {
     return response;
   }
 
-  async reportIssueSessionArchiveFailure(
+  async reportSessionArchiveFailure(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     input: { stage: "prepare"; error: string },
   ): Promise<MultiremiDaemonSessionArchiveWire> {
     const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/failure`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/failure`,
       input,
     );
     return response.archive;
   }
 
-  async uploadIssueSessionArchive(
+  async uploadSessionArchive(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
     archivePath: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
-    const path = sessionArchiveUploadPath(runtimeId, issueId, archiveId, claim.attempt);
+    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
+    const path = sessionArchiveUploadPath(runtimeId, subject, archiveId, claim.attempt);
     try {
       const target = this.resolveSessionArchiveUploadTarget(path, claim.uploadUrl);
       const archiveStat = await stat(archivePath);
@@ -1333,19 +1357,20 @@ export class MultiremiDaemonClient {
       const message = error instanceof Error ? error.message : String(error);
       try {
         await this.post(
-          `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/failure?attempt=${claim.attempt}`,
+          `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
+          + `/failure?attempt=${claim.attempt}`,
           { error: message },
           undefined,
           AbortSignal.timeout(this.sessionArchiveFailureReportTimeoutMs),
         );
-        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
       } catch (reportError) {
         if (
           reportError instanceof MultiremiDaemonHttpError
           && reportError.status === 409
           && reportError.code === "session_archive_attempt_conflict"
         ) {
-          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
           throw error;
         }
         const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
@@ -1357,15 +1382,16 @@ export class MultiremiDaemonClient {
     }
   }
 
-  async completeIssueSessionArchive(
+  async completeSessionArchive(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
-    const key = sessionArchiveAttemptKey(runtimeId, issueId, archiveId);
+    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
+    const key = sessionArchiveAttemptKey(runtimeId, subject, archiveId);
     const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/complete?attempt=${attempt}`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
+      + `/complete?attempt=${attempt}`,
       {},
     );
     if (response.archive.status === "ready") this.sessionArchiveUploadAttempts.delete(key);
@@ -1374,10 +1400,12 @@ export class MultiremiDaemonClient {
 
   private requireSessionArchiveUploadAttempt(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
   ): { attempt: number; uploadUrl: string | null } {
-    const claim = this.sessionArchiveUploadAttempts.get(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+    const claim = this.sessionArchiveUploadAttempts.get(
+      sessionArchiveAttemptKey(runtimeId, subject, archiveId),
+    );
     if (!claim) throw new Error("Session archive must be initialized before upload or completion");
     return claim;
   }
@@ -1460,7 +1488,8 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     archive: MultiremiIssueWorkspaceArchiveBinding,
   ): Promise<void> {
-    await this.post(`/api/daemon/issues/${encodeURIComponent(issueId)}/workspace/cleaned`, {
+    await this.maintenanceRpc("gc.workspace_cleaned", {
+      issue_id: issueId,
       runtime_id: runtimeId,
       archive_id: archive.archiveId,
       source_revision: archive.sourceRevision,
@@ -1469,15 +1498,15 @@ export class MultiremiDaemonClient {
   }
 
   async getChatSessionGcCheck(sessionId: string): Promise<MultiremiDaemonGcStatus> {
-    return this.get<MultiremiDaemonGcStatus>(`/api/daemon/chat-sessions/${encodeURIComponent(sessionId)}/gc-check`);
+    return this.maintenanceRpc("gc.check_chat_session", { session_id: sessionId });
   }
 
   async getAutopilotRunGcCheck(runId: string): Promise<MultiremiDaemonGcStatus> {
-    return this.get<MultiremiDaemonGcStatus>(`/api/daemon/autopilot-runs/${encodeURIComponent(runId)}/gc-check`);
+    return this.maintenanceRpc("gc.check_autopilot_run", { run_id: runId });
   }
 
   async getTaskGcCheck(taskId: string): Promise<MultiremiDaemonGcStatus> {
-    return this.get<MultiremiDaemonGcStatus>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/gc-check`);
+    return this.maintenanceRpc("gc.check_task", { task_id: taskId });
   }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -1552,12 +1581,41 @@ export class MultiremiDaemonClient {
   }
 }
 
-function sessionArchiveAttemptKey(runtimeId: string, issueId: string, archiveId: string): string {
-  return JSON.stringify([runtimeId, issueId, archiveId]);
+/**
+ * One archive upload subject: an Issue, a Chat session, or a one-shot Task.
+ *
+ * The kind picks the route segment; the id is the subject itself. Keeping them
+ * together means a caller cannot mix an id with the wrong ownership rule.
+ */
+export interface SessionArchiveClientSubject {
+  kind: MultiremiSessionArchiveSubjectKind;
+  id: string;
 }
 
-function sessionArchiveUploadPath(runtimeId: string, issueId: string, archiveId: string, attempt: number): string {
-  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
+/** Route segment per subject kind, shared by the client and the router. */
+export const SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT: Record<MultiremiSessionArchiveSubjectKind, string> = {
+  issue: "issues",
+  chat: "chats",
+  task: "tasks",
+};
+
+function sessionArchiveAttemptKey(
+  runtimeId: string,
+  subject: SessionArchiveClientSubject,
+  archiveId: string,
+): string {
+  return [runtimeId, subject.kind, subject.id, archiveId].join(":");
+}
+
+function sessionArchiveUploadPath(
+  runtimeId: string,
+  subject: SessionArchiveClientSubject,
+  archiveId: string,
+  attempt: number,
+): string {
+  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
+    + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}/${encodeURIComponent(subject.id)}`
+    + `/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
 }
 
 function normalizeSessionArchiveUploadBaseUrl(value: string | null | undefined): URL | null {
@@ -1641,7 +1699,7 @@ function isRuntimeGoneHeartbeatError(error: unknown): boolean {
     && error.message.includes("runtime not found");
 }
 
-function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | null {
+export function normalizeDaemonClaimTask(raw: any | null): (MultiremiTaskWithAgent & import("@daemon/contracts/types.js").AgentTask) | null {
   if (!raw) return null;
   const normalized = {
     ...raw,
@@ -1686,6 +1744,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
     chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
+    boundIssueLog: raw.bound_issue_log ?? raw.boundIssueLog ?? undefined,
     boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
       ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
       : Array.isArray(raw.boundIssueUpdates)
@@ -1763,7 +1822,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     // Do not leave a rejected snake_case alias available to daemon field helpers.
     delete normalized.chat_auto_checkout_repos;
   }
-  return normalized as MultiremiTaskWithAgent;
+  return normalized as MultiremiTaskWithAgent & import("@daemon/contracts/types.js").AgentTask;
 }
 
 function normalizeDaemonClaimSquadContext(raw: any): any | null {
@@ -2059,4 +2118,84 @@ function booleanOrDefault(value: unknown, fallback: boolean): boolean {
 
 function objectOrDefault(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+export function normalizeDaemonRuntimeInput(runtimeId: string, resp: Partial<MultiremiDaemonHeartbeatConfigAck>): MultiremiDaemonHeartbeatConfigAck {
+  const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
+  const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
+    ? {
+        id: String(rawOutbound.id ?? ""),
+        claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
+        chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
+        threadId: typeof (rawOutbound.thread_id ?? rawOutbound.threadId) === "string"
+          ? String(rawOutbound.thread_id ?? rawOutbound.threadId)
+          : null,
+        replyToMessageId: typeof (rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId) === "string"
+          ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
+          : null,
+        body: String(rawOutbound.body ?? ""),
+        bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
+        idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
+        mention: parseOutboundMention(rawOutbound.mention),
+        ...(Array.isArray(rawOutbound.attachments) ? {
+          attachments: rawOutbound.attachments.map(normalizeDaemonClaimAttachment),
+        } : {}),
+        ...(Array.isArray(rawOutbound.receipt_message_ids) ? {
+          receiptMessageIds: rawOutbound.receipt_message_ids.filter((id): id is string => typeof id === "string"),
+        } : {}),
+        ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
+        ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
+        ...(typeof rawOutbound.kind === "string" ? {
+          kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
+        } : {}),
+        ...(typeof rawOutbound.receipt_state === "string" ? {
+          receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
+        } : {}),
+        ...(typeof rawOutbound.decision_id === "string" ? { decisionId: rawOutbound.decision_id } : {}),
+        ...(typeof rawOutbound.decision_issue_id === "string" ? { decisionIssueId: rawOutbound.decision_issue_id } : {}),
+        ...(typeof rawOutbound.human_request_id === "string" ? {
+          humanRequestId: rawOutbound.human_request_id,
+          human_request_id: rawOutbound.human_request_id,
+        } : {}),
+        ...(typeof rawOutbound.human_request_task_id === "string" ? {
+          humanRequestTaskId: rawOutbound.human_request_task_id,
+          human_request_task_id: rawOutbound.human_request_task_id,
+        } : {}),
+        ...(typeof rawOutbound.target_message_id === "string" ? {
+          targetMessageId: rawOutbound.target_message_id,
+          target_message_id: rawOutbound.target_message_id,
+        } : {}),
+        ...(typeof rawOutbound.expires_at === "string" ? {
+          expiresAt: rawOutbound.expires_at,
+          expires_at: rawOutbound.expires_at,
+        } : {}),
+        ...(typeof rawOutbound.degraded === "string" ? {
+          degraded: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
+          degradeReason: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
+        } : {}),
+        ...(typeof rawOutbound.task_id === "string" ? {
+          taskId: rawOutbound.task_id,
+          resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
+        } : {}),
+      }
+    : undefined;
+  // `agent_plugins.revision` is the daemon's change token for the desired
+  // Plugin set: while it is unchanged the poll loop skips that GET entirely.
+  // Normalize it here so a server that omits the field, or a proxy that
+  // reshapes it, degrades to the periodic refresh instead of `undefined`.
+  const rawAgentPlugins = resp.agent_plugins as { revision?: unknown } | undefined;
+  const agentPlugins = typeof rawAgentPlugins?.revision === "string" && rawAgentPlugins.revision
+    ? { revision: rawAgentPlugins.revision }
+    : undefined;
+  // Strip the raw value first: spreading `resp` after this block would
+  // otherwise put a malformed revision back and defeat the normalization.
+  const { agent_plugins: _rawAgentPlugins, ...rest } = resp;
+  void _rawAgentPlugins;
+  return {
+    runtime_id: runtimeId,
+    status: rest.status ?? "ok",
+    ...rest,
+    ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
+    ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
+  } as MultiremiDaemonHeartbeatConfigAck;
 }

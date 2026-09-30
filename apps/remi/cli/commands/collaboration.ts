@@ -177,9 +177,6 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "retitle"]),
     legacySpec("issue.cancel", ["issue", "cancel-task"], "Cancel an issue task", "destructive", HUMAN_TASK, [refPositional("task")], [], ["issue", "cancel-task"]),
     legacySpec("issue.task-runs", ["issue", "runs"], "List issue task runs", "read", HUMAN_TASK, [refPositional("issue")], [], ["issue", "runs"]),
-    legacySpec("task.messages", ["issue", "run-messages"], "List task execution messages", "read", HUMAN_TASK, [refPositional("task")], [
-      { name: "since", type: "integer", valueName: "seq", description: "First sequence number" },
-    ], ["issue", "run-messages"]),
   ];
 }
 
@@ -325,8 +322,50 @@ function sessionCommandSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${sessionPath(invocation)}/participants/${encodePath(positional(invocation, 2, "type"))}/${encodePath(positional(invocation, 3, "participant"))}`);
     }),
-    nativeSpec("session.event.list", ["session", "event", "list"], "List Session events", "read", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [], async (invocation) => {
-      await getAndRender(invocation, `${sessionPath(invocation)}/events`, ["events"]);
+    nativeSpec("session.event.list", ["session", "event", "list"], "List Session events", "read", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [
+      { name: "since-seq", type: "integer", valueName: "seq", description: "Events after this sequence" },
+      { name: "to-seq", type: "integer", valueName: "seq", description: "Last sequence to include" },
+    ], async (invocation) => {
+      await getAndRender(invocation, `${sessionPath(invocation)}/events`, ["events"], {
+        since_seq: integerOption(invocation, "since-seq"), to_seq: integerOption(invocation, "to-seq"),
+      });
+    }),
+    nativeSpec("session.log.get", ["session", "log", "get"], "Read a complete Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
+      const entry = positional(invocation, 1, "entry");
+      const client = await clientFor(invocation);
+      const response = await client.request<{
+        session_id: string; seq: number; id: string; body_md: string;
+        metadata: Record<string, unknown>; delivered: boolean | null;
+      }>({
+        method: "GET",
+        path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/entry`,
+        query: /^(0|[1-9]\d*)$/.test(entry) ? { seq: entry } : { id: entry },
+      });
+      const mode = outputMode(invocation);
+      if (mode !== "table") {
+        new CliRenderer().render(response.data, { mode });
+        return;
+      }
+      const logEntry = response.data;
+      console.log(`Session: ${logEntry.session_id}\nSeq: ${logEntry.seq}\nID: ${logEntry.id}`);
+      console.log(`Delivered: ${logEntry.delivered === null ? "未知（旧条目无收件人）" : logEntry.delivered ? "是" : "否"}`);
+      console.log(`Metadata: ${JSON.stringify(logEntry.metadata, null, 2)}\n\nBody:\n${logEntry.body_md}`);
+    }),
+    nativeSpec("session.log.window", ["session", "log", "window"], "Read a Session log window", "read", HUMAN_TASK, [refPositional("session")], [
+      { name: "anchor", type: "integer", valueName: "seq", description: "Anchor sequence" },
+      { name: "before", type: "integer", valueName: "n", description: "Entries at or before anchor" },
+      { name: "after", type: "integer", valueName: "n", description: "Entries after anchor" },
+    ], async (invocation) => {
+      await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log`, ["entries"], {
+        anchor: integerOption(invocation, "anchor"), before: integerOption(invocation, "before"), after: integerOption(invocation, "after"),
+      });
+    }, [
+      { path: ["chat", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi session log window" },
+    ]),
+    nativeSpec("session.log.locate", ["session", "log", "locate"], "Locate a Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
+      await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/locate`, [], {
+        id: positional(invocation, 1, "entry"),
+      });
     }),
     nativeSpec("session.message.create", ["session", "message", "create"], "Post a Session message", "write", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `${sessionPath(invocation)}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
@@ -630,6 +669,19 @@ function shareCommandSpecs(): CommandSpec[] {
       if (token !== stringOption(invocation, "share")) throw new CliError("usage", "the share path token must match --share");
       await getAndRender(invocation, `/api/shares/${encodePath(token)}`);
     }),
+    nativeSpec("share.trace.read", ["share", "trace", "read"], "Read a task trace through a signed issue share", "read", ["human", "share"], [refPositional("task"), optionalPositional("token")], [
+      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
+      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
+    ], async (invocation) => {
+      const token = positionalOrOption(invocation, 1, "token", "share");
+      if (!stringOption(invocation, "share") || token !== stringOption(invocation, "share")) {
+        throw new CliError("usage", "share trace read requires a matching --share <signed-token>");
+      }
+      await getAndRender(invocation, `/api/shares/${encodePath(token)}/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
+        after_seq: integerOption(invocation, "after"),
+        limit: integerOption(invocation, "limit"),
+      });
+    }),
   ];
 }
 
@@ -711,23 +763,6 @@ function chatCommandSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}`);
-    }),
-    nativeSpec("chat.message.list", ["chat", "message", "list"], "List chat messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const rawCursor = stringOption(invocation, "cursor");
-      let cursor: { created_at: string; id: string } | null = null;
-      if (rawCursor) {
-        try {
-          const parsed: unknown = JSON.parse(rawCursor);
-          if (isRecord(parsed) && typeof parsed.created_at === "string" && typeof parsed.id === "string"
-            && parsed.created_at && parsed.id) cursor = { created_at: parsed.created_at, id: parsed.id };
-        } catch { /* Report the same usage error as a malformed cursor object. */ }
-        if (!cursor) throw new CliError("usage", "--cursor must be the previous page's next_cursor JSON object");
-      }
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], {
-        limit: integerOption(invocation, "limit"),
-        before_created_at: cursor?.created_at,
-        before_id: cursor?.id,
-      });
     }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
@@ -893,11 +928,20 @@ function taskCommandSpecs(): CommandSpec[] {
     nativeSpec("task.steer.list", ["task", "steer", "list"], "List steer directives sent to a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, ["messages"]);
     }),
-    nativeSpec("task.message.list", ["task", "message", "list"], "List task messages", "read", HUMAN_TASK, [refPositional("task")], [
-      { name: "since", type: "integer", valueName: "seq", description: "First sequence number" },
+    nativeSpec("task.trace.read", ["task", "trace", "read"], "Read a task trace window", "read", HUMAN_TASK, [refPositional("task")], [
+      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
+      { name: "since", type: "integer", valueName: "seq", description: "Deprecated alias for --after" },
+      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
     ], async (invocation) => {
-      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/messages`, ["messages"], { since: integerOption(invocation, "since") });
-    }, [{ path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task message list" }]),
+      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
+        after_seq: integerOption(invocation, "after") ?? integerOption(invocation, "since"),
+        limit: integerOption(invocation, "limit"),
+      });
+    }, [
+      { path: ["task", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+      { path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+      { path: ["issue", "run-messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+    ]),
     nativeSpec("task.inspect", ["task", "inspect"], "Inspect derived task health metadata", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/inspection`, ["inspection"]);
     }),

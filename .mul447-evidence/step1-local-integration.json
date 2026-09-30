@@ -1,0 +1,142 @@
+{
+  "issue": "MUL-447",
+  "executed_at": "2026-09-28T19:07:20.201Z",
+  "bun": "1.3.14",
+  "environment": "real local Bun API + real co-resident daemon + temporary SQLite; fake Feishu sender; synthetic trace producer",
+  "initial_checkpoint": 2,
+  "checkpoint_before_disconnect": 4,
+  "final_checkpoint": 7,
+  "subscribe_from_seq": [
+    2,
+    4
+  ],
+  "received_seq": [
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "closed": true,
+  "cross_checkpoint_tool_result": {
+    "stable_id_reused": true,
+    "start_count": 1,
+    "result_count": 1
+  },
+  "native_events": [
+    {
+      "event_type": "REASONING_START",
+      "content": "{\"messageId\":\"4b647acc2bcec9ec773a3692b11ded7c\"}",
+      "timestamp": "1790622439597"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_START",
+      "content": "{\"messageId\":\"bc7e9f11757ee10384d5a4b6bce5488a\",\"role\":\"reasoning\"}",
+      "timestamp": "1790622439598"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_CONTENT",
+      "content": "{\"messageId\":\"bc7e9f11757ee10384d5a4b6bce5488a\",\"delta\":\"live 3\"}",
+      "timestamp": "1790622439599"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_END",
+      "content": "{\"messageId\":\"bc7e9f11757ee10384d5a4b6bce5488a\"}",
+      "timestamp": "1790622439600"
+    },
+    {
+      "event_type": "TOOL_CALL_START",
+      "content": "{\"toolCallId\":\"a27fd4a1f112713f87dc3cc0be442867\",\"toolCallName\":\"Read\",\"title\":\"读取 /synthetic/source.ts\",\"icon\":\"read\"}",
+      "timestamp": "1790622439601"
+    },
+    {
+      "event_type": "TOOL_CALL_ARGS",
+      "content": "{\"toolCallId\":\"a27fd4a1f112713f87dc3cc0be442867\",\"delta\":\"/synthetic/source.ts\"}",
+      "timestamp": "1790622439602"
+    },
+    {
+      "event_type": "TOOL_CALL_END",
+      "content": "{\"toolCallId\":\"a27fd4a1f112713f87dc3cc0be442867\"}",
+      "timestamp": "1790622439603"
+    },
+    {
+      "event_type": "TOOL_CALL_RESULT",
+      "content": "{\"toolCallId\":\"a27fd4a1f112713f87dc3cc0be442867\",\"messageId\":\"1eecbc2f1abe586381ae060023d02f7f\",\"role\":\"tool\",\"content\":\"{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"执行失败\\\"}\"}",
+      "timestamp": "1790622440135"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_START",
+      "content": "{\"messageId\":\"01095ec319049471fa50a1a2f9ed67d0\",\"role\":\"reasoning\"}",
+      "timestamp": "1790622440136"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_CONTENT",
+      "content": "{\"messageId\":\"01095ec319049471fa50a1a2f9ed67d0\",\"delta\":\"recovered 5\"}",
+      "timestamp": "1790622440137"
+    },
+    {
+      "event_type": "future.widget",
+      "content": "{\"ts\":\"2026-09-28T19:07:19.602Z\",\"type\":\"future.widget\",\"tool\":null,\"content\":\"literal future payload\",\"input\":{\"nested\":[1,{\"two\":true}]},\"output\":null,\"tool_call_id\":null,\"status\":null,\"meta\":{\"arbitrary\":\"value\"},\"seq\":7}",
+      "timestamp": "1790622440138"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_END",
+      "content": "{\"messageId\":\"01095ec319049471fa50a1a2f9ed67d0\"}",
+      "timestamp": "1790622440200"
+    },
+    {
+      "event_type": "REASONING_END",
+      "content": "{\"messageId\":\"4b647acc2bcec9ec773a3692b11ded7c\"}",
+      "timestamp": "1790622440201"
+    },
+    {
+      "event_type": "RUN_FINISHED",
+      "content": "{\"threadId\":\"oc_local_fixture\",\"runId\":\"tsk_ma6rtbz126wu\",\"status\":\"done\"}",
+      "timestamp": "1790622440202"
+    }
+  ],
+  "http_requests": [
+    {
+      "method": "POST",
+      "path": "/api/daemon/register"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/workspaces/local/repos"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/runtimes/rt_xlbu5i/agent-plugins/desired"
+    },
+    {
+      "method": "POST",
+      "path": "/api/daemon/runtimes/rt_xlbu5i/recover-orphans"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/tasks/tsk_ma6rtbz126wu/status"
+    }
+  ],
+  "trace_requests": [
+    {
+      "type": "trace.subscribe",
+      "task_id": "tsk_ma6rtbz126wu",
+      "from_seq": 2
+    },
+    {
+      "type": "trace.subscribe",
+      "task_id": "tsk_ma6rtbz126wu",
+      "from_seq": 4
+    },
+    {
+      "type": "trace.unsubscribe",
+      "task_id": "tsk_ma6rtbz126wu"
+    }
+  ],
+  "polling": {
+    "cot_400ms_removed": true,
+    "status_reads": 1,
+    "human_750ms_removed": false,
+    "human_request_note": "No human requests in this CoT fixture. Step 5 deferred: MUL-436 Hub events are API-process local and agent/MUL-421 has no task.human_request.settled producer/receiver."
+  }
+}

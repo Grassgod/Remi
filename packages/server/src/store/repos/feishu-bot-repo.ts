@@ -34,6 +34,7 @@ import {
 } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
+import { toTaskHumanRequest } from "@multiremi/store/repos/tasks-repo.js";
 import {
   IssueTopicConfigError,
   readWorkspaceIssueTopics,
@@ -42,8 +43,11 @@ import {
 } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { createLogger } from "@shared/logger.js";
+import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/config/background-jobs.js";
+import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
   buildIssueDecisionCard,
@@ -103,6 +107,15 @@ export type IssueDecisionOperatorMemberResolution =
   | { status: "resolved"; member: MultiremiWorkspaceMember }
   | { status: "unmapped" }
   | { status: "ambiguous" };
+type DeferredOutboundOperation =
+  | { kind: "topic"; issue: MultiremiIssue }
+  | { kind: "human_request" | "decision_patch"; request: MultiremiTaskHumanRequest }
+  | { kind: "round"; issue: MultiremiIssue; leaderTask: MultiremiTask }
+  | { kind: "retarget"; fromTaskId: string; toTaskId: string }
+  | { kind: "round_delivery"; task: MultiremiTask; body: string }
+  | { kind: "attachments"; bindingId: string; chatId: string; threadId: string | null;
+      replyToMessageId: string | null; deliveries: Array<{ id: string; body: string;
+        attachment: { id: string; filename: string; contentType: string; sizeBytes: number } }> };
 
 const log = createLogger("multiremi-store");
 
@@ -581,6 +594,7 @@ export class FeishuBotRepo {
       now,
       cleanOptionalString(input.actor),
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId)!;
   }
 
@@ -591,6 +605,7 @@ export class FeishuBotRepo {
     // Reported states are intentionally kept: a Runtime that is still hosting
     // the connector must keep appearing here until it confirms it stopped, so
     // `directiveForRuntime` can go on telling it to stop after the row is gone.
+    this.publishDownlinkChange(workspaceId);
     return true;
   }
 
@@ -611,6 +626,7 @@ export class FeishuBotRepo {
       cleanOptionalString(actor),
       workspaceId,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId);
   }
 
@@ -629,6 +645,7 @@ export class FeishuBotRepo {
       cleanOptionalString(actor),
       workspaceId,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getConfig(workspaceId);
   }
 
@@ -759,7 +776,7 @@ export class FeishuBotRepo {
       if (binding) {
         if (!binding.chat_id) throw new Error("Feishu Chat has no destination");
         const batchId = createId("fbo");
-        const now = nowIso();
+        const deliveries: Extract<DeferredOutboundOperation, { kind: "attachments" }>["deliveries"] = [];
         for (const [index, attachment] of attachments.entries()) {
           // Keep a readable batch order; claim eligibility is enforced by the
           // predecessor, not by sorting (other deliveries may run concurrently).
@@ -767,22 +784,17 @@ export class FeishuBotRepo {
           const descriptor = { id: attachment.id, filename: attachment.filename,
             contentType: attachment.contentType, sizeBytes: attachment.sizeBytes };
           // One file per delivery gives retries an independent stable Feishu UUID.
-          this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
-            (id, workspace_id, binding_id, chat_id, thread_id, reply_to_message_id,
-             body, attachments, previous_delivery_id, status, available_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-            [id, task.workspaceId, binding.id, binding.chat_id, binding.thread_id,
-              binding.reply_to_message_id, deliveryIds.length === 0 ? body : "", toJson([descriptor]),
-              deliveryIds.at(-1) ?? null, now, now, now]);
+          deliveries.push({ id, body: deliveryIds.length === 0 ? body : "", attachment: descriptor });
           deliveryIds.push(id);
         }
+        const operation: Extract<DeferredOutboundOperation, { kind: "attachments" }> = { kind: "attachments",
+          bindingId: String(binding.id), chatId: String(binding.chat_id), threadId: cleanOptionalString(binding.thread_id),
+          replyToMessageId: cleanOptionalString(binding.reply_to_message_id), deliveries };
+        if (backgroundJobsEnabled()) this.writeAttachmentDeliveriesWithinTransaction(task.workspaceId, operation);
+        else this.deferOutboundOperation(task.workspaceId, message.id, operation);
       }
       return { message, attachments, delivery_ids: deliveryIds };
     })();
-    const session = this.ctx.chat().getChatSession(result.message.chatSessionId)!;
-    this.ctx.emitChatEvent(session, "chat:message", { message_id: result.message.id,
-      role: "assistant", content: result.message.body, task_id: taskId, created_at: result.message.createdAt },
-      { actorType: "agent", actorId: this.ctx.tasks().getTask(taskId)!.agentId });
     return result;
   }
 
@@ -1008,11 +1020,18 @@ export class FeishuBotRepo {
         now,
         chatSessionId,
       );
+      const outboundContext = input.deliveryMode === "native_cot_v1" && chatId ? {
+        mention: chatType === "group" && isFeishuOpenId(input.senderOpenId)
+          ? { mode: "person", openId: input.senderOpenId, resolvedOpenId: input.senderOpenId }
+          : { mode: "none", resolvedOpenId: null },
+        interactionOpenId: isFeishuOpenId(input.senderOpenId) ? input.senderOpenId : null,
+        presentation: { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} },
+      } : null;
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_deliveries (
            workspace_id, external_message_id, binding_id, task_id,
-           reply_to_message_id, created_at, updated_at, sender_id, sender_recorded
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+           reply_to_message_id, created_at, updated_at, sender_id, sender_recorded, outbound_requested, outbound_context
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         workspaceId,
         externalMessageId,
         String(binding.id),
@@ -1021,8 +1040,10 @@ export class FeishuBotRepo {
         now,
         now,
         sender.id,
+        input.deliveryMode === "native_cot_v1" && chatId ? 1 : 0,
+        outboundContext ? toJson(outboundContext) : null,
       );
-      if (input.deliveryMode === "native_cot_v1" && chatId && !steered) {
+      if (backgroundJobsEnabled() && input.deliveryMode === "native_cot_v1" && chatId && !steered) {
         // Use the same leased queue as proactive replies. A lost inbound WS
         // consumer must not strand a running Task's result or question card.
         const openId = isFeishuOpenId(input.senderOpenId) ? input.senderOpenId : null;
@@ -1030,14 +1051,13 @@ export class FeishuBotRepo {
           `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
              id, workspace_id, binding_id, task_id, chat_id, thread_id,
              reply_to_message_id, body, status, available_at, created_at, updated_at,
-             mention_snapshot, interaction_open_id, presentation_checkpoint
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending', ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(task_id) DO NOTHING`,
+             mention_snapshot, interaction_open_id, presentation_checkpoint, kind
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending', ?, ?, ?, ?, ?, ?, 'cot')
+           ON CONFLICT DO NOTHING`,
           [createId("fbo"), workspaceId, String(binding.id), task.id, chatId,
             threadId, replyToMessageId,
-            now, now, now, toJson(chatType === "group" && openId
-              ? { mode: "person", openId, resolvedOpenId: openId } : { mode: "none", resolvedOpenId: null }),
-            openId, toJson({ version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} })],
+            now, now, now, toJson(outboundContext!.mention),
+            openId, toJson(outboundContext!.presentation)],
         );
       }
       return {
@@ -1055,6 +1075,7 @@ export class FeishuBotRepo {
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
     this.ctx.tasks().runCollectedChildStatusChanges(submitChanges);
     this.ctx.emitCommitEvents(submitEvents);
+    this.materializeTaskDeliveries(result.taskId);
     return result;
   }
 
@@ -1157,6 +1178,7 @@ export class FeishuBotRepo {
   }
 
   prepareIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
+    if (!backgroundJobsEnabled()) { this.deferOutboundOperation(issue.workspaceId, issue.id, { kind: "topic", issue }); return false; }
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return false;
     // A stored config the current validation would reject must not abort the
@@ -1241,6 +1263,10 @@ export class FeishuBotRepo {
   prepareHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
     const sourceTask = this.ctx.tasks().getTask(request.taskId);
     if (!sourceTask) return null;
+    if (!backgroundJobsEnabled()) {
+      this.deferOutboundOperation(sourceTask.workspaceId, request.id, { kind: "human_request", request });
+      return null;
+    }
     // The asking Task and the Issue it names must agree before anything is
     // written: a Task whose `issue_id` aims at another workspace would
     // otherwise queue this workspace's delivery, and later its activity, onto
@@ -1792,13 +1818,9 @@ export class FeishuBotRepo {
    * `reminder_sent_at` on the decision row is the single compare-and-set that
    * makes it once-only. A decision answered a second earlier produces nothing.
    */
-  private materializeIssueDecisionRemindersWithinTransaction(
-    workspaceId: string,
-    now: Date,
-    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
-  ): void {
+  private findDueIssueDecisionReminders(workspaceId: string, now: Date): Row[] {
     const threshold = new Date(now.getTime() - ISSUE_DECISION_CARD_REMINDER_DELAY_MS).toISOString();
-    const due = this.ctx.db.query(
+    return this.ctx.db.query(
       `SELECT decision.id, decision.issue_id
        FROM multiremi_issue_decisions decision
        JOIN multiremi_issues issue ON issue.id = decision.issue_id
@@ -1813,6 +1835,14 @@ export class FeishuBotRepo {
          ) <= ?
        ORDER BY decision.id ASC`,
     ).all(workspaceId, threshold) as Row[];
+  }
+
+  private materializeIssueDecisionRemindersWithinTransaction(
+    workspaceId: string,
+    now: Date,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+    due: Row[],
+  ): void {
     for (const row of due) {
       const decision = this.ctx.issues().getIssueDecision(String(row.issue_id), String(row.id));
       if (!decision || decision.status !== "escalated") continue;
@@ -2072,6 +2102,11 @@ export class FeishuBotRepo {
    * original send or the request's own status.
    */
   enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest, nowInput: string | Date = new Date()): void {
+    if (!backgroundJobsEnabled()) {
+      const task = this.ctx.tasks().getTask(request.taskId);
+      if (task) this.deferOutboundOperation(task.workspaceId, request.id, { kind: "decision_patch", request });
+      return;
+    }
     const row = this.ctx.db.query(
       `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
               o.external_message_id, o.human_request_id, o.human_request_task_id, o.degraded
@@ -2288,6 +2323,67 @@ export class FeishuBotRepo {
     }));
   }
 
+  /** Bounded recovery for sent cards and recent Chat transport requests. */
+  listSettledHumanRequestCandidates(workspaceId: string, runtimeId: string, daemonId?: string):
+    Array<{ requestId: string; taskId: string; request?: MultiremiTaskHumanRequest }> {
+    const chatCutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const audienceFilter = daemonId === undefined ? "" : `WHERE
+        bot_daemon_id = ? AND bot_workspace_id = ?
+        AND (task_runtime_id IS NULL OR task_runtime_id <> ?)
+        AND (
+          EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.chat_session_id = task_chat_session_id AND b.agent_id = task_agent_id)
+          OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
+            WHERE b.workspace_id = bot_workspace_id AND b.app_id = bot_app_id
+              AND b.issue_id IS NOT NULL AND b.issue_id = task_issue_id)
+        )`;
+    const rows = this.ctx.db.query(`
+      WITH candidates AS (
+      SELECT request.*, task.runtime_id AS task_runtime_id,
+        task.chat_session_id AS task_chat_session_id, task.issue_id AS task_issue_id,
+        task.agent_id AS task_agent_id, c.workspace_id AS bot_workspace_id,
+        c.app_id AS bot_app_id, host.daemon_id AS bot_daemon_id
+      FROM multiremi_task_human_requests request
+      JOIN multiremi_tasks task ON task.id = request.task_id
+      JOIN multiremi_feishu_bot_configs c ON c.workspace_id = task.workspace_id
+      JOIN multiremi_runtimes host ON host.id = c.runtime_id AND host.workspace_id = c.workspace_id
+      WHERE c.workspace_id = ? AND c.runtime_id = ? AND c.enabled = 1
+        AND request.status IN ('responded', 'timeout', 'cancelled')
+        AND NOT EXISTS (
+          SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries patch
+          WHERE patch.kind = 'decision_card_patch' AND patch.human_request_id = request.id
+            AND patch.status = 'sent'
+        )
+        AND (
+          EXISTS (
+            SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries o
+            JOIN multiremi_feishu_bot_chat_bindings b
+              ON b.id = o.binding_id AND b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+            WHERE o.workspace_id = c.workspace_id AND o.human_request_id = request.id
+              AND o.human_request_task_id = request.task_id AND o.kind = 'decision_card'
+              AND o.status = 'sent' AND o.degraded IS NULL AND o.external_message_id IS NOT NULL
+          )
+          OR (request.responded_at >= ? AND EXISTS (
+            SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            WHERE b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+              AND b.chat_session_id = task.chat_session_id AND b.agent_id = task.agent_id
+          ))
+        )
+      ORDER BY request.responded_at DESC, request.id DESC
+      LIMIT 1024
+      )
+      SELECT candidates.* FROM candidates
+      ${audienceFilter}
+      ORDER BY responded_at DESC, id DESC
+    `).all(workspaceId, runtimeId, chatCutoff,
+      ...(daemonId === undefined ? [] : [daemonId, workspaceId, runtimeId])) as Row[];
+    return rows.map(row => daemonId === undefined
+      ? { requestId: String(row.id), taskId: String(row.task_id) }
+      : { requestId: String(row.id), taskId: String(row.task_id), request: toTaskHumanRequest(row) });
+  }
+
   /**
    * The Issue a delivery belongs to, so a host-reported outcome can be recorded
    * on the same timeline the queue entry was. Returns null when the row is not
@@ -2409,6 +2505,7 @@ export class FeishuBotRepo {
   prepareIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: EnvelopeDelivery[];
     /** Caller-owned collector for Issue transitions these fresh rounds produce. */
     childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector;
     /** Caller-owned queue for the realtime pushes these rounds would emit. */
@@ -2416,6 +2513,11 @@ export class FeishuBotRepo {
   }): MultiremiTask[] {
     const childStatusChanges = input.childStatusChanges;
     const deferredEvents = input.deferredEvents;
+    if (!backgroundJobsEnabled()) {
+      this.deferOutboundOperation(input.issue.workspaceId, input.leaderTask.id,
+        { kind: "round", issue: input.issue, leaderTask: input.leaderTask });
+      return [];
+    }
     const config = this.getConfig(input.issue.workspaceId);
     if (!config?.enabled) return [];
     const rows = this.ctx.db.query(
@@ -2448,37 +2550,28 @@ export class FeishuBotRepo {
       if (wakeTask && (wakeTask.issueId !== input.issue.id
         || wakeTask.workspaceId !== input.issue.workspaceId
         || wakeTask.agentId !== binding.agent_id)) wakeTask = null;
-      let deliveryMode: "inbound" | "proactive";
-      if (wakeTask) {
-        const proactive = this.ctx.db.query(
-          `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
-           WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
-        ).get(wakeTask.id) as Row | null;
-        deliveryMode = proactive ? "proactive" : "inbound";
-        const pending = wakeTask.status === "queued"
-          ? { messages: [], omittedCount: 0 }
-          : this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, wakeTask.id);
-        this.ctx.tasks().createTaskSteerMessageWithinTransaction({
-          taskId: wakeTask.id,
-          kind: "steer",
-          content: roundPushPrompt(input.issue, pending.messages.map((message) => message.body), pending.omittedCount),
-          authorType: "system",
-          authorId: null,
-        });
-      } else {
-        deliveryMode = "proactive";
-        wakeTask = this.ctx.tasks().createTaskWithinTransaction({
-          agentId: String(binding.agent_id),
-          chatSessionId,
-          issueId: input.issue.id,
-          workspaceId: input.issue.workspaceId,
-          holdsWorkspace: false,
-          prompt: roundPushPrompt(input.issue),
+      const delivered = input.envelopeDeliveries?.find((item) => item.recipient.chatSessionId === chatSessionId && item.task);
+      const priorTask = wakeTask;
+      const turn = delivered ?? this.ctx.tasks().ensurePendingTurnWithinTransaction({
+        lane: { kind: "chat", chatSessionId, agentId: String(binding.agent_id), issueId: input.issue.id },
+        wake: { reason: "relay", seq: null },
+        steerBody: roundPushPrompt(input.issue),
+        create: () => this.ctx.tasks().createTaskWithinWorkspaceLock({
+          agentId: String(binding.agent_id), chatSessionId, issueId: input.issue.id,
+          workspaceId: input.issue.workspaceId, holdsWorkspace: false,
+          prompt: roundPushPrompt(input.issue), wakeSource: "relay",
           requestingUserName: "Multiremi",
-          requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",
-        }, childStatusChanges, deferredEvents);
-        enqueued.push(wakeTask);
-      }
+          requestingUserProfileDescription: "System-triggered summary for an Issue work round.",
+        }, childStatusChanges, deferredEvents),
+      });
+      wakeTask = turn.task;
+      if (!wakeTask) continue;
+      if (!delivered && turn.action === "created") enqueued.push(wakeTask);
+      const proactive = priorTask && this.ctx.db.query(
+        `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
+         WHERE wake_task_id = ? AND delivery_mode = 'proactive' LIMIT 1`,
+      ).get(priorTask.id) as Row | null;
+      const deliveryMode: "inbound" | "proactive" = turn.action === "created" || proactive ? "proactive" : "inbound";
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_round_pushes (
@@ -2505,6 +2598,11 @@ export class FeishuBotRepo {
 
   /** Caller owns the failed-task transaction. */
   retargetRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void {
+    if (!backgroundJobsEnabled()) {
+      const task = this.ctx.tasks().getTask(fromTaskId);
+      if (task) this.deferOutboundOperation(task.workspaceId, fromTaskId, { kind: "retarget", fromTaskId, toTaskId });
+      return;
+    }
     this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_round_pushes
        SET wake_task_id = ?, delivery_mode = 'proactive', updated_at = ?
@@ -2516,12 +2614,20 @@ export class FeishuBotRepo {
        SET wake_task_id = ?, updated_at = ? WHERE wake_task_id = ?`,
       [toTaskId, nowIso(), fromTaskId],
     );
+    const carrier = this.ctx.db.query(`SELECT delivery_mode FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(fromTaskId) as Row | null;
+    this.ctx.db.run(`UPDATE multiremi_feishu_bot_deliveries SET outbound_task_id = ?
+      WHERE COALESCE(outbound_task_id, task_id) = ? AND outbound_requested = 1`, [toTaskId, fromTaskId]);
+    if (carrier?.delivery_mode === 'split') {
+      this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries SET task_id = ?
+        WHERE task_id = ? AND kind = 'receipt' AND delivery_mode = 'split'`, [toTaskId, fromTaskId]);
+    }
     this.ctx.db.run(
       `UPDATE multiremi_feishu_bot_outbound_deliveries
        SET task_id = ?, body = '', status = 'pending', claim_token = NULL, leased_until = NULL,
            external_message_id = CASE WHEN presentation_checkpoint IS NULL THEN external_message_id ELSE NULL END,
            presentation_checkpoint = NULL, attempt_count = 0, last_error = NULL,
-           available_at = ?, updated_at = ? WHERE task_id = ?`,
+           available_at = ?, updated_at = ? WHERE task_id = ? AND (kind IS NULL OR kind = 'cot')`,
       [toTaskId, nowIso(), nowIso(), fromTaskId],
     );
     const retry = this.ctx.tasks().getTask(toTaskId);
@@ -2530,6 +2636,10 @@ export class FeishuBotRepo {
 
   /** Enqueue at task creation; completion fills in the legacy final-body fallback. */
   upsertRoundPushDeliveryWithinTransaction(task: MultiremiTask, body: string): void {
+    if (!backgroundJobsEnabled()) {
+      this.deferOutboundOperation(task.workspaceId, task.id, { kind: "round_delivery", task, body });
+      return;
+    }
     const row = this.ctx.db.query(
       `SELECT b.* FROM multiremi_feishu_bot_round_pushes r
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = r.binding_id
@@ -2542,12 +2652,19 @@ export class FeishuBotRepo {
     const replyToMessageId = cleanOptionalString(row.reply_to_message_id);
     if (!chatId || !replyToMessageId) return;
     const now = nowIso();
+    const existing = this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(task.id) as Row | null;
+    if (existing) {
+      this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries SET body = ?, updated_at = ? WHERE id = ?`,
+        [body, now, existing.id]);
+      return;
+    }
     this.ctx.db.run(
       `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
-         reply_to_message_id, body, status, available_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-       ON CONFLICT(task_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
+         reply_to_message_id, body, status, available_at, created_at, updated_at, kind
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 'cot')
+       ON CONFLICT DO NOTHING`,
       [
         createId("fbo"),
         task.workspaceId,
@@ -2564,15 +2681,176 @@ export class FeishuBotRepo {
     );
   }
 
+  materializeTaskDeliveries(taskId: string): void {
+    if (!backgroundJobsEnabled()) return;
+    if (!this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND kind = 'cot' AND delivery_mode = 'split'`).get(taskId)) return;
+    this.ctx.db.transaction(() => this.materializeTaskDeliveriesWithinTransaction(taskId))();
+  }
+
+  private writeAttachmentDeliveriesWithinTransaction(workspaceId: string,
+    operation: Extract<DeferredOutboundOperation, { kind: "attachments" }>): void {
+    const now = nowIso();
+    for (const [index, delivery] of operation.deliveries.entries()) {
+      this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, chat_id, thread_id, reply_to_message_id, body,
+         attachments, previous_delivery_id, status, available_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`,
+        [delivery.id, workspaceId, operation.bindingId, operation.chatId, operation.threadId, operation.replyToMessageId,
+          delivery.body, toJson([delivery.attachment]), operation.deliveries[index - 1]?.id ?? null, now, now, now]);
+    }
+  }
+
+  /** Persist the original operation with its stable IDs when this process cannot write the outbox. */
+  private deferOutboundOperation(workspaceId: string, unitKey: string, operation: DeferredOutboundOperation): void {
+    const now = nowIso();
+    this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_operations
+      (id, workspace_id, kind, unit_key, operation, available_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_id, kind, unit_key) DO UPDATE SET operation = excluded.operation,
+        status = 'pending', claim_token = NULL, leased_until = NULL,
+        available_at = excluded.available_at, updated_at = excluded.updated_at`,
+      [createId('fop'), workspaceId, operation.kind, unitKey, toJson(operation), now, now, now]);
+  }
+
+  private drainOutboundOperations(workspaceId: string, now: Date): void {
+    const at = now.toISOString();
+    const rows = this.ctx.db.query(`SELECT id, operation FROM multiremi_feishu_bot_outbound_operations
+      WHERE workspace_id = ? AND ((status = 'pending' AND available_at <= ?)
+        OR (status = 'processing' AND leased_until <= ?)) ORDER BY created_at,
+          CASE kind WHEN 'topic' THEN 0 WHEN 'round' THEN 1 WHEN 'retarget' THEN 2
+            WHEN 'human_request' THEN 3 WHEN 'round_delivery' THEN 4 ELSE 5 END, id LIMIT 32`).all(workspaceId, at, at) as Row[];
+    for (const row of rows) {
+      const token = createId('fop_claim');
+      if (this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'processing', claim_token = ?, leased_until = ?
+        WHERE id = ? AND operation = ? AND ((status = 'pending' AND available_at <= ?) OR (status = 'processing' AND leased_until <= ?))`,
+        [token, new Date(now.getTime() + 120_000).toISOString(), row.id, row.operation, at, at]).changes !== 1) continue;
+      try {
+        const op = parseJson<DeferredOutboundOperation | null>(row.operation, null);
+        if (!op) throw new Error('Deferred outbound operation is invalid');
+        // Each established entry point owns its transaction and commit events.
+        switch (op.kind) {
+          case 'topic':
+            if (this.ctx.issues().getIssue(op.issue.id)) this.prepareIssueTopicWithinTransaction(op.issue);
+            break;
+          case 'human_request': {
+            const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
+            if (request?.status === 'pending') this.prepareHumanRequestPush(request);
+            break;
+          }
+          case 'decision_patch': {
+            const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
+            if (request) this.enqueueDecisionCardPatch(request);
+            break;
+          }
+          case 'round': this.prepareIssueRoundPushes({ issue: op.issue, leaderTask: op.leaderTask }); break;
+          case 'retarget': this.ctx.db.transaction(() => this.retargetRoundPushTaskWithinTransaction(op.fromTaskId, op.toTaskId))(); break;
+          case 'round_delivery': this.ctx.db.transaction(() => this.upsertRoundPushDeliveryWithinTransaction(op.task, op.body))(); break;
+          case 'attachments': this.ctx.db.transaction(() => this.writeAttachmentDeliveriesWithinTransaction(workspaceId, op))(); break;
+        }
+        this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'done', claim_token = NULL,
+          leased_until = NULL, updated_at = ? WHERE id = ? AND claim_token = ?`, [at, row.id, token]);
+      } catch {
+        this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'pending', claim_token = NULL,
+          leased_until = NULL, available_at = ?, updated_at = ? WHERE id = ? AND claim_token = ?`,
+          [new Date(now.getTime() + 5_000).toISOString(), at, row.id, token]);
+        log.warn(`Deferred Feishu outbound operation ${String(row.id)} will retry`);
+      }
+    }
+  }
+
+  /** Catch up writes made on an API process with background jobs disabled. */
+  private reconcileTaskDeliveriesWithinTransaction(workspaceId: string): void {
+    const missed = this.ctx.db.query(`SELECT d.*, COALESCE(d.outbound_task_id, d.task_id) AS target_task_id,
+      b.chat_id, b.thread_id, s.open_id
+      FROM multiremi_feishu_bot_deliveries d
+      JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id AND b.workspace_id = d.workspace_id
+      LEFT JOIN multiremi_feishu_bot_senders s ON s.id = d.sender_id
+      WHERE d.workspace_id = ? AND d.outbound_requested = 1 AND b.chat_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries carrier
+          WHERE carrier.task_id = COALESCE(d.outbound_task_id, d.task_id) AND (carrier.kind IS NULL OR carrier.kind = 'cot') AND carrier.unit_key = '')
+        AND NOT EXISTS (SELECT 1 FROM multiremi_feishu_bot_deliveries earlier
+          WHERE COALESCE(earlier.outbound_task_id, earlier.task_id) = COALESCE(d.outbound_task_id, d.task_id) AND earlier.outbound_requested = 1
+            AND (earlier.created_at < d.created_at OR (earlier.created_at = d.created_at AND earlier.external_message_id < d.external_message_id)))
+      ORDER BY d.created_at, d.external_message_id LIMIT 32`).all(workspaceId) as Row[];
+    for (const delivery of missed) {
+      const context = parseJson<{ mention: unknown; interactionOpenId: string | null; presentation: unknown } | null>(delivery.outbound_context, null);
+      this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id,
+         body, kind, status, available_at, created_at, updated_at, interaction_open_id, mention_snapshot, presentation_checkpoint)
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', 'cot', 'pending', ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        ['fbo_c5_' + String(delivery.target_task_id), workspaceId, delivery.binding_id, delivery.target_task_id,
+          delivery.chat_id, delivery.thread_id, delivery.reply_to_message_id,
+          delivery.created_at, delivery.created_at, delivery.created_at,
+          context?.interactionOpenId ?? delivery.open_id, context ? toJson(context.mention) : null, context ? toJson(context.presentation) : null]);
+    }
+    const rows = this.ctx.db.query(`SELECT o.task_id FROM multiremi_feishu_bot_outbound_deliveries o
+      JOIN multiremi_tasks t ON t.id = o.task_id
+      WHERE o.workspace_id = ? AND o.kind = 'cot' AND o.delivery_mode = 'split'
+        AND (t.status NOT IN ('completed', 'failed', 'cancelled') OR NOT EXISTS (
+          SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries r WHERE r.task_id = o.task_id AND r.kind = 'result_card'))`)
+      .all(workspaceId) as Row[];
+    for (const row of rows) this.materializeTaskDeliveriesWithinTransaction(String(row.task_id));
+  }
+
+  private materializeTaskDeliveriesWithinTransaction(taskId: string, now = nowIso()): void {
+    const primary = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND kind = 'cot' AND delivery_mode = 'split'`).get(taskId) as Row | null;
+    const task = primary ? this.ctx.tasks().getTask(taskId) : null;
+    if (!primary || !task) return;
+    const terminal = ['completed', 'failed', 'cancelled'].includes(task.status);
+    const insert = (kind: string, unit: string, body: string, previous: string | null = null,
+      requestId: string | null = null, target: string | null = null) => {
+      const id = createId('fbo');
+      this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id, body,
+         kind, unit_key, cascade_failure, delivery_mode, previous_delivery_id, human_request_id,
+         human_request_task_id, target_message_id, mention_snapshot, interaction_open_id,
+         status, available_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'split', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        ON CONFLICT DO NOTHING`, [id, task.workspaceId, primary.binding_id, taskId, primary.chat_id,
+          primary.thread_id, primary.reply_to_message_id, body, kind, unit, previous, requestId,
+          requestId ? taskId : null, target, primary.mention_snapshot, primary.interaction_open_id, now, now, now]);
+      return this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+        WHERE task_id = ? AND kind = ? AND unit_key = ?`).get(taskId, kind, unit) as { id: string };
+    };
+    for (const request of this.ctx.tasks().listTaskHumanRequests(taskId)) {
+      if (terminal || request.status !== 'pending') continue;
+      insert('interaction_card', request.id, toJson({ agentName: this.ctx.agents().getAgent(task.agentId)?.name,
+        sessionId: task.sessionId }), null, request.id);
+    }
+    let resultId: string | null = null;
+    if (terminal) {
+      const result = buildFeishuTaskResult(task, this.ctx.tasks().listTaskMessages(taskId), this.ctx.agents().getAgent(task.agentId)?.name ?? null);
+      resultId = insert('result_card', '', toJson(result), String(primary.id)).id;
+    }
+    const receiptMessages = this.ctx.db.query(`SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d
+      JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
+      JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id
+      WHERE d.workspace_id = ? AND COALESCE(d.outbound_task_id, d.task_id) = ?
+      ORDER BY d.created_at, d.external_message_id`).all(task.workspaceId, taskId) as Row[];
+    for (const receipt of receiptMessages) {
+      const messageId = String(receipt.external_message_id);
+      insert('receipt', `${messageId}:received`, toJson({ state: 'received' }), null, null, messageId);
+      if (terminal) {
+        const state = task.status === 'completed' ? 'completed' : 'failed';
+        insert('receipt', `${messageId}:${state}`, toJson({ state }), resultId, null, messageId);
+      }
+    }
+  }
+
   claimOutbound(
     workspaceId: string,
     runtimeId: string,
-    nowInput: string | Date = new Date(),
+    nowInput?: string | Date,
     supportsTaskStream = false,
     supportsNativeCot = false,
     supportsAttachments = false,
+    supportsKinds = false,
+    downlink?: "peek" | { id: string; claimToken: string },
   ): MultiremiFeishuBotOutboundDelivery | null {
-    const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
+    if (!backgroundJobsEnabled()) return null;
+    const now = nowInput instanceof Date ? new Date(nowInput) : new Date(nowInput ?? Date.now());
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
     const config = this.getConfig(workspaceId);
     const runtimeStatus = this.getRuntimeStatus(workspaceId, runtimeId);
@@ -2582,17 +2860,38 @@ export class FeishuBotRepo {
       || runtimeStatus?.state !== "online"
       || runtimeStatus.appliedRevision !== config.revision
     ) return null;
+    this.drainOutboundOperations(workspaceId, now);
+    if (nowInput === undefined) now.setTime(Date.now());
     // This claim owns its own transaction, so it owns the queue too: the
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      // Read candidates before taking write locks. Each row is revalidated and
+      // claimed by CAS below, so concurrent pollers can share this snapshot.
+      const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
       const nowIsoValue = now.toISOString();
+      const exhaustedCandidates = this.ctx.db.query(`SELECT id, kind FROM multiremi_feishu_bot_outbound_deliveries
+        WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
+          AND ((status = 'pending' AND available_at <= ?)
+            OR (status = 'sending' AND leased_until <= ?))`
+      ).all(workspaceId, nowIsoValue, nowIsoValue) as Row[];
+      if (exhaustedCandidates.some((row) => row.kind === 'receipt')) {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       // The reminder lane is materialized here rather than at request creation:
       // a request answered before its window closes must never produce one, and
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
       // transaction means a host that polls continuously still queues one nudge.
       this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
-      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
+      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents, dueIssueDecisions);
+      this.reconcileTaskDeliveriesWithinTransaction(workspaceId);
+      const exhausted = this.sweepExhaustedWithinTransaction(
+        workspaceId, exhaustedCandidates.map((row) => String(row.id)), nowIsoValue,
+      );
+      for (const failed of exhausted) {
+        if (failed.kind === 'receipt') this.recordReceiptFailure(workspaceId, runtimeId, String(failed.id), Number(failed.attempt_count));
+      }
       // A decision lane only exists for a host that advertised the capability.
       // The filter belongs in SQL, not after the pick: skipping in JavaScript
       // would return null and strand every later delivery behind one row this
@@ -2607,7 +2906,7 @@ export class FeishuBotRepo {
       // control plane never queues one), so blocking costs nothing there.
       const decisionsCapable = this.supportsIssueDecisionCard(workspaceId, runtimeId);
       const humanRequestsCapable = this.supportsDecisionCard(workspaceId, runtimeId);
-      const plainTextRow = "o.kind IS NULL OR o.kind = '' OR o.degraded IS NOT NULL";
+      const plainTextRow = "o.kind IS NULL OR o.kind NOT IN ('decision_card', 'decision_card_patch', 'decision_reminder') OR o.degraded IS NOT NULL";
       const decisionFilter = decisionsCapable && humanRequestsCapable
         ? ""
         : decisionsCapable
@@ -2621,6 +2920,7 @@ export class FeishuBotRepo {
          JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
          WHERE o.workspace_id = ? AND b.app_id = ?
            ${decisionFilter}
+           AND (? = 1 OR o.delivery_mode IS NULL OR o.delivery_mode = 'legacy')
            AND (o.decision_id IS NULL OR EXISTS (
              SELECT 1 FROM multiremi_issue_decisions decision
              JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
@@ -2644,16 +2944,30 @@ export class FeishuBotRepo {
            AND (o.task_id IS NULL OR ? = 1 OR o.body <> '')
            AND (? = 1 OR o.presentation_checkpoint IS NULL)
            AND (? = 1 OR o.attachments IS NULL)
+           AND NOT EXISTS (
+             SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries received
+             WHERE o.kind = 'receipt' AND o.unit_key <> o.target_message_id || ':received'
+               AND received.task_id = o.task_id AND received.kind = 'receipt'
+               AND received.unit_key = o.target_message_id || ':received'
+               AND received.status IN ('pending', 'sending'))
            AND (o.previous_delivery_id IS NULL OR EXISTS (
              SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries previous
              WHERE previous.id = o.previous_delivery_id AND previous.workspace_id = o.workspace_id
-               AND previous.status = 'sent'))
+               AND (previous.status = 'sent' OR (o.cascade_failure = 0 AND previous.status = 'failed'))))
+           ${typeof downlink === "object" ? "AND o.id = ?" : ""}
            AND ((o.status = 'pending' AND o.available_at <= ?)
              OR (o.status = 'sending' AND o.leased_until IS NOT NULL AND o.leased_until <= ?))
          ORDER BY o.created_at ASC, o.id ASC LIMIT 1`,
-      ).get(workspaceId, config.appId, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0, supportsAttachments ? 1 : 0, nowIsoValue, nowIsoValue) as Row | null;
+      ).get(workspaceId, config.appId, supportsKinds ? 1 : 0, supportsTaskStream ? 1 : 0, supportsNativeCot ? 1 : 0,
+        supportsAttachments ? 1 : 0, ...(typeof downlink === "object" ? [downlink.id] : []), nowIsoValue, nowIsoValue) as Row | null;
       if (!row) return null;
-      const kind = cleanOptionalString(row.kind);
+      const carrier = row.task_id && (!row.kind || row.kind === 'cot') && row.unit_key === '';
+      const presentationState = parseFeishuPresentation(parseJson(row.presentation_checkpoint, null));
+      // Never split a Task that an older consumer might already have presented.
+      const mode = carrier ? row.delivery_mode ?? (row.kind === 'cot' && supportsKinds && feishuOutboundKindsEnabled() && Number(row.attempt_count) === 0
+        && !row.external_message_id && !presentationState?.cot && !presentationState?.resultMessageId
+        && !Object.keys(presentationState?.interactions ?? {}).length ? 'split' : 'legacy') : row.delivery_mode;
+      const kind = carrier && mode === 'split' ? 'cot' : cleanOptionalString(row.kind);
       let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
       if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
         // An old relay row derives its @ here, and that read is the one place a
@@ -2680,28 +2994,45 @@ export class FeishuBotRepo {
           };
         }
       }
-      const claimToken = createId("foc");
+      const claimToken = typeof downlink === "object" ? downlink.claimToken
+        : downlink === "peek" && row.status === "pending" && row.claim_token
+          ? String(row.claim_token) : createId("foc");
       const presentation = parseFeishuPresentation(parseJson(row.presentation_checkpoint, null))
         ?? (supportsNativeCot && row.task_id && !row.external_message_id
           ? { version: "native_cot_v1" as const, startedAt: now.getTime(), throughSeq: 0, interactions: {} } : null);
       const leasedUntil = new Date(now.getTime() + (supportsTaskStream ? 120_000 : 30_000)).toISOString();
-      const updated = this.ctx.db.run(
+      // Freeze the offered epoch without claiming it. A reconnect must carry
+      // the same token/checkpoint until ACK; expired leases start a new epoch.
+      const updated = downlink === "peek" ? this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = 'pending', claim_token = ?, leased_until = NULL,
+             mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?)
+         WHERE id = ? AND workspace_id = ?
+           AND ((status = 'pending' AND available_at <= ?)
+             OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
+        [claimToken, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null,
+          String(row.id), workspaceId, nowIsoValue, nowIsoValue],
+      ) : this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = 'sending', claim_token = ?, leased_until = ?,
              attempt_count = attempt_count + 1, updated_at = ?,
-             mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?)
+             mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?),
+             delivery_mode = COALESCE(delivery_mode, ?), kind = ?
          WHERE id = ?
            AND (previous_delivery_id IS NULL OR EXISTS (
              SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries previous
              WHERE previous.id = multiremi_feishu_bot_outbound_deliveries.previous_delivery_id
                AND previous.workspace_id = multiremi_feishu_bot_outbound_deliveries.workspace_id
-               AND previous.status = 'sent'))
+               AND (previous.status = 'sent' OR (multiremi_feishu_bot_outbound_deliveries.cascade_failure = 0 AND previous.status = 'failed'))))
            AND ((status = 'pending' AND available_at <= ?)
              OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
-        [claimToken, leasedUntil, nowIsoValue, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null,
+        [claimToken, leasedUntil, nowIsoValue, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null, mode ?? null, kind,
           String(row.id), nowIsoValue, nowIsoValue],
       );
       if (updated.changes !== 1) return null;
+      row.delivery_mode = mode;
+      row.kind = kind;
+      if (mode === 'split' && carrier) this.materializeTaskDeliveriesWithinTransaction(String(row.task_id), nowIsoValue);
       if ((kind === "decision_card" || kind === "decision_reminder") && !row.degraded && Number(row.attempt_count) > 0) {
         const card = this.rotatedQuestionCard(row, cleanOptionalString(row.interaction_open_id));
         if (card) {
@@ -2710,7 +3041,7 @@ export class FeishuBotRepo {
         }
       }
       return {
-        ...outboundDelivery(row, claimToken),
+        ...outboundDelivery({ ...row, kind: carrier && mode === 'legacy' ? null : kind }, claimToken),
         // The decision lanes carry their own recipient checkpoint and need no
         // Task stream, so they read these outside the `task_id` branch.
         ...(kind ? {
@@ -2729,6 +3060,55 @@ export class FeishuBotRepo {
     })();
     this.ctx.emitCommitEvents(deferredEvents);
     return claimed;
+  }
+
+  private sweepExhaustedWithinTransaction(workspaceId: string, ids: string[], nowIsoValue: string): Row[] {
+    if (ids.length === 0) return [];
+    return this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
+      SET status = 'failed', claim_token = NULL, leased_until = NULL,
+        last_error = 'Delivery lease exhausted after six attempts', updated_at = ?
+      WHERE workspace_id = ? AND id IN (${ids.map(() => '?').join(', ')})
+        AND delivery_mode = 'split' AND attempt_count >= 6
+        AND ((status = 'pending' AND available_at <= ?)
+          OR (status = 'sending' AND leased_until <= ?))
+      RETURNING id, kind, attempt_count`
+    ).all(nowIsoValue, workspaceId, ...ids, nowIsoValue, nowIsoValue) as Row[];
+  }
+
+  discardPendingOutbound(workspaceId: string, runtimeId: string, deliveryId: string): void {
+    if (this.getConfig(workspaceId)?.runtimeId !== runtimeId) return;
+    this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries
+      SET status = 'failed', last_error = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND status = 'pending'`,
+      ["feishu.outbound exceeds the 1 MiB daemon protocol frame limit", nowIso(), deliveryId, workspaceId]);
+  }
+
+  nextOutboundWakeAt(workspaceId: string, runtimeId: string): number | null {
+    const config = this.getConfig(workspaceId);
+    if (!config?.enabled || config.runtimeId !== runtimeId) return null;
+    const now = Date.now();
+    const row = this.ctx.db.query(`SELECT MIN(wake_at) AS wake_at FROM (
+      SELECT available_at AS wake_at FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE workspace_id = ? AND status = 'pending' AND available_at > ?
+      UNION ALL
+      SELECT leased_until AS wake_at FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE workspace_id = ? AND status = 'sending' AND leased_until > ?
+    ) deadlines`).get(workspaceId, new Date(now).toISOString(), workspaceId, new Date(now).toISOString()) as Row | null;
+    let next = row?.wake_at ? Date.parse(String(row.wake_at)) : Number.POSITIVE_INFINITY;
+    const requests = this.ctx.db.query(`SELECT request.created_at, request.expires_at
+      FROM multiremi_task_human_requests request JOIN multiremi_tasks task ON task.id = request.task_id
+      WHERE task.workspace_id = ? AND task.issue_id IS NOT NULL AND request.status = 'pending'
+        AND request.reminder_sent_at IS NULL AND request.expires_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries delivery
+          WHERE delivery.human_request_id = request.id AND delivery.kind = 'decision_card'
+            AND delivery.status = 'sent' AND delivery.external_message_id IS NOT NULL AND delivery.degraded IS NULL)`)
+      .all(workspaceId) as Row[];
+    for (const request of requests) {
+      const expires = String(request.expires_at);
+      const due = Date.parse(expires) - decisionReminderLeadMs(expires, String(request.created_at));
+      if (due > now) next = Math.min(next, due);
+    }
+    return Number.isFinite(next) ? next : null;
   }
 
   /** Checkpoint before the first send, under the existing delivery lease. */
@@ -2792,6 +3172,20 @@ export class FeishuBotRepo {
       && attachment.sizeBytes <= FEISHU_IMAGE_MAX_BYTES ? attachment : null;
   }
 
+  getOutboundReportState(workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string): {
+    status: string; currentRuntime: boolean; currentLease: boolean;
+  } {
+    const config = this.getConfig(workspaceId);
+    const row = this.ctx.db.query(
+      `SELECT status, claim_token, leased_until FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE id = ? AND workspace_id = ?`,
+    ).get(deliveryId, workspaceId) as Row | null;
+    const currentRuntime = config?.runtimeId === runtimeId;
+    return { status: row ? String(row.status) : "deleted", currentRuntime,
+      currentLease: currentRuntime && row?.status === "sending" && row.claim_token === claimToken
+        && String(row.leased_until ?? "") > nowIso() };
+  }
+
   reportOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -2847,8 +3241,9 @@ export class FeishuBotRepo {
           `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments,
                   kind, human_request_id, human_request_task_id, decision_id, decision_issue_id, degraded, body
            FROM multiremi_feishu_bot_outbound_deliveries
-           WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
-        ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
+           WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
+             AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
+        ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
         if (!row) return false;
         const externalMessageId = cleanOptionalString(input.externalMessageId);
         // Only a standalone Issue topic seed establishes a new conversation
@@ -2919,16 +3314,22 @@ export class FeishuBotRepo {
         return true;
       })();
       this.ctx.emitCommitEvents(deferredEvents);
+      if (sent) this.publishDownlinkChange(workspaceId);
       return sent;
     }
-    return this.ctx.db.transaction(() => {
+    const failed = this.ctx.db.transaction(() => {
       const row = this.ctx.db.query(
-        `SELECT attempt_count, body FROM multiremi_feishu_bot_outbound_deliveries
-         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
-      ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
+        `SELECT attempt_count, kind, body FROM multiremi_feishu_bot_outbound_deliveries
+         WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?
+           AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
+      ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
       if (!row) return false;
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
+      if (terminal && row.kind === 'receipt') {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       const card = decodeDecisionCardBody(String(row.body))?.card;
       const token = card ? questionCardAction(card)?.t : null;
       const detail = cleanOptionalString(input.error) ?? "Feishu send failed";
@@ -2949,17 +3350,20 @@ export class FeishuBotRepo {
         ],
       );
       if (updated.changes !== 1) return false;
-      if (terminal) {
+      if (terminal && row.kind === 'receipt') {
+        this.recordReceiptFailure(workspaceId, runtimeId, deliveryId, Number(row.attempt_count));
+      }
+      if (terminal && row.kind !== 'receipt') {
         // A failed caption/attachment must not let the rest of that batch
         // overtake it, nor leave descendants pending forever without a reason.
         this.ctx.db.run(
           `WITH RECURSIVE successors AS (
              SELECT id FROM multiremi_feishu_bot_outbound_deliveries
-             WHERE previous_delivery_id = ? AND workspace_id = ?
+             WHERE previous_delivery_id = ? AND workspace_id = ? AND cascade_failure = 1
              UNION
              SELECT o.id FROM multiremi_feishu_bot_outbound_deliveries o
              JOIN successors previous ON o.previous_delivery_id = previous.id
-             WHERE o.workspace_id = ?
+             WHERE o.workspace_id = ? AND o.cascade_failure = 1
            )
            UPDATE multiremi_feishu_bot_outbound_deliveries
            SET status = 'failed', last_error = ?, updated_at = ?
@@ -2970,6 +3374,14 @@ export class FeishuBotRepo {
       }
       return true;
     })();
+    if (failed) this.publishDownlinkChange(workspaceId);
+    return failed;
+  }
+
+  private recordReceiptFailure(workspaceId: string, runtimeId: string, deliveryId: string, attempts: number): void {
+    this.recordAuditWithinTransaction(workspaceId, 'receipt_failed', { actorType: 'daemon', actorId: runtimeId,
+      details: { delivery_id: deliveryId, attempts } });
+    log.warn(`Feishu receipt delivery ${deliveryId} failed after ${attempts} attempt(s)`);
   }
 
   private resolveSender(
@@ -3332,7 +3744,13 @@ export class FeishuBotRepo {
       cleanOptionalString(input.errorMessage),
       now,
     );
+    this.publishDownlinkChange(workspaceId);
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
+  }
+
+  private publishDownlinkChange(workspaceId: string): void {
+    this.ctx.emitWorkspaceEvent({ type: "daemon:feishu_changed", workspaceId,
+      actorType: "system", actorId: null, payload: {} });
   }
 
   /**
@@ -3350,8 +3768,8 @@ export class FeishuBotRepo {
     return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
   }
 
-  /** Caller already holds the transaction that takes the number lock. */
-  private recordAuditWithinTransaction(
+  /** Transactional callers take W then N before domain writes; re-taking them here is free. */
+  recordAuditWithinTransaction(
     workspaceId: string,
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
@@ -3755,8 +4173,8 @@ function roundPushPrompt(
   omittedCount = 0,
 ): string {
   const lines = [
-    `The responsible agent completed a work round for ${issue.key} - ${issue.title}.`,
-    "Report the current result to the users in this Feishu topic. Use the Bound Issue Updates context below when present.",
+    `${issue.key} - ${issue.title} has a new work-round result in its Issue log.`,
+    "Read the Bound Issue Log and report the current result to the users in this Feishu topic.",
   ];
   if (updates.length) {
     lines.push("", "Updates delivered while the current Chat task was already active:", ...updates);
@@ -4022,6 +4440,7 @@ function outboundDelivery(row: Row, claimToken: string): MultiremiFeishuBotOutbo
     idempotency_key: id,
     ...(row.attachments ? { attachments: parseJson(row.attachments, []) } : {}),
     ...(kind ? { kind: kind as MultiremiFeishuBotOutboundDelivery["kind"] } : {}),
+    ...(kind === 'receipt' ? { receiptState: parseJson<{ state: "received" | "completed" | "failed" }>(row.body, { state: "received" }).state } : {}),
     ...(row.human_request_id ? {
       humanRequestId: String(row.human_request_id),
       human_request_id: String(row.human_request_id),

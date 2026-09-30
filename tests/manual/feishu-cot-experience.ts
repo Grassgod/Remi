@@ -11,7 +11,8 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { escapeCardText, handleTaskInteractionEvent } from "@connectors/feishu/task-interaction.js";
@@ -86,8 +87,9 @@ try {
   let seq = 0;
   function event(taskId: string, type: string, patch: Record<string, unknown> = {}): TaskStreamEvent {
     const n = ++seq;
-    return { kind: "message", message: { id: `${taskId}_${n}`, taskId, seq: n, type, tool: null, toolCallId: null,
-      content: null, input: null, output: null, status: null, meta: null, createdAt: new Date().toISOString(), ...patch } as MultiremiTaskMessage };
+    const { toolCallId, ...fields } = patch;
+    return { kind: "message", message: { seq: n, type, tool: null, tool_call_id: toolCallId ?? null,
+      content: null, input: null, output: null, status: null, meta: null, ts: new Date().toISOString(), ...fields } as TraceEvent };
   }
   const outcomes: Array<{ taskId: string; cotMessageId?: string; resultMessageId: string; status?: string }> = [];
   async function run(suffix: string, stream: (taskId: string) => AsyncIterable<TaskStreamEvent>) {

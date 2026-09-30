@@ -385,8 +385,9 @@ async function main(): Promise<void> {
 
     // (b) A dependency rejection must leave nothing behind: no orphan issue, no
     // consumed number, no half-written dependency row. The creation must also
-    // stay a single transaction on this bridge: Postgres has no savepoints, so a
-    // nested `BEGIN` would commit the issue row early and survive the rollback.
+    // stay a single transaction on this bridge: a nested `transaction()` is a
+    // SAVEPOINT inside it since B1 (MUL-426); before that, a nested `BEGIN`
+    // committed the issue row early and it survived the rollback.
     const issuesBefore = store.listIssues({ workspaceId: "local" }).length;
     const childrenBefore = store.listChildIssues(parentId).length;
     const rejected = await post("/api/issues", {

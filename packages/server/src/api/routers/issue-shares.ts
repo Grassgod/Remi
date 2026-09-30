@@ -23,6 +23,7 @@ import {
   signIssueShareId,
 } from "../helpers/issue-share-tokens.js";
 import type { RouterDeps } from "./deps.js";
+import { parseTraceWindow } from "../trace/request.js";
 
 const SHARE_DURATION_DAYS = 60;
 
@@ -87,6 +88,25 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
     store.recordIssueShareView(share.id);
     const viewedShare = store.getIssueShare(share.id) ?? share;
     return c.json(buildSharedIssueBundle(c.req.param("token"), viewedShare, issue, deps));
+  });
+
+  app.get("/api/shares/:token/tasks/:task_id/trace", async (c) => {
+    const token = c.req.param("token");
+    const signedCliRequest = c.req.header("X-Remi-Share")?.trim() === token;
+    if (!authenticatedRequestUserId(c) && !signedCliRequest) return c.json({ error: "login required" }, 401);
+    const share = resolveActiveIssueShareToken(token, store, shareSecret);
+    if (!share) return c.json({ error: "trace not found" }, 404);
+    const issue = store.getIssue(share.issueId);
+    const task = store.getTask(c.req.param("task_id"));
+    const taskSession = task?.issueSessionId ? store.getIssueSession(task.issueSessionId) : null;
+    if (!issue || issue.workspaceId !== share.workspaceId || !task
+      || task.issueId !== issue.id || task.workspaceId !== share.workspaceId || task.chatSessionId
+      || (task.issueSessionId && taskSession?.issueId !== issue.id)) {
+      return c.json({ error: "trace not found" }, 404);
+    }
+    const window = parseTraceWindow(c);
+    if (!window) return c.json({ error: "invalid trace window" }, 400);
+    return c.json(await deps.traceReader.readTrace(task.id, window.afterSeq, window.limit));
   });
 
   app.get("/api/shares/:token/attachments/:attachmentId/content", async (c) => {
@@ -161,17 +181,11 @@ function buildSharedIssueBundle(
     events: store.listSessionEvents(session.id).map(sessionEventCompatibilityResponse),
     tasks: store.listTasksForIssue(issue.id)
       .filter((task) => task.issueSessionId === session.id && !task.chatSessionId)
-      .map((task) => ({
-        ...taskCompatibilityResponse(task),
-        messages: store.listTaskMessages(task.id),
-      })),
+      .map((task) => taskCompatibilityResponse(task)),
   }));
   const unscopedTasks = store.listTasksForIssue(issue.id)
     .filter((task) => !task.issueSessionId && !task.chatSessionId)
-    .map((task) => ({
-      ...taskCompatibilityResponse(task),
-      messages: store.listTaskMessages(task.id),
-    }));
+    .map((task) => taskCompatibilityResponse(task));
   const issueWorkspace = store.getIssueWorkspace(issue.id);
   const project = issue.projectId ? store.getProject(issue.projectId) : null;
   const parentIssue = issue.parentIssueId ? store.getIssueByRef(issue.parentIssueId, issue.workspaceId) : null;

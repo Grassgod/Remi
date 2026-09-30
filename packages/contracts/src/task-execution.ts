@@ -3,6 +3,8 @@ function trimmed(value: unknown): string | null {
   return text || null;
 }
 
+export const RELAY_EXECUTION_SCOPE_PREFIX = "relay:";
+
 /**
  * The model and reasoning level a task will ACTUALLY execute with (MUL-336).
  *
@@ -57,6 +59,7 @@ export function agentAtTaskTarget<
 
 /** Independent delegations must not share a provider session or its context cursor. */
 export function taskExecutionScope(task: {
+  execution_scope?: string;
   agentId?: string | null;
   agent_id?: string | null;
   delegatedByAgentId?: string | null;
@@ -64,6 +67,7 @@ export function taskExecutionScope(task: {
   delegationId?: string | null;
   delegation_id?: string | null;
 }): string {
+  if (task.execution_scope !== undefined) return task.execution_scope;
   const delegator = task.delegatedByAgentId ?? task.delegated_by_agent_id;
   const agent = task.agentId ?? task.agent_id;
   return delegator && agent !== delegator

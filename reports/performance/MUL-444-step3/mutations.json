@@ -1,0 +1,31 @@
+{
+  "head_under_test": "fd90a83a plus uncommitted step 3 changes",
+  "mutations": [
+    {
+      "change": "ignore metadata.client_id when merging server and optimistic Chat rows",
+      "command": "bunx vitest run chat/lib/optimistic-log.test.ts",
+      "result": "3 failed: matches by client_id; same text and replay; local upload replacement"
+    },
+    {
+      "change": "replace the optimistic row's local seq with the server seq",
+      "command": "bunx vitest run chat/lib/optimistic-log.test.ts",
+      "result": "2 failed: keeps DOM identity and position; same text and replay"
+    },
+    {
+      "change": "restore chatKeys.all invalidation on a same-instance WebSocket reconnect",
+      "command": "bunx vitest run realtime/use-realtime-sync-ws-instance.test.tsx",
+      "result": "1 failed: keeps Chat's cursor-backed rows during a same-instance reconnect"
+    },
+    {
+      "change": "classify a turn as a push whenever it has attachments",
+      "command": "bunx vitest run chat/components/chat-message-list.test.tsx",
+      "result": "2 failed: terminal reply with attachments keeps timeline; nonterminal turn without attachments stays separate"
+    },
+    {
+      "change": "return empty attachments instead of Chat read-side hydration",
+      "command": "bun test tests/unit/multiremi/conversation-log.test.ts --test-name-pattern 'hydrates Chat user'",
+      "result": "1 failed at conversation-log.test.ts:214: user attachment missing (push and terminal checked in the same test)"
+    }
+  ],
+  "restored": true
+}

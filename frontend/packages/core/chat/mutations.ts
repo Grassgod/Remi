@@ -103,8 +103,6 @@ export function useDeleteChatSession() {
 function refreshChatQueue(qc: QueryClient, wsId: string, sessionId: string): void {
   void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
   void qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
-  void qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
-  void qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
   void qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
   void qc.invalidateQueries({ queryKey: chatKeys.session(wsId, sessionId) });
 }

@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 // Workspace-level env (MUL-49): admin-only GET/PUT /api/workspaces/:id/env,
 // "****" preserve semantics shared with agent env, and the claim payload
 // carrying workspace_env so a saved value reaches the next dispatched task
@@ -77,7 +78,7 @@ describe("workspace env API", () => {
     store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "env claim" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const task = (await claim.json()).task;
     expect(task.workspace_env).toEqual({ GH_TOKEN: "ghp_ws", SHARED: "from-workspace" });
@@ -92,7 +93,7 @@ describe("workspace env API", () => {
     store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "no env" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     const task = (await claim.json()).task;
     expect(task.workspace_env).toBeUndefined();
   });

@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 
 for (const provider of ["codex", "claude"] as const) {
   it(`discovers custom ${provider} models, caches refreshes and executes the selected model`, async () => {
@@ -48,9 +49,11 @@ for (const provider of ["codex", "claude"] as const) {
     let reports = 0;
     const updateModels = store.updateRuntimeModels.bind(store);
     store.updateRuntimeModels = (...args) => { reports++; return updateModels(...args); };
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token, daemonId: "catalog-daemon", runtimeId: runtime.id,
       runtimeName: "Catalog", provider, workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
+      protocolClientOptions: { clock: protocolClock },
       workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"),
       inProcessRuntimeModelDiscoveryEnabled: true, runtimeModelRefreshIntervalMs: 60_000,
       providerFactory: options => ({
@@ -81,6 +84,8 @@ for (const provider of ["codex", "claude"] as const) {
     };
     try {
       await waitFor(() => store.listRuntimeModels(runtime.id).some(model => model.id === "sol"));
+      await waitFor(() => daemon.daemonProtocolClient().connectionState() === "connected" && daemon.daemonProtocolClient().diagnostics().pending_rpcs === 0);
+      protocolClock.advance(15_000);
       await Bun.sleep(150);
       expect(probes).toBe(1);
       expect(reports).toBe(1);

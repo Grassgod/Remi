@@ -1736,6 +1736,8 @@ export class ScmRepo {
         const collector: ChildStatusChangeCollector = [];
         const deferredEvents = createCommitEventQueue();
         const applied = this.ctx.db.transaction(() => {
+          const workspaceId = this.ctx.issueWorkspaceId(issueId);
+          if (workspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
           // Take the same lock as child creation/reparenting/reopening before
           // reading membership, the grant or A1, and hold it through the effect.
           lockIssueRowWithinTransaction(this.ctx.db, issueId);

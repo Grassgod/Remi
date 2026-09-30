@@ -179,7 +179,7 @@ export async function capturePr2Responses() {
     const owned = await json("/api/runtimes?owner=me");
     const hydrated = harness.runtimeIds.map(id => harness.store.getRuntime(id));
     const normalize = (value: unknown) => JSON.parse(JSON.stringify(value).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>"));
-    return normalize({ source: "pre-PR2 main 58bf5cc0", fixture: { sessions: fixture.counts.sessions,
+    return normalize({ source: "pre-PR2 main 58bf5cc0 with MUL-421 protocol fields", fixture: { sessions: fixture.counts.sessions,
       agents: fixture.counts.agents, inboxRows: fixture.counts.inboxRows + 6 }, inbox, attachment, denied, unauthorized, runtimes, owned, hydrated });
   } finally { await harness.dispose(); restore(); }
 }

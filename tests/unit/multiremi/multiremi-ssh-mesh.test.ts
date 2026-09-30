@@ -7,6 +7,9 @@ import {
   SshMeshKeyError,
 } from "@multiremi/ssh-mesh/keys.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
+
+const fleetStores = new WeakMap<ReturnType<typeof createMultiremiApp>, ReturnType<typeof createStore>>();
 
 const ROOT_TOKEN = "ssh-mesh-root-secret";
 let previousEncryptionKey: string | undefined;
@@ -1114,6 +1117,7 @@ describe("Multiremi SSH Mesh", () => {
       userId: "local",
     });
     const app = createMultiremiApp({ store, authToken: ROOT_TOKEN });
+    fleetStores.set(app, store);
     const meshPath = `/api/workspaces/${workspace.id}/ssh-mesh`;
 
     const enabled = await (await app.request(meshPath, {
@@ -1368,9 +1372,11 @@ async function setupFleet() {
     workspaceId: "local",
     userId: "local",
   });
+  const app = createMultiremiApp({ store, authToken: ROOT_TOKEN });
+  fleetStores.set(app, store);
   return {
     store,
-    app: createMultiremiApp({ store, authToken: ROOT_TOKEN }),
+    app,
     runtimeA,
     runtimeA2,
     runtimeB,
@@ -1404,7 +1410,12 @@ async function daemonHeartbeat(
     }),
   });
   expect(response.status).toBe(200);
-  return response.json();
+  const ack = await response.json();
+  expect(ack.ssh_mesh).toBeUndefined();
+  const store = fleetStores.get(app)!;
+  const accessToken = await store.verifyAccessToken(token);
+  const pushed = await receiveRuntimeInputs(store, runtimeId, { identity: { accessToken, masterToken: false } });
+  return { ...ack, ssh_mesh: pushed.ssh_mesh };
 }
 
 async function daemonConfig(

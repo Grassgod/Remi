@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +10,8 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
 import { readyArchiveBinding } from "./helpers.js";
+import { reportFrame } from "../../fixtures/report-session.js";
+import { buildArchiveFixture } from "./session-archive-fixtures.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 
@@ -140,12 +141,13 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     async function physicalArchive(issueId: string, runtimeId: string) {
       const runtime = store.getRuntime(runtimeId)!;
-      const bytes = new TextEncoder().encode(`archive for ${issueId}`);
-      const initialized = sessionArchives.initialize({ workspaceId: runtime.workspaceId!, issueId, runtimeId,
-        daemonId: runtime.daemonId!, sourceRevision: `revision-${issueId}`,
-        sha256: createHash("sha256").update(bytes).digest("hex"), sizeBytes: bytes.byteLength }).archive;
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issueId }, traces: {} });
+      const bytes = fixture.bytes;
+      const initialized = sessionArchives.initialize({ workspaceId: runtime.workspaceId!, subjectKind: "issue", subjectId: issueId, issueId, runtimeId,
+        daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: bytes.byteLength }).archive;
       const claimed = await sessionArchives.claimUploadAttempt(runtimeId, issueId, initialized.id);
-      await sessionArchives.upload(runtimeId, issueId, initialized.id, claimed.uploadAttempt!, new Response(bytes).body);
+      await sessionArchives.upload(runtimeId, issueId, initialized.id, claimed.uploadAttempt!, new Response(fixture.bytes).body);
       const ready = await sessionArchives.complete(runtimeId, issueId, initialized.id, claimed.uploadAttempt!);
       return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
     }
@@ -284,12 +286,11 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const { issue, runtime } = issueWorkspace(source);
         const daemon = (await store.createAccessToken({ type: "daemon", purpose: "daemon", workspaceId: source,
           daemonId: runtime.daemonId!, name: "Source daemon" })).token;
-        const cleanedPath = `/api/daemon/issues/${issue.id}/workspace/cleaned`;
-        const reachable = await auth.request(daemon, cleanedPath, "POST", {});
-        expect(reachable.status).toBe(400);
-        expect(await reachable.json()).toEqual({ error: "runtime_id is required" });
+        const daemonOptions = { headers: { Authorization: `Bearer ${daemon}` }, authToken: "mul476-test-root", runtimeId: runtime.id, archives: sessionArchives };
+        const reachable = await reportFrame(store, "gc.workspace_cleaned", { issue_id: issue.id, runtime_id: runtime.id }, daemonOptions);
+        expect(reachable).toMatchObject({ ok: false, code: "invalid_report", operation_error: { status: 400 } });
         db.run("UPDATE multiremi_issues SET workspace_id = ?, issue_number = 999, issue_key = 'MUL-999' WHERE id = ?", [target, issue.id]);
-        expect(() => store.initSessionArchive({ workspaceId: target, issueId: issue.id, runtimeId: runtime.id,
+        expect(() => store.initSessionArchive({ workspaceId: target, subjectKind: "issue", subjectId: issue.id, issueId: issue.id, runtimeId: runtime.id,
           daemonId: runtime.daemonId!, sourceRevision: "foreign-runtime", sha256: "f".repeat(64), sizeBytes: 0 },
           `sar_foreign_${issue.id}`, "foreign.tar.gz")).toThrow("Issue is deleting or its workspace has already been cleaned");
         expect(store.listSessionArchives(issue.id)).toEqual([]);
@@ -300,9 +301,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.reportIssueWorkspace(input)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id });
         assertWorkspaceInvariant(issue.id);
         expect(() => store.reportIssueWorkspace({ ...input, runtimeId: runtime.id })).toThrow("runtime belongs to another workspace");
-        const cleaned = await auth.request(daemon, cleanedPath, "POST", { runtime_id: runtime.id,
-          archive_id: "sar_source", source_revision: "source-revision", sha256: "f".repeat(64) });
-        expect(cleaned.status).toBe(403);
+        const cleaned = await reportFrame(store, "gc.workspace_cleaned", { issue_id: issue.id, runtime_id: runtime.id,
+          archive_id: "sar_source", source_revision: "source-revision", sha256: "f".repeat(64) }, daemonOptions);
+        expect(cleaned).toMatchObject({ ok: false, code: "task_not_found", operation_error: { status: 404, code: "issue_not_found" } });
         expect(store.getIssueWorkspace(issue.id)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id, status: "ready" });
       });
 

@@ -2,13 +2,9 @@ import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { Hono } from "hono";
 import { Hono as ProbeApp } from "hono";
-import { createRealtimeFanout } from "../../packages/server/src/api/realtime-fanout.js";
-import { createPeerChannel } from "../../packages/server/src/api/peer/peer-channel.js";
-import { registerPeerRoutes } from "../../packages/server/src/api/peer/peer-routes.js";
 import { createRequestMetricsMiddleware, currentDbReplyOrigin } from "../../packages/server/src/observability/request-metrics.js";
 import { resetDbReplyLimitForTest, type PostgresSyncDatabase } from "../../packages/server/src/store/db/postgres.js";
 import type { MultiremiStore } from "../../packages/server/src/store/store.js";
-import { fanoutBrowserClient, installDeterministicFanoutClock } from "../fixtures/multiremi/task-message-fanout-fixture.js";
 
 const MIB = 1_048_576;
 const metrics = { enabled: true, slowRequestMs: 500, summaryIntervalMs: 60_000,
@@ -16,13 +12,12 @@ const metrics = { enabled: true, slowRequestMs: 500, summaryIntervalMs: 60_000,
 
 export function prepareC1WorkerClock(): () => void {
   const RealDate = Date;
-  const restore = installDeterministicFanoutClock();
   // Freeze response timestamps; latency still uses the real performance clock.
   globalThis.Date = class extends RealDate {
     constructor(...args: unknown[]) { super(...(args.length ? args : [Date.UTC(2026, 8, 28, 0)]) as [string]); }
     static now(): number { return Date.UTC(2026, 8, 28, 0); }
   } as DateConstructor;
-  return () => { restore(); globalThis.Date = RealDate; };
+  return () => { globalThis.Date = RealDate; };
 }
 
 export async function runC1Worker(input: {
@@ -42,16 +37,6 @@ export async function runC1Worker(input: {
       if (["api_large_db_reply", "api_db_reply_rejected"].includes(parsed.event)) replies.push(parsed);
     } catch { /* Only bridge evidence is collected; no request bodies or secrets. */ }
   };
-  const browser = fanoutBrowserClient("local");
-  const peer = createPeerChannel({ url: "http://unused-c1-peer", origin: "c1-receiver" });
-  let pageRows = 0;
-  let origin: { method: string; route: string } | undefined;
-  peer.subscribe("realtime", () => { pageRows = store.getTaskMessagePageRows(); origin = currentDbReplyOrigin(); });
-  let fanout: ReturnType<typeof createRealtimeFanout> | undefined;
-  const peerApp = new ProbeApp();
-  const peerSecret = crypto.randomUUID();
-  peerApp.use("*", createRequestMetricsMiddleware(metrics));
-  registerPeerRoutes(peerApp, { peer, secret: peerSecret });
   const realQuery = db.query.bind(db);
   let calls = 0;
   let messageSelects = 0;
@@ -79,8 +64,6 @@ export async function runC1Worker(input: {
   let issueId: string | undefined;
   let longTaskId: string | undefined;
   let shareToken: string | undefined;
-  let peerSequence = 0;
-  let seededPeer = false;
   const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   try {
     emit({ ready: true, stage: before ? "before" : "after" });
@@ -103,38 +86,7 @@ export async function runC1Worker(input: {
         if (response.status !== 200) throw new Error(`Daemon batch status ${response.status}`);
         emit({ ms, queries: timing(response, "dbq") });
       } else if (command.kind === "peer" || command.kind === "peer-http") {
-        if (!seededPeer) {
-          // Each referenced message exceeds 512 KiB; the degraded event itself
-          // carries only seq bounds, matching the receiver's production contract.
-          db.run("UPDATE multiremi_task_messages SET content = ?, input = ?, output = ? WHERE task_id = ?",
-            ["x".repeat(256 * 1024), JSON.stringify("x".repeat(256 * 1024 - 2)), "x".repeat(64 * 1024), taskId]);
-          seededPeer = true;
-        }
-        fanout ??= createRealtimeFanout({ store, role: "ui", peer, registries: {
-          browser: new Map([["local", new Set([browser.client])]]), browserScope: new Map(),
-          browserUser: new Map(), daemon: new Map(),
-        } });
-        browser.frames.length = 0;
-        calls = 0;
-        messageSelects = 0;
-        const envelope = { v: 1, id: `c1_peer_${peerSequence++}`, origin: "c1-sender", kind: "task_messages",
-          payload: { task_id: taskId, degraded: true, seq_start: 1, seq_end: count } };
-        const started = performance.now();
-        if (command.kind === "peer") {
-          const received = peer.receive("realtime", [envelope]);
-          if (received.accepted !== 1) throw new Error("Peer reference rejected");
-        } else {
-          const response = await peerApp.request("/internal/peer/events", { method: "POST",
-            headers: { Authorization: `Bearer ${peerSecret}`, "content-type": "application/json" },
-            body: JSON.stringify({ topic: "realtime", epoch: "c1-probe", batch_seq: peerSequence, events: [envelope] }) });
-          const body = await response.json() as { accepted: number };
-          if (response.status !== 200 || body.accepted !== 1) throw new Error("HTTP peer reference rejected");
-        }
-        const ms = performance.now() - started;
-        if (browser.frames.length !== count) throw new Error(`Peer delivered ${browser.frames.length}/${count}`);
-        if (messageSelects !== Math.ceil(count / 8)) throw new Error(`Peer message SELECTs ${messageSelects}/${Math.ceil(count / 8)}`);
-        emit({ ms, queries: calls, messageSelects, referencedBodyBytes: count * (576 * 1024 - 2),
-          rows: pageRows, origin, frames: browser.frames.length });
+        throw new Error("The browser task-message peer frame was retired; this historical benchmark is unavailable");
       } else if (command.kind === "long") {
         if (!longTaskId) {
           store.completeTask(taskId, { output: "C1 batch measurements complete" });
@@ -188,6 +140,6 @@ export async function runC1Worker(input: {
       } else throw new Error("Unknown probe command");
     }
   } finally {
-    fanout?.close(); peer.close(); db.query = realQuery; console.log = realLog;
+    db.query = realQuery; console.log = realLog;
   }
 }

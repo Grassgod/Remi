@@ -3,16 +3,16 @@ import type {
   AgentRunCount,
   AgentTask,
   IssueUsageSummary,
-  TaskMessagePayload,
   TaskPromptArtifact,
 } from "../../types";
-import { normalizeTaskMessages } from "../../chat/normalize-message";
 import type { HttpClient } from "../http";
 import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   EMPTY_TASK_STEER_LIST,
   TaskSteerListResponseSchema,
   TaskSteerResponseSchema,
+  TaskTraceReadSchema,
+  type TaskTraceRead,
   type TaskSteerListResponse,
   type TaskSteerResponse,
 } from "../schemas/tasks";
@@ -50,10 +50,10 @@ export class TasksEndpoints {
     return this.http.fetch(`/api/issues/${issueId}/active-task`);
   }
 
-  async listTaskMessages(taskId: string): Promise<TaskMessagePayload[]> {
-    // GET returns the camelCase store object; the WS wire is snake_case. Funnel
-    // both through the one normalizer so the cache holds a single shape.
-    return normalizeTaskMessages(await this.http.fetch(`/api/tasks/${taskId}/messages`));
+  async getTaskTrace(taskId: string, afterSeq = 0, limit = 500): Promise<TaskTraceRead> {
+    const query = new URLSearchParams({ after_seq: String(afterSeq), limit: String(limit) });
+    const raw = await this.http.fetch<unknown>(`/api/tasks/${encodeURIComponent(taskId)}/trace?${query}`);
+    return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/tasks/:id/trace" });
   }
 
   async getTaskPrompt(taskId: string): Promise<TaskPromptArtifact> {

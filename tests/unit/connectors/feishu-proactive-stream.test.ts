@@ -18,8 +18,9 @@ function harness(failPatch = false) {
   return { channel, sends, patches, native };
 }
 function message(seq: number, type: string, patch: Record<string, unknown> = {}): TaskStreamEvent {
-  return { kind: "message", message: { id: `msg_${seq}`, taskId: "tsk_1", seq, type, tool: null, content: null,
-    input: null, output: null, toolCallId: null, status: null, meta: null, createdAt: "2026-09-01T00:00:00Z", ...patch } } as TaskStreamEvent;
+  const { toolCallId, ...fields } = patch;
+  return { kind: "message", message: { seq, type, tool: null, content: null,
+    input: null, output: null, tool_call_id: toolCallId ?? null, status: null, meta: null, ts: "2026-09-01T00:00:00Z", ...fields } } as TaskStreamEvent;
 }
 async function* events(onLive?: () => Promise<void>): AsyncGenerator<TaskStreamEvent> {
   yield message(1, "tool_use", { tool: "Bash", toolCallId: "call_1" });

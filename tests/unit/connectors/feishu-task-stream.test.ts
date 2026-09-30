@@ -4,6 +4,7 @@ import { handleButtonClick, handleFormSubmission } from "@connectors/feishu/sdk.
 import type { TaskStreamEvent } from "@connectors/base.js";
 
 function message(seq: number, type: string, patch: Record<string, unknown> = {}) {
+  const { toolCallId, ...fields } = patch;
   return {
     id: `msg_${seq}`,
     taskId: "tsk_1",
@@ -13,11 +14,11 @@ function message(seq: number, type: string, patch: Record<string, unknown> = {})
     content: null,
     input: null,
     output: null,
-    toolCallId: null,
+    tool_call_id: toolCallId as string ?? null,
     status: null,
     meta: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    ...patch,
+    ts: "2026-09-01T00:00:00.000Z",
+    ...fields,
   };
 }
 

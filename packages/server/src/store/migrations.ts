@@ -13,6 +13,9 @@ import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
+import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
+import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
+import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION, preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -43,8 +46,11 @@ const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
+const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
+const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
 const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
+const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2744,6 +2750,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     "pending_heartbeat_count INTEGER NOT NULL DEFAULT 0",
   );
   addColumnIfMissing(db, "multiremi_runtimes", "daemon_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtimes", "daemon_protocol_version INTEGER");
   addColumnIfMissing(db, "multiremi_runtimes", "legacy_daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "runtime_mode TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_runtimes", "device_info TEXT NOT NULL DEFAULT ''");
@@ -2842,6 +2849,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION, () => {
     backfillSessionArchiveRetryBudget(db);
   });
+  runMigrationOnce(db, SESSION_ARCHIVE_SUBJECT_V2_MIGRATION, () => {
+    migrateSessionArchiveSubjectsV2(db);
+  });
+  addColumnIfMissing(db, "multiremi_session_archives", "retry_budget_base_attempt INTEGER NOT NULL DEFAULT 0");
+  runMigrationOnce(db, TASK_TRACE_POINTERS_MIGRATION, () => {
+    createTaskTracePointers(db);
+  });
+  // MUL-432 P1: which writer produced an archive pointer ('daemon' or
+  // 'trace_backfill'); the swap rule only compares head_seq within one source.
+  // NULL on an existing archive pointer means daemon, the only writer before this.
+  addColumnIfMissing(db, "multiremi_task_traces", "source TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
@@ -3015,6 +3033,8 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "offered_at TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "accepted_at TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");
@@ -3304,6 +3324,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // buys nothing.
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "decision_issue_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_decisions", "reminder_sent_at TEXT");
+  ensureFeishuOutboundKindsSchema(db, dialect);
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_requested INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_context TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_task_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_outbound_operations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, unit_key TEXT NOT NULL,
+    operation TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, leased_until TEXT,
+    available_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(workspace_id, kind, unit_key));
+    CREATE INDEX IF NOT EXISTS idx_feishu_outbound_operations_pending
+      ON multiremi_feishu_bot_outbound_operations(workspace_id, status, available_at, leased_until);`);
   runMigrationOnce(db, "20260929_human_request_tokens", () => {
     for (const table of ["multiremi_task_human_requests", "multiremi_issue_decisions"]) {
       addColumnIfMissing(db, table, "token_hash TEXT");
@@ -3352,6 +3383,51 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       );
     `);
   });
+  // MUL-426 / B1 (ADR 0006): the single per-session conversation log. One row is
+  // one display unit (`head` at seq 0, `message`, `system`, `turn`,
+  // `result_published`); every other lifecycle fact is a hidden marker row so
+  // lane cursors, projection windows and the browser replica keep reading one
+  // ordering. `multiremi_conversation_heads` allocates seq with an atomic
+  // `head_seq = head_seq + 1` update; the `(session_id, seq)` primary key is the
+  // backstop. Written once in SQLite dialect and translated for Postgres.
+  runMigrationOnce(db, CONVERSATION_LOG_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_conversation_log (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        author_type TEXT NOT NULL DEFAULT 'system',
+        author_id TEXT,
+        task_id TEXT,
+        body_md TEXT NOT NULL DEFAULT '',
+        body_html TEXT,
+        render_version TEXT,
+        parent_id TEXT,
+        resolved_at TEXT,
+        resolved_by_type TEXT,
+        resolved_by_id TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        PRIMARY KEY(session_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_multiremi_conversation_log_window
+        ON multiremi_conversation_log(session_id, visibility, seq);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_conversation_log_task
+        ON multiremi_conversation_log(task_id);
+
+      CREATE TABLE IF NOT EXISTS multiremi_conversation_heads (
+        session_id TEXT PRIMARY KEY,
+        head_seq INTEGER NOT NULL DEFAULT 0,
+        log_version INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  });
   runMigrationOnce(db, GATEWAY_MODEL_CONTEXT_MIGRATION, () => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS multiremi_gateway_model_context (
@@ -3368,6 +3444,27 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+  runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
+    backfillConversationLogWithinTransaction(db);
+  });
+  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
+  // the task_messages trace backfill. Plain idempotent DDL rather than
+  // `runMigrationOnce`, for the same clock-read reason as the MUL-407 (E5) block
+  // above. Ordered after the MUL-427 conversation backfill.
+  createTraceBackfillProgress(db);
+  // MUL-432 segment 2 (ADR 0006 decision 8): on-demand session archive
+  // requests. Plain idempotent DDL, same reason as above.
+  createSessionArchiveRequests(db);
+  migrateTaskExecutionScope(db);
+  runMigrationOnce(db, "20260929_relay_issue_log_to_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_to_seq INTEGER");
+  });
+  runMigrationOnce(db, "20260929_relay_issue_log_delivered_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_delivered_seq INTEGER");
+  });
+  runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
+    preparePendingTurnConstraintsWithinTransaction(db);
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
@@ -4161,6 +4258,14 @@ function stringOrNull(value: unknown): string | null {
   return value === null || value === undefined || value === "" ? null : String(value);
 }
 
+export function migrateTaskExecutionScope(db: SqlDatabase): void {
+  runMigrationOnce(db, TASK_EXECUTION_SCOPE_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_tasks", "execution_scope TEXT NOT NULL DEFAULT ''");
+    addColumnIfMissing(db, "multiremi_tasks", "wake_seq INTEGER NOT NULL DEFAULT 0");
+    db.run(`UPDATE multiremi_tasks SET execution_scope = ${executionScopeSql("multiremi_tasks")}`);
+  });
+}
+
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {
   db.transaction(() => {
     const claimed = db.run(
@@ -4292,7 +4397,7 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
       attempt_count, external_message_id, last_error, sent_at, created_at, updated_at
     FROM multiremi_feishu_bot_outbound_deliveries_legacy;
     DROP TABLE multiremi_feishu_bot_outbound_deliveries_legacy;
-    CREATE INDEX idx_multiremi_feishu_bot_outbound_pending
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_pending
       ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
   `);
 }
@@ -4305,6 +4410,128 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
  */
 const HUMAN_REQUEST_PUSH_TABLE = "multiremi_feishu_bot_human_request_pushes";
 const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
+
+/** C5 relaxes the Task key without deleting delivery data. SQLite retains an
+ * atomic pre-migration copy; PG can relax the constraint in place. */
+export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDatabaseDialect): void {
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  addColumnIfMissing(db, table, "unit_key TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, table, "cascade_failure INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, table, "delivery_mode TEXT");
+  if (isPostgresDialect(db, dialect)) {
+    db.transaction(() => {
+      const constraints = db.query(`SELECT c.conname FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE t.relname = ? AND n.nspname = current_schema() AND c.contype = 'u'
+          AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+            WHERE attrelid = t.oid AND attname = 'task_id')]::smallint[]`).all(table) as Array<{ conname: string }>;
+      for (const constraint of constraints) {
+        const name = constraint.conname.replaceAll('"', '""');
+        db.exec(`ALTER TABLE ${table} DROP CONSTRAINT "${name}"`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+    return;
+  }
+  const uniqueIndexes = db.query(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number; partial: number }>;
+  const oldUnique = uniqueIndexes.some(index => {
+    if (Number(index.unique) !== 1 || Number(index.partial) === 1) return false;
+    const columns = db.query(`PRAGMA index_info("${index.name.replaceAll('"', '""')}")`).all() as Array<{ name: string }>;
+    return columns.length === 1 && columns[0]!.name === "task_id";
+  });
+  if (!oldUnique) { ensureFeishuOutboundKindIndexes(db); return; }
+  let backup = `${table}_c5_backup`;
+  for (let version = 2; tableExists(db, backup); version++) backup = `${table}_c5_backup_${version}`;
+  const schema = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string };
+  const relaxed = schema.sql.replace(/\btask_id\s+TEXT\s+UNIQUE\b/i, "task_id TEXT");
+  if (relaxed === schema.sql) throw new Error("C5 outbound migration: unexpected task_id unique constraint");
+  const columns = (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .map(column => `"${column.name.replaceAll('"', '""')}"`).join(", ");
+  const indexes = db.query("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL")
+    .all(table) as Array<{ name: string; sql: string }>;
+  const foreignKeys = Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys);
+  if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE ${table} RENAME TO ${backup}`);
+      db.exec(relaxed);
+      db.exec(`INSERT INTO ${table} (${columns}) SELECT ${columns} FROM ${backup}`);
+      for (const index of indexes) {
+        // Index names are global in SQLite; the original indexes stay on the retained backup.
+        const definition = index.sql.slice(index.sql.toUpperCase().indexOf(" ON "));
+        let name = `${index.name}_c5`;
+        for (let version = 2; db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name); version++) name = `${index.name}_c5_${version}`;
+        db.exec(`CREATE ${/^CREATE UNIQUE/i.test(index.sql) ? "UNIQUE " : ""}INDEX "${name.replaceAll('"', '""')}"${definition}`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+  } finally {
+    if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function ensureFeishuOutboundKindIndexes(db: SqlDatabase): void {
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  const indexes = [
+    ["idx_feishu_outbound_task_kind_unit", "UNIQUE ", "(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))"],
+    ["idx_feishu_outbound_task_carrier", "UNIQUE ", "(task_id) WHERE task_id IS NOT NULL AND (kind IS NULL OR kind = 'cot') AND unit_key = ''"],
+    ["idx_feishu_outbound_pending_c5", "", "(status, available_at, leased_until, created_at)"],
+    ["idx_feishu_outbound_kind_c5", "", "(kind, status, available_at)"],
+  ];
+  if (isPostgresDialect(db)) {
+    const keys = [
+      ["task_id", "COALESCE(kind, ''::text)", "COALESCE(unit_key, ''::text)"],
+      ["task_id"],
+      ["status", "available_at", "leased_until", "created_at"],
+      ["kind", "status", "available_at"],
+    ];
+    const carrierPredicate = "((task_id IS NOT NULL) AND ((kind IS NULL) OR (kind = 'cot'::text)) AND (unit_key = ''::text))";
+    type IndexDefinition = { unique: boolean; keys: string[]; predicate: string | null };
+    const liveIndexes = () => db.query(`SELECT i.indisunique AS "unique",
+        to_json(ARRAY(SELECT pg_get_indexdef(i.indexrelid, key, false)
+          FROM generate_series(1, i.indnkeyatts) AS key)) AS keys,
+        pg_get_expr(i.indpred, i.indrelid) AS predicate
+      FROM pg_index i
+      JOIN pg_class t ON t.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_class index_relation ON index_relation.oid = i.indexrelid
+      JOIN pg_am method ON method.oid = index_relation.relam
+      WHERE t.relname = ? AND n.nspname = current_schema()
+        AND i.indisvalid AND i.indisready AND method.amname = 'btree'`).all(table) as IndexDefinition[];
+    const matches = (index: IndexDefinition, position: number) =>
+      index.unique === Boolean(indexes[position]![1])
+      && index.keys.length === keys[position]!.length
+      && index.keys.every((key, column) => key === keys[position]![column])
+      && index.predicate === (position === 1 ? carrierPredicate : null);
+    const existing = liveIndexes();
+    for (const [position, [baseName, unique, definition]] of indexes.entries()) {
+      if (existing.some(index => matches(index, position))) continue;
+      let name = baseName!;
+      for (let version = 2; db.query(`SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = ? AND n.nspname = current_schema()`).get(name); version++) name = `${baseName}_${version}`;
+      // An archive may own the original name. A concurrent collision must fail, not skip creation.
+      db.exec(`CREATE ${unique}INDEX ${name} ON ${table}${definition}`);
+    }
+    const complete = liveIndexes();
+    if (indexes.some((_, position) => !complete.some(index => matches(index, position)))) {
+      throw new Error("C5 outbound migration: live index definitions are incomplete; see docs/feishu-outbound-kind-migration.md");
+    }
+    return;
+  }
+  for (const [baseName, unique, definition] of indexes) {
+    let name = baseName!;
+    if (!isPostgresDialect(db)) {
+      for (let version = 2; ; version++) {
+        const existing = db.query("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) as { tbl_name: string } | null;
+        if (!existing || existing.tbl_name === table) break;
+        name = `${baseName}_${version}`;
+      }
+    }
+    db.exec(`CREATE ${unique}INDEX IF NOT EXISTS ${name} ON ${table}${definition}`);
+  }
+}
 
 /**
  * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
@@ -5191,7 +5418,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       SELECT push.workspace_id, push.binding_id, push.issue_id, retry.id, push.delivery_mode, push.source
       FROM push_lineage push
       JOIN multiremi_tasks parent ON parent.id = push.wake_task_id
-      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent")}
+      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent", "legacy")}
     )
     SELECT push.*, task.chat_session_id FROM push_lineage push
     LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id
@@ -5555,8 +5782,11 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
   const nowIso = now.toISOString();
   const stallBefore = new Date(now.getTime() - resolveSessionArchiveUploadStallMs()).toISOString();
   const policy = resolveSessionArchiveRetryPolicy();
+  const hasBudgetBase = (db.query("PRAGMA table_info(multiremi_session_archives)").all() as Array<{ name: string }>)
+    .some((column) => column.name === "retry_budget_base_attempt");
   const rows = db.query(
-    `SELECT id, status, attempt_count, updated_at
+    `SELECT id, status, attempt_count, updated_at,
+            ${hasBudgetBase ? "retry_budget_base_attempt" : "0 AS retry_budget_base_attempt"}
      FROM multiremi_session_archives
      WHERE status = 'failed'
         OR (status = 'uploading' AND updated_at <= ?)`,
@@ -5565,11 +5795,13 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
     status: string;
     attempt_count: number;
     updated_at: string;
+    retry_budget_base_attempt: number;
   }>;
   for (const row of rows) {
     const attemptCount = Number(row.attempt_count ?? 0);
-    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy);
-    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now);
+    const base = Number(row.retry_budget_base_attempt ?? 0);
+    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy, base);
+    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now, base);
     db.run(
       `UPDATE multiremi_session_archives
        SET status = 'failed',
@@ -5585,6 +5817,238 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
       [nextRetryAt, exhausted ? nowIso : null, nowIso, row.id],
     );
   }
+}
+
+/**
+ * Session Archive v2 schema: subject columns and the task trace pointer table.
+ *
+ * Every pre-existing row is an Issue archive written by the v1 writer, so it is
+ * relabelled `subject_kind = 'issue'`, `subject_id = issue_id`,
+ * `format = multiremi.issue-sessions.v1`. Those rows keep their bytes and their
+ * `ready` state: the hard-delete barrier requires the exact bound row to stay
+ * `ready`, so v1 history is never rewritten by this migration.
+ */
+function migrateSessionArchiveSubjectsV2(db: SqlDatabase): void {
+  addColumnIfMissing(db, "multiremi_session_archives", "subject_kind TEXT");
+  addColumnIfMissing(db, "multiremi_session_archives", "subject_id TEXT");
+  addColumnIfMissing(db, "multiremi_session_archives", "format TEXT");
+  const before = db.query(
+    "SELECT COUNT(*) AS count FROM multiremi_session_archives",
+  ).get() as { count: number } | null;
+  const beforeCount = Number(before?.count ?? 0);
+
+  db.run(
+    `UPDATE multiremi_session_archives
+        SET subject_kind = COALESCE(subject_kind, 'issue'),
+            subject_id = COALESCE(subject_id, issue_id),
+            format = COALESCE(format, ?)
+      WHERE subject_kind IS NULL OR subject_id IS NULL OR format IS NULL`,
+    [SESSION_ARCHIVE_FORMAT_V1],
+  );
+
+  const after = db.query(
+    `SELECT COUNT(*) AS count,
+            SUM(CASE WHEN subject_kind = 'issue' THEN 1 ELSE 0 END) AS issue_subjects,
+            SUM(CASE WHEN subject_id IS NULL OR subject_id = '' THEN 1 ELSE 0 END) AS missing_subjects
+     FROM multiremi_session_archives`,
+  ).get() as { count: number; issue_subjects: number | null; missing_subjects: number | null } | null;
+  const afterCount = Number(after?.count ?? 0);
+  const issueSubjects = Number(after?.issue_subjects ?? 0);
+  const missingSubjects = Number(after?.missing_subjects ?? 0);
+  // The backfill is a relabel: no row may appear, disappear, or lose its subject.
+  if (afterCount !== beforeCount || issueSubjects !== afterCount || missingSubjects !== 0) {
+    throw new Error(
+      "Session archive subject migration changed the row set: "
+      + `${beforeCount} -> ${afterCount} rows, ${issueSubjects} issue subjects, ${missingSubjects} unlabelled`,
+    );
+  }
+
+  const expectedRows = afterCount;
+  allowNullableSessionArchiveIssueId(db, expectedRows);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_session_archives_subject_revision
+      ON multiremi_session_archives(subject_kind, subject_id, source_revision, sha256);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_subject
+      ON multiremi_session_archives(subject_kind, subject_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_issue
+      ON multiremi_session_archives(issue_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_workspace_status
+      ON multiremi_session_archives(workspace_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_runtime
+      ON multiremi_session_archives(runtime_id, status, updated_at);
+  `);
+}
+
+/**
+ * Drop `NOT NULL` from `multiremi_session_archives.issue_id`.
+ *
+ * Chat and one-shot Task subjects have no Issue, so the column has to accept
+ * NULL. SQLite cannot drop a column constraint in place; the table is rebuilt
+ * the way `allowNullableFeishuOutboundReplyToMessageId` already does it, and
+ * Postgres gets a plain `ALTER COLUMN ... DROP NOT NULL`.
+ */
+function allowNullableSessionArchiveIssueId(db: SqlDatabase, expectedRows: number): void {
+  const column = (db.query("PRAGMA table_info(multiremi_session_archives)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>).find((entry) => entry.name === "issue_id");
+  if (!column || Number(column.notnull) === 0) return;
+  if (isPostgresConfigured()) {
+    db.exec("ALTER TABLE multiremi_session_archives ALTER COLUMN issue_id DROP NOT NULL");
+    return;
+  }
+
+  // The rebuilt table carries the subject uniqueness key instead of
+  // UNIQUE(issue_id, source_revision, sha256): issue_id is NULL for Chat and
+  // Task rows, and NULLs compare distinct in a unique index on both engines.
+  db.exec(`
+    CREATE TABLE multiremi_session_archives_v2 (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      issue_id TEXT,
+      subject_kind TEXT NOT NULL DEFAULT 'issue',
+      subject_id TEXT NOT NULL DEFAULT '',
+      format TEXT NOT NULL DEFAULT 'multiremi.session-archive.v2',
+      runtime_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL,
+      uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
+      file_count INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      relative_path TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      next_retry_at TEXT,
+      retry_exhausted_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      UNIQUE(subject_kind, subject_id, source_revision, sha256),
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+    INSERT INTO multiremi_session_archives_v2 (
+      id, workspace_id, issue_id, subject_kind, subject_id, format,
+      runtime_id, daemon_id, source_revision, sha256, size_bytes,
+      uploaded_size_bytes, file_count, status, relative_path, metadata,
+      attempt_count, last_error, next_retry_at, retry_exhausted_at,
+      created_at, updated_at, completed_at
+    )
+    SELECT
+      id, workspace_id, issue_id,
+      COALESCE(subject_kind, 'issue'), COALESCE(subject_id, issue_id),
+      COALESCE(format, 'multiremi.issue-sessions.v1'),
+      runtime_id, daemon_id, source_revision, sha256, size_bytes,
+      uploaded_size_bytes, file_count, status, relative_path, metadata,
+      attempt_count, last_error, next_retry_at, retry_exhausted_at,
+      created_at, updated_at, completed_at
+    FROM multiremi_session_archives;
+    DROP TABLE multiremi_session_archives;
+    ALTER TABLE multiremi_session_archives_v2 RENAME TO multiremi_session_archives;
+  `);
+  // The rebuild is a copy, not a filter: a mismatch here means rows were lost
+  // while relocating the table, which would silently orphan archive bytes.
+  const rebuilt = db.query(
+    "SELECT COUNT(*) AS count FROM multiremi_session_archives",
+  ).get() as { count: number } | null;
+  const rebuiltCount = Number(rebuilt?.count ?? 0);
+  if (rebuiltCount !== expectedRows) {
+    throw new Error(
+      `Session archive table rebuild lost rows: expected ${expectedRows}, found ${rebuiltCount}`,
+    );
+  }
+}
+
+/** `multiremi_task_traces`: one row per task, pointing at wherever its trace lives. */
+function createTaskTracePointers(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_task_traces (
+      task_id TEXT PRIMARY KEY,
+      location TEXT NOT NULL,
+      runtime_id TEXT,
+      archive_id TEXT,
+      member_path TEXT,
+      data_offset INTEGER,
+      compressed_size INTEGER,
+      uncompressed_size INTEGER,
+      sha256 TEXT,
+      event_count INTEGER,
+      head_seq INTEGER,
+      closed INTEGER,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_location
+      ON multiremi_task_traces(location, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_archive
+      ON multiremi_task_traces(archive_id);
+  `);
+}
+
+/**
+ * One row per backfilled subject. `running` marks a subject whose archive is
+ * being built, so a restart knows to discard its staging files and redo it;
+ * `done` is written in the transaction that makes the archive `ready`.
+ *
+ * `multiremi_trace_backfill_tasks` holds the per-task digests of the last
+ * completed run, replaced in that same transaction; `cross_switch` marks the
+ * tasks that run acknowledged as cross-switch (MUL-432 P1).
+ */
+function createTraceBackfillProgress(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_progress (
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      task_count INTEGER NOT NULL DEFAULT 0,
+      row_count BIGINT NOT NULL DEFAULT 0,
+      digest TEXT,
+      archive_id TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(subject_kind, subject_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_tasks (
+      task_id TEXT PRIMARY KEY,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      archive_id TEXT NOT NULL,
+      row_count BIGINT NOT NULL,
+      head_seq BIGINT NOT NULL,
+      digest TEXT NOT NULL,
+      cross_switch INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_trace_backfill_tasks_subject
+      ON multiremi_trace_backfill_tasks(subject_kind, subject_id);
+  `);
+}
+
+/**
+ * One row per request asking a daemon to archive one session subject, delivered
+ * as the `runtime.archive_sessions` frame. `status` only moves forward:
+ * pending → sent → acked → completed | failed.
+ */
+function createSessionArchiveRequests(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_session_archive_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_runtime
+      ON multiremi_session_archive_requests(runtime_id, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_subject
+      ON multiremi_session_archive_requests(runtime_id, subject_kind, subject_id);
+  `);
 }
 
 function nextIssueNumber(db: SqlDatabase, workspaceId: string): number {

@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { Inter, Geist_Mono, Source_Serif_4 } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@multiremi/ui/components/ui/sonner";
@@ -113,6 +114,30 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={cn("antialiased font-sans h-full", inter.variable, geistMono.variable, sourceSerif.variable)}
     >
+      <head>
+        <Script id="issue-log-ssr-position" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: `(()=>{
+          const position=e=>{
+            const target=e.dataset.ssrAnchorId&&document.getElementById(e.dataset.ssrAnchorId);
+            if(target&&e.contains(target)){
+              const offset=target.getBoundingClientRect().top-e.getBoundingClientRect().top+e.scrollTop;
+              e.scrollTop=Math.max(0,offset-(e.clientHeight-target.offsetHeight)/2);
+            }else e.scrollTop=e.scrollHeight;
+          };
+          const place=()=>document.querySelectorAll('[data-session-log-scroll][data-ssr-initial]').forEach(e=>{
+            const expected=Number(e.dataset.ssrExpected||0);
+            if(e.dataset.ssrPositioned||e.dataset.ssrPositioning||expected<1||e.querySelectorAll('[data-perf-item]').length<expected||e.clientHeight<1||e.scrollHeight<1)return;
+            e.dataset.ssrPositioning='1';const c=e.firstElementChild;position(e);
+            const r=e.getBoundingClientRect();
+            const images=[...e.querySelectorAll('img')].filter(i=>!i.complete&&i.getBoundingClientRect().bottom>r.top&&i.getBoundingClientRect().top<r.bottom);
+            const waits=images.map(i=>new Promise(resolve=>{i.addEventListener('load',resolve,{once:true});i.addEventListener('error',resolve,{once:true});}));
+            Promise.race([Promise.all(waits),new Promise(resolve=>setTimeout(resolve,1500))]).then(()=>requestAnimationFrame(()=>{
+              position(e);c.style.visibility='';e.dataset.ssrPositioned='1';e.dataset.perfState='ready';
+            }));
+          });
+          new MutationObserver(place).observe(document,{childList:true,subtree:true});
+          document.addEventListener('DOMContentLoaded',place);place();
+        })();` }} />
+      </head>
       <body className="h-full overflow-hidden">
         <ThemeProvider>
           <WebProviders locale={locale} resources={resources}>

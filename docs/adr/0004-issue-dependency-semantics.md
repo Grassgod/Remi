@@ -65,8 +65,10 @@ squad rule about ordering was prose. The observable failures were:
      rejected prerequisite leaves nothing behind: no orphan issue and no
      consumed number. The body runs through `createIssueWithinTransaction`; the
      wrapper opens the transaction only when the caller does not already own one
-     (Feishu ingestion and autopilots do), because Postgres has no savepoints on
-     this bridge. An issue with an unmet prerequisite parks at `backlog`
+     (Feishu ingestion and autopilots do), so the caller's `COMMIT` stays the only
+     one and the creation's events wait for it; nested, the wrapper's
+     `transaction()` would only be a `SAVEPOINT` (B1, MUL-426) and would publish
+     before that `COMMIT`. An issue with an unmet prerequisite parks at `backlog`
      whatever status was requested.
 
    **The outermost owner holds the only transaction.** A flow that already owns
@@ -76,8 +78,11 @@ squad rule about ordering was prose. The observable failures were:
    COMMIT (or drops both on rollback). Messaging follows the same rule:
    direct, approved and proposal owners call the transaction-internal outcome
    writer, while the standalone `recordOutcome` wrapper opens a transaction only
-   for independent callers. This is required because the PostgreSQL bridge has
-   no savepoints: an inner COMMIT would make the outer rollback ineffective.
+   for independent callers. This is required because a standalone wrapper
+   publishes and replays right after its own `transaction()` returns; since B1
+   (MUL-426) a nested `transaction()` on the PostgreSQL bridge is a `SAVEPOINT`,
+   so that would happen before the owner's COMMIT and an outer rollback could
+   not take it back.
 
    *Layer 2 — task creation (`createTaskWithinWorkspaceLock` in tasks-repo),
    the single funnel every task is born in:* creating the **first** task of a

@@ -32,6 +32,8 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
+Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，列表等运行卡片首次查询结束再显现，避免卡片插入造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+
 ## 一次任务读取与更新
 
 ```text
@@ -55,7 +57,8 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 | 工作台待输入 / 待验收 / 失败恢复 | [issues/workbench.ts](../../frontend/packages/core/issues/workbench.ts) 的 `workbenchIssuesOptions`、`partitionReviewIssues`；[workbench-page.tsx](../../frontend/packages/views/workbench/components/workbench-page.tsx) |
 | 收件箱的分页、摘要与展示分组 | [inbox/queries.ts](../../frontend/packages/core/inbox/queries.ts) 的 `inboxPageOptions` / `inboxSummaryOptions`、[inbox/grouping.ts](../../frontend/packages/core/inbox/grouping.ts)、[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) |
 | Issue 飞书话题设置 | [issue-topic-section.tsx](../../frontend/packages/views/settings/components/issue-topic-section.tsx)、[feishu-bot/queries.ts](../../frontend/packages/core/feishu-bot/queries.ts)、[workspaces router](../../packages/server/src/api/routers/workspaces.ts) 的 `/api/workspaces/:id/issue-topics` |
-| 执行消息与 transcript | [chat/queries.ts](../../frontend/packages/core/chat/queries.ts)、[build-timeline.ts](../../frontend/packages/views/common/task-transcript/build-timeline.ts)、[agent-transcript-dialog.tsx](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx) |
+| 平铺会话日志（切片、行高缓存、副本端口） | [session-log-list.tsx](../../frontend/packages/views/common/session-log/session-log-list.tsx)、[entry-html.tsx](../../frontend/packages/views/common/session-log/entry-html.tsx)、[use-row-heights.ts](../../frontend/packages/views/common/session-log/use-row-heights.ts)、[core/replica/port.ts](../../frontend/packages/core/replica/port.ts) |
+| 执行过程弹窗 | [task-trace-dialog.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.tsx)、[build-timeline.ts](../../frontend/packages/views/common/task-transcript/build-timeline.ts)、[agent-transcript-dialog.tsx](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx)；点击后从 task trace API 分页读取，运行中由 trace socket 续传 |
 
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
@@ -72,10 +75,19 @@ Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../.
 - [useRealtimeSync](../../frontend/packages/core/realtime/use-realtime-sync.ts)负责订阅生命周期和断线重连后的缓存恢复；领域处理器集中在 [realtime/sync/](../../frontend/packages/core/realtime/sync/)。
 - [issues/ws-updaters.ts](../../frontend/packages/core/issues/ws-updaters.ts)补写可确定的任务列表和详情，对派生列表做失效处理。改任务响应字段时同时检查这里和 mutation 的缓存处理。
 - [prefix-refresh.ts](../../frontend/packages/core/realtime/sync/prefix-refresh.ts)按事件前缀合并刷新；`SPECIFIC_EVENTS` 排除已有精确处理器的事件，避免重复失效。
-- [tasks.ts](../../frontend/packages/core/realtime/sync/tasks.ts)将 `task:message` 按任务缓冲，约每 80ms 批写已加载缓存，退出订阅时刷新尾部；流式消息不走通用前缀失效。
+- 浮动 Chat 在 [FloatingPanelLayout](../../frontend/packages/views/layout/floating-panel-layout.tsx) 中预留展开的 Issue 属性栏宽度；右栏缩放和折叠通过 ResizeObserver 更新布局，普通与展开的浮窗均限制在剩余文档区域，不提高属性按钮层级。
+- Chat/Issue 正文由 [SessionReplica](../../frontend/packages/core/replica/browser.ts) 的 `log:` 流驱动；运行中的简要工具状态由 [use-task-trace.ts](../../frontend/packages/views/common/task-transcript/use-task-trace.ts) 读取并订阅 `trace:`，结束任务只读分页结果，不继续占用 trace socket。
 - 排查慢页面先区分网络请求扇出、API 延迟、缓存失效范围和 React 渲染成本；保留测量场景与前后结果。以上文件提供定位入口，不把静态代码形态直接当成已证实的性能瓶颈。
 
 ## 验证入口
+
+浏览器本地副本在 [replica/browser.ts](../../frontend/packages/core/replica/browser.ts)。Web Lock、BroadcastChannel、OPFS SAH pool 名和目录都使用同一个 `(user_id, workspace_id)` 分区键；频道消息再核对该键。leader 持有 Worker 和 socket，follower 通过频道查询；没有 OPFS 或 Web Locks 时，每页的 Memory 副本复用同一个 leader 请求队列和同步语义。
+
+页面句柄显式 open/close，每个 tab 对同一 session 只声明一次兴趣；leader 按 tab 去重，最后一个 close 才退订。新 leader 宣告接管后，各存活页面重新声明，cursor 来自数据库的连续 head。dispose 终止 Worker 并结束 Web Lock 回调，使下一页可以接管。
+
+副本 schema v3 包含 `revision_watermarks`，Memory 也保存同样的 `(session_id, seq) → revision` 水位。删除或隐藏只移除展示行，不移除水位；流帧和 HTTP 窗口都拒绝不高于水位的 revision，交接重开后仍有效。水位随删除行数增长，不按 coverage 回收；session/log_version 重置、身份切换和整库清除同时删除水位。旧版缓存无法还原已丢失的删除 revision，因此按既有 schema_upgrade 路径清库并重新同步。
+
+Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯一请求 ID。close、dispose、clear 使旧请求失效；清库从任意页转给 leader，删除全部表内容及旧 meta，并广播 cleared。仍挂载页面的引用计数保持连续，清后新数据可以重建副本；logout 的授权和 socket 退出由调用方处理。ack 的新鲜度传到所有页面，版本改变从重置后的 cursor 同步；逐洞补读等 Worker 写入确认后再响应。原夹具及 [QA 回归](../../tests/integration/replica-fixture/qa-run.ts)使用 C0 mock socket 和真实浏览器资源；离线场景在服务端订阅数为零之后追加数据。
 
 统一命令维护在[根开发入口](../../CLAUDE.md)和[根 package.json](../../package.json)；针对某个文件运行时，使用所属包的 `test` 脚本传入测试路径，确保加载正确的 Vitest 配置。
 

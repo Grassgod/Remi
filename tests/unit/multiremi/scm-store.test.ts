@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -1521,10 +1522,7 @@ describe("SCM connection and canonical event store", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ autopilotId: ordinary.id, repositoryId: null, dedupeKey: null });
 
-    const claimResponse = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: "Bearer root-secret" },
-    });
+    const claimResponse = await taskOfferResponse(store, runtime.id, { headers: { Authorization: "Bearer root-secret" }, authToken: "root-secret" });
     expect(claimResponse.status).toBe(200);
     const claim = (await claimResponse.json() as any).task;
     expect(claim.id).toBe(runs[0]!.taskId);
@@ -1660,7 +1658,7 @@ describe("SCM connection and canonical event store", () => {
     const app = createMultiremiApp({ store });
     const claims = new Map<string, any>();
     for (let index = 0; index < 5; index++) {
-      const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      const response = await taskOfferResponse(store, runtime.id);
       expect(response.status).toBe(200);
       const claim = (await response.json() as any).task;
       expect(claim).not.toBeNull();

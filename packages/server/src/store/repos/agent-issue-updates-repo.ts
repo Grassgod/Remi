@@ -122,6 +122,7 @@ export class AgentIssueUpdatesRepo {
        ORDER BY c.created_at ASC, c.id ASC`,
     ).all(issue.id) as Row[];
     const seenChats = new Set<string>();
+    const targets: Array<{ chat: ReturnType<typeof toBoundChat>; channelId: string }> = [];
     for (const row of chats) {
       const chat = toBoundChat(row);
       if (seenChats.has(chat.id)) continue;
@@ -130,8 +131,14 @@ export class AgentIssueUpdatesRepo {
       if (!channel?.enabled) continue;
       if (!channel.eventTypes.includes("*") && !channel.eventTypes.includes(input.type)) continue;
       if (this.isTargetChatEvent(chat.id, input)) continue;
-      this.upsertPending(chat, channel.id, input);
+      targets.push({ chat, channelId: channel.id });
     }
+    if (targets.length === 0) return;
+    const write = () => {
+      for (const { chat, channelId } of targets) this.upsertPending(chat, channelId, input);
+    };
+    if (this.ctx.db.inTransaction) write();
+    else this.ctx.db.transaction(write)();
   }
 
   flushDue(nowInput: string | Date = new Date()): AgentIssueUpdateFlushResult {
@@ -176,23 +183,17 @@ export class AgentIssueUpdatesRepo {
     ).all(issueId) as Row[];
     let delivered = 0;
     let dropped = 0;
-    const events: WorkspaceEvent[] = [];
     for (const row of rows) {
       const outcome = this.flushOneWithinTransaction(String(row.chat_session_id), now, true);
       if (outcome.kind === "delivered") delivered += 1;
       else if (outcome.kind === "dropped") dropped += 1;
-      if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result, events);
     }
-    // These messages preceded the deferred terminal events. Prepend the whole
-    // batch so that order, including the order between Chats, stays unchanged.
-    deferredEvents.workspace.unshift(...events);
     return { delivered, dropped };
   }
 
   private flushOne(chatSessionId: string, now: Date): "delivered" | "dropped" | "skipped" {
     const outcome = this.ctx.db.transaction(() => this.flushOneWithinTransaction(chatSessionId, now, false))();
 
-    if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result);
     return outcome.kind;
   }
 
@@ -363,28 +364,6 @@ export class AgentIssueUpdatesRepo {
     );
   }
 
-  private publish(
-    result: { session: MultiremiChatSession; message: MultiremiChatMessage },
-    events?: WorkspaceEvent[],
-  ): void {
-    const payload = {
-      message_id: result.message.id,
-      role: "system",
-      content: result.message.body,
-      task_id: null,
-      created_at: result.message.createdAt,
-    };
-    if (events) {
-      // Match emitChatEvent's fallback for a null actor id.
-      events.push({
-        type: "chat:message", workspaceId: result.session.workspaceId,
-        chatSessionId: result.session.id, actorType: "system", actorId: result.session.creatorId,
-        payload: { chat_session_id: result.session.id, ...payload },
-      });
-    } else {
-      this.ctx.emitChatEvent(result.session, "chat:message", payload, { actorType: "system", actorId: null });
-    }
-  }
 }
 
 interface AgentIssueUpdateState {

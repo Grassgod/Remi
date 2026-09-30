@@ -56,7 +56,7 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { session } = loaded;
-    return c.json({ session, messages: store.listChatMessages(session.id) });
+    return c.json({ session, messages: store.listChatMessagesFromLog(session.id) });
   });
   app.patch("/api/multiremi/chats/:id", async (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
@@ -69,7 +69,7 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/chats/:id/messages", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json({ messages: store.listChatMessages(loaded.session.id) });
+    return c.json({ messages: store.listChatMessagesFromLog(loaded.session.id) });
   });
   app.post("/api/multiremi/chats/:id/messages", async (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("id"));
@@ -120,53 +120,6 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const deleted = store.deleteChatSession(loaded.session.id);
     if (!deleted) return c.json({ error: "chat session not found" }, 404);
     return c.body(null, 204);
-  });
-  app.get("/api/chat/sessions/:sessionId/messages", (c) => {
-    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
-    if (loaded instanceof Response) return loaded;
-    const messages = store.listChatMessages(loaded.session.id);
-    const attachments = store.listAttachmentsForChatMessages(messages.map((message) => message.id));
-    return c.json(messages.map((message) => chatMessageCompatibilityResponse(message, attachments.get(message.id) ?? [])));
-  });
-  app.get("/api/chat/sessions/:sessionId/messages/page", (c) => {
-    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
-    if (loaded instanceof Response) return loaded;
-    const rawLimit = c.req.query("limit");
-    let limit = 50;
-    if (rawLimit != null && rawLimit !== "") {
-      const parsedLimit = Number(rawLimit);
-      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
-        return c.json({ error: "invalid limit" }, 400);
-      }
-      limit = parsedLimit;
-    }
-    const beforeCreatedAt = c.req.query("before_created_at");
-    const beforeId = c.req.query("before_id");
-    if ((!beforeCreatedAt && beforeId) || (beforeCreatedAt && !beforeId)) {
-      return c.json({ error: "invalid cursor" }, 400);
-    }
-    if (beforeCreatedAt && Number.isNaN(Date.parse(beforeCreatedAt))) {
-      return c.json({ error: "invalid cursor" }, 400);
-    }
-    const sessionMessages = store.listChatMessages(loaded.session.id);
-    const attachments = store.listAttachmentsForChatMessages(sessionMessages.map((message) => message.id));
-    const messages = sessionMessages.map((message) => chatMessageCompatibilityResponse(message, attachments.get(message.id) ?? []));
-    const cursorIndex = beforeCreatedAt
-      ? messages.findIndex((message) => message.id === beforeId && message.created_at === beforeCreatedAt)
-      : messages.length;
-    if (cursorIndex < 0) return c.json({ error: "invalid cursor" }, 400);
-    const filtered = messages.slice(0, cursorIndex);
-    const pageMessages = filtered.slice(Math.max(0, filtered.length - limit));
-    const hasMore = filtered.length > pageMessages.length;
-    const nextCursor = hasMore && pageMessages[0]
-      ? { created_at: pageMessages[0].created_at, id: pageMessages[0].id }
-      : null;
-    return c.json({
-      messages: pageMessages,
-      limit,
-      has_more: hasMore,
-      next_cursor: nextCursor,
-    });
   });
   app.post("/api/chat/sessions/:sessionId/messages", async (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));

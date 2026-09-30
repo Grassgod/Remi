@@ -37,17 +37,31 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 协议、消息引用、字节预算与角色解析链见 [Realtime peer channel](dev/realtime-peer.md)。
 
 **任务执行**：issue/chat/autopilot 产生 task → [任务存储](../packages/server/src/store/repos/tasks-repo.ts) →
-[daemon client](../packages/server/src/worker/client.ts) / [worker loop](../packages/server/src/worker/daemon.ts) 领取 →
+[服务端 offer 泵](../packages/server/src/api/daemon-protocol/task-offers.ts) 推送 →
+[worker loop](../packages/server/src/worker/daemon.ts) accept 并执行 →
 [AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP 或原生 agy provider → 消息、usage 和终态上报。
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
+当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
+过程消息仍经 `TaskMessageBatcher` 写入 `multiremi_task_messages`；MUL-421 负责后续上行 outbox
+与 trace 接入：过程事件作为 trace 流交给 Live Hub 而不再落库，`trace.read` 作为反向 RPC 读热 trace。
+**A-2 连接层已接线**：[客户端](../packages/server/src/worker/daemon-protocol-client.ts)每进程一条 socket，
+`hello` 汇总所有 provider lane，`hb` 每 15 秒一次，ack 独立调度。主循环不再发 HTTP 心跳；
+4426、HTTP 426 或 v1 `ready` 会暂停全部 lane 接单，改走每 60 秒一次的 HTTP 升级探测。
+**A-3/A-4 下行已接线**：[DB 快照下发](../packages/server/src/api/daemon-protocol/downlinks.ts)在创建后及重连时
+推送待办和配置；steer、human request、取消与 plugin desired 使用 v2 帧和 RPC，不再搭心跳 ack 或定时轮询。
+跨进程触发依赖 MUL-462 的实时扇出，临时同进程接线不能替代该交付门禁。
+HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。规范见
+[daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0012](adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
+上行报告在 MUL-421 合入前仍走现有 HTTP 路径，不能将它视为已经迁移。
+
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
-Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加 Issue 与增量摘要。详见 [Chat 契约](chat.md)。
+Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加按 `relay:<chat_session_id>` 游标读取的 Issue 日志（最多 100 条，并给出续读位置）；转述任务完成才推进游标。详见 [Chat 契约](chat.md)。
 
 **飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
 工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；
-bot 控制指令携带版本和期望状态。[concierge supervisor](../packages/server/src/worker/feishu-concierge.ts)经鉴权接口拉取 assignment 后串行协调 connector 的启动、停止与重试，应用凭据不随心跳下发。心跳还可领取持久化出站投递，由 connector 发送并回报；自动 Issue 话题及负责人轮次完成推送见[飞书接入契约](feishu-message-ingestion.md)。
+bot 控制指令携带版本和期望状态。[concierge supervisor](../packages/server/src/worker/feishu-concierge.ts)经鉴权接口拉取 assignment 后串行协调 connector 的启动、停止与重试，应用凭据不随心跳下发。持久化出站投递使用 `feishu.outbound`，发出后收到 ACK 才领取原有租约；断连前未确认的投递由 DB 快照重推，不改变投递数据模型。自动 Issue 话题及负责人轮次完成推送见[飞书接入契约](feishu-message-ingestion.md)。
 
 ## 存储与事务
 
@@ -58,9 +72,22 @@ SQLite handle 统一由 [openSqliteDatabase](../packages/server/src/store/db/sql
 已有 SQLite handle 或包装对象使用 `markSqliteDialect`，支持两种后端的包装对象转发内层 `dialect`。
 shared 的 `getDb` 不依赖 server，由 `openMultiremiDatabase` 给返回的同一对象打标记。
 [架构扫描](../tests/arch/sqlite-handle-entry.test.ts)禁止其他 git 跟踪源码直接构造或恢复 `bun:sqlite` handle。
+SQLite 最外层事务以 `BEGIN IMMEDIATE` 取得写锁，嵌套事务仍用 savepoint，避免跨进程先读后写升级锁时立即失败；PostgreSQL 事务语义不变。详见 [ADR 0011](adr/0011-transaction-ownership-and-side-effect-timing.md)。
 这是底层存储适配的选择；生产 server 启动还有[必要配置检查](dev/auth.md)，不能据此省略部署配置。
 PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packages/server/src/store/db/pg-worker.ts)，worker 使用单连接。
 这是真实实现约束，不应被“整体 async/await”概述掩盖。
+嵌套 `transaction()` 在 PostgreSQL 使用 savepoint；外层提交前会拒绝未恢复的语句失败。
+活动记录随主事务提交；可选的活动通知聚合、广播查表在提交后执行，避免给深度 1 的入口增加 savepoint。
+可选聚合写入使用独立事务，失败时仅回滚聚合；轮次结束时的聚合及 flush 仍使用调用方事务。
+没有接收者时不启动聚合事务。事务代理在原 runner 返回、读缓存事务结束后执行提交后回调；
+外层回滚会丢弃这些回调。不能在 PostgreSQL 事务内用裸 `try/catch` 吞掉 SQL 错误，否则事务会进入 aborted 状态。
+调用方事件队列先保留活动位置，提交后补齐路由；路由失败时移除该活动，保持其余评论事件的顺序。
+
+[InboxRepo](../packages/server/src/store/repos/inbox-repo.ts)将 E2、E3 通知、E4 和委派回报写成接收会话的系统评论，
+`metadata.envelope` 保留寻址与去重信息。状态、日志条目与 `wake_seq` 在同一深度 1 的事务提交；评论 @ 复用原日志条目。
+平台种下的 queued 行由部分唯一索引约束，人的 Chat 队列、评论轮和续接排除在索引外；
+人的评论按 Q-B 常量并入 queued，编辑触发评论时在同一事务补种 `re_ring`。实现和迁移入口见
+[pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

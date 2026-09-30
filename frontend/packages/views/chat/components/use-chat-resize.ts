@@ -10,11 +10,12 @@ const FALLBACK_MAX_W = 800;
 const FALLBACK_MAX_H = 700;
 
 function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
+  return Math.min(max, Math.max(min, v));
 }
 
 export function useChatResize(
   windowRef: React.RefObject<HTMLDivElement | null>,
+  rightRailWidth = 0,
 ) {
   const chatWidth = useChatStore((s) => s.chatWidth);
   const chatHeight = useChatStore((s) => s.chatHeight);
@@ -34,7 +35,8 @@ export function useChatResize(
     if (!parent) return;
 
     const update = () => {
-      const maxW = Math.floor(parent.clientWidth * MAX_RATIO);
+      // Both normal and expanded windows must stop before the property rail.
+      const maxW = Math.max(0, Math.floor(Math.min(parent.clientWidth * MAX_RATIO, parent.clientWidth - rightRailWidth - 16)));
       const maxH = Math.floor(parent.clientHeight * MAX_RATIO);
       setBoundsReady(true); // idempotent once true
       // Only trigger a re-render if the bounds actually changed. Without this
@@ -53,7 +55,7 @@ export function useChatResize(
     const ro = new ResizeObserver(update);
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [windowRef]);
+  }, [windowRef, rightRailWidth]);
 
   // ── Derive rendered size ──────────────────────────────────────────────
   const { maxW, maxH } = boundsRef.current;

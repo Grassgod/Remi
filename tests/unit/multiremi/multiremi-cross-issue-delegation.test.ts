@@ -4,6 +4,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 let sequence = 0;
@@ -95,6 +96,8 @@ function finishLeaderRound(store: MultiremiStore, f: ReturnType<typeof fixture>)
 }
 
 for (const backend of ["sqlite", "postgres"] as const) {
+  // These PG scenarios do several writes; CI runner jitter is outside the behavior asserted below.
+  const pgScenarioTimeout = backend === "postgres" ? 15000 : 5000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
     it("recognizes the child and sibling subtrees and explains rejected dispatches", async () => withStore(backend, async (store) => {
       const f = fixture(store);
@@ -154,9 +157,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
           && task.parentTaskId === childTask.id);
         expect(returns).toHaveLength(1);
         expect(returns[0]?.issueSessionId).toBe(f.leaderSession.id);
-        expect(returns[0]?.prompt).toContain(f.child.key);
-        expect(returns[0]?.prompt).toContain(comment.id);
-        expect(returns[0]?.prompt).toContain(`Status: ${terminal}`);
+        const body = inboxReportBody(store, returns[0]!);
+        expect(body).toContain(f.child.key);
+        expect(body).toContain(comment.id);
+        expect(body).toContain(`Status: ${terminal}`);
         expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
         expect(store.listTasksForIssue(f.child.id).filter((task) => task.agentId === f.leader.id)).toHaveLength(0);
         const bridge = store.listSessionEvents(f.leaderSession.id).find((event) =>
@@ -186,15 +190,16 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .toHaveLength(0);
     }));
 
-    it("dedupes a manual wakeup by parent_task_id and returns after its cancellation", async () => withStore(backend, async (store) => {
+    it("coalesces into the earliest queued leader round rather than selecting a manual wakeup by parent_task_id", async () => withStore(backend, async (store) => {
       const f = fixture(store);
       const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       const manual = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
         issueSessionId: f.leaderSession.id, parentTaskId: childTask.id, prompt: "Wake up" });
       store.cancelTask(childTask.id);
-      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manual.id);
-      expect(activities(store, f.child.id, "delegation_return_skipped")
-        .some((activity) => (activity.data as Record<string, unknown>).reason === "covered_by_delegate_wakeup"))
+      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(f.leaderTask.id);
+      expect(store.getTask(manual.id)!.prompt).toBe("Wake up");
+      expect(activities(store, f.parent.id, "pending_turn_coalesced")
+        .some((activity) => (activity.data as Record<string, unknown>).task_id === f.leaderTask.id))
         .toBe(true);
       const next = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       const cancelled = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
@@ -220,9 +225,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
       store.completeTask(childTask.id, { output: "Finished after closing the child." });
       expect(store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
       expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(e2Round[0]?.id);
-      expect(activities(store, f.child.id, "delegation_return_skipped")
-        .map((activity) => (activity.data as Record<string, unknown>).reason))
-        .toContain("covered_by_queued_task");
+      expect(activities(store, f.parent.id, "pending_turn_coalesced")
+        .map((activity) => (activity.data as Record<string, unknown>).task_id))
+        .toContain(e2Round[0]!.id);
     }));
 
     it("ignores a spoofed wake_source and trigger comment on a manual wakeup", async () => withStore(backend, async (store) => {
@@ -247,8 +252,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort();
       store.cancelTask(childTask.id);
       expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manualId);
-      expect(activities(store, f.child.id, "delegation_return_skipped")
-        .some((activity) => (activity.data as Record<string, unknown>).reason === "covered_by_delegate_wakeup"))
+      expect(activities(store, f.parent.id, "pending_turn_coalesced")
+        .some((activity) => (activity.data as Record<string, unknown>).task_id === manualId))
         .toBe(true);
       expect(store.listTasksForIssue(f.parent.id)
         .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort())
@@ -276,11 +281,14 @@ for (const backend of ["sqlite", "postgres"] as const) {
         reason: "wake source probe",
       }).replacementTask!;
       expect(replacement.wakeSource).toBe("child_status");
+      expect(store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.agentId === f.leader.id && task.status === "queued")
+        .map((task) => task.id)).toEqual([replacement.id]);
       store.cancelTask(childTask.id);
       expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(replacement.id);
-      expect(activities(store, f.child.id, "delegation_return_skipped")
-        .map((activity) => (activity.data as Record<string, unknown>).reason))
-        .toContain("covered_by_queued_task");
+      expect(activities(store, f.parent.id, "pending_turn_coalesced")
+        .map((activity) => (activity.data as Record<string, unknown>).task_id))
+        .toContain(replacement.id);
     }));
 
     it("merges a failure's blocked report into its queued return", async () => withStore(backend, async (store) => {
@@ -295,7 +303,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const queued = store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued");
       expect(queued).toHaveLength(1);
       expect(queued[0]?.issueSessionId).toBe(f.leaderSession.id);
-      expect(activities(store, f.parent.id, "child_status_parent_coalesced")).toHaveLength(1);
+      expect(activities(store, f.parent.id, "pending_turn_coalesced")).toHaveLength(1);
       expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
     }));
 
@@ -312,6 +320,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((task) => task.agentId === f.leader.id && task.parentTaskId === childTask.id)).toHaveLength(1);
     }));
 
+    // Cold PG setup dominates this case: 3.65-4.61s locally, 5.22s in CI.
+    // Both baseline heads use 161/221 terminal queries with no lock wait.
     it("resolves the result comment once inside the terminal transaction", async () => withStore(backend, async (store) => {
       const f = fixture(store);
       const first = await dispatch(store, f.leaderTask, f.child, f.worker.id);
@@ -324,7 +334,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       store.cancelTask(first.id);
       const withoutComment = store.listTasksForIssue(f.parent.id)
         .find((task) => task.agentId === f.leader.id && task.parentTaskId === first.id)!;
-      expect(withoutComment.prompt).toContain("Result comment: none at completion");
+      expect(inboxReportBody(store, withoutComment)).toContain("Result comment: none at completion");
       const bridgeWithout = store.listSessionEvents(f.leaderSession.id)
         .find((event) => event.kind === "delegation_report" && event.taskId === first.id)!;
       expect((bridgeWithout.metadata as Record<string, unknown>).result_comment_id).toBeNull();
@@ -338,7 +348,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(withoutComment.id);
       store.buildTaskSessionProjection(withoutComment.id);
       store.startTask(withoutComment.id);
-      store.completeTask(withoutComment.id, { output: "Reviewed the first report." });
+      store.completeTask(withoutComment.id, { output: "Reviewed the first report.", sessionId: "reviewed_first_report" });
       const secondLeaderTask = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
         issueSessionId: f.leaderSession.id, prompt: "Coordinate again." });
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(secondLeaderTask.id);
@@ -356,8 +366,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
       store.failTask(second.id, { error: "Latest result text" });
       const withComment = store.listTasksForIssue(f.parent.id)
         .find((task) => task.agentId === f.leader.id && task.parentTaskId === second.id)!;
-      expect(withComment.prompt).toContain(`Result comment: ${newest.id}`);
-      expect(withComment.prompt).toContain("Latest result text");
+      expect(inboxReportBody(store, withComment)).toContain(`Result comment: ${newest.id}`);
+      expect(inboxReportBody(store, withComment)).toContain("Latest result text");
       const bridgeWith = store.listSessionEvents(f.leaderSession.id)
         .find((event) => event.kind === "delegation_report" && event.taskId === second.id)!;
       expect((bridgeWith.metadata as Record<string, unknown>).result_comment_id).toBe(newest.id);
@@ -368,7 +378,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((event) => event.kind === "delegation_report" && event.taskId === second.id);
       expect(bridgeEvents).toHaveLength(1);
       expect((bridgeEvents[0]!.metadata as Record<string, unknown>).result_comment_id).toBe(newest.id);
-    }));
+    }), backend === "postgres" ? 15_000 : 5_000);
 
     it("still queues the return when the post-commit auto comment fails", async () => withStore(backend, async (store) => {
       const f = fixture(store);
@@ -389,13 +399,15 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const returnTask = store.listTasksForIssue(f.parent.id)
         .find((task) => task.agentId === f.leader.id && task.parentTaskId === childTask.id)!;
       expect(returnTask).toBeTruthy();
-      expect(returnTask.prompt).toContain("Result comment: none at completion");
-      expect(returnTask.prompt).toContain("Completed without an in-run comment");
+      expect(inboxReportBody(store, returnTask)).toContain("Result comment: none at completion");
+      expect(inboxReportBody(store, returnTask)).toContain("Completed without an in-run comment");
       const bridge = store.listSessionEvents(f.leaderSession.id)
         .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
       expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
-    }));
+    }), pgScenarioTimeout);
 
+    // Cold PG migrations plus five complete HTTP/task lifecycles take 4.94-5.26s
+    // locally; retain every assertion while allowing this fixture to finish.
     it("drains five child reports into one round and marks the lane cursor covered", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
       const app = createMultiremiApp({ store, authToken: "test-root" });
@@ -429,7 +441,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(queued).toHaveLength(1);
       expect(queued[0]?.issueSessionId).toBe(f.leaderSession.id);
       for (let index = 1; index < childTasks.length; index += 1) {
-        expect(queued[0]?.prompt).toContain(`Report ${index}`);
+        expect(inboxReportBody(store, queued[0]!)).toContain(`Report ${index}`);
       }
       expect(store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
@@ -445,7 +457,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((event) => event.kind === "delegation_report");
       expect(bridges).toHaveLength(5);
       expect(new Set(bridges.map((event) => event.taskId))).toEqual(new Set(childTasks.map((task) => task.id)));
-    }));
+    }), pgScenarioTimeout);
 
     it("reproduces the MUL-383 HTTP path step by step", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
@@ -487,13 +499,13 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const queued = store.listTasksForIssue(f.parent.id)
         .filter((task) => task.status === "queued" && task.agentId === f.leader.id);
       expect(queued).toHaveLength(1);
-      expect(queued[0]?.prompt).toContain("MUL-383 result 4");
+      expect(inboxReportBody(store, queued[0]!)).toContain("MUL-383 result 4");
       expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
       expect(store.listSessionEvents(f.leaderSession.id)
         .filter((event) => event.kind === "delegation_report")).toHaveLength(5);
       // The leader never waited: every child report landed while the leader's
       // own round was already over, and the single queued return is claimable.
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
-    }));
+    }), pgScenarioTimeout);
   });
 }

@@ -49,10 +49,19 @@ import {
  * later files running with the bridge limit disabled.
  */
 const PRELOAD_PG_REPLY_MAX_BYTES = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+const PRELOAD_PG_REPLY_ENFORCE = process.env.MULTIREMI_PG_REPLY_ENFORCE;
+
+function enforceDbReplyLimit(bytes: number): void {
+  process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(bytes);
+  process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
+  resetDbReplyLimitForTest();
+}
 
 function restoreDbReplyLimitEnv(): void {
   if (PRELOAD_PG_REPLY_MAX_BYTES === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = PRELOAD_PG_REPLY_MAX_BYTES;
+  if (PRELOAD_PG_REPLY_ENFORCE === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+  else process.env.MULTIREMI_PG_REPLY_ENFORCE = PRELOAD_PG_REPLY_ENFORCE;
   resetDbReplyLimitForTest();
 }
 
@@ -736,7 +745,7 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
   }
 
   it("logs api_large_db_reply with the route pattern and byte count only", async () => {
-    resetDbReplyLimitForTest();
+    enforceDbReplyLimit(DEFAULT_DB_REPLY_MAX_BYTES);
     const database = new PostgresSyncDatabase(PG_URL);
     const app = new Hono();
     app.use("*", createRequestMetricsMiddleware(OPTIONS));
@@ -763,6 +772,7 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
         expect(line).not.toContain(BIG_ROWS.slice(0, 40));
       }
     } finally {
+      restoreDbReplyLimitEnv();
       database.close();
     }
   });
@@ -786,8 +796,7 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
 
   it("refuses a reply over the hard limit before decoding it", async () => {
     // 2 MB limit, 4 MB payload: refused before any decode/parse work happens.
-    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(2 * 1_048_576);
-    resetDbReplyLimitForTest();
+    enforceDbReplyLimit(2 * 1_048_576);
     const database = new PostgresSyncDatabase(PG_URL);
     const payload = "y".repeat(4 * 1_048_576);
     const app = new Hono();
@@ -823,8 +832,7 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
   });
 
   it("labels a rejected reply with the handler's route pattern", async () => {
-    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(2 * 1_048_576);
-    resetDbReplyLimitForTest();
+    enforceDbReplyLimit(2 * 1_048_576);
     const database = new PostgresSyncDatabase(PG_URL);
     const payload = "y".repeat(4 * 1_048_576);
     const app = new Hono();

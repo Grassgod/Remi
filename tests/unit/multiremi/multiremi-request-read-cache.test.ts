@@ -229,6 +229,57 @@ describe("request-scoped read cache", () => {
       expect(reads()).toBe(2);
     });
 
+    it("starts a fresh cache generation for a transaction opened after commit", () => {
+      const { raw, wrapped, read } = cachedTable();
+      try {
+        withRequestReadCache(() => {
+          wrapped.transaction(() => {
+            expect(read()).toBe("before");
+            (wrapped as unknown as SqlDatabase).afterCommit!(() => {
+              raw.run("UPDATE t SET v = 'after' WHERE id = 'a'");
+              expect(wrapped.transaction(() => read())()).toBe("after");
+            });
+          })();
+          expect(read()).toBe("after");
+        });
+      } finally {
+        raw.close();
+      }
+    });
+
+    it("drains native commit callbacks after the instrumented runner returns", () => {
+      const raw = openSqliteDatabase(":memory:");
+      const callbacks: Array<() => void> = [];
+      let runnerActive = false;
+      const native = new Proxy(raw, {
+        get(target, key) {
+          if (key === "afterCommit") return (fn: () => void) => callbacks.push(fn);
+          if (key === "transaction") return (fn: () => void) => () => {
+            runnerActive = true;
+            try {
+              target.transaction(fn)();
+              for (const callback of callbacks.splice(0)) callback();
+            } finally {
+              runnerActive = false;
+            }
+          };
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const wrapped = invalidatingDatabase(native) as unknown as SqlDatabase;
+      const observed: boolean[] = [];
+      try {
+        wrapped.transaction(() => {
+          wrapped.afterCommit!(() => observed.push(runnerActive));
+          expect(observed).toEqual([]);
+        })();
+        expect(observed).toEqual([false]);
+      } finally {
+        raw.close();
+      }
+    });
+
     it("never serves a row read before a lock to a read after it", () => {
       // The store's rule is "lock first, then read what the lock protects". The cache must not
       // depend on it: if a read is moved above the lock, the re-read under the lock still has to

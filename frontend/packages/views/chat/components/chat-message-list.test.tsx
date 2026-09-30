@@ -1,39 +1,14 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
-import { chatKeys } from "@multiremi/core/chat/queries";
-import { setApiInstance } from "@multiremi/core/api";
-import { createTaskHandlers } from "../../test/task-handlers";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
+import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
+import { setApiInstance } from "@multiremi/core/api";
 
-// jsdom has no layout, so the real Virtuoso measures a 0-height viewport and
-// renders nothing. Render every row (plus Footer, which owns the live timeline
-// and the status pill) inline instead.
-//
-// The mock reproduces Virtuoso's `firstItemIndex` contract, which the real
-// component relies on: `itemContent` receives the *logical* index, i.e. the data
-// index plus the offset (`react-virtuoso` adds `firstItemIndex` before calling
-// the renderer). A mock that passed the data index would hide any bug keyed on
-// logical indices — which is exactly how `data-perf-anchor="latest-message"`
-// silently never rendered for months of green tests.
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, firstItemIndex = 0, components, startReached }: {
-    data: ChatMessage[];
-    itemContent: (index: number, item: ChatMessage) => ReactNode;
-    firstItemIndex?: number;
-    components?: { Footer?: () => ReactNode };
-    startReached?: () => void;
-  }) => (
-    <div>
-      <button onClick={startReached}>Load older</button>
-      {data.map((item, index) => (
-        <div key={item.id}>{itemContent(index + firstItemIndex, item)}</div>
-      ))}
-      {components?.Footer ? <components.Footer /> : null}
-    </div>
-  ),
+vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
+  useTraceStreamSubscription: vi.fn(),
 }));
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
@@ -55,48 +30,75 @@ vi.mock("./task-status-pill", () => ({
 import { ChatMessageList } from "./chat-message-list";
 
 describe("cached message observer visibility", () => {
-  it("does not fetch an older page from a hidden virtual-list callback", () => {
+  it("keeps a pinned Chat at the bottom when an availability banner changes layout, but leaves released scrolling alone", () => {
     const client = new QueryClient();
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });
+    const content = (availability: "offline" | "unstable" | undefined) => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
+        pendingTask={null} availability={availability} />
+    </QueryClientProvider>;
+    const view = render(content(undefined));
+    const root = view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]')!;
+    Object.defineProperty(root, "scrollHeight", { configurable: true, value: 500 });
+    root.dataset.stickState = "pinned";
+    view.rerender(content("offline"));
+    expect(root.scrollTop).toBe(500);
+    root.dataset.stickState = "released";
+    root.scrollTop = 42;
+    view.rerender(content("unstable"));
+    expect(root.scrollTop).toBe(42);
+    view.unmount(); client.clear();
+  });
+
+  it("does not load older log rows while the window is hidden", () => {
+    const client = new QueryClient();
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });
     const load = vi.fn();
-    const content = (visible: boolean) => <QueryClientProvider client={client}><ChatMessageList visible={visible} messages={[]} pendingTask={null} availability={undefined} hasOlderMessages onLoadOlderMessages={load} /></QueryClientProvider>;
+    const content = (visible: boolean) => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
+        pendingTask={null} availability={undefined} visible={visible}
+        hasOlderMessages onLoadOlderMessages={load} />
+    </QueryClientProvider>;
     const view = render(content(false));
-    fireEvent.click(screen.getByText("Load older"));
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-chat-earlier]")!);
     expect(load).not.toHaveBeenCalled();
     view.rerender(content(true));
-    fireEvent.click(screen.getByText("Load older"));
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-chat-earlier]")!);
     expect(load).toHaveBeenCalledTimes(1);
     view.unmount(); client.clear();
   });
-  it.each(["live", "assistant"])("keeps the %s observer inactive while hidden and refetches stale data on reopen", async (kind) => {
+
+  it.each(["live", "assistant"])("keeps the %s task observer inactive while hidden and refetches after opening", async (kind) => {
     const taskId = "tsk_visibility";
-    const listTaskMessages = vi.fn(async () => []);
-    setApiInstance({ listTaskMessages } as never);
+    const getTaskTrace = vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 }));
+    setApiInstance({ getTaskTrace } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    client.setQueryData(chatKeys.taskMessages(taskId), []);
-    const message = { id: "msg_visibility", role: kind === "assistant" ? "assistant" : "user", content: "Cached reply", task_id: kind === "assistant" ? taskId : null } as ChatMessage;
-    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
-    const content = (visible: boolean) => <QueryClientProvider client={client}><ChatMessageList visible={visible} messages={[message]} pendingTask={kind === "live" ? { task_id: taskId, status: "running" } as ChatPendingTask : null} availability={undefined} /></QueryClientProvider>;
+    const entries = kind === "assistant" ? [{ session_id: "cs-1", seq: 1, id: "msg-1", revision: 1,
+      kind: "turn", author_type: "agent", body_md: "Cached reply", body_html: null,
+      render_version: null, task_id: taskId, metadata: { attachments: [], elapsed_ms: 1, final_reply_md: "Cached reply" },
+      created_at: "2026-09-16T00:00:00Z" } as SessionLogEntry] : [];
+    const replica = new MemorySessionReplica({ "cs-1": { entries } });
+    const content = (visible: boolean) => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
+        pendingTask={kind === "live" ? { task_id: taskId, status: "running" } as ChatPendingTask : null}
+        availability={undefined} visible={visible} />
+    </QueryClientProvider>;
     const view = render(content(false));
     try {
-      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 }); });
-      expect(listTaskMessages).not.toHaveBeenCalled();
-      expect(client.getQueryCache().find({ queryKey: chatKeys.taskMessages(taskId) })?.isActive()).toBe(false);
+      expect(getTaskTrace).not.toHaveBeenCalled();
       view.rerender(content(true));
-      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
-      listTaskMessages.mockClear();
-      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 3, seq_end: 4 }); });
-      expect(listTaskMessages).toHaveBeenCalledTimes(1);
-    } finally {
-      view.unmount(); sync.dispose?.(); client.clear();
-    }
+      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
+      view.rerender(content(false));
+      expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); client.clear(); }
   });
 });
 
 const TASK_ID = "task_01hzzzzzzzzzzzzzzzzzzzzzzz";
 const TIMELINE_TEXT = "Timeline answer from the task transcript.";
 
-const taskMessages: TaskMessagePayload[] = [
-  { task_id: TASK_ID, issue_id: "", seq: 1, type: "text", content: TIMELINE_TEXT },
+const taskEvents: TraceEvent[] = [
+  { seq: 1, ts: "2026-09-16T00:00:00Z", type: "text", content: TIMELINE_TEXT },
 ];
 
 function attachment(id: string): Attachment {
@@ -136,35 +138,43 @@ const pendingTask = { task_id: TASK_ID, status: "running" } as ChatPendingTask;
 function renderList(
   messages: ChatMessage[],
   pending: ChatPendingTask | null,
-  firstItemIndex = 0,
+  includeHead = false,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  // Seed the transcript the way useRealtimeSync does during the run, so no
-  // component in the tree needs to fetch.
-  client.setQueryData(chatKeys.taskMessages(TASK_ID), taskMessages);
+  client.setQueryData(["task-trace", TASK_ID], taskEvents);
+  const entries = messages.map((message, index) => ({
+    session_id: "cs-1", seq: index + 1, id: message.id, revision: 1,
+    kind: message.role === "user" ? "message" : "turn",
+    author_type: message.role === "user" ? "member" : "agent",
+    body_md: message.content, body_html: null, render_version: null,
+    task_id: message.task_id,
+    metadata: { final_reply_md: message.content, attachments: message.attachments,
+      elapsed_ms: message.elapsed_ms, failure_reason: message.failure_reason },
+    created_at: message.created_at,
+  })) as SessionLogEntry[];
+  if (includeHead) entries.unshift({ session_id: "cs-1", seq: 0, id: "chat-head", revision: 1,
+    kind: "head", body_md: "Chat title", body_html: null, render_version: null } as SessionLogEntry);
+  const replica = new MemorySessionReplica({ "cs-1": { entries } });
   return render(
     <QueryClientProvider client={client}>
       <ChatMessageList
-        messages={messages}
+        sessionId="cs-1"
+        replica={replica}
+        optimisticRows={[]}
         pendingTask={pending}
         availability={undefined}
-        firstItemIndex={firstItemIndex}
       />
     </QueryClientProvider>,
   );
 }
 
 describe("ChatMessageList measurement contract", () => {
-  it("marks exactly one terminal anchor, on the last message, despite the firstItemIndex offset", () => {
-    // ChatWindow passes firstItemIndex = 1_000_000 - olderMessageCount, so
-    // `itemContent`'s index is offset. Keying the anchor on the logical index made
-    // it never render; keying it on the message id is what this pins.
+  it("marks exactly one terminal anchor on the last log row", () => {
     const { container } = renderList(
       [attachmentPush("msg-1", "first"), terminalReply("msg-2")],
       null,
-      1_000_000,
     );
 
     const anchors = container.querySelectorAll('[data-perf-anchor="latest-message"]');
@@ -176,8 +186,14 @@ describe("ChatMessageList measurement contract", () => {
   });
 
   it("has no terminal anchor when there are no messages", () => {
-    const { container } = renderList([], null, 1_000_000);
+    const { container } = renderList([], null);
     expect(container.querySelectorAll('[data-perf-anchor="latest-message"]')).toHaveLength(0);
+  });
+
+  it("does not render Chat's seq 0 title as a message after client recovery", () => {
+    const { container } = renderList([terminalReply("msg-1")], null, true);
+    expect(container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(1);
+    expect(container).not.toHaveTextContent("Chat title");
   });
 });
 
@@ -216,6 +232,13 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     const reply = { ...terminalReply("msg-1"), attachments: [attachment("att-x")] };
     renderList([reply], null);
 
+    expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+  });
+
+  it("keeps a nonterminal turn without attachments separate from the final reply", () => {
+    const push = { ...attachmentPush("msg-1", "Progress update"), attachments: [] };
+    renderList([push, terminalReply("msg-2")], null);
+    expect(screen.getByText("Progress update")).toBeInTheDocument();
     expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
   });
 });

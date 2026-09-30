@@ -3,8 +3,10 @@
  *
  * Sweeps the daemon's workspaces root and removes per-task working directories
  * whose backing entity (issue / chat session / autopilot run / task) is
- * terminal and past TTL, or that are orphaned (no/unknown metadata) past the
- * orphan TTL. Local-directory tasks are never GC'd. The recursive remove is
+ * terminal and past TTL, or that are orphaned (no/unknown metadata, or a
+ * backing entity the server no longer knows) past the orphan TTL. When archives
+ * are required, Issue, Chat and one-shot Task directories additionally need a
+ * ready Session archive. Local-directory tasks are never GC'd. The recursive remove is
  * guarded by a containment check so it can never delete outside the root.
  * Extracted verbatim from src/multiremi/worker/daemon.ts in D6 (behavior
  * unchanged).
@@ -12,6 +14,8 @@
 
 import {
   closeSync,
+  constants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -28,6 +32,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
+import { checkTraceFileLines } from "@multiremi/contracts/trace-file.js";
 import { createLogger } from "@shared/logger.js";
 import {
   OWNED_DIRECTORY_QUARANTINE,
@@ -73,6 +78,17 @@ export interface RunWorkspaceGcOnceOptions {
   requireIssueSessionArchive?: boolean;
   ensureIssueSessionArchive?: (
     issueId: string,
+    workspaceDir: string,
+    forceFreshSnapshot: boolean,
+  ) => Promise<MultiremiIssueWorkspaceArchiveBinding | null>;
+  /**
+   * Chat and one-shot Task counterpart of the Issue barrier: a terminal subject
+   * past TTL is deleted only once its `.runtime/<id>` history has a ready
+   * archive, fresh-verified right before rm.
+   */
+  requireSessionArchive?: boolean;
+  ensureSessionArchive?: (
+    subject: { kind: "chat" | "task"; id: string },
     workspaceDir: string,
     forceFreshSnapshot: boolean,
   ) => Promise<MultiremiIssueWorkspaceArchiveBinding | null>;
@@ -323,6 +339,10 @@ async function collectTopicWorkspace(
         summary.skipped++;
         return;
       }
+      if (hasUnclosedTrace(topicDir)) {
+        summary.skipped++;
+        return;
+      }
       options.assertRootOwner?.();
       removeGcWorkDir(root, topicDir, options.assertRootOwner);
       summary.orphaned++;
@@ -400,6 +420,13 @@ async function collectWorkspaceGcDecisionUnlocked(
     return;
   }
   const issueId = stringField(readGcMeta(workspaceDir)?.issue_id);
+  // A trace without its terminal trailer is still owned by this daemon. Keep
+  // the entire root until its task closes, even if the server reports terminal.
+  if (hasUnclosedTrace(workspaceDir)
+    || (issueId && issueRuntimeRoots(root, issueId).some(hasUnclosedTrace))) {
+    summary.skipped++;
+    return;
+  }
   let reportReceipt: string | null = null;
   if (
     decision === "clean"
@@ -630,7 +657,13 @@ async function getWorkspaceGcDecision(
   if (meta.kind === "issue") return getIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "discussion_issue") return getDiscussionIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "chat") return getChatGcDecision(meta, taskDir, options, now);
-  if (meta.kind === "autopilot_run") return getAutopilotRunGcDecision(meta, taskDir, options, now);
+  if (meta.kind === "autopilot_run") {
+    const run = await getAutopilotRunGcDecision(meta, taskDir, options, now);
+    // The run's one-shot task owns this directory's provider history, so the
+    // task's terminal/TTL/archive barrier applies on top of the run policy.
+    if (run.decision !== "clean" || !stringField(meta.task_id)) return run;
+    return getTaskGcDecision(meta, taskDir, options, now);
+  }
   return getTaskGcDecision(meta, taskDir, options, now);
 }
 
@@ -753,10 +786,56 @@ function hasIssueRuntimeState(root: string, issueId: string): boolean {
 }
 
 function removeIssueRuntimeRoots(root: string, issueId: string, assertRootOwner?: () => void): void {
-  for (const sessionRoot of issueRuntimeRoots(root, issueId)) {
+  const roots = issueRuntimeRoots(root, issueId);
+  if (roots.some(hasUnclosedTrace)) throw new Error(`Issue ${issueId} has an unclosed trace`);
+  for (const sessionRoot of roots) {
     assertRootOwner?.();
     removeGcWorkDir(root, sessionRoot, assertRootOwner);
   }
+}
+
+/** Treat malformed or unreadable trace state as open so GC fails closed. */
+export function hasUnclosedTrace(workspaceDir: string): boolean {
+  const traces = join(workspaceDir, "traces");
+  let info: Stats;
+  try { info = lstatSync(traces); }
+  catch (error) { return !isFsNotFoundError(error); }
+  if (!info.isDirectory() || info.isSymbolicLink()) return true;
+  const files = safeReadDir(traces);
+  if (!files) return true;
+  for (const file of files) {
+    if (!file.name.endsWith(".jsonl")) continue;
+    const path = join(traces, file.name);
+    const stat = safeLstat(path);
+    if (!stat?.isFile() || stat.isSymbolicLink()) {
+      log.warn(`Keeping malformed trace during GC: ${path}: not a regular file`);
+      return true;
+    }
+    try {
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error("trace file changed during GC inspection");
+        bytes = readFileSync(fd);
+      } finally { closeSync(fd); }
+      const lastNewline = bytes.lastIndexOf(10);
+      const lines = lastNewline < 0 ? [] : bytes.subarray(0, lastNewline).toString("utf8").split("\n");
+      const checked = checkTraceFileLines(lines, {
+        taskId: file.name.slice(0, -6),
+        sessionId: basename(workspaceDir),
+        incompleteTail: lastNewline !== bytes.length - 1,
+      });
+      if (!checked.ok || !checked.value.closed) {
+        log.warn(`Keeping unclosed or malformed trace during GC: ${path}: ${checked.ok ? "incomplete or ambiguous framing" : checked.reason}`);
+        return true;
+      }
+    } catch (error) {
+      log.warn(`Keeping unreadable trace during GC: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 function issueRuntimeRoots(root: string, issueId: string): string[] {
@@ -805,14 +884,20 @@ async function getChatGcDecision(
 ): Promise<MultiremiGcResolution> {
   const sessionId = stringField(meta.chat_session_id);
   if (!sessionId) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+  let status: WorkspaceGcStatus;
   try {
-    const status = await options.client.getChatSessionGcCheck(sessionId);
-    if (status.status === "archived" && isOlderThan(status.updated_at, options.ttlMs, now)) return gcResolution("clean");
-    return gcResolution("skip");
+    status = await options.client.getChatSessionGcCheck(sessionId);
   } catch (err) {
-    if (isNotFoundError(err)) return gcResolution("clean");
+    if (isNotFoundError(err)) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
     throw err;
   }
+  if (status.status !== "archived") return gcResolution("skip");
+  return getSubjectArchiveResolution(
+    { kind: "chat", id: sessionId },
+    taskDir,
+    options,
+    isOlderThan(status.updated_at, options.ttlMs, now),
+  );
 }
 
 async function getAutopilotRunGcDecision(
@@ -843,14 +928,42 @@ async function getTaskGcDecision(
 ): Promise<MultiremiGcResolution> {
   const taskId = stringField(meta.task_id);
   if (!taskId) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+  let status: WorkspaceGcStatus;
   try {
-    const status = await options.client.getTaskGcCheck(taskId);
-    if (isTerminalTaskStatus(status.status)) return gcResolution("clean");
-    return gcResolution("skip");
+    status = await options.client.getTaskGcCheck(taskId);
   } catch (err) {
     if (isNotFoundError(err)) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
     throw err;
   }
+  if (!isTerminalTaskStatus(status.status)) return gcResolution("skip");
+  return getSubjectArchiveResolution(
+    { kind: "task", id: taskId },
+    taskDir,
+    options,
+    isOlderThan(status.completed_at, options.ttlMs, now),
+  );
+}
+
+/**
+ * Terminal Chat / one-shot Task: delete only past TTL and, when archives are
+ * required, only against a ready archive verified right before rm. Only the
+ * subject status lookup may map a 404 to the orphan path; an archive failure
+ * (including a 404 from the archive routes) keeps the directory.
+ */
+async function getSubjectArchiveResolution(
+  subject: { kind: "chat" | "task"; id: string },
+  taskDir: string,
+  options: RunWorkspaceGcOnceOptions,
+  eligibleForDeletion: boolean,
+): Promise<MultiremiGcResolution> {
+  if (!eligibleForDeletion) return gcResolution("skip");
+  if (!options.requireSessionArchive) return gcResolution("clean");
+  if (!options.ensureSessionArchive) return gcResolution("skip");
+  options.assertRootOwner?.();
+  const archive = await options.ensureSessionArchive(subject, taskDir, true);
+  log.debug(`Workspace GC ${subject.kind} Session archive checked: ${taskDir} available=${Boolean(archive)}`);
+  // The binding is not carried on: it only feeds the Issue cleaned-state report.
+  return gcResolution(archive ? "clean" : "skip");
 }
 
 function staleDirDecision(taskDir: string, ttlMs: number, now: number): MultiremiGcDecision {

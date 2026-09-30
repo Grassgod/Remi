@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { StorageAdapter } from "../types";
+import type { Attachment, StorageAdapter } from "../types";
 import { getCurrentSlug, registerForWorkspaceRehydration } from "../platform/workspace-storage";
 import { createLogger } from "../logger";
 
@@ -111,6 +111,8 @@ export interface ChatState {
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
   inputDraftAttachments: Record<string, Record<string, string>>;
+  /** Upload details shared between the panel and page until the server row arrives. */
+  localAttachmentDetails: Record<string, Attachment>;
   /** Raw user-chosen size — no clamp applied. UI layer clamps at render time. */
   chatWidth: number;
   chatHeight: number;
@@ -124,6 +126,7 @@ export interface ChatState {
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
   setInputDraftAttachment: (draftKey: string, url: string, attachmentId: string) => void;
+  setLocalAttachmentDetail: (attachment: Attachment) => void;
   clearInputDraftAttachments: (draftKey: string) => void;
   /** Persist raw size and auto-exit expanded mode. */
   setChatSize: (width: number, height: number) => void;
@@ -155,6 +158,7 @@ export function createChatStore(options: ChatStoreOptions) {
     draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
     inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
+    localAttachmentDetails: {},
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
     chatHeight: Number(storage.getItem(CHAT_HEIGHT_KEY)) || CHAT_DEFAULT_H,
     isExpanded: storage.getItem(wsKey(CHAT_EXPANDED_KEY)) === "true",
@@ -205,10 +209,12 @@ export function createChatStore(options: ChatStoreOptions) {
       const next = { ...current };
       delete next[sessionId];
       const nextAttachments = { ...get().inputDraftAttachments };
+      const nextDetails = { ...get().localAttachmentDetails };
+      for (const id of Object.values(nextAttachments[sessionId] ?? {})) delete nextDetails[id];
       delete nextAttachments[sessionId];
       writeDrafts(storage, wsKey(DRAFTS_KEY), next);
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), nextAttachments);
-      set({ inputDrafts: next, inputDraftAttachments: nextAttachments });
+      set({ inputDrafts: next, inputDraftAttachments: nextAttachments, localAttachmentDetails: nextDetails });
     },
     setInputDraftAttachment: (draftKey, url, attachmentId) => {
       const current = get().inputDraftAttachments;
@@ -216,11 +222,16 @@ export function createChatStore(options: ChatStoreOptions) {
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), next);
       set({ inputDraftAttachments: next });
     },
+    setLocalAttachmentDetail: (attachment) => set({ localAttachmentDetails: {
+      ...get().localAttachmentDetails, [attachment.id]: attachment,
+    } }),
     clearInputDraftAttachments: (draftKey) => {
       const next = { ...get().inputDraftAttachments };
+      const nextDetails = { ...get().localAttachmentDetails };
+      for (const id of Object.values(next[draftKey] ?? {})) delete nextDetails[id];
       delete next[draftKey];
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), next);
-      set({ inputDraftAttachments: next });
+      set({ inputDraftAttachments: next, localAttachmentDetails: nextDetails });
     },
     setChatSize: (w, h) => {
       logger.debug("setChatSize", { w, h });
@@ -258,6 +269,7 @@ export function createChatStore(options: ChatStoreOptions) {
       draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
       inputDrafts: nextDrafts,
       inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
+      localAttachmentDetails: {},
     });
   });
 

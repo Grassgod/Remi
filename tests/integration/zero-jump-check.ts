@@ -545,6 +545,9 @@ async function runRound(input: {
   if (violationsForRound(result).length > 0) {
     const shotDir = process.env[SHOT_DIR_ENV] ?? join(tmpdir(), "mul394-zero-jump");
     ensureDir(shotDir);
+    if (buffer) writeFileSync(join(shotDir, `${scenario.key}-${scenario.mode}-${round}.frames.json`), JSON.stringify({
+      frames: buffer.frames, shifts: buffer.shifts, stateTransitions: buffer.stateTransitions,
+    }));
     await page.screenshot({ path: join(shotDir, `${scenario.key}-${scenario.mode}-${round}.png`) }).catch(() => {});
   }
   await context.close().catch(() => {});

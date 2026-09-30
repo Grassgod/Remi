@@ -28,7 +28,14 @@
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
-    "loading_older": "이전 메시지를 불러오는 중…"
+    "loading_older": "이전 메시지를 불러오는 중…",
+    "expand_older": "이전 메시지 30개 보기",
+    "earliest": "첫 메시지입니다",
+    "sending": "보내는 중…",
+    "sent": "전송됨",
+    "send_failed": "전송 실패 ·",
+    "retry": "다시 시도",
+    "retry_send": "이 메시지 다시 보내기"
   },
   "session_history": {
     "untitled": "제목 없음",
@@ -175,5 +182,12 @@
     "fixed_hint": "프로젝트는 채팅을 만들 때 확정됩니다. 다른 프로젝트를 사용하려면 새 채팅을 만드세요.",
     "load_failed": "프로젝트를 불러오지 못했습니다. 다시 시도하세요.",
     "unavailable": "연결된 프로젝트를 사용할 수 없습니다"
+  },
+  "session_log": {
+    "copy_code": "코드 복사",
+    "copied": "복사됨",
+    "new_messages_other": "새 메시지 {{count}}개",
+    "new_messages_overflow": "새 메시지 99+개",
+    "new_messages_jump": "끝으로 이동, 새 메시지 {{count}}개"
   }
 }

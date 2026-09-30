@@ -30,9 +30,14 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
+| 改系统收件箱、平台待处理轮或唤醒事务 | [ADR 0012](../adr/0012-unified-inbox-and-single-pending-turn.md)、[ADR 0003 决策 8](../adr/0003-parent-status-derived-from-children.md) | 信封去重、平台轮次索引、评论合并与同事务编辑补救 |
 | 改提问卡片答复鉴权、令牌轮换或宿主重启恢复 | [ADR 0011](../adr/0011-question-card-one-time-token.md) | 服务端一次性令牌、收件人绑定与成员映射的边界 |
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
 | 改跨单委派回叫、回叫落点或 `wake_source` | [ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 跨单判定、回叫会话、D4 去重和结果评论口径 |
+| 改会话日志表、轮次卡、trace 归属或 Session Archive 主体 | [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md) | 契约类型、被否决的替代方案和回到源码的位置 |
+| 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0012](../adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、升级等待与 offer；pending/配置和任务输入走下行帧及 RPC，跨进程触发依赖实时扇出；outbox 与 trace 归 v2-A |
+| 改浏览器实时订阅、Live Hub 或前端本地副本 | [浏览器实时 v2](realtime-v2.md)、[ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的端点与归属、订阅鉴权、续传与退避、resync 广播；C1 已落核心、按角色锁与 health 字段 |
+| 对接 Hub 的 trace 订阅（A-6、飞书 CoT） | [Live Hub 对接说明](live-hub-a6-integration.md) | 调用方式、gap 由谁补读、背压恢复与 `closed` 终态 |
 | 改详情页首屏定位、贴底或 `data-perf-state` 契约 | [ADR 0008](../adr/0008-issue-detail-anchored-reveal-and-stick-to-bottom.md) | 先隐藏后一次定位、贴底状态机与预算口径 |
 | 改项目 Memory/Wiki | [项目知识契约](../project-wiki-memory-spec.md) | 查询、提案、发布、物化与权限 |
 | 改飞书消息接入 | [消息接入](../feishu-message-ingestion.md) | Connection、Source、消息处理与凭据 |

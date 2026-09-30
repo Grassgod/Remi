@@ -1,0 +1,210 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/multiremi/multiremi-delegation-result-comment-once.test.ts:
+[hermetic-env] stripped 17 inherited env var(s): CODEX_HOME, INVOCATION_ID, MULTIREMI_AGENT_NAME, MULTIREMI_DAEMON_PORT, MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS, MULTIREMI_GIT_REPOSITORIES_JSON, MULTIREMI_ISSUE_ID, MULTIREMI_ISSUE_SESSION_ID, MULTIREMI_PROJECT_ID, MULTIREMI_SERVER_URL, MULTIREMI_STATE_DIR, MULTIREMI_TASK_ID, MULTIREMI_TOKEN, MULTIREMI_WORKSPACE_ID, MULTIREMI_WORKSPACE_ROOT, OPENAI_API_KEY, REMI_CLAUDE_AGENT_ACP_DIR
+[13:41:35] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_4t8kkqtzaqow",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > uses one id for the bridge metadata and the prompt even when a later comment lands mid-transaction [306.75ms]
+[13:41:35] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_yb6vy9klciqi",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > records null and the ruling's fallback line when the run never commented [219.60ms]
+[13:41:35] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_d7fjewyqlbnr",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > reuses the terminal null snapshot after an unclaimed return is cancelled [283.95ms]
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_hkgoyypbu759",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_3vt1rm4t5sui",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > drains the terminal null snapshot after a skipped generic wake is cancelled [277.38ms]
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_4nfbmee2c1nr",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_et57equvmb0y",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/issues/iss_vwcy61wa6zeb/comments",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > reuses the terminal comment A snapshot after an unclaimed return is cancelled [276.89ms]
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_7sm49tahayrh",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_epiab323pzg2",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/issues/iss_2c5herv6g4ou/comments",
+  status_code: 201,
+}
+[13:41:36] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_epiab323pzg2",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > drains the terminal comment A snapshot after a skipped generic wake is cancelled [275.70ms]
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_dw01h9uju6ay",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > keeps same-issue report assembly on the main behavior without result-comment reads [263.90ms]
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_ekte9xqaxlb7",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_ekte9xqaxlb7",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_c0ylkegazsha",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/tasks/tsk_m2i848n04r2e/redispatch",
+  status_code: 202,
+}
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_yh6uwbpfbn60",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > drains historical sources when the terminal trigger is covered by a delegate wake-up [314.38ms]
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_8gp77z778krk",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_yyrr72815d7r",
+  workspace_id: "local",
+  method: "PATCH",
+  path: "/api/multiremi/issues/iss_u2i3pbgglard",
+  status_code: 200,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > reuses the null snapshot after a queued E2 coverage round is cancelled [286.98ms]
+[13:41:37] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_llivda6pm00q",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > keeps the legacy latest-comment fallback when the bridge has no snapshot key [270.94ms]
+[13:41:38] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_s5u53xgsw6hc",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:38] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_s5u53xgsw6hc",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+[13:41:38] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_4bppyoclkmhl",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/tasks/tsk_yd3p82055z7g/redispatch",
+  status_code: 202,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > reuses the historical snapshot when redispatch is followed by another terminal drain [310.61ms]
+[13:41:38] INFO  [multiremi-api] task token write request {
+  event: "task_token_write",
+  task_id: "tsk_sy2vdxka4nx7",
+  workspace_id: "local",
+  method: "POST",
+  path: "/api/multiremi/tasks",
+  status_code: 201,
+}
+(pass) MUL-456 result comment resolved once (sqlite) > still delivers a bridge and a claimable return into an archived dispatch Session [232.09ms]
+(skip) MUL-456 result comment resolved once (postgres) > uses one id for the bridge metadata and the prompt even when a later comment lands mid-transaction
+(skip) MUL-456 result comment resolved once (postgres) > records null and the ruling's fallback line when the run never commented
+(skip) MUL-456 result comment resolved once (postgres) > reuses the terminal null snapshot after an unclaimed return is cancelled
+(skip) MUL-456 result comment resolved once (postgres) > drains the terminal null snapshot after a skipped generic wake is cancelled
+(skip) MUL-456 result comment resolved once (postgres) > reuses the terminal comment A snapshot after an unclaimed return is cancelled
+(skip) MUL-456 result comment resolved once (postgres) > drains the terminal comment A snapshot after a skipped generic wake is cancelled
+(skip) MUL-456 result comment resolved once (postgres) > keeps same-issue report assembly on the main behavior without result-comment reads
+(skip) MUL-456 result comment resolved once (postgres) > drains historical sources when the terminal trigger is covered by a delegate wake-up
+(skip) MUL-456 result comment resolved once (postgres) > reuses the null snapshot after a queued E2 coverage round is cancelled
+(skip) MUL-456 result comment resolved once (postgres) > keeps the legacy latest-comment fallback when the bridge has no snapshot key
+(skip) MUL-456 result comment resolved once (postgres) > reuses the historical snapshot when redispatch is followed by another terminal drain
+(skip) MUL-456 result comment resolved once (postgres) > still delivers a bridge and a claimable return into an archived dispatch Session
+
+ 12 pass
+ 12 skip
+ 0 fail
+ 210 expect() calls
+Ran 24 tests across 1 file. [3.78s]

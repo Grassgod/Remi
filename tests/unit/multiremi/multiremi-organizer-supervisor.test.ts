@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -38,7 +40,6 @@ async function setup() {
     workspaceId: "local",
     userId: "member",
   });
-  const app = createMultiremiApp({ store, authToken: "root-secret" });
   const runtime = store.registerRuntime({
     id: "rt_organizer_test",
     name: "Organizer test runtime",
@@ -73,7 +74,8 @@ async function setup() {
     workspaceId: "local",
     prompt: "TOP SECRET target prompt",
   });
-  store.appendTaskMessages(targetTask.id, [
+  const trace = new InMemoryTraceStore();
+  trace.append(targetTask.id, [
     {
       type: "tool_call",
       tool: "exec_command",
@@ -83,6 +85,8 @@ async function setup() {
     },
     { type: "assistant", content: "private answer" },
   ]);
+  const app = createMultiremiApp({ store, authToken: "root-secret",
+    daemonTraceReader: new InMemoryDaemonTraceReader(() => trace) });
   store.reportProgress(targetTask.id, "Indexing repository", 2, 5);
   store.createTaskHumanRequest({
     taskId: targetTask.id,
@@ -197,6 +201,7 @@ describe("Organizer supervisor privilege layer", () => {
 
   it("exposes transcript-free inspection metadata while preserving main's owner parity", async () => {
     const fixture = await setup();
+    fixture.store.markTaskTraceDaemon(fixture.targetTask.id, fixture.runtime.id);
     const supervisorToken = await grantSupervisor(fixture);
     const normalTaskToken = await fixture.store.createTaskAccessToken(fixture.targetTask, "owner");
 
@@ -666,7 +671,7 @@ describe("Organizer supervisor privilege layer", () => {
     expect(events[0]?.inTransaction).toBe(false);
   });
 
-  it("dispatches rich organizer comment mentions only after the outer transaction commits", async () => {
+  it("dispatches rich organizer comment mentions within the outer transaction", async () => {
     const fixture = await setup();
     await grantSupervisor(fixture);
     await setMode(fixture, "act");
@@ -696,13 +701,13 @@ describe("Organizer supervisor privilege layer", () => {
       delegatedByAgentId: leader.id,
     });
     const supervisorToken = await fixture.store.createTaskAccessToken(delegatedSupervisorTask, "owner");
-    const originalEnsure = fixture.store.ensureDelegationWakeup.bind(fixture.store);
+    const originalEnsure = fixture.store.ensureDelegationWakeupWithinTransaction.bind(fixture.store);
     let ensureObservedInTransaction: boolean | null = null;
     const enqueueTransactionStates: boolean[] = [];
-    fixture.store.ensureDelegationWakeup = ((input) => {
+    fixture.store.ensureDelegationWakeupWithinTransaction = ((input, childStatusChanges, deferredEvents) => {
       ensureObservedInTransaction = db!.inTransaction;
-      return originalEnsure(input);
-    }) as typeof fixture.store.ensureDelegationWakeup;
+      return originalEnsure(input, childStatusChanges, deferredEvents);
+    }) as typeof fixture.store.ensureDelegationWakeupWithinTransaction;
     const unsubscribe = fixture.store.onTaskEnqueued((task) => {
       if (task.agentId === leader.id) {
         enqueueTransactionStates.push(db!.inTransaction);
@@ -719,12 +724,12 @@ describe("Organizer supervisor privilege layer", () => {
       });
       expect(response.status).toBe(202);
     } finally {
-      fixture.store.ensureDelegationWakeup = originalEnsure;
+      fixture.store.ensureDelegationWakeupWithinTransaction = originalEnsure;
       unsubscribe();
     }
 
     expect(ensureObservedInTransaction).not.toBeNull();
-    expect(Boolean(ensureObservedInTransaction)).toBeFalse();
+    expect(Boolean(ensureObservedInTransaction)).toBeTrue();
     expect(enqueueTransactionStates).toEqual([false]);
     expect(fixture.store.listTasksForIssue(delegatedIssue.id).find((task) =>
       task.agentId === leader.id && task.parentTaskId === delegatedSupervisorTask.id

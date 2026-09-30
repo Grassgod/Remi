@@ -464,7 +464,7 @@ function RowShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="group/execution-log-row flex items-center gap-2 overflow-hidden rounded px-1 py-1.5 transition-colors hover:bg-accent/40">
+    <div data-task-id={task.id} className="group/execution-log-row flex items-center gap-2 overflow-hidden rounded px-1 py-1.5 transition-colors hover:bg-accent/40">
       {task.agent_id ? (
         <ActorAvatar
           actorType="agent"

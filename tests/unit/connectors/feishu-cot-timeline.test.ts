@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
 import { cotPlan, cotToolDisplay, isCotSubagent } from "@connectors/feishu/cot-tool-display.js";
-import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { taskEvent } from "./feishu-native-harness.js";
 
 const message = (seq: number, type: string, patch: Record<string, unknown> = {}) =>
-  (taskEvent(seq, type, patch) as { message: MultiremiTaskMessage }).message;
+  (taskEvent(seq, type, patch) as { message: TraceEvent }).message;
 
 describe("semantic native CoT timeline", () => {
   it.each([
@@ -108,13 +108,35 @@ describe("semantic native CoT timeline", () => {
     expect(JSON.stringify(samples)).not.toContain("stacktrace");
   });
 
-  it("keeps narration in chronological segments, without child prose, hook noise or final text", () => {
+  it.each([["failed", "执行失败"], ["cancelled", "已取消"]])(
+    "preserves a %s tool result after a checkpoint without replaying the invocation",
+    (status, text) => {
+      const original = new FeishuCotTimeline("task");
+      original.accept(message(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } }));
+      const prefix = original.drain();
+      const toolCallId = prefix.samples.find(([type]) => type === "TOOL_CALL_START")?.[1].toolCallId;
+      const resumed = new FeishuCotTimeline("task", prefix.throughSeq);
+      resumed.accept(message(2, "tool_result", { toolCallId: "tc", status: "in_progress", output: "partial" }));
+      expect(resumed.drain().samples).toEqual([]);
+      resumed.accept(message(3, "tool_result", { toolCallId: "tc", status, output: "sensitive stacktrace" }));
+      const result = resumed.drain();
+      expect(result.throughSeq).toBe(3);
+      expect(result.samples).toEqual([["TOOL_CALL_RESULT", {
+        toolCallId, messageId: expect.any(String), role: "tool", content: JSON.stringify({ type: "text", text }),
+      }]]);
+      expect(resumed.toolCount).toBe(1);
+      expect(JSON.stringify(result.samples)).not.toContain("stacktrace");
+    },
+  );
+
+  it("keeps narration chronological and passes unknown trace types through verbatim", () => {
     const timeline = new FeishuCotTimeline("task");
     timeline.accept(message(1, "text", { content: "先读取。" }));
     timeline.accept(message(2, "text", { content: "再检查。", meta: { phase: "commentary" } }));
     timeline.accept(message(3, "tool_use", { tool: "Read", toolCallId: "tc", input: { path: "/source.ts" } }));
     timeline.accept(message(4, "text", { content: "child secret", meta: { parent_tool_call_id: "tc" } }));
-    timeline.accept(message(5, "system", { content: "hook heartbeat" }));
+    const unknown = message(5, "system", { content: "hook heartbeat" });
+    timeline.accept(unknown);
     timeline.accept(message(6, "text", { content: "已核对。", meta: { phase: "commentary" } }));
     timeline.accept(message(7, "text", { content: "最终答案", meta: { phase: "final" } }));
     const samples = timeline.finish("completed");
@@ -124,7 +146,7 @@ describe("semantic native CoT timeline", () => {
     expect(samples.filter(([t]) => t === "REASONING_MESSAGE_END")).toHaveLength(2);
     expect(timeline.answer("")).toBe("最终答案");
     expect(JSON.stringify(samples)).not.toContain("secret");
-    expect(JSON.stringify(samples)).not.toContain("heartbeat");
+    expect(samples.find(([type]) => type === "system")).toEqual(["system", { ...unknown }]);
   });
 
   it("renders plan entries as native list rows without a code panel or duplicate update", () => {

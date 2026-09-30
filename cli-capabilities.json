@@ -2823,23 +2823,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "task.messages": {
-      "command": "remi issue run-messages",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "task.messages",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "comment": {
       "command": "remi comment",
       "aliases": [],
@@ -3205,6 +3188,59 @@
         "task"
       ],
       "capability": "session.event.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.log.get": {
+      "command": "remi session log get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.log.window": {
+      "command": "remi session log window",
+      "aliases": [
+        "remi chat message list"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.window",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.log.locate": {
+      "command": "remi session log locate",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.locate",
       "mutation": "read",
       "output": [
         "table",
@@ -4204,6 +4240,24 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "share.trace.read": {
+      "command": "remi share trace read",
+      "aliases": [],
+      "auth": [
+        "human",
+        "share",
+        "task"
+      ],
+      "capability": "share.trace.read",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "label": {
       "command": "remi label",
       "aliases": [],
@@ -4454,23 +4508,6 @@
       ],
       "capability": "chat.delete",
       "mutation": "destructive",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "chat.message.list": {
-      "command": "remi chat message list",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.message.list",
-      "mutation": "read",
       "output": [
         "table",
         "json",
@@ -4795,16 +4832,18 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "task.message.list": {
-      "command": "remi task message list",
+    "task.trace.read": {
+      "command": "remi task trace read",
       "aliases": [
-        "remi task messages"
+        "remi task message list",
+        "remi task messages",
+        "remi issue run-messages"
       ],
       "auth": [
         "human",
         "task"
       ],
-      "capability": "task.message.list",
+      "capability": "task.trace.read",
       "mutation": "read",
       "output": [
         "table",
@@ -9802,6 +9841,12 @@
       "replacement": "remi session list",
       "hidden": false
     },
+    "remi chat message list": {
+      "command": "session.log.window",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session log window",
+      "hidden": false
+    },
     "remi issue session result list": {
       "command": "session.result.list",
       "deprecated_since": "0.3.0",
@@ -9844,10 +9889,22 @@
       "replacement": "remi attachment download",
       "hidden": false
     },
-    "remi task messages": {
-      "command": "task.message.list",
+    "remi task message list": {
+      "command": "task.trace.read",
       "deprecated_since": "0.3.0",
-      "replacement": "remi task message list",
+      "replacement": "remi task trace read",
+      "hidden": false
+    },
+    "remi task messages": {
+      "command": "task.trace.read",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi task trace read",
+      "hidden": false
+    },
+    "remi issue run-messages": {
+      "command": "task.trace.read",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi task trace read",
       "hidden": false
     },
     "remi multiremi agent list": {
@@ -10247,12 +10304,6 @@
     "GET /api/chat/sessions/:sessionId": {
       "command": "chat.get"
     },
-    "GET /api/chat/sessions/:sessionId/messages": {
-      "command": "chat.message.list"
-    },
-    "GET /api/chat/sessions/:sessionId/messages/page": {
-      "command": "chat.message.list"
-    },
     "GET /api/chat/sessions/:sessionId/pending-task": {
       "command": "chat.pending"
     },
@@ -10340,6 +10391,16 @@
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
+      "reason": "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/status": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot": {
@@ -10367,7 +10428,12 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/runtimes/:runtimeId/tasks/pending": {
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/status": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10382,22 +10448,7 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/tasks/:taskId/human-requests/:requestId": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "GET /api/daemon/tasks/:taskId/messages": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "GET /api/daemon/tasks/:taskId/status": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "GET /api/daemon/tasks/:taskId/steer": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10635,7 +10686,7 @@
       "command": "chat.get"
     },
     "GET /api/multiremi/chats/:id/messages": {
-      "command": "chat.message.list"
+      "command": "session.log.window"
     },
     "GET /api/multiremi/comments/:id/attachments": {
       "command": "comment.attachment.list"
@@ -10833,7 +10884,7 @@
       "command": "task.inspect"
     },
     "GET /api/multiremi/tasks/:id/messages": {
-      "command": "task.message.list"
+      "command": "task.trace.read"
     },
     "GET /api/multiremi/tasks/:id/steer": {
       "command": "task.steer.list"
@@ -10963,11 +11014,23 @@
     "GET /api/sessions/:sessionId/inherited-context": {
       "command": "session.inherited-context"
     },
+    "GET /api/sessions/:sessionId/log": {
+      "command": "session.log.window"
+    },
+    "GET /api/sessions/:sessionId/log/entry": {
+      "command": "session.log.get"
+    },
+    "GET /api/sessions/:sessionId/log/locate": {
+      "command": "session.log.locate"
+    },
     "GET /api/shares/:token": {
       "command": "share.view"
     },
     "GET /api/shares/:token/attachments/:attachmentId/content": {
       "command": "share.view"
+    },
+    "GET /api/shares/:token/tasks/:task_id/trace": {
+      "command": "share.trace.read"
     },
     "GET /api/skills": {
       "command": "skill.list"
@@ -11002,14 +11065,22 @@
     "GET /api/tasks/:id/steer": {
       "command": "task.steer.list"
     },
+    "GET /api/tasks/:id/trace": {
+      "command": "task.trace.read"
+    },
     "GET /api/tasks/:taskId/messages": {
-      "command": "task.message.list"
+      "command": "task.trace.read"
     },
     "GET /api/tasks/:taskId/prompt": {
       "command": "task.prompt"
     },
     "GET /api/tokens": {
       "command": "token.list"
+    },
+    "GET /api/trace/ws": {
+      "cli_exempt": true,
+      "category": "websocket_transport",
+      "reason": "Long-lived WebSocket transport is outside the CLI command surface."
     },
     "GET /api/workspaces": {
       "command": "workspace.list"
@@ -11446,27 +11517,27 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state": {
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/complete": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result": {
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/failure": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result": {
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/failure": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/init": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/commands/claim": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11486,11 +11557,6 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11502,11 +11568,6 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/reset": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11531,27 +11592,12 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/runtimes/:runtimeId/local-skills/claim": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11562,6 +11608,26 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/recover-orphans": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/complete": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/failure": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/failure": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/init": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11586,32 +11652,7 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/complete": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/dispatch-lease": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/fail": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/human-requests": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11621,47 +11662,12 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/messages": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/progress": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/prompt": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/session": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/tasks/:taskId/start": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/steer/consume": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/usage": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/tasks/:taskId/wait-local-directory": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/workspace": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -12346,12 +12352,17 @@
     "PUT /api/comments/:id": {
       "command": "comment.update"
     },
+    "PUT /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "PUT /api/daemon/runtimes/:runtimeId/models": {
+    "PUT /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."

@@ -2,18 +2,51 @@
  * MUL-400 E3 blocking 4 (MUL-409 fix round 2): the automatic-start chain must
  * stay a single transaction on the Postgres bridge.
  *
- * `PostgresSyncDatabase.transaction()` is a bare BEGIN/COMMIT pair with no
- * savepoint, so a nested BEGIN lets the inner COMMIT end the outer unit early
- * and a later ROLLBACK cannot undo it. The depth counter is asserted for the
+ * When this was written `PostgresSyncDatabase.transaction()` was a bare
+ * BEGIN/COMMIT pair, so a nested BEGIN let the inner COMMIT end the outer unit
+ * early and a later ROLLBACK could not undo it. Since MUL-405 a nested
+ * `transaction()` is a SAVEPOINT inside the outer unit, and
+ * `maxTransactionDepth` counts every frame, the SAVEPOINT included. The entry
+ * points below still hold depth 1 exactly, with no nested frame — see
+ * docs/adr/0011-transaction-ownership-and-side-effect-timing.md. The depth
+ * counter is asserted for the
  * three scenarios the fix round names: auto-start after a prerequisite is done,
  * two prerequisites finishing, and the member forced start.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => {
+  it("inserts the E3 notification turn inside the prerequisite transaction at depth 1", () => {
+    const store = createStore();
+    const flow = inboxFlowFixture(store, "e3");
+    const database = db!;
+    const transaction = database.transaction.bind(database);
+    const run = database.run.bind(database);
+    let depth = 0;
+    let maxDepth = 0;
+    const inserts: Array<{ depth: number; inTransaction: boolean }> = [];
+    database.transaction = ((fn: (...args: unknown[]) => unknown) => {
+      const runner = transaction(fn);
+      return (...args: unknown[]) => {
+        maxDepth = Math.max(maxDepth, ++depth);
+        try { return runner(...args); }
+        finally { depth--; }
+      };
+    }) as typeof database.transaction;
+    database.run = (sql, params) => {
+      if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) inserts.push({ depth, inTransaction: database.inTransaction });
+      return run(sql, params);
+    };
+    try { triggerInboxFlow(store, flow); }
+    finally { database.transaction = transaction; database.run = run; }
+    expect(maxDepth).toBe(1);
+    expect(inserts).toEqual([{ depth: 1, inTransaction: true }]);
+  });
+
   it("auto-starts after a prerequisite is done without nesting", () => {
     const store = createStore();
     store.ensureLocalWorkspace();

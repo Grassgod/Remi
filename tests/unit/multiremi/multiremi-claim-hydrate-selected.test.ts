@@ -10,8 +10,8 @@
 //   2. the eligibility decision never needs a Skill body, so reading one must not happen per
 //      candidate Agent.
 import { afterEach, describe, expect, it } from "bun:test";
-import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { normalizeDaemonClaimTask } from "@multiremi/client.js";
+import { receiveTaskOffer } from "../../fixtures/task-offer.js";
 import { createStore, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
@@ -193,31 +193,17 @@ describe("claim hydrates only the selected task", () => {
     expect(skillFileReads).toBe(0);
   });
 
-  it("delivers the same task over HTTP as the store-level claim", async () => {
+  it("delivers the same task over a v2 offer as the store-level claim", async () => {
     const { store, runtime } = fixture({ agents: 3 });
     const expected = store.listTasks().find((task) => task.priority === 100)!.id;
-    const token = await store.createAccessToken({ workspaceId: "local", name: "d", type: "daemon", daemonId: "daemon-hydrate" });
-    const app = createMultiremiApp({ store, authToken: "MASTER", backgroundJobs: false });
-    const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ supports_binary_skill_files: true }),
-    });
-    expect(response.status).toBe(200);
-    const body = await response.json() as { task: { id: string; agent: { skills: Array<{ files?: unknown[] }> } } };
+    const body = { task: (await receiveTaskOffer(store, runtime.id))! };
     expect(body.task.id).toBe(expected);
     expect(body.task.agent.skills[0]!.files).toHaveLength(1);
   });
 
-  it("keeps the daemon client's claim normalization working against the new path", async () => {
+  it("keeps daemon task normalization working against the v2 offer payload", async () => {
     const { store, runtime } = fixture({ agents: 2 });
-    const token = await store.createAccessToken({ workspaceId: "local", name: "d", type: "daemon", daemonId: "daemon-hydrate" });
-    const app = createMultiremiApp({ store, authToken: "MASTER", backgroundJobs: false });
-    mockFetch((url, init) => {
-      const parsed = new URL(url);
-      return app.request(`${parsed.pathname}${parsed.search}`, init);
-    });
-    const claimed = await new MultiremiDaemonClient("https://remi.example", token.token).claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
     expect(claimed?.id).toBe(store.listTasks().find((task) => task.priority === 100)!.id);
     expect(claimed?.agent?.skills).toHaveLength(1);
   });

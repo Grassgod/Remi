@@ -39,7 +39,7 @@ import {
   formatElapsedSince,
   formatTokens,
 } from "../format";
-import { api } from "@multiremi/core/api";
+import { api, type TaskTraceRead } from "@multiremi/core/api";
 import { useTranscriptViewStore } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
@@ -72,6 +72,10 @@ interface AgentTranscriptDialogProps {
    * The dialog stays generic — slot content is the caller's concern.
    */
   headerSlot?: React.ReactNode;
+  traceResult?: TaskTraceRead | null;
+  traceLoading?: boolean;
+  traceError?: boolean;
+  onTraceRetry?: () => void;
 }
 
 // ─── Color mapping for timeline segments ────────────────────────────────────
@@ -89,6 +93,10 @@ export function AgentTranscriptDialog({
   agentName,
   isLive = false,
   headerSlot,
+  traceResult,
+  traceLoading = false,
+  traceError = false,
+  onTraceRetry,
 }: AgentTranscriptDialogProps) {
   const { t } = useT("agents");
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
@@ -376,11 +384,12 @@ export function AgentTranscriptDialog({
           ? t(($) => $.transcript.waiting_events)
           : null;
   const emptyStateSpins = (task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive);
+  const traceUnavailable = traceError || (traceResult !== undefined && traceResult !== null && traceResult.state !== "ok");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="!max-w-4xl !w-[calc(100vw-4rem)] !max-h-[calc(100vh-4rem)] !h-[calc(100vh-4rem)] flex flex-col !p-0 !gap-0 overflow-hidden"
+        className="!max-w-[896px] !w-[calc(100vw-48px)] !h-[min(720px,calc(100dvh-48px))] flex flex-col !p-0 !gap-0 overflow-hidden max-md:!w-screen max-md:!h-dvh max-md:!max-h-dvh max-md:!rounded-none"
         showCloseButton={false}
       >
         <DialogTitle className="sr-only">{t(($) => $.transcript.dialog_title)}</DialogTitle>
@@ -604,6 +613,36 @@ export function AgentTranscriptDialog({
           </div>
         </div>
 
+        {onTraceRetry && (
+          <div
+            role={traceError || traceResult?.state === "unreachable" ? "alert" : "status"}
+            className={cn(
+              "flex h-10 shrink-0 items-center gap-2 border-b px-4 text-xs text-muted-foreground",
+              (traceError || traceResult?.state === "unreachable") && "h-16 max-md:h-[88px]",
+            )}
+          >
+            {traceLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : null}
+            <span className="min-w-0 flex-1">
+              {traceError ? t(($) => $.transcript.trace_failed) : traceLoading && !traceResult ? t(($) => $.transcript.trace_loading)
+                : traceResult?.state === "unreachable"
+                  ? t(($) => $.transcript.trace_unreachable, { name: traceResult.runtime_name ?? traceResult.runtime_id ?? "" })
+                  : traceResult?.state === "backfilling" ? t(($) => $.transcript.trace_backfilling)
+                  : traceResult?.state === "lost" ? t(($) => $.transcript.trace_lost)
+                  : traceResult?.state === "not_found" ? t(($) => $.transcript.trace_not_found)
+                  : traceResult?.closed ? t(($) => $.transcript.trace_finished, { count: items.length })
+                  : t(($) => $.transcript.trace_live)}
+              {traceResult?.state === "unreachable" && traceResult.last_seen_at && (
+                <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceResult.last_seen_at).toLocaleString() })}</span>
+              )}
+            </span>
+            {(traceError || traceResult?.state === "unreachable") && (
+              <button type="button" onClick={onTraceRetry} className="shrink-0 text-foreground underline underline-offset-2">
+                {t(($) => $.transcript.trace_retry)}
+              </button>
+            )}
+          </div>
+        )}
+
         {activeView === "prompt" ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {promptQuery.isLoading ? (
@@ -714,7 +753,13 @@ export function AgentTranscriptDialog({
           ref={scrollContainerRef}
           className="flex-1 overflow-y-auto min-h-0"
         >
-          {entries.length === 0 ? (
+          {traceLoading && items.length === 0 ? (
+            <div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />{t(($) => $.transcript.trace_loading)}
+            </div>
+          ) : entries.length === 0 && traceUnavailable ? (
+            <div className="h-full" aria-hidden="true" />
+          ) : entries.length === 0 ? (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
               {emptyStateLabel ? (
                 <div className="flex items-center gap-2">

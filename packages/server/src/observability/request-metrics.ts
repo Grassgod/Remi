@@ -351,6 +351,18 @@ export function recordDbQuery(waitMs: number, bytes: number): void {
 }
 
 /**
+ * Snapshot the process-wide DB counters.
+ *
+ * Read by the WebSocket frame summary (`ws_minute_summary`) so both summaries
+ * report the same process totals: a daemon that moved from HTTP to a socket must
+ * not look like it stopped touching the database. A reader is exported rather
+ * than the object itself so nothing outside can reset a counter.
+ */
+export function readProcessDbCounters(): { dbMs: number; dbQueries: number; dbBytes: number } {
+  return { ...processDbCounters };
+}
+
+/**
  * Main-thread `TextDecoder` + `JSON.parse` cost of a bridge reply.
  *
  * Request-scoped only: it exists to test the MUL-366 "serialization + GC"
@@ -467,8 +479,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "GET /api/multiremi/agents/:id/tasks",
   "GET /api/multiremi/chats/:id", // Legacy bundle includes all chat bodies.
   "GET /api/multiremi/chats/:id/messages",
-  "GET /api/chat/sessions/:sessionId/messages",
-  "GET /api/chat/sessions/:sessionId/messages/page", // Pagination is after SQL.
   "POST /api/chat/sessions/:sessionId/messages", // Dispatch builds chat history.
   "POST /api/multiremi/chats/:id/messages",
   "GET /api/chat/sessions", // Last-message excerpt is projected; retain pending C-2 byte data.
@@ -584,7 +594,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/daemon/tasks/:taskId/start",
   "POST /api/daemon/tasks/:taskId/dispatch-lease",
   "POST /api/daemon/tasks/:taskId/wait-local-directory",
-  "POST /api/daemon/tasks/:taskId/human-requests",
   "POST /api/daemon/tasks/:taskId/progress",
   "POST /api/daemon/tasks/:taskId/session",
   "POST /api/daemon/tasks/:taskId/workspace",
@@ -734,7 +743,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer", // daemon.ts:588; decision access and writeback read issue description/metadata.
   "POST /api/daemon/issues/:issueId/workspace/cleaned", // daemon.ts:1358; large-column caller.
   "POST /api/daemon/scm/git-credentials", // daemon.ts:159; large-column caller.
-  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire", // daemon.ts:1065; large-column caller.
   "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond", // daemon.ts:1078; large-column caller.
   "POST /api/daemon/tasks/:taskId/steer/consume", // daemon.ts:1339; large-column caller.
   "POST /api/issues", // issues.ts:791; large-column caller.

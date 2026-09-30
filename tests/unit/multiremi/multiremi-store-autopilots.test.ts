@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 // Autopilot run state, cron scheduling and trigger claiming, the failure-rate
 // auto-pause, analytics, and webhook delivery.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -248,7 +249,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.getTask(run.taskId!)?.prompt).toBe("Execute the full Runbook");
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const body = await claim.json();
     expect(body.task.id).toBe(run.taskId);

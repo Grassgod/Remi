@@ -181,6 +181,7 @@ describe("MUL-473 runtimes list", () => {
         status: source.status,
         device_info: source.deviceInfo,
         metadata: source.metadata,
+        protocol: source.protocol,
         owner_id: source.ownerId,
         visibility: source.visibility,
         created_at: source.createdAt,

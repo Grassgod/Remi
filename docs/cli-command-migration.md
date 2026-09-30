@@ -533,7 +533,10 @@ remove any alias.
 | `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
 | `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
-| `remi task messages` | `remi task message list` | One-release compatibility alias |
+| `remi task message list` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
+| `remi task messages` | `remi task trace read` | One-release compatibility alias |
+| `remi issue run-messages` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
+| `remi chat message list` | `remi session log window` | One-release compatibility alias; use sequence `--anchor`/`--before`/`--after` instead of the retired timestamp cursor |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
 | `remi agent edit` | `remi agent update` | One-release compatibility alias |
@@ -565,6 +568,7 @@ The server-injected agent prompt now uses only canonical commands in
 
 - `remi comment list|add`
 - `remi session result publish`
+- `remi session log get <session> <seq|entry-id>` expands a folded inbox entry; `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
 - `remi memory search|get|create|update`
 
 The matching durable command examples use canonical commands in

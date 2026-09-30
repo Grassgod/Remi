@@ -26,12 +26,6 @@ export function reconcileSettledPendingChatTask(
   }
 
   void queryClient.invalidateQueries({
-    queryKey: chatKeys.messages(previous.sessionId),
-  });
-  void queryClient.invalidateQueries({
-    queryKey: chatKeys.messagesPage(previous.sessionId),
-  });
-  void queryClient.invalidateQueries({
     queryKey: chatKeys.sessions(wsId),
   });
   void queryClient.invalidateQueries({

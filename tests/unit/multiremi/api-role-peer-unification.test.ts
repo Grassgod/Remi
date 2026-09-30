@@ -27,10 +27,13 @@ import {
   type LocalRealtimeRole,
   type RealtimeFanoutOptions,
 } from "../../../packages/server/src/api/realtime-fanout.js";
-import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import * as apiRoleConfig from "@multiremi/config/api-role.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+
+const legacyHub = () => createEmptyLiveHub(createLocalHubTransport());
 
 it("resolves the role once during a real server start and retains the unconfigured default", async () => {
   delete process.env.MULTIREMI_API_ROLE;
@@ -39,7 +42,7 @@ it("resolves the role once during a real server start and retains the unconfigur
   expect(resolveStartupApiRole({ MULTIREMI_API_ROLE: "all" })).toEqual({ role: "all", configured: true });
   const resolver = spyOn(apiRoleConfig, "resolveApiRole");
   const { store, db } = memoryStore();
-  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
+  const server = startMultiremiServer({ store, liveHub: legacyHub(), port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
   try {
     expect(resolver).toHaveBeenCalledTimes(1);
     const base = `http://127.0.0.1:${server.port}`;
@@ -82,10 +85,9 @@ function roleSpy() {
   };
 }
 
-/** Records the frames a browser- or daemon-registry client is handed. */
+/** Records browser frames; daemon delivery is observed through the fanout hook. */
 function registries() {
   const browserFrames: string[] = [];
-  const daemonFrames: string[] = [];
   const browser = {
     data: {
       kind: "browser" as const,
@@ -94,28 +96,13 @@ function registries() {
       authenticated: true,
       userId: "local",
       accessToken: null,
-      scopeSubscriptions: [] as string[],
     },
     sendText: (frame: string) => browserFrames.push(frame),
     close: () => {},
   };
-  const daemon = {
-    data: {
-      kind: "daemon" as const,
-      connectedAt: new Date().toISOString(),
-      runtimeId: "rt_role",
-      runtimeIds: ["rt_role"],
-      accessToken: null,
-      canReportAgentPluginProtocol: true,
-    },
-    sendText: (frame: string) => daemonFrames.push(frame),
-    close: () => {},
-  };
   return {
     browserFrames,
-    daemonFrames,
     registries: {
-      daemon: new Map([["rt_role", new Set([daemon])]]) as DaemonWebSocketRegistry,
       browser: new Map([["local", new Set([browser])]]) as any,
       browserUser: new Map([["local", new Set([browser])]]) as any,
       browserScope: new Map() as any,
@@ -132,14 +119,15 @@ function fanoutDelivery(role: LocalRealtimeRole) {
   const agent = store.createAgent({ name: `role-${role}`, provider: "codex" });
   const runtime = store.registerRuntime({ id: "rt_role", name: "Role runtime", provider: "codex" });
   const mounts = registries();
-  const fanout = createRealtimeFanout({ role, store, registries: mounts.registries });
+  const daemonEvents: Array<{ type: string }> = [];
+  const fanout = createRealtimeFanout({ role, store, registries: mounts.registries, onDaemonTask: event => { daemonEvents.push(event); } });
   try {
     store.createTask({ agentId: agent.id, prompt: "role delivery", runtimeId: runtime.id });
     return {
       browser: mounts.browserFrames.length,
-      daemon: mounts.daemonFrames.length,
+      daemon: daemonEvents.length,
       browserTypes: mounts.browserFrames.map((frame) => (JSON.parse(frame) as { type: string }).type),
-      daemonTypes: mounts.daemonFrames.map((frame) => (JSON.parse(frame) as { type: string }).type),
+      daemonTypes: daemonEvents.map(event => event.type),
     };
   } finally {
     fanout.close();
@@ -153,12 +141,14 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
     const { store, db } = memoryStore();
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -193,12 +183,14 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
     const { store, db } = memoryStore();
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -221,14 +213,16 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
   it("behaves exactly like main when neither env nor apiRole is set", async () => {
     delete process.env[ROLE_ENV];
     const { store, db } = memoryStore();
-    const app = createMultiremiApp({ store, authToken: null });
+    const app = createMultiremiApp({ store, liveHub: legacyHub(), authToken: null });
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      hub: legacyHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {

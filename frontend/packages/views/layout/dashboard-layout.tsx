@@ -5,6 +5,7 @@ import { SidebarProvider, SidebarInset } from "@multiremi/ui/components/ui/sideb
 import { ModalRegistry } from "../modals/registry";
 import { AppSidebar } from "./app-sidebar";
 import { DashboardGuard } from "./dashboard-guard";
+import { FloatingPanelLayout } from "./floating-panel-layout";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 
@@ -36,10 +37,12 @@ export function DashboardLayout({
         <WorkspacePresencePrefetch />
         <AppSidebar searchSlot={searchSlot} />
         <SidebarInset className="relative overflow-hidden">
-          <NavigationProgress />
-          {children}
-          <ModalRegistry />
-          {extra}
+          <FloatingPanelLayout>
+            <NavigationProgress />
+            {children}
+            <ModalRegistry />
+            {extra}
+          </FloatingPanelLayout>
         </SidebarInset>
       </SidebarProvider>
     </DashboardGuard>
