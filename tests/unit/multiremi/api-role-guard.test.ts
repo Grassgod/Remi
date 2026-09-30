@@ -68,7 +68,7 @@ const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string
  * These are transcriptions of MUL-455 §3.2, so a bug in `isMisdirectedPath` /
  * `isRuntimeAllowedPath` fails this suite instead of defining the answer.
  *
- * `ui` = the page process: it refuses the daemon protocol and B5 trace reads.
+ * `ui` = the page process: it refuses the daemon protocol, trace socket and B5 trace reads.
  * `runtime` = the daemon process: an allowlist of prefixes, exact paths and B5
  * trace reads; everything else is refused.
  */
@@ -89,7 +89,7 @@ function expectedRefusal(role: ApiRole, pathname: string): boolean {
   if (role === "all") return false;
   const traceRead = /^\/api\/tasks\/[^/]+\/trace$/.test(pathname)
     || /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname);
-  if (role === "ui") return pathname.startsWith("/api/daemon/") || traceRead;
+  if (role === "ui") return pathname.startsWith("/api/daemon/") || traceRead || pathname === "/api/trace/ws";
   if (traceRead) return false;
   if (RUNTIME_ALLOWED_EXACT.includes(pathname as (typeof RUNTIME_ALLOWED_EXACT)[number])) return false;
   return !RUNTIME_ALLOWED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -111,7 +111,7 @@ function routeCountHint(role: ApiRole): string {
     "Before touching this number:",
     "  1. Read the new route's path and classify it against the literal rules at the top of this",
     "     file (RUNTIME_ALLOWED_PREFIXES / RUNTIME_ALLOWED_EXACT), NOT against the implementation.",
-     "     /api/daemon/* and B5 trace reads -> runtime serves them and ui answers 421.",
+     "     /api/daemon/*, the trace socket and B5 trace reads -> runtime serves them and ui answers 421.",
     "     /api/daemons/:id (plural) and everything else outside the allowlist -> ui serves it.",
     "  2. Confirm the route really belongs where it was added. A daemon-protocol route registered",
     "     outside /api/daemon/ (or a browser route added under it) is a routing bug, not a count to",
@@ -153,7 +153,7 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
   try {
     for (const pattern of GOLDEN.routes) {
       const { method, path } = concreteRequest(pattern);
-      // The three upgrade-only routes answer 426 through `app.request`; the WS
+      // The four upgrade-only routes answer 426 through `app.request`; the WS
       // behaviour is asserted separately below against a real server.
       if (
         pattern === "GET /api/daemon/ws"
@@ -335,6 +335,7 @@ describe("MUL-461 api role — env resolution", () => {
       { path: "/api/cloud-runtime/healthz", ui: false, runtime: true },
       { path: "/internal/peer/events", ui: false, runtime: false },
       { path: "/internal/peer/health", ui: false, runtime: false },
+      { path: "/api/trace/ws", ui: true, runtime: false },
       { path: "/api/tasks/task_1/trace", ui: true, runtime: false },
       { path: "/api/shares/share_1/tasks/task_1/trace", ui: true, runtime: false },
     ];
@@ -388,7 +389,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
     expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
     expect(misdirected, routeCountHint("ui")).toHaveLength(63);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(64);
+    // daemon/ws and trace/ws are tested as real upgrades below.
+    expect(misdirected.length + 2, routeCountHint("ui")).toBe(65);
   });
 
   it("refuses paths outside runtime's daemon, health, peer and trace routes", async () => {
@@ -531,10 +533,11 @@ describe("MUL-461 api role — websocket upgrades", () => {
     // readable body (asserted by the status alone); a 421 would carry the header.
     const served = await upgradeStatus("runtime", "/api/trace/ws?workspace_id=local");
     expect(served.status).not.toBe(421);
-    // `ui` only refuses the daemon prefix, so this path is simply not its
-    // business to refuse at the guard — nginx sends it to runtime (MUL-464).
+    // nginx routes this socket to runtime; a UI process receiving it must
+    // reject the upgrade with the same 421 contract as the trace GET reads.
     const onUi = await upgradeStatus("ui", "/api/trace/ws?workspace_id=local");
-    expect(onUi.status).not.toBe(421);
+    expect(onUi.status).toBe(421);
+    expect(onUi.role).toBe("ui");
   });
 
   it("keeps the 426 upgrade-required answer for a non-upgrade GET", async () => {

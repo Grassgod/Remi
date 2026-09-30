@@ -76,6 +76,7 @@ import { useNavigation } from "../../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
 import { createSafeId } from "@multiremi/core/utils";
+import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { PageHeader } from "../../layout/page-header";
 import { ChatQueue } from "./chat-queue";
 
@@ -512,6 +513,7 @@ export function ChatWindow({
 
   const isExpanded = useChatStore((s) => s.isExpanded);
 
+  const { rightRailWidth } = useFloatingPanelLayout();
   const windowRef = useRef<HTMLDivElement>(null);
   const {
     renderWidth,
@@ -521,7 +523,7 @@ export function ChatWindow({
     isDragging,
     toggleExpand,
     startDrag,
-  } = useChatResize(windowRef);
+  } = useChatResize(windowRef, isPage ? 0 : rightRailWidth);
 
   // Show the list (vs empty state) as soon as there's anything to display —
   // a real message, or a pending task whose timeline will stream in.
@@ -533,6 +535,7 @@ export function ChatWindow({
   const containerClass =
     "absolute bottom-2 right-2 z-50 flex flex-col rounded-xl ring-1 ring-foreground/10 bg-sidebar shadow-2xl overflow-hidden";
   const containerStyle: React.CSSProperties = {
+    right: 8 + rightRailWidth,
     transformOrigin: "bottom right",
     pointerEvents: isVisible ? "auto" : "none",
   };
@@ -846,10 +849,11 @@ export function ChatWindow({
   return (
     <>
     {isOpen && waitingForLog && <div role="status" aria-label={t(($) => $.page.loading)}
-      className="absolute bottom-2 right-2 z-50 flex size-10 items-center justify-center rounded-full bg-card text-muted-foreground shadow-sm ring-1 ring-foreground/10">
+      className="absolute bottom-2 right-2 z-50 flex size-10 items-center justify-center rounded-full bg-card text-muted-foreground shadow-sm ring-1 ring-foreground/10" style={{ right: 8 + rightRailWidth }}>
       <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
     </div>}
     <motion.div
+      data-floating-chat-window=""
       ref={windowRef}
       className={containerClass}
       style={containerStyle}

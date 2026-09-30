@@ -5,6 +5,7 @@ import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { api } from "@multiremi/core/api";
 import { defaultStorage } from "@multiremi/core/platform";
 import { ChevronLeft } from "lucide-react";
+import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { useNavigation } from "../../navigation";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
@@ -83,6 +84,7 @@ export function IssueDetail({
 }: IssueDetailProps) {
   const { t } = useT("issues");
   const id = issueId;
+  const { registerRightRail } = useFloatingPanelLayout();
   const router = useNavigation();
   const { pathname } = router;
   const { user } = useSSRUser();
@@ -401,7 +403,7 @@ export function IssueDetail({
         panelRef={sidebarRef}
         onResize={(size) => setDesktopSidebarOpen(size.inPixels > 0)}
       >
-      <div className="overflow-y-auto border-l h-full">
+      <div ref={registerRightRail} data-issue-detail-sidebar="" className="overflow-y-auto border-l h-full">
         <div className="p-4">
           {sidebarContent}
         </div>
