@@ -5,12 +5,12 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import baseline from "../../fixtures/daemon-v1-routes.json";
 import { snapshotRouteTable } from "../../../scripts/snapshot-api-routes.js";
+import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { waitFor } from "./harness.js";
 
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
 
 const removedBy421 = [
-  "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
   "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
   "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
   "GET /api/daemon/tasks/:taskId/messages",
@@ -43,6 +43,45 @@ it("keeps the retired method + path table equal to v1 minus live routes", () => 
   const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
   expect(retired).toHaveLength(new Set(retired).size);
   expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
+});
+
+it.each(["empty", "nonempty"] as const)("keeps v1 desired GET read-only and equal to plugin.desired RPC (%s)", async scenario => {
+  const db = new Database(":memory:");
+  try {
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: `rt_desired_${scenario}`, name: "Legacy desired", provider: "claude",
+      workspaceId: "local", daemonId: "dmn_desired" });
+    if (scenario === "nonempty") {
+      const agent = store.createAgent({ name: "Desired agent", provider: "claude" });
+      const plugin = store.importAgentPlugin({ provider: "claude",
+        manifest: { name: "desired-fixture", version: "1.0.0" } });
+      store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    }
+    const credential = await store.createAccessToken({ name: "Desired daemon", type: "daemon",
+      workspaceId: "local", daemonId: runtime.daemonId });
+    const foreign = await store.createAccessToken({ name: "Foreign desired daemon", type: "daemon",
+      workspaceId: "local", daemonId: "dmn_foreign_desired" });
+    const path = `/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`;
+    const rpc = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, credential.token);
+    expect(rpc.ok).toBe(true);
+    const expected = { runtime_id: rpc.runtime_id, revision: rpc.revision, plugins: rpc.plugins };
+    expect(expected.plugins.length).toBe(scenario === "empty" ? 0 : 1);
+    for (const apiRole of ["all", "runtime"] as const) {
+      const app = createMultiremiApp({ store, authToken: "isolated-desired", apiRole });
+      const unauthorized = await app.request(path);
+      expect(unauthorized.status).toBe(401);
+      const forbidden = await app.request(path, { headers: { Authorization: `Bearer ${foreign.token}` } });
+      expect(forbidden.status).toBe(403);
+      const changesBefore = db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count;
+      const response = await app.request(path, { headers: { Authorization: `Bearer ${credential.token}` } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expected);
+      expect(db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count).toBe(changesBefore);
+    }
+    const ui = createMultiremiApp({ store, authToken: "isolated-desired", apiRole: "ui" });
+    expect((await ui.request(path, { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(421);
+  } finally { db.close(); }
 });
 
 it.each(["all", "runtime"] as const)("keeps v1 task claim inert and authenticated (%s)", async apiRole => {

@@ -1061,8 +1061,8 @@ runMigrations(this.db);
     return this.agentPlugins.listAgentPluginRuntimeStates(options);
   }
 
-  getRuntimeAgentPluginDesiredSnapshot(runtimeId: string): MultiremiAgentPluginRuntimeDesiredSnapshot {
-    return this.agentPlugins.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
+  getRuntimeAgentPluginDesiredSnapshot(runtimeId: string, options: { reconcile?: boolean } = {}): MultiremiAgentPluginRuntimeDesiredSnapshot {
+    return this.agentPlugins.getRuntimeAgentPluginDesiredSnapshot(runtimeId, options);
   }
 
   reportAgentPluginRuntimeState(

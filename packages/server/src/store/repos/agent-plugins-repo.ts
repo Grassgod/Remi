@@ -625,10 +625,10 @@ export class AgentPluginsRepo {
     return rows.map((row) => this.toRuntimeState(row));
   }
 
-  getRuntimeAgentPluginDesiredSnapshot(runtimeId: string): MultiremiAgentPluginRuntimeDesiredSnapshot {
+  getRuntimeAgentPluginDesiredSnapshot(runtimeId: string, options: { reconcile?: boolean } = {}): MultiremiAgentPluginRuntimeDesiredSnapshot {
     const runtime = this.requireRuntime(runtimeId);
     const workspaceId = runtime.workspaceId ?? "local";
-    this.reconcileAgentPluginDesiredState(workspaceId);
+    if (options.reconcile !== false) this.reconcileAgentPluginDesiredState(workspaceId);
     const rows = this.ctx.db.query(
       `SELECT s.*, p.name, p.provider, v.version, v.artifact_digest, v.source_revision, v.requirements
        FROM multiremi_agent_plugin_runtime_states s

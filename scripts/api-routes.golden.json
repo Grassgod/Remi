@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 747,
+    "routeCount": 748,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 519,
+      "compat": 520,
       "root": 16
     },
-    "getRoutes": 324,
-    "getRoutesWithBody": 321,
+    "getRoutes": 325,
+    "getRoutesWithBody": 322,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -184,6 +184,7 @@
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
+    "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
@@ -914,6 +915,7 @@
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
+    "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
@@ -12735,6 +12737,17 @@
       "status": 403,
       "body": {
         "error": "daemon token required"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+      "route": "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+      "path": "/api/daemon/runtimes/rt_snapshot/agent-plugins/desired",
+      "status": 200,
+      "body": {
+        "runtime_id": "rt_snapshot",
+        "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "plugins": []
       }
     },
     {

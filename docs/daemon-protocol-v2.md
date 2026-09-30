@@ -448,7 +448,7 @@ SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议�
 | 今天 | v2 |
 |---|---|
 | heartbeat ack 捎带 `pending_update` / `pending_command` / `pending_model_list` / `pending_local_skills` / `pending_directory_scan` / `pending_bot_menu` / `pending_feishu_outbound` | 创建即推对应下行帧；`task.complete` 等结果走上行可靠帧 |
-| `GET agent-plugins/desired` 30 s 兜底 | 服务端推 `plugin.desired_revision`，daemon 用 rpc `plugin.desired` 拉快照；30 s 兜底取消 |
+| `GET agent-plugins/desired` 30 s 兜底 | v2 服务端推 `plugin.desired_revision`，daemon 用 rpc `plugin.desired` 拉快照；30 s 兜底取消。v1 的只读 GET 暂作升级桥，供旧进程完成启动并进入升级心跳，非 v2 稳态轮询 |
 | desired 的 10 分钟强制刷新（ADR 0001 的「revision 定义漏字段」防御） | 保留，改为 WS rpc；不算轮询 |
 | `GET tasks/:id/steer` 2.5 s | 创建即推 `task.steer`，daemon 用 rpc `steer.consume` 标记消费 |
 | `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除。飞书 bot 的独立任务状态轮询仍按需使用此 GET，见下方条件 HTTP 清单 |

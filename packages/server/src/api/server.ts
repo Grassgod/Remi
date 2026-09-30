@@ -203,7 +203,6 @@ import { registerPeerRoutes } from "./peer/peer-routes.js";
 // Only routes removed from the v1 daemon API get the upgrade response. Unknown
 // method/path combinations remain not-found after these registrations.
 export const RETIRED_DAEMON_HTTP_ROUTES = [
-  { method: "GET", path: "/api/daemon/runtimes/:runtimeId/agent-plugins/desired" },
   { method: "GET", path: "/api/daemon/runtimes/:runtimeId/tasks/pending" },
   { method: "GET", path: "/api/daemon/tasks/:taskId/human-requests/:requestId" },
   { method: "GET", path: "/api/daemon/tasks/:taskId/messages" },

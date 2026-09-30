@@ -29,9 +29,14 @@ It never inherits deployment tokens, service-manager identity or provider creden
 loopback address with an explicit port. The existing fake Antigravity provider is used, and a local inert installer
 returns exit 42 so no release is installed or successor spawned. Tokens are not written to configuration or capture files.
 
-The manual probe presently checks only fixture integrity, startup and registration. Once MUL-419 and MUL-421 PR 1
-are merged, add the business assertions to the integration suite: v1 claim returns `task: null`, removed snapshot routes
-return 426, heartbeat receives `pending_update`, and installation failure is reported through the retained update-result route.
+The manual probe starts a fresh published v0.2.82 process twice, with empty and nonempty desired Plugin state.
+It requires the real process to reach its first heartbeat and receive `pending_update` after the desired GET;
+an early process exit or 15 seconds without heartbeat fails. The tag's default heartbeat period is 10 seconds,
+with 5 seconds allowed for local startup scheduling. The nonempty Claude scenario requires an existing
+`REMI_CLAUDE_AGENT_ACP_DIR` package path for the release binary's health check; only that path is passed
+into the otherwise isolated child. The probe separately verifies claim-null, retired-report 426, runtime
+`upgrade_pending`, and one pending update row. A nonempty desired set may trigger retired Plugin state
+POSTs returning 426 before heartbeat; these do not block startup and are not restored.
 Keep teardown ordered: daemon exit and output drain, server request drain, server stop, then Store close. A failed probe
 does not relax a timeout or leave a daemon behind. The archive is caller-owned; the harness removes only its own extracted
 temporary directory after the child exits.

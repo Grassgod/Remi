@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -84,15 +84,21 @@ export class DaemonV1ReleaseHarness {
     }
   }
 
-  start(serverUrl: string, token: string): void {
+  start(serverUrl: string, token: string, provider: "antigravity" | "claude" = "antigravity"): void {
     if (this.disposed || this.child) throw new Error("Release fixture is already started or disposed");
     const url = localDaemonTestUrl(serverUrl);
     this.installer = Bun.serve({ hostname: "127.0.0.1", port: 0,
       fetch: () => new Response("exit 42\n", { headers: { "Content-Type": "text/x-shellscript" } }) });
     const installerUrl = `http://127.0.0.1:${this.installer.port}/fixture-installer.sh`;
-    this.child = Bun.spawn([this.binary, "daemon", "start", "--foreground", "--provider", "antigravity",
+    const claudeAcpDir = process.env.REMI_CLAUDE_AGENT_ACP_DIR;
+    if (provider === "claude" && (!claudeAcpDir || !existsSync(join(claudeAcpDir, "package.json")))) {
+      throw new Error("Claude ACP package directory is required for the nonempty release fixture");
+    }
+    this.child = Bun.spawn([this.binary, "daemon", "start", "--foreground", "--provider", provider,
       "--server", url, "--workspace", "local", "--daemon-id", "dmn_release_fixture", "--device-name", "release-fixture", "--daemon-port", "0"], {
-      cwd: this.root, env: daemonV1TestEnv(this.root, url, token, installerUrl), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      cwd: this.root, env: { ...daemonV1TestEnv(this.root, url, token, installerUrl),
+        ...(provider === "claude" ? { REMI_CLAUDE_AGENT_ACP_DIR: claudeAcpDir! } : {}) },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const collect = async (stream: ReadableStream<Uint8Array>) => {
       const reader = stream.getReader();
@@ -110,6 +116,12 @@ export class DaemonV1ReleaseHarness {
 
   localPort(): number | null {
     return Number(/Repo checkout server listening on 127\.0\.0\.1:(\d+)/.exec(this.output)?.[1]) || null;
+  }
+
+  hasExited(): boolean { return this.child !== null && this.child.exitCode !== null; }
+
+  diagnostic(): string {
+    return this.output.slice(-2_000).replace(/(token|password|authorization)[=:]\s*\S+/gi, "$1=[redacted]");
   }
 
   async health(): Promise<Record<string, unknown> | null> {
