@@ -78,6 +78,20 @@ describe.each([
     expect(seen).toEqual([1, 2, 3]);
   });
 
+  it("serves a synchronous retained snapshot and never replays it on the next flush", async () => {
+    const sink = build();
+    sink.append("task_a", [traceEvent(1), traceEvent(2)]);
+    const snapshot: number[] = [];
+    sink.subscribe("task_a", 0, (_id, events) => snapshot.push(...events.map(event => event.seq))).unsubscribe();
+    expect(snapshot).toEqual([1, 2]);
+    const live: number[] = [];
+    sink.subscribe("task_a", 0, (_id, events) => live.push(...events.map(event => event.seq)));
+    expect(live).toEqual([1, 2]);
+    sink.append("task_a", [traceEvent(3)]);
+    await settle();
+    expect(live).toEqual([1, 2, 3]);
+  });
+
   it("stops delivering after unsubscribe", async () => {
     const sink = build();
     sink.append("task_a", [traceEvent(1)]);

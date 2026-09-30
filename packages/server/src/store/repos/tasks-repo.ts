@@ -1056,15 +1056,65 @@ export class TasksRepo {
     this.acceptedOfferLeases.delete(taskId);
   }
 
+  /** Caller owns one frame. W precedes both the partner lookup and writes. */
+  private coalesceDispatchedTurnWithinTransaction(taskId: string): boolean {
+    this.ctx.db.run(`UPDATE multiremi_workspaces SET updated_at = updated_at
+      WHERE id = (SELECT workspace_id FROM multiremi_tasks WHERE id = ?)`, [taskId]);
+    const row = this.ctx.db.query(`SELECT * FROM multiremi_tasks
+      WHERE id = ? AND status = 'dispatched' AND started_at IS NULL`).get(taskId) as Row | null;
+    if (!row || row.wake_source == null || row.continued_from_task_id != null) return false;
+    const issueLane = row.issue_session_id != null;
+    if (!issueLane && row.chat_session_id == null) return false;
+    // Match the partial indexes exactly, including the Chat-only lane. Do not
+    // call the Chat ensure branch: it would steer this very dispatched task.
+    const partner = this.ctx.db.query(`SELECT * FROM multiremi_tasks
+      WHERE ${issueLane ? "issue_session_id = ? AND execution_scope = ?" : "chat_session_id = ? AND issue_session_id IS NULL"}
+        AND agent_id = ? AND status = 'queued' AND wake_source IS NOT NULL
+        AND continued_from_task_id IS NULL AND id <> ?
+      ORDER BY created_at ASC, id ASC LIMIT 1`).get(
+      ...(issueLane ? [row.issue_session_id, row.execution_scope] : [row.chat_session_id]), row.agent_id, taskId,
+    ) as Row | null;
+    if (!partner) return false;
+    const at = nowIso();
+    const seq = Math.max(Number(row.wake_seq ?? 0), Number(partner.wake_seq ?? 0));
+    this.ctx.db.run(`UPDATE multiremi_tasks SET wake_seq = ?, updated_at = ?
+      WHERE id = ? AND status = 'queued'`, [seq, at, partner.id]);
+    // Same retirement as already_covered at claim time. Terminal handling would
+    // send a spurious cancelled delegation report and mutate the Issue status.
+    this.ctx.db.run(`UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?,
+      updated_at = ? WHERE id = ? AND status = 'dispatched'`, [at, at, taskId]);
+    this.ctx.conversationLog().updateTurnCardWithinTransaction(taskId, { status: "cancelled" });
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, toTask(row), "pending_turn_skipped", {
+      reason: "pending_turn_coalesced", kept_task_id: partner.id,
+      wake_source: row.wake_source, wake_seq: Number(row.wake_seq ?? 0),
+    }, at);
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, toTask(partner), "pending_turn_coalesced", {
+      reason: "offer_requeued", merged_task_id: taskId, seq,
+      wake_source: row.wake_source, commentId: row.trigger_comment_id ?? null,
+    }, at);
+    this.ctx.notifyTaskEnqueued(this.getTask(String(partner.id))!);
+    return true;
+  }
+
   requeueTaskOffer(taskId: string, runtimeId: string): boolean {
     this.acceptedOfferLeases.delete(taskId);
-    const row = this.ctx.db.query(
-      `UPDATE multiremi_tasks SET status = 'queued', dispatched_at = NULL,
-         offered_at = NULL, accepted_at = NULL, updated_at = ?
-       WHERE id = ? AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL RETURNING *`,
-    ).get(nowIso(), taskId, runtimeId) as Row | null;
-    if (row) this.ctx.notifyTaskEnqueued(toTask(row));
-    return Boolean(row);
+    const run = () => {
+      // No pre-lock read snapshot on SQLite, no recover-after-UNIQUE on PG.
+      this.ctx.db.run(`UPDATE multiremi_workspaces SET updated_at = updated_at
+        WHERE id = (SELECT workspace_id FROM multiremi_tasks WHERE id = ? AND runtime_id = ?)`, [taskId, runtimeId]);
+      const offered = this.ctx.db.query(`SELECT id FROM multiremi_tasks WHERE id = ?
+        AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL`).get(taskId, runtimeId);
+      if (!offered) return false;
+      if (this.coalesceDispatchedTurnWithinTransaction(taskId)) return true;
+      const row = this.ctx.db.query(
+        `UPDATE multiremi_tasks SET status = 'queued', dispatched_at = NULL,
+           offered_at = NULL, accepted_at = NULL, updated_at = ?
+         WHERE id = ? AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL RETURNING *`,
+      ).get(nowIso(), taskId, runtimeId) as Row | null;
+      if (row) this.ctx.notifyTaskEnqueued(toTask(row));
+      return Boolean(row);
+    };
+    return this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
   }
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
@@ -2175,6 +2225,7 @@ export class TasksRepo {
         const source = { executionFingerprint: nullableString(task.execution_fingerprint),
           workDir: nullableString(task.work_dir), runtimeId: nullableString(task.runtime_id) };
         if (chatWorkspaceLineageCurrent(this.ctx, chat, source) && !workspace.changed) continue;
+        if (this.coalesceDispatchedTurnWithinTransaction(String(task.id))) continue;
         const frozen = source.executionFingerprint;
         this.ctx.db.run(`UPDATE multiremi_tasks
           SET status = 'queued', session_id = NULL, work_dir = NULL, dispatched_at = NULL,
@@ -3764,7 +3815,8 @@ ${routing.sql}
       && this.runtimeMeetsTaskClaimEligibility(runtime, task);
     if (task && !eligible) {
       const now = nowIso();
-      const repool = () =>
+      const repool = () => {
+        if (this.coalesceDispatchedTurnWithinTransaction(String(row.id))) return;
         this.ctx.db.run(
           `UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL,
              work_dir = NULL, dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
@@ -3776,6 +3828,7 @@ ${routing.sql}
              updated_at = ? WHERE id = ?`,
           [now, String(row.id)],
         );
+      };
       // local_directory is checked FIRST, before archived/agent-missing — the
       // directory pin must survive even while the agent is archived (archived_at
       // keeps the normal claim from picking it up; if the agent is restored the
@@ -3785,6 +3838,7 @@ ${routing.sql}
       if (daemonId && task.agent) {
         const rt = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
+        if (this.coalesceDispatchedTurnWithinTransaction(String(row.id))) return null;
         this.ctx.db.run(
           `UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL,
              dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
@@ -6357,15 +6411,13 @@ ${placementAfter.sql}
         body,
       };
       // Ruling (ab) item 2: the reply (comment, Session event, log row) and the
-      // turn card's `final_entry_id` commit together. The reply's push, its
-      // notifications and its agent dispatch follow that COMMIT, as fix A does
-      // for a standalone comment.
+      // turn card's `final_entry_id` and any mention inbox wake commit together.
+      // The reply's pushes and member notifications follow that COMMIT.
       const deferredEvents = createCommitEventQueue();
       const created = this.ctx.db.transaction(() => {
         const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
           withinTransaction: true,
           deferredEvents,
-          deferDispatch: true,
         });
         this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
         return created;

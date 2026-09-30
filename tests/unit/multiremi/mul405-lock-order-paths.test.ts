@@ -145,7 +145,9 @@ function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase 
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
   let db: Database | PostgresSyncDatabase;
-  const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
+  // Exercise SQLite probes while retaining the real-PG-only frame test below.
+  const adminUrl = process.env.MULTIREMI_TEST_LOCK_ORDER_BACKEND === "sqlite"
+    ? undefined : process.env.MULTIREMI_TEST_POSTGRES_URL;
   if (adminUrl) {
     const name = `mul405_path_${process.pid}_${Date.now()}_${pgDatabases.length}`;
     const admin = new PostgresSyncDatabase(adminUrl);

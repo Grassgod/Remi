@@ -543,6 +543,14 @@ export class HubImpl implements ObservableLiveHub {
     const requested = Math.max(1, fromSeq + 1);
     const subscriber = this.newSubscriber(key, requested, listenerSink(key, () => {}), onEvents, taskId);
     this.skipUnservable(subscriber, stream);
+    // TraceSink callers take synchronous snapshots (subscribe then unsubscribe),
+    // unlike keyed browser subscriptions. Replay the retained window now; advance
+    // this subscriber's cursor so the queued flush cannot replay it a second time.
+    const backlog = this.ring.entriesAfter(stream, subscriber.cursor);
+    if (backlog.length > 0) {
+      subscriber.cursor = backlog[backlog.length - 1]!.frame.seq;
+      this.send(subscriber, backlog.map(entry => entry.frame));
+    }
     this.scheduleFlushFor(key);
     void this.ensureWarm(key);
     return {

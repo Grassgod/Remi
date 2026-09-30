@@ -2869,8 +2869,6 @@ export class FeishuBotRepo {
       // Read candidates before taking write locks. Each row is revalidated and
       // claimed by CAS below, so concurrent pollers can share this snapshot.
       const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const nowIsoValue = now.toISOString();
       const exhaustedCandidates = this.ctx.db.query(`SELECT id, kind FROM multiremi_feishu_bot_outbound_deliveries
         WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
@@ -3326,8 +3324,6 @@ export class FeishuBotRepo {
            AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
       ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
       if (!row) return false;
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
       if (terminal && row.kind === 'receipt') {

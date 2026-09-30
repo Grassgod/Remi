@@ -78,6 +78,16 @@ function rawDb(store: MultiremiStore) {
   return (store as unknown as { ctx: { db: { run: (sql: string, params: unknown[]) => { changes: number } } } }).ctx.db;
 }
 
+/** D1 keeps the log bridge and routes the wake through a deduplicated inbox envelope. */
+function reportEnvelope(store: MultiremiStore, sessionId: string, sourceTaskId: string) {
+  const entries = store.listConversationLogEntries(sessionId).filter(entry => {
+    const envelope = entry.metadata.envelope as { kind?: string; source?: { taskId?: string } } | undefined;
+    return envelope?.kind === "report" && envelope.source?.taskId === sourceTaskId;
+  });
+  expect(entries).toHaveLength(1);
+  return entries[0]!;
+}
+
 /** Every session-event seq has a log row at the same seq, and nothing else is in the log. */
 function expectNoSeqHole(store: MultiremiStore, sessionId: string): void {
   const eventSeqs = store.listSessionEvents(sessionId).map((event) => event.seq);
@@ -229,12 +239,14 @@ for (const backend of ["sqlite", "postgres"] as const) {
           const replacementId = store.getTask(childTask.id)!.delegationReturnTaskId;
           expect(replacementId).toEqual(expect.any(String));
           expect(replacementId).not.toBe(firstReturnId);
-          expect(store.getTask(replacementId!)!.prompt).toContain(`Result comment: ${result.id}`);
+          const inbox = reportEnvelope(store, f.leaderSession.id, childTask.id);
+          expect(inbox.metadata.envelope).toMatchObject({ source: { taskId: childTask.id, commentId: result.id } });
+          expect(store.getTask(replacementId!)!.prompt).toBe(`读收件箱\n\n${f.leaderSession.id}:${inbox.seq} (${inbox.id})`);
           const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
             activity.type === "delegation_return_triggered"
             && (activity.data as Record<string, unknown>).returnTaskId === replacementId);
           expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
-            .toEqual([bridge.seq]);
+            .toEqual([inbox.seq]);
         }));
     }
   });
@@ -312,7 +324,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           activity.type === "delegation_return_triggered"
           && (activity.data as Record<string, unknown>).returnTaskId === returnId);
         expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
-          .toEqual([bridges[0]!.seq]);
+          .toEqual([reportEnvelope(store, f.leaderSession.id, childTask.id).seq]);
       }));
   });
 }

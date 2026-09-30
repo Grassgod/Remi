@@ -460,12 +460,14 @@ type CreateIssueCommentOptions =
   | {
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
+    splitAssigneeDispatch?: boolean;
     withinTransaction?: false;
     deferredEvents?: CommitEventQueue;
   }
   | {
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
+    splitAssigneeDispatch?: boolean;
     /**
      * The caller already owns a database transaction (the organizer action
      * facade). Every write inside must use the `WithinTransaction` flavour:
@@ -4621,9 +4623,9 @@ export class IssuesRepo {
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
     // The comment, its Session event and its log row commit together (B1).
-    // Caller-owned comments share their mention envelopes and pending turns
-    // with the outer transaction. Standalone comments retain the durable-comment
-    // boundary: failed post-COMMIT dispatch cannot remove the saved comment.
+    // Mention envelopes and pending turns share the comment's transaction (D1),
+    // including standalone comments. Only the split assignee auto-response and
+    // member notification side effects run after COMMIT.
     // Realtime pushes always follow the owning COMMIT.
     //
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
@@ -4642,7 +4644,7 @@ export class IssuesRepo {
     const ownsTransaction = !this.ctx.db.inTransaction;
     const run = () => this.createIssueCommentWithinTransaction(issueId, input, {
       ...options,
-      deferDispatch: options.deferDispatch || ownsTransaction,
+      splitAssigneeDispatch: ownsTransaction,
       ...(deferredEvents ? { deferredEvents } : {}),
     }, childStatusChanges);
     const created = this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
@@ -4656,8 +4658,8 @@ export class IssuesRepo {
 
   /**
    * Post-COMMIT half of {@link createIssueCommentWithinTransaction}: member
-   * notifications, then agent dispatch, in main's order. A caller that owns the
-   * comment's transaction runs it after that COMMIT (ruling (ab) item 2).
+   * notifications, then explicitly deferred dispatch (including split assignee
+   * replies). A caller-owned transaction schedules this after its COMMIT.
    */
   runIssueCommentPostCommit(
     created: CreatedIssueComment,
@@ -4796,7 +4798,13 @@ export class IssuesRepo {
     if (options.deferredEvents) options.deferredEvents.workspace.push(commentCreatedEvent);
     else this.ctx.emitWorkspaceEvent(commentCreatedEvent);
     const mentionedMemberIds = this.resolveCommentMemberMentionTargets(body, issue.workspaceId);
-    if (options.deferAgentMentionDispatch || options.deferDispatch) {
+    // Decide under the comment's W/session locks, without opening another frame
+    // or taking a pre-lock SQLite read snapshot.
+    const splitAssigneeDispatch = options.splitAssigneeDispatch && authorType === "member"
+      && (issue.assigneeType === "agent" || issue.assigneeType === "squad")
+      && this.resolveCommentMentionTargets(body, issue.workspaceId).length === 0
+      && mentionedMemberIds.length === 0;
+    if (options.deferAgentMentionDispatch || options.deferDispatch || splitAssigneeDispatch) {
       return { issue, comment, body, authorType, issueSessionId, sessionEventSeq: commentEvent.seq, dispatchHandled: false };
     }
     const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq, options.deferredEvents, childStatusChanges);

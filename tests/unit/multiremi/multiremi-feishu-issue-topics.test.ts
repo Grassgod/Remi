@@ -390,9 +390,12 @@ describe("Feishu Issue topics", () => {
           terminalActivities.push({ index: events.length - 1, inTransaction: db!.inTransaction });
         }
       });
-      const logEvents: Array<{ id: string; inTransaction: boolean }> = [];
+      const logEvents: Array<{ id: string; index: number; inTransaction: boolean }> = [];
       store.setConversationLogListener({ onEntry: (sessionId, entry) => {
-        if (sessionId === wake.chatSessionId && "kind" in entry && entry.author_type === "system") logEvents.push({ id: entry.id, inTransaction: db!.inTransaction });
+        if (sessionId === wake.chatSessionId && "kind" in entry && entry.author_type === "system") {
+          events.push({ type: "log:wake", inTransaction: db!.inTransaction });
+          logEvents.push({ id: entry.id, index: events.length - 1, inTransaction: db!.inTransaction });
+        }
       } });
       const database = db!;
       const originalRun = database.run;
@@ -431,6 +434,7 @@ describe("Feishu Issue topics", () => {
         expect(message.body_md).toContain(leader.id);
         expect(terminalActivities).toHaveLength(1);
         expect(terminalActivities[0].inTransaction).toBe(false);
+        expect(logEvents[0].index).toBeLessThan(terminalActivities[0].index);
         expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(1);
       }
     });

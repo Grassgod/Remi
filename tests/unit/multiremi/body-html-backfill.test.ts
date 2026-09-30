@@ -20,11 +20,7 @@ import { RENDER_VERSION } from "@multiremi/render/markdown.js";
 import { createStore as createMigratedStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 function createStore() {
-  const store = createMigratedStore();
-  // The fixture exercises pre-B1 and partial-B1 schemas. Current migrations
-  // create the complete table before the fixture can install those shapes.
-  db!.exec("DROP TABLE multiremi_conversation_log");
-  return store;
+  return createMigratedStore();
 }
 
 afterEach(resetMultiremiTestEnv);

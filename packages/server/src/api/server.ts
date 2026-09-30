@@ -79,6 +79,7 @@ import {
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { createHubTraceSink } from "./hub/trace-sink-adapter.js";
 import { createPeerHubTransport } from "./hub/peer-hub-transport.js";
 import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
 import { hubHealthPayload } from "./hub/hub-health.js";
@@ -1140,6 +1141,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
     peerChannel: peer,
+    // The app is assembled before the socket layer; requests arrive only after
+    // startup completes. Delegate to the same runtime-owned trace service.
+    daemonTraceReader: options.daemonTraceReader ?? (effectiveApiRole === "ui" ? undefined
+      : { read: request => daemonTrace.reader.read(request) }),
   });
   // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
   // build apps with `createMultiremiApp` and must not inherit a timer.
@@ -1165,7 +1170,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id))] });
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
-  const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store);
+  const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
+    effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
+      ? createHubTraceSink(liveHub as HubImpl) : undefined);
   registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   registerSessionArchiveRequestHandlers(daemonProtocol, store);

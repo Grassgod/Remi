@@ -62,10 +62,12 @@ notification wakes to this decision.
    start, which must lock a second Issue and is replayed by MUL-452. Crash
    injection before the turn write, after it, and after commit must observe
    either nothing or everything, on PostgreSQL and SQLite.
-   Standalone user comments retain ADR 0011’s durable-comment boundary: their
-   dispatch runs after the comment commits, so a failed forced start cannot
-   remove the saved comment. Caller-owned comments (including Organizer audit
-   comments) write mention envelopes and pending turns in the caller’s frame.
+   Standalone comments and caller-owned comments (including Organizer audit
+   comments) write mention envelopes and non-split assignee wakes in the
+   comment's frame. A failed wake rolls back the comment and its queued events.
+   The split assignee auto-response still opens its own transaction after COMMIT;
+   this accepted gap remains a follow-up. Member notifications and realtime
+   pushes also remain after COMMIT.
 5. **`wake` has three meanings.** `now`: ensure a pending turn; if the turn ends
    with such entries still unread, ring again (re-ring). `next_turn`: no turn is
    created while one is queued or running; the entry rides along and never

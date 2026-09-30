@@ -5,11 +5,16 @@ import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { join } from "node:path";
+import { EmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });
 async function fixture(options: Parameters<typeof DaemonProtocolHarness.create>[0] = {}) {
-  const h = await DaemonProtocolHarness.create({ onReady: daemon => { (daemon as any).claimsPaused = true; }, ...options });
+  // This suite pins A-0's memory retention contract (2000-event cold tails).
+  // Default production Hub wiring is covered separately without an injection.
+  const h = await DaemonProtocolHarness.create({ liveHub: new EmptyLiveHub(createLocalHubTransport()),
+    onReady: daemon => { (daemon as any).claimsPaused = true; }, ...options });
   fixtures.push(h); await h.startDaemon(); return h;
 }
 const rt = (h: DaemonProtocolHarness) => (h.daemon as any).options.runtimeId as string;

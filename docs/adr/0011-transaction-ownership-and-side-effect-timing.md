@@ -83,6 +83,8 @@ broadcast) is not wrapped at all: with B1's bridge-failure classification
 transaction, so what is left reaching the `catch` is a real SQL error — a broken
 schema — which should fail the write.
 
+Inbox envelopes and pending turns are part of the mutation itself, not §3 side effects.
+
 ### 4. A swallowed statement failure must surface before COMMIT
 
 An application `catch` around a failed statement inside a transaction leaves

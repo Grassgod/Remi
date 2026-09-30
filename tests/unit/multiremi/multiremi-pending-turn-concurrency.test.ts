@@ -16,8 +16,9 @@ async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
 }
 
 pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
+  if (backend !== "PostgreSQL") return;
   for (const kind of ["issue", "chat"] as const) {
-    it.skipIf(backend !== "PostgreSQL")(`keeps the ${kind} session-before-head lock order alongside legacy appenders`, async () => {
+    it(`keeps the ${kind} session-before-head lock order alongside legacy appenders`, async () => {
       installPendingTurnTestConstraints(fixture());
       const f = fixture();
       const agent = f.store.createAgent({ name: "Lock-order owner", provider: "codex" });
@@ -78,7 +79,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
   }
 
   for (const reason of ["concurrent", "re_ring"] as const) {
-  it.skipIf(backend !== "PostgreSQL")(`coalesces two concurrent ${reason} transactions under the workspace lock without a unique violation`, async () => {
+  it(`coalesces two concurrent ${reason} transactions under the workspace lock without a unique violation`, async () => {
     installPendingTurnTestConstraints(fixture());
     const f = fixture();
     const agent = f.store.createAgent({ name: "Concurrent owner", provider: "codex" });
