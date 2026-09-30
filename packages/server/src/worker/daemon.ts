@@ -1514,7 +1514,7 @@ export class MultiremiDaemon {
     const previous = this.activeTaskCount;
     this.activeTaskCount = Math.max(0, previous - 1);
     if (this.activeTaskCount < previous) {
-      this.protocolClient.sendHeartbeatNow();
+      this.protocolClient?.sendHeartbeatNow();
       this.wakeClaim();
     }
   }
