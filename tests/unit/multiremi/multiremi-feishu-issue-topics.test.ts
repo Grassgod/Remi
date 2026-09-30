@@ -418,6 +418,9 @@ describe("Feishu Issue topics", () => {
         expect(events.filter(event => event.type === "daemon:task_input")).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
         expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
         const chatIndex = events.findIndex(event => event.type === "chat:message");
+        const inputIndex = events.findIndex(event => event.type === "daemon:task_input");
+        expect(inputIndex).toBeGreaterThanOrEqual(0);
+        expect(chatIndex).toBeGreaterThan(inputIndex);
         expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(chatIndex);
       }
     });
