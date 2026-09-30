@@ -382,9 +382,14 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const terminalActivities: Array<{ index: number; inTransaction: boolean }> = [];
       const chatActorIds: Array<string | null | undefined> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string } | undefined)?.action === "task_completed") {
+          terminalActivities.push({ index: events.length - 1, inTransaction: db!.inTransaction });
+        }
         if (event.type === "chat:message") chatActorIds.push(event.actorId);
       });
       const database = db!;
@@ -412,16 +417,19 @@ describe("Feishu Issue topics", () => {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
         expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
         expect(events).toEqual([]);
+        expect(terminalActivities).toEqual([]);
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
         expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
         expect(events.filter(event => event.type === "daemon:task_input")).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+        expect(terminalActivities).toHaveLength(1);
+        expect(terminalActivities[0].inTransaction).toBe(false);
         expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
         const chatIndex = events.findIndex(event => event.type === "chat:message");
         const inputIndex = events.findIndex(event => event.type === "daemon:task_input");
         expect(inputIndex).toBeGreaterThanOrEqual(0);
         expect(chatIndex).toBeGreaterThan(inputIndex);
-        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(chatIndex);
+        expect(terminalActivities[0].index).toBeGreaterThan(chatIndex);
       }
     });
   }
