@@ -122,7 +122,8 @@ export interface SqlDatabase {
  * Run `fn` while holding the cross-process mutex named `key`.
  *
  * SQLite has no cross-process advisory lock, and it does not need one: a writer
- * takes the database file lock for its whole transaction, so two processes
+ * takes the database file lock for its whole transaction (guaranteed by the
+ * outermost `BEGIN IMMEDIATE`), so two processes
  * cannot interleave the read-then-write these locks protect. It is therefore a
  * documented no-op there, and the same call site expresses "only one process may
  * be here at a time" for both backends with no dialect branch. Use it for work a
