@@ -109,12 +109,13 @@ describe("binary Skill daemon claim compatibility", () => {
     expect(claimed?.agent?.skills[0]?.files?.[0]).toEqual(png);
   });
 
-  it("removes the HTTP claim route without consuming a task, including malformed capability bodies", async () => {
+  it("keeps the HTTP claim stub inert with malformed capability bodies", async () => {
     const { store, runtime, task } = createFixture();
     const app = createMultiremiApp({ store });
     for (const body of ['{"supports_binary_skill_files":"true"}', "null", "[true]", "{"]) {
       const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST", body });
-      expect(response.status).toBe(404);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ task: null });
       expect(store.getTask(task.id)).toEqual(task);
     }
   });

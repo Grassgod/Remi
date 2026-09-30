@@ -145,7 +145,9 @@ function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase 
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
   let db: Database | PostgresSyncDatabase;
-  const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
+  // Exercise SQLite probes while retaining the real-PG-only frame test below.
+  const adminUrl = process.env.MULTIREMI_TEST_LOCK_ORDER_BACKEND === "sqlite"
+    ? undefined : process.env.MULTIREMI_TEST_POSTGRES_URL;
   if (adminUrl) {
     const name = `mul405_path_${process.pid}_${Date.now()}_${pgDatabases.length}`;
     const admin = new PostgresSyncDatabase(adminUrl);
@@ -711,7 +713,7 @@ describe("MUL-405 per-path lock order", () => {
     store.updateIssue(prereq.id, { status: "done" });
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
-    assertFrames("MUL-409 automatic start", recorder, [["D"], ["W", "D"]]);
+    assertFrames("MUL-409 automatic start", recorder, [["W", "D"], ["W", "D"]]);
     assertPath("MUL-409 automatic start", recorder, ["W", "D"]);
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
   });
@@ -809,7 +811,7 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     clear(recorder);
     pg.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });
-    assertFrames("PG automatic start", recorder, [["D"], ["W", "D"]]);
+    assertFrames("PG automatic start", recorder, [["W", "D"], ["W", "D"]]);
     expect(pg.maxTransactionDepth).toBe(1);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);

@@ -89,15 +89,16 @@ describe("persisted inherited context diagnostics", () => {
     const own = claimed.session_projection;
     expect(own.truncated).toBe(false);
     expect(own.omitted_events).toBe(0);
-    expect(inherited.truncated).toBe(true);
-    expect(inherited.omitted_events).toBeGreaterThan(0);
+    expect(inherited.truncated).toBe(false);
+    expect(inherited.omitted_events).toBe(0);
+    expect(inherited.jsonl).toContain('"body_folded":true');
     expect(inherited.estimated_tokens).not.toBe(own.estimated_tokens);
     const budget = Math.floor(resolveProjectionTokenBudget({ provider: agent.provider, model: agent.model, degradeLevel: 0 }) * 0.4);
     expect(inherited.estimated_tokens).toBeLessThanOrEqual(budget);
     const stored = store.getTask(task.id)!;
     expect(stored.inheritedProjectionRecordedAt).toBe(stored.updatedAt);
     expect(persistedDiagnostics(task.id)).toEqual({
-      inherited_projection_truncated: 1,
+      inherited_projection_truncated: 0,
       inherited_projection_omitted_events: inherited.omitted_events,
       inherited_projection_estimated_tokens: inherited.estimated_tokens,
       inherited_projection_to_seq: inherited.to_seq,
@@ -106,7 +107,7 @@ describe("persisted inherited context diagnostics", () => {
     });
     expect(stored).toMatchObject({
       projectionTruncated: false, projectionOmittedEvents: 0,
-      inheritedProjectionTruncated: true, inherited_projection_truncated: true,
+      inheritedProjectionTruncated: false, inherited_projection_truncated: false,
       inheritedProjectionOmittedEvents: inherited.omitted_events, inherited_projection_omitted_events: inherited.omitted_events,
       inheritedProjectionEstimatedTokens: inherited.estimated_tokens, inherited_projection_estimated_tokens: inherited.estimated_tokens,
       inheritedProjectionToSeq: inherited.to_seq, inherited_projection_to_seq: inherited.to_seq,
@@ -254,7 +255,8 @@ describe("persisted inherited context diagnostics", () => {
     const second = (await secondClaim.json()).task;
     expect(second.id).toBe(secondTask.id);
     const inherited = second.inherited_session_projection;
-    expect(inherited.omitted_events).not.toBe(first.inherited_session_projection.omitted_events);
+    expect(inherited.omitted_events).toBe(0);
+    expect(first.inherited_session_projection.omitted_events).toBe(0);
     expect(inherited.estimated_tokens).not.toBe(first.inherited_session_projection.estimated_tokens);
     const expected = {
       task_id: secondTask.id, agent_id: secondAgent.id, to_seq: inherited.to_seq,

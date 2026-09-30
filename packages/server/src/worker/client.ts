@@ -401,11 +401,11 @@ export class MultiremiDaemonClient {
               // MUL-407: this build renders server-built decision cards. The
               // control plane only enqueues one for a host that says so.
               feishu_decision_card: FEISHU_DECISION_CARD_PROTOCOL_VERSION,
-              feishu_outbound_kinds: 1,
               // MUL-412: this build also renders and answers E4 decision
               // cards. Declared on its own so a host without it is handed no
               // decision card rather than one whose buttons do nothing.
               feishu_issue_decision_card: FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+              feishu_outbound_kinds: 1,
             }
           : {}),
       }, undefined, signal);
@@ -441,9 +441,6 @@ export class MultiremiDaemonClient {
           ...(typeof rawOutbound.kind === "string" ? {
             kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
           } : {}),
-          ...(["received", "completed", "failed"].includes(String(rawOutbound.receipt_state)) ? {
-            receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
-          } : {}),
           ...(typeof rawOutbound.decision_id === "string" ? {
             decisionId: rawOutbound.decision_id,
             decision_id: rawOutbound.decision_id,
@@ -451,6 +448,9 @@ export class MultiremiDaemonClient {
               decisionIssueId: rawOutbound.decision_issue_id,
               decision_issue_id: rawOutbound.decision_issue_id,
             } : {}),
+          } : {}),
+          ...(["received", "completed", "failed"].includes(String(rawOutbound.receipt_state)) ? {
+            receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
           } : {}),
           ...(typeof rawOutbound.human_request_id === "string" ? {
             humanRequestId: rawOutbound.human_request_id,
@@ -936,34 +936,6 @@ export class MultiremiDaemonClient {
     return response.allowed === true;
   }
 
-  async createTaskHumanRequest(taskId: string, input: {
-    kind: "permission" | "question";
-    payload: Record<string, unknown>;
-    /**
-     * MUL-407: the deadline the control plane records for this request. The
-     * daemon still decides when to expire it; the server publishes the time so
-     * the topic can remind the requester ten minutes before it elapses.
-     */
-    timeoutMs?: number;
-  }): Promise<MultiremiTaskHumanRequest> {
-    // The wire field is snake_case like every other daemon body; `timeoutMs` is
-    // only the ergonomic spelling at the call site.
-    const { timeoutMs, ...rest } = input;
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`,
-      timeoutMs === undefined ? rest : { ...rest, timeout_ms: timeoutMs });
-    return resp.request;
-  }
-
-  async getTaskHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.get<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`);
-    return resp.request ?? null;
-  }
-
-  async expireTaskHumanRequest(taskId: string, requestId: string, status: "timeout" | "cancelled"): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.post<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/expire`, { status });
-    return resp.request ?? null;
-  }
-
   async reportRuntimeUpdateResult(runtimeId: string, requestId: string, result: { status: string; output?: string; error?: string }): Promise<void> {
     if (!this.reportTransport || this.reportTransport.upgradeWaiting()) {
       await this.post(`/api/daemon/runtimes/${runtimeId}/update/${requestId}/result`, result);
@@ -1230,11 +1202,6 @@ export class MultiremiDaemonClient {
       input,
       taskToken,
     );
-  }
-
-  async getTaskStatus(taskId: string): Promise<MultiremiTaskStatus> {
-    const resp = await this.get<{ status: MultiremiTaskStatus }>(`/api/daemon/tasks/${taskId}/status`);
-    return resp.status;
   }
 
   async listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]> {
@@ -1777,6 +1744,7 @@ export function normalizeDaemonClaimTask(raw: any | null): (MultiremiTaskWithAge
     authToken: stringOrNull(raw.auth_token ?? raw.authToken),
     chatMessage: stringOrNull(raw.chat_message ?? raw.chatMessage),
     chatProjectId: stringOrNull(raw.chat_project_id ?? raw.chatProjectId),
+    boundIssueLog: raw.bound_issue_log ?? raw.boundIssueLog ?? undefined,
     boundIssueUpdates: Array.isArray(raw.bound_issue_updates)
       ? raw.bound_issue_updates.filter((value: unknown): value is string => typeof value === "string")
       : Array.isArray(raw.boundIssueUpdates)
@@ -2180,6 +2148,11 @@ export function normalizeDaemonRuntimeInput(runtimeId: string, resp: Partial<Mul
         ...(typeof rawOutbound.kind === "string" ? {
           kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
         } : {}),
+        ...(typeof rawOutbound.receipt_state === "string" ? {
+          receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
+        } : {}),
+        ...(typeof rawOutbound.decision_id === "string" ? { decisionId: rawOutbound.decision_id } : {}),
+        ...(typeof rawOutbound.decision_issue_id === "string" ? { decisionIssueId: rawOutbound.decision_issue_id } : {}),
         ...(typeof rawOutbound.human_request_id === "string" ? {
           humanRequestId: rawOutbound.human_request_id,
           human_request_id: rawOutbound.human_request_id,

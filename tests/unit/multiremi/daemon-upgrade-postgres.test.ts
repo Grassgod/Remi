@@ -45,7 +45,9 @@ describe.skipIf(!available)("automatic daemon upgrades on real PostgreSQL", () =
       store.startTask(task.id);
       const ready: Promise<unknown>[] = [];
       for (let index = 0; index < 2; index++) {
-        const worker = new Worker(new URL("./fixtures/postgres-daemon-heartbeat-worker.ts", import.meta.url).href);
+        const worker = new Worker(new URL("./fixtures/postgres-daemon-heartbeat-worker.ts", import.meta.url).href, {
+          env: { ...process.env, MULTIREMI_TOKEN: "unrelated-parent-fixture-token" },
+        });
         workers.push(worker);
         ready.push(phase(worker, "ready"));
         worker.postMessage({ databaseUrl: url.toString(), runtimeId: runtime.id });

@@ -10,7 +10,18 @@ import { DaemonProtocolHarness, waitFor } from "./daemon-protocol-v2/harness.js"
 import { nativeHarness } from "../unit/connectors/feishu-native-harness.js";
 
 it("presents continuous CoT through a real local daemon/API disconnect and resumes at checkpoint + 1", async () => {
-  const h = await DaemonProtocolHarness.create({ onReady: daemon => { (daemon as any).claimsPaused = true; } });
+  const activeTaskIds: string[] = [];
+  const h = await DaemonProtocolHarness.create({
+    onReady: daemon => { (daemon as any).claimsPaused = true; },
+    beforeSend(frame, socket) {
+      if (frame.t === "hello") {
+        for (const runtime of frame.p.runtimes) runtime.active_task_ids = [...activeTaskIds];
+      } else if (frame.t === "runtime.ready") frame.p.active_task_ids = [...activeTaskIds];
+      else return;
+      socket.native.send(JSON.stringify(frame));
+      return false;
+    },
+  });
   const sender = nativeHarness();
   const http: Array<{ method: string; path: string }> = [];
   const realFetch = globalThis.fetch;
@@ -28,6 +39,8 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     const task = h.store.createTask({ agentId: agent.id, prompt: "Synthetic CoT subscription fixture" });
     expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
     h.store.startTask(task.id);
+    // This manually claimed fixture must be advertised as active on reconnect.
+    activeTaskIds.push(task.id);
     const transport = (h.daemon as any).ensureTrace() as DaemonTraceTransport;
     transport.append(task.id, runtimeId, [{ type: "thinking", content: "consumed 1" }, { type: "thinking", content: "consumed 2" }]);
     await waitFor(() => daemonTraceService(h.layer).sink.head(task.id) === 2, "checkpoint prefix");
@@ -57,6 +70,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       { type: "future.widget", content: "literal future payload", input: { nested: [1, { two: true }] }, meta: { arbitrary: "value" } },
     ]);
     await h.reconnect();
+    expect(h.store.getTask(task.id)?.status).toBe("running");
     await waitFor(() => received.length === 5 && sender.checkpoint?.throughSeq === 7, "resumed CoT checkpoint", 5_000);
     const subscriptions = h.ledger.filter(entry => entry.type === "trace.subscribe");
     expect(subscriptions.map(entry => entry.frame.p.from_seq)).toEqual([2, 4]);

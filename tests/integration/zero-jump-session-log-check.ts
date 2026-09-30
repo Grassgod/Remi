@@ -104,7 +104,8 @@ interface Scenario {
    */
   reader: "released" | "pinned" | "reveal-window";
   /**
-   * Perturb the page. Every implementation goes through one of the fixture's
+   * Perturb the page. The pre-reveal case is armed at document start so it
+   * cannot race the reveal while Playwright reads its baseline. Each goes through one of the fixture's
    * `*BetweenFrames` methods, so the mutation lands strictly between two
    * recorded frames; see the comment on those methods.
    */
@@ -297,6 +298,7 @@ interface FixtureState {
 
 declare global {
   interface Window {
+    __mul443WidthChange?: { settled: FixtureState; startedAt: number; applied: boolean; pendingAtApply?: boolean };
     __mul443SessionLog?: {
       append(count: number): void;
       growRow(seq?: number, revision?: number): void;
@@ -603,6 +605,26 @@ async function runRound(input: {
   const context: BrowserContext = await browser.newContext({ viewport: VIEWPORT });
   await context.setDefaultTimeout(ROUND_TIMEOUT_MS);
   await installRecorderOnContext(context, { profiles: [PROFILE] });
+  if (scenario.reader === "reveal-window") {
+    // Arm inside the renderer before mount. IPC reads plus a later rAF used to
+    // let the reveal's second stable frame win, testing a visible resize instead
+    // of the declared pre-reveal scenario. Do not reset or weaken the recorder.
+    await context.addInitScript(() => {
+      const observer = new MutationObserver(() => {
+        const root = document.querySelector("[data-session-log-scroll]");
+        const control = window.__mul443SessionLog;
+        if (!root || !control || !root.getAttribute("data-perf-state")) return;
+        observer.disconnect();
+        const probe = { settled: control.state(), startedAt: performance.now(), applied: false, pendingAtApply: false };
+        window.__mul443WidthChange = probe;
+        void control.setWidthBetweenFrames(640).then(() => {
+          probe.pendingAtApply = root.getAttribute("data-perf-state") === "pending";
+          probe.applied = true;
+        });
+      });
+      observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-perf-state"] });
+    });
+  }
   const page = await context.newPage();
   await page.emulateMedia({ reducedMotion: "reduce" });
 
@@ -631,7 +653,14 @@ async function runRound(input: {
       result.appReadyForced = appReady.forced;
     }
 
-    const settled = await page.evaluate(() => window.__mul443SessionLog!.state());
+    const widthChange = perturbsBeforeReveal ? await (async () => {
+      await page.waitForFunction(() => window.__mul443WidthChange?.applied, undefined, { timeout: ROUND_TIMEOUT_MS });
+      return page.evaluate(() => window.__mul443WidthChange!);
+    })() : null;
+    if (widthChange && (widthChange.settled.perfState !== "pending" || !widthChange.pendingAtApply)) {
+      throw new Error("width-change must be applied while the reveal is pending");
+    }
+    const settled = widthChange?.settled ?? await page.evaluate(() => window.__mul443SessionLog!.state());
     result.settled = settled;
     result.releasedFromBottomPx = settled.bottomDistance;
     result.settledVisibleRows = await countVisibleRows(page);
@@ -651,11 +680,9 @@ async function runRound(input: {
     // `data-perf-state` transitions — which are exactly what that scenario
     // asserts. Measured: resetting there reported `perf-ready` for every round of
     // correct code.
-    const windowStart = perturbsBeforeReveal
-      ? await page.evaluate(() => performance.now())
-      : await resetRecorderAt(page);
-    const perturbAt = await page.evaluate(() => performance.now());
-    await scenario.perturb(page);
+    const windowStart = widthChange?.startedAt ?? await resetRecorderAt(page);
+    const perturbAt = widthChange?.startedAt ?? await page.evaluate(() => performance.now());
+    if (!widthChange) await scenario.perturb(page);
     if (perturbsBeforeReveal) {
       await waitForReady(page);
       const appReady = await readAppReady(page);

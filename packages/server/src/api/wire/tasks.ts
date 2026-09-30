@@ -2,7 +2,9 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
-import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX, agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiChatMessage,
@@ -15,6 +17,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type InternalTaskField =
+  | "execution_scope"
   | "codexProfile"
   | "claudeProfile"
   | "delegationId"
@@ -50,6 +53,7 @@ type TaskListOmittedField =
 
 export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalTaskField> {
   const {
+    execution_scope: _executionScope,
     codexProfile: _codexProfile,
     claudeProfile: _claudeProfile,
     delegationId: _delegationId,
@@ -453,6 +457,11 @@ export function daemonTaskClaimResponse(
   if (task.issueSessionId || task.chatSessionId) {
     const projection = store.buildTaskSessionProjection(task.id);
     if (projection) {
+      try {
+        store.recordTaskInboxDelivery(task.id, projection.fromSeq, projection.toSeq);
+      } catch (error) {
+        log.warn(`inbox delivery receipt failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       projectionMode = projection.mode === "delta" ? "delta" : "bootstrap";
       response.session_projection = {
         session_id: projection.sessionId,
@@ -640,7 +649,7 @@ function appendDaemonClaimExecutionContext(
   appendDaemonClaimWorkspaceContext(store, task, response);
   appendDaemonClaimChatContext(store, task, response);
   appendDaemonClaimBoundIssue(store, task, response);
-  appendDaemonClaimBoundIssueUpdates(store, task, response);
+  appendDaemonClaimBoundIssueLog(store, task, response);
   appendDaemonClaimAutopilotContext(store, task, response);
 
   const quickCreatePrompt = daemonQuickCreatePrompt(task);
@@ -710,23 +719,59 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
   }
 }
 
-function appendDaemonClaimBoundIssueUpdates(
+function appendDaemonClaimBoundIssueLog(
   store: MultiremiStore,
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId || !response.bound_issue) return;
+  if (!task.chatSessionId || !task.issueId || !response.bound_issue) return;
   try {
-    const pending = store.preparePendingAgentIssueUpdatesForTask(task.chatSessionId, task.id);
-    if (pending.messages.length) {
-      response.bound_issue_updates = pending.messages.map((message) => message.body);
-    }
-    if (pending.omittedCount > 0) {
-      response.bound_issue_updates_omitted_count = pending.omittedCount;
+    const toSeq = store.getBoundIssueLogToSeq(task.id);
+    if (toSeq == null) return;
+    const session = store.getOrCreateDefaultIssueSession(task.issueId);
+    const lane = store.getSessionAgentLane(session.id, task.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${task.chatSessionId}`);
+    const fromSeq = lane?.cursorSeq ?? 0;
+    const shown = store.listConversationLogShown(session.id, { sinceSeq: fromSeq, toSeq, limit: 101 });
+    const entries = shown.slice(0, 100);
+    const projection = buildSessionProjection({
+      sessionId: session.id,
+      targetAgentId: task.agentId,
+      events: entries.map((entry) => ({
+        id: entry.id, sessionId: session.id, seq: entry.seq, kind: entry.kind,
+        authorType: entry.author_type, authorId: entry.author_id,
+        body: entry.body_md, taskId: entry.task_id, sourceCommentId: null,
+        metadata: entry.metadata, createdAt: entry.created_at,
+      })),
+      expandableSeqs: new Set(entries.map((entry) => entry.seq)),
+      cursorSeq: fromSeq, fromSeq, toSeq, providerSessionId: null,
+      perspectiveMode: "inherited",
+      tokenBudget: Math.min(12_000, Math.floor(resolveProjectionTokenBudget({
+        provider: task.agent?.provider, model: task.agent?.model,
+        degradeLevel: task.projectionDegradeLevel ?? 0,
+      }) / 4)),
+    });
+    response.bound_issue_log = {
+      session_id: session.id,
+      from_seq: fromSeq,
+      to_seq: toSeq,
+      content_jsonl: projection.jsonl,
+      next_seq: entries.at(-1)?.seq ?? fromSeq,
+      has_more: shown.length > 100,
+    };
+  } catch (error) {
+    log.warn(
+      `Failed to load bound Issue log for claimed task ${task.id}: `
+      + `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  try {
+    if (!store.markBoundIssueLogDelivered(task.id, (response.bound_issue_log as { to_seq: number }).to_seq)) {
+      log.warn(`Failed to mark bound Issue log delivered for claimed task ${task.id}: task or frozen window changed`);
     }
   } catch (error) {
-    log.debug(
-      `Failed to load bound Issue updates for claimed task ${task.id}: `
+    log.warn(
+      `Failed to mark bound Issue log delivered for claimed task ${task.id}: `
       + `${error instanceof Error ? error.message : String(error)}`,
     );
   }

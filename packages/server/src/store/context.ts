@@ -204,8 +204,9 @@ export function createCommitEventQueue(): CommitEventQueue {
  * the compiler enforced) exactly when `withinTransaction` is set.
  */
 export type CreateIssueCommentOptions =
-  | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
-  | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
+  | { deferAgentMentionDispatch?: boolean; deferDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
+  | { deferAgentMentionDispatch?: boolean; deferDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue;
+    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChangeCollector };
 
 /**
  * One human-request transition, as the store recorded it.
@@ -234,6 +235,7 @@ export interface CreatedIssueComment {
   authorType: string;
   issueSessionId: string;
   sessionEventSeq: number;
+  dispatchHandled?: boolean;
 }
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
@@ -258,6 +260,10 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
+  createSystemIssueCommentWithinTransaction(
+    issueId: string, body: string, data: Record<string, unknown>, deferredEvents: CommitEventQueue,
+    taskId?: string | null, issueSessionId?: string | null, entryId?: string,
+  ): MultiremiIssueComment;
   createIssue(input: CreateIssueInput, transaction?: {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
@@ -285,7 +291,7 @@ export interface IssuesSurface {
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: CommitEventQueue },
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean },
   ): CreatedIssueComment;
   /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
   runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;
@@ -382,14 +388,7 @@ export interface IssuesSurface {
     activity: import("./repos/issues-repo.js").IssueMutationActivityContext,
     deferredEvents: CommitEventQueue,
   ): MultiremiIssueDependencyView;
-  /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
-  /**
-   * Post-commit E1/E2 hook. Every Issue transition the hook's own writes produce
-   * (the parent round can move that parent's status, which is a child event for
-   * ITS parent) is pushed into `collector`; the owner replays it after the next
-   * commit. Collector and queue are required so no call site can drop a
-   * transition by ignoring a return value, and no event escapes mid-transaction.
-   */
+  /** Post-commit automatic-start replay; required E1/E2/E3 writes use the transaction variant. */
   notifyChildStatusChange(
     previous: MultiremiIssue,
     issue: MultiremiIssue,
@@ -400,6 +399,17 @@ export interface IssuesSurface {
       dependencyCheckEventId?: string | null;
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
+    },
+  ): void;
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options?: {
+      taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      statusChangeEventId?: string | null;
     },
   ): void;
   restoreIssue(id: string): MultiremiIssue;
@@ -565,6 +575,9 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
+  createTaskWithinWorkspaceLock(input: CreateTaskInput, childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue, gateIssueBeforeReplacement?: MultiremiIssue | null, executionScopeOverride?: string): MultiremiTask;
   createTask(input: CreateTaskInput): MultiremiTask;
   /**
    * Internal primitive for a caller that already owns a database transaction.
@@ -580,10 +593,13 @@ export interface TasksSurface {
     deferredEvents: CommitEventQueue,
   ): MultiremiTask;
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
-  /** Caller owns the transaction and post-commit notifications; emits no events. */
+  /** Queues its downlink notification for the caller's outermost commit. */
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
-  /** Kicks the task's daemon downlink; call after the steer's transaction commits. */
-  publishTaskInputChanged(taskId: string): void;
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): ReturnType<import("./repos/tasks-repo.js").TasksRepo["ensureDelegationWakeupWithinTransaction"]>;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
@@ -592,8 +608,6 @@ export interface TasksSurface {
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
-  listTaskMessages(taskId: string, sinceSeq?: number | null): import("@multiremi/contracts/types.js").MultiremiTaskMessage[];
-  listTaskHumanRequests(taskId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest[];
   /**
    * MUL-474: identity/status columns only — no `prompt`, `result` or `usage`.
    * The daemon identity guard and the task-level handlers read this instead of
@@ -602,6 +616,8 @@ export interface TasksSurface {
   getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
   /** MUL-474: the `status` route's fields, without the prompt column. */
   getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
+  listTaskMessages(taskId: string, sinceSeq?: number | null): import("@multiremi/contracts/types.js").MultiremiTaskMessage[];
+  listTaskHumanRequests(taskId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest[];
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -623,6 +639,7 @@ export interface TasksSurface {
   listTasksForIssue(issueId: string): MultiremiTask[];
   /** Read one human request without going through the facade (MUL-407). */
   getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
@@ -658,7 +675,10 @@ export interface ChatSurface {
     workspaceId?: string | null,
     options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
   ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string, options?: {
+    id?: string;
+    metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata;
+  }): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   };
@@ -722,6 +742,11 @@ export interface ConversationLogSurface {
   ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
   /** The `turn` card of a task, updated in place through its lifecycle. */
   findTurnEntry(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  recordTurnInboxDeliveryWithinTransaction(
+    taskId: string,
+    fromSeq: number,
+    toSeq: number,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
   updateTurnCardWithinTransaction(
     taskId: string,
     fields: {
@@ -750,7 +775,7 @@ export interface ConversationLogSurface {
   getConversationLogHead(sessionId: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): { sessionId: string; headSeq: number; logVersion: number; updatedAt: string } | null;
   conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
   locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
-  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null; limit?: number }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
@@ -766,6 +791,14 @@ export interface ConversationLogSurface {
     title: string | null,
     createdAt?: string,
   ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+}
+
+export interface InboxSurface {
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[];
 }
 
 export interface IssueSessionsSurface {
@@ -834,6 +867,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  enqueueDecisionCardPatch(request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest): void;
   getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
   isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
@@ -887,6 +921,7 @@ export interface FeishuBotSurface {
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    envelopeDeliveries?: import("./repos/inbox-repo.js").EnvelopeDelivery[];
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
   }): MultiremiTask[];
@@ -946,7 +981,7 @@ export interface TaskTracesSurface {
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
-export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface, InboxSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -1098,6 +1133,10 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  inbox(): InboxSurface {
+    return this.resolveHost();
+  }
+
   feishuBot(): FeishuBotSurface {
     return this.resolveHost();
   }
@@ -1218,18 +1257,18 @@ export class StoreContext {
   /**
    * Publish one human-request transition.
    *
-   * Called by the store facade right after each of the three write paths returns
-   * the row it changed, so the transition is reported exactly once and while the
-   * row is durable.
+   * Writers can call this inside a transaction; listeners only see committed rows.
    */
   notifyHumanRequest(transition: HumanRequestTransition): void {
-    for (const listener of [...this.humanRequestListeners]) {
-      try {
-        listener(transition);
-      } catch {
-        // Realtime listeners are best-effort and must not roll back the write.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.humanRequestListeners]) {
+        try {
+          listener(transition);
+        } catch {
+          // Realtime listeners are best-effort and must not roll back the write.
+        }
       }
-    }
+    });
   }
 
   notifyTaskEvent(type: string, task: MultiremiTask): void {
@@ -1375,28 +1414,6 @@ export class StoreContext {
         now,
       ],
     );
-    // Best-effort side effect, so it must not ride the caller's transaction:
-    // a SAVEPOINT here would add two extra bridge round-trips per activity on
-    // the hottest parent-status path and would still be rolled back by an
-    // outer ROLLBACK. `afterCommit` runs it after the outermost COMMIT (or
-    // immediately outside a transaction) and keeps the warn-and-continue
-    // contract. Basis: Senior ruling cmt_96e1yqxgifms §2.
-    afterCommit(this.db, () => {
-      try {
-        this.host.queueAgentIssueUpdate({
-          activityId: id,
-          issueId,
-          actorType: input.actorType,
-          actorId: input.actorId ?? null,
-          type: input.type,
-          body: input.body ?? null,
-          data: input.data ?? null,
-          createdAt: now,
-        });
-      } catch (err) {
-        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity

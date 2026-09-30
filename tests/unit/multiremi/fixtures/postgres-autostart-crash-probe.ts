@@ -50,20 +50,25 @@ if (mode === "before-commit" || mode === "replay-before-commit") {
   // BEGIN is real on both backends. Park before the auto-start's first write,
   // after the prerequisite's own transaction has already committed.
   const original = db.transaction.bind(db);
-  db.transaction = <T,>(fn: (...args: any[]) => T) => original((...args: any[]): T => {
-    if (status(prerequisiteId) === "done" && status(dependentId) === "backlog") {
-      announce(mode === "before-commit" ? "in-transaction" : "replay-before-commit");
-      holdUntilKilled();
-    }
-    return fn(...args);
-  });
+  db.transaction = <T,>(fn: (...args: any[]) => T) => {
+    const nested = db.inTransaction;
+    return original((...args: any[]): T => {
+      if (!nested && status(prerequisiteId) === "done" && status(dependentId) === "backlog") {
+        announce(mode === "before-commit" ? "in-transaction" : "replay-before-commit");
+        holdUntilKilled();
+      }
+      return fn(...args);
+    });
+  };
 } else if (mode === "after-claim-commit" || mode === "after-done-commit") {
   const original = db.transaction.bind(db);
   let armed = true;
   db.transaction = <T,>(fn: (...args: any[]) => T) => {
+    const nested = db.inTransaction;
     const run = original(fn);
     return (...args: any[]): T => {
       const result = run(...args);
+      if (nested) return result;
       const reached = mode === "after-claim-commit"
         ? status(dependentId) === "todo"
         : status(prerequisiteId) === "done" && status(dependentId) === "backlog";

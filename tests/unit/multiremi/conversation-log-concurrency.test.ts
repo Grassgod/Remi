@@ -5,10 +5,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { Hono } from "hono";
 import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase, postgresReplyMaxBytes } from "@multiremi/store/db/postgres.js";
 import { resetLockOrderSentinelEnabledCache } from "@multiremi/store/lock-order-sentinel.js";
-import { DB_REPLY_TRANSITION_EXCEPTIONS } from "@multiremi/observability/request-metrics.js";
+import { DB_REPLY_TRANSITION_EXCEPTIONS, createRequestMetricsMiddleware, currentDbReplyPolicy } from "@multiremi/observability/request-metrics.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import { AgentIssueUpdatesRepo } from "@multiremi/store/repos/agent-issue-updates-repo.js";
+import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -165,7 +169,7 @@ function verifyNestedTransactions(db: SqlDatabase): void {
   expect(db.query("SELECT n FROM nested_tx_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 3, 4, 6, 7]);
 }
 
-function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
+async function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): Promise<void> {
   db.exec("CREATE TABLE local_reply_case (n INTEGER PRIMARY KEY)");
   const previousLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
@@ -175,28 +179,41 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
   resetDbReplyLimitForTest();
   try {
-    db.transaction(() => {
-      db.run("INSERT INTO local_reply_case (n) VALUES (1)");
-      const caughtQuery = () => {
-        let caught = false;
-        try {
-          if (db instanceof PostgresSyncDatabase) {
-            db.query("SELECT repeat('x', 1000) AS payload").get();
-          } else {
-            db.query("SELECT 1 AS payload").get();
-            throw new PostgresReplyTooLargeError(1000, 200);
+    const app = new Hono();
+    let handlerError: unknown;
+    app.use("*", createRequestMetricsMiddleware({ enabled: false, slowRequestMs: 500,
+      summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 256, role: "all" }));
+    app.onError((error, c) => { handlerError = error; return c.text("failed", 500); });
+    app.get("/api/local-reply-limit-fixture", (c) => {
+      expect(postgresReplyMaxBytes()).toBe(200);
+      expect(currentDbReplyPolicy()).toMatchObject({ enforced: true, exempt: false });
+      db.transaction(() => {
+        db.run("INSERT INTO local_reply_case (n) VALUES (1)");
+        const caughtQuery = () => {
+          let caught = false;
+          try {
+            if (db instanceof PostgresSyncDatabase) {
+              db.query("SELECT repeat('x', 1000) AS payload").get();
+            } else {
+              db.query("SELECT 1 AS payload").get();
+              throw new PostgresReplyTooLargeError(1000, 200);
+            }
+          } catch (error) {
+            expect(error).toBeInstanceOf(PostgresReplyTooLargeError);
+            caught = true;
           }
-        } catch (error) {
-          expect(error).toBeInstanceOf(PostgresReplyTooLargeError);
-          caught = true;
-        }
-        expect(caught).toBe(true);
-      };
-      if (nested) db.transaction(caughtQuery)();
-      else caughtQuery();
-      db.run("INSERT INTO local_reply_case (n) VALUES (2)");
-    })();
-    expect(db.query("SELECT n FROM local_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+          expect(caught).toBe(true);
+        };
+        if (nested) db.transaction(caughtQuery)();
+        else caughtQuery();
+        db.run("INSERT INTO local_reply_case (n) VALUES (2)");
+      })();
+      expect(db.query("SELECT n FROM local_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+      return c.body(null, 204);
+    });
+    const response = await app.request("/api/local-reply-limit-fixture");
+    if (handlerError) throw handlerError;
+    expect(response.status).toBe(204);
   } finally {
     if (previousLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousLimit;
@@ -207,39 +224,41 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   }
 }
 
-/**
- * Senior ruling cmt_96e1yqxgifms §2: the agent-issue-update queue is a
- * best-effort side effect, so it rides `afterCommit` instead of a savepoint
- * around the caller's transaction. The queue write therefore runs *after* the
- * COMMIT — it cannot be rolled back into the comment's atomic unit, and a
- * failure there must leave the comment, its Session event, its log row and its
- * activity row durable while only the queue row is missing.
- */
-function verifyBestEffortQueueAfterCommit(db: SqlDatabase): void {
+function verifyLegacyIssueUpdateQueueIsUnused(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Best effort queue", workspaceId: "local" });
-  db.exec("CREATE TABLE best_effort_queue_case (n INTEGER PRIMARY KEY)");
-  const queueRun: { inTransaction: boolean | null } = { inTransaction: null };
+  const issue = store.createIssue({ title: "No legacy update queue", workspaceId: "local" });
   store.queueAgentIssueUpdate = () => {
-    queueRun.inTransaction = db.inTransaction ?? null;
-    // One statement, so a failure leaves no partial queue row either way.
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1),(1)");
+    throw new Error("Legacy Issue update queue must not be called");
   };
-  const warnings: string[] = [];
-  const originalWarn = console.warn;
-  console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
-  try {
-    const comment = store.createIssueComment(issue.id, { body: "comment survives queue error" });
-    expect(store.getIssueComment(comment.id)?.body).toBe("comment survives queue error");
-    expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives queue error");
-    expect(warnings.some((line) => line.includes("agent issue update queue skipped"))).toBe(true);
-  } finally {
-    console.warn = originalWarn;
-  }
-  // The queue call itself ran after the commit, with no transaction left to
-  // poison; its own SQL failure left no queue row and reached nobody.
-  expect(queueRun.inTransaction).toBe(false);
-  expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
+  const comment = store.createIssueComment(issue.id, { body: "comment survives without legacy queue" });
+  expect(store.getIssueComment(comment.id)?.body).toBe("comment survives without legacy queue");
+  expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives without legacy queue");
+  const count = db.query("SELECT COUNT(*) AS count FROM multiremi_agent_issue_update_state").get() as { count: number | string };
+  expect(Number(count.count)).toBe(0);
+}
+
+function verifyQueueBeforeFlush(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = store.createIssue({ title: "Queue before flush", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Flush recipient", provider: "codex" });
+  const chat = store.createChatSession({ agentId: agent.id });
+  bindFeishuTopicFixture(store, db, chat.id, issue.id);
+  const context = (store as unknown as { ctx: StoreContext }).ctx;
+  const events = createCommitEventQueue();
+  context.db.transaction(() => {
+    store.queueAgentIssueUpdate({
+      activityId: "leader-round:flush-once", issueId: issue.id,
+      actorType: "agent", type: "leader_round_completed", body: "Flush this round once",
+      createdAt: new Date().toISOString(),
+    });
+    expect(store.flushAgentIssueUpdatesForIssueWithinTransaction(issue.id, events)).toEqual({
+      delivered: 1, dropped: 0,
+    });
+  })();
+  expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 0, dropped: 0 });
+  const messages = store.listChatMessages(chat.id);
+  expect(messages).toHaveLength(1);
+  expect(messages[0]?.body).toContain("Flush this round once");
 }
 
 /**
@@ -343,9 +362,9 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeStatus = store.getIssue(issue.id)?.status;
-  // MUL-406 S1 (ADR 0003): child status commits; the notification hook transaction rolls back in full.
+  // ADR 0012: state, system comment and pending turn roll back together.
   expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
-  expect(store.getIssue(child.id)?.status).toBe("done");
+  expect(store.getIssue(child.id)?.status).toBe(child.status);
   expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);
   expect(parentLog()).toEqual(beforeLog);
@@ -743,12 +762,18 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       await withPostgres(async (db) => verifyCaughtLocalReplyFailure(db, nested));
     });
   }
-  it("SQLite: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
-    await withSqlite(async (db) => verifyBestEffortQueueAfterCommit(db));
+  it("SQLite: Issue comments do not enter the legacy update queue", async () => {
+    await withSqlite(async (db) => verifyLegacyIssueUpdateQueueIsUnused(db));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
-    await withPostgres(async (db) => verifyBestEffortQueueAfterCommit(db));
+  it.skipIf(!pgAdminUrl)("Postgres: Issue comments do not enter the legacy update queue", async () => {
+    await withPostgres(async (db) => verifyLegacyIssueUpdateQueueIsUnused(db));
   });
+  it("SQLite: round aggregation stays before an in-transaction flush", async () => {
+    await withSqlite(async (db) => verifyQueueBeforeFlush(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: round aggregation stays before an in-transaction flush", async () => {
+    await withPostgres(async (db) => verifyQueueBeforeFlush(db));
+  }, 30_000);
   it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
     await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db, "sqlite"));
   });

@@ -1,15 +1,14 @@
 /**
  * MUL-407 decision-card lifecycle on real PostgreSQL.
  *
- * The SQLite suite covers the logic; this file covers the two things only a
- * real Postgres can answer: that the reminder window predicate and the claim
- * compare-and-set behave the same when the statements are translated, and that
- * two independent connections racing for the same delivery produce one card,
- * one patch and one reminder.
+ * The SQLite suite covers the logic; real Postgres checks translated reminder
+ * and claim SQL, concurrent delivery claims, and parameter type inference in
+ * the settled bot-host snapshot query.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -208,5 +207,20 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
     const patchBody = JSON.parse(patch.body) as { card?: Record<string, unknown> };
     expect(patchBody.card).toBeTruthy();
     expect(JSON.stringify(patchBody.card)).toContain("已提交");
+  });
+
+  it("replays a settled Issue decision card to its bot host on Postgres", () => {
+    const { workspaceId, runtimeId, task, request } = scaffold();
+    const card = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
+    store.reportFeishuBotOutbound(workspaceId, runtimeId, card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_settled",
+      interactionOpenId: "ou_pg",
+    });
+    const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
+
+    const frames = taskInputSnapshot(store, runtimeId, `d-${runtimeId}`, new Set(), () => {});
+    expect(frames.filter(frame => frame.type === "task.human_request.settled")).toEqual([
+      expect.objectContaining({ payload: { task_id: task.id, request: settled } }),
+    ]);
   });
 });

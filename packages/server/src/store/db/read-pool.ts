@@ -834,13 +834,14 @@ export function createReadPool(options: {
   databaseUrl?: string | null;
   sqliteDb?: SqlDatabase | null;
   /**
-   * The already-resolved API process role. Omitted roles use the all capacity;
-   * production callers must pass their startup role explicitly.
+   * The resolved API process role. Production startup passes this explicitly;
+   * other callers use the unsplit capacity unless they select a role.
    */
   role?: string | null;
 } = {}): ReadPool {
   const url = (options.databaseUrl ?? process.env.MULTIREMI_DATABASE_URL ?? "").trim();
-  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url, readPoolCapacityForRole(options.role));
+  const role = options.role ?? "all";
+  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url, readPoolCapacityForRole(role));
   if (!options.sqliteDb) {
     throw new Error("createReadPool needs a sqlite database when no Postgres URL is configured");
   }

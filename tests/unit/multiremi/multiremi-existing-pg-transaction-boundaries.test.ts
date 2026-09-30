@@ -105,6 +105,40 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     } };
   }
 
+  it("closes pending human requests only when an outer task cancellation commits", () => {
+    const { workspaceId, agent, runtime } = freshAgent();
+    const task = store.createTask({ agentId: agent.id, workspaceId, runtimeId: runtime.id, prompt: "Wait" });
+    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { message: "Continue?" } });
+    const events: Array<{ type: string; inTransaction: boolean }> = [];
+    const offWorkspace = store.onWorkspaceEvent(event => {
+      if (event.payload.task_id === task.id) events.push({ type: event.type, inTransaction: db.inTransaction === true });
+    });
+    const offTask = store.onTaskEvent(event => {
+      if (event.task.id === task.id) events.push({ type: event.type, inTransaction: db.inTransaction === true });
+    });
+    try {
+      expect(() => db.transaction(() => {
+        store.cancelTask(task.id);
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(events).toEqual([]);
+        throw new Error("rollback cancellation");
+      })()).toThrow("rollback cancellation");
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+      expect(events).toEqual([]);
+      db.transaction(() => {
+        store.cancelTask(task.id);
+        expect(events).toEqual([]);
+      })();
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+      expect(events.filter(event => event.type === "daemon:task_input")).toHaveLength(1);
+      expect(events.every(event => !event.inTransaction)).toBe(true);
+      expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
+    } finally {
+      offWorkspace();
+      offTask();
+    }
+  });
+
   it("rolls back Feishu Chat, steer and delivery writes after a later failure", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
     const events: string[] = [];
@@ -142,9 +176,18 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("commits a Feishu steer in one transaction and preserves message linkage", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
+    const inputEvents: Array<{ inTransaction: boolean; taskId: unknown }> = [];
+    const unsubscribe = store.onWorkspaceEvent(event => {
+      if (event.type === "daemon:task_input" && event.payload.task_id === first.taskId) {
+        inputEvents.push({ inTransaction: db.inTransaction, taskId: event.payload.task_id });
+      }
+    });
     maxDepth = 0;
-    expect(store.submitFeishuBotMessage(workspaceId, runtime.id, input))
-      .toMatchObject({ taskId: first.taskId, steered: true, duplicate: false });
+    try {
+      expect(store.submitFeishuBotMessage(workspaceId, runtime.id, input))
+        .toMatchObject({ taskId: first.taskId, steered: true, duplicate: false });
+    } finally { unsubscribe(); }
+    expect(inputEvents).toEqual([{ inTransaction: false, taskId: first.taskId }]);
     const rows = await reader`SELECT s.content, c.body FROM multiremi_task_steer_messages s
       JOIN multiremi_chat_messages c ON c.id = s.source_chat_message_id WHERE s.task_id = ${first.taskId}`;
     expect(rows).toEqual([{ content: input.text, body: input.text }]);
@@ -232,6 +275,12 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         events.push({ type: event.type, inTransaction: db.inTransaction, actorId: event.actorId, payload: event.payload });
       }
     });
+    const unsubscribeLog = store.subscribeConversationLog({ onEntry(sessionId, entry) {
+      if (sessionId === wake.chatSessionId && "author_type" in entry && entry.author_type === "system") {
+        events.push({ type: "log:entry", inTransaction: db.inTransaction, actorId: null, payload: { entry } });
+      }
+    } });
+    const priorSystemMessages = store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system").length;
     const originalRun = db.run;
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") {
@@ -246,14 +295,24 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     } finally {
       db.run = originalRun;
       unsubscribe();
+      unsubscribeLog();
     }
-    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+    expect(store.getPendingChatTask(wake.chatSessionId!)?.id).toBe(wake.id);
+    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
     expect(workspaceLocks.length).toBeGreaterThanOrEqual(2);
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
-    expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
-    expect(events[0]?.type).toBe("activity:created");
-    expect(events[0]?.inTransaction).toBe(false);
+    // The queued wake consumes its inbox envelope; it no longer needs a steer kick.
+    const logEvents = events.filter(event => event.type === "log:entry");
+    const activityEvents = events.filter(event => event.type === "activity:created");
+    const terminalActivities = activityEvents.filter(event =>
+      (event.payload.entry as { action?: string } | undefined)?.action === "task_completed");
+    expect(logEvents).toHaveLength(1);
+    expect(terminalActivities).toHaveLength(1);
+    expect(logEvents[0].inTransaction).toBe(false);
+    expect(activityEvents.every(event => !event.inTransaction)).toBe(true);
+    expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(priorSystemMessages + 1);
+    expect(events.indexOf(logEvents[0])).toBeLessThan(events.indexOf(terminalActivities[0]));
   });
 
   const roleUpdates = [
@@ -319,14 +378,14 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     });
   }
 
-  it("keeps workspace before session locking and emits nothing in the steer primitive", () => {
+  it("keeps workspace before session locking and wakes only after the steer transaction commits", () => {
     const { workspaceId, agent } = freshAgent();
     const issue = store.createIssue({ title: "Steer lock order", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Steer me" });
     const locks: string[] = [];
-    const events: string[] = [];
-    const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
+    const events: Array<{ type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent(event => events.push({ type: event.type, inTransaction: db.inTransaction }));
     const originalRun = db.run;
     const originalQuery = db.query;
     // What this probe protects, and why B1's allocator counts as "session":
@@ -337,8 +396,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     // with the conversation-head counter, so the second lock moved to
     // `multiremi_conversation_heads`; it is the same session-domain lock in the
     // same seat of the W-before-S order. Counting it keeps this assertion
-    // pinning order *and* count — a third session-domain lock appearing here
-    // still fails, which is the regression this array exists to catch.
+    // pinning order *and* count. D also locks the legacy Session event row
+    // before allocation, so each steer has barrier, event-row and head locks.
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") locks.push("workspace");
       if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") locks.push("session");
@@ -352,18 +411,62 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     };
     maxDepth = 0;
     try {
-      db.transaction(() => store.createTaskSteerMessageWithinTransaction({
-        taskId: task.id, kind: "steer", content: "New input",
-      }))();
+      db.transaction(() => {
+        store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "New input" });
+        expect(events).toEqual([]);
+      })();
+      expect(events).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+      events.length = 0;
+      expect(() => db.transaction(() => {
+        store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "Rolled back" });
+        expect(events).toEqual([]);
+        throw new Error("rollback steer");
+      })()).toThrow("rollback steer");
+      expect(events).toEqual([]);
     } finally {
       db.run = originalRun;
       db.query = originalQuery;
       unsubscribe();
     }
-    expect(locks).toEqual(["workspace", "session", "session"]);
+    expect(locks).toEqual(["workspace", "session", "session", "session", "workspace", "session", "session", "session"]);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
     expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);
+    expect(store.listTaskSteerMessages(task.id).map(message => message.content)).toEqual(["New input"]);
+  });
+
+  it("publishes terminal human-request cancellation after commit and not after rollback", () => {
+    const { workspaceId, agent, runtime } = freshAgent();
+    const issue = store.createIssue({ title: "Terminal request", workspaceId });
+    const makePending = () => {
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId, prompt: "Work" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ?, status = 'running' WHERE id = ?", [runtime.id, task.id]);
+      const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+      return { task, request };
+    };
+    const committed = makePending();
+    const transitions: Array<{ requestId: string; type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onHumanRequest(event => transitions.push({
+      requestId: event.request.id, type: event.type, inTransaction: db.inTransaction,
+    }));
+    try {
+      db.transaction(() => {
+        store.completeTask(committed.task.id, { output: "finished" });
+        expect(transitions).toEqual([]);
+      })();
+      expect(transitions).toEqual([{ requestId: committed.request.id, type: "cancelled", inTransaction: false }]);
+      expect(store.getTaskHumanRequest(committed.request.id)?.status).toBe("cancelled");
+
+      const rolledBack = makePending();
+      transitions.length = 0;
+      expect(() => db.transaction(() => {
+        store.completeTask(rolledBack.task.id, { output: "not committed" });
+        expect(transitions).toEqual([]);
+        throw new Error("rollback terminal cancellation");
+      })()).toThrow("rollback terminal cancellation");
+      expect(transitions).toEqual([]);
+      expect(store.getTaskHumanRequest(rolledBack.request.id)?.status).toBe("pending");
+    } finally { unsubscribe(); }
   });
 
   function organizerFixture() {

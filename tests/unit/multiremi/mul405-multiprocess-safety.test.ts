@@ -118,6 +118,7 @@ describe("MUL-405 issue number allocation lock", () => {
     const statements: string[] = [];
     const countedDb = {
       dialect: "sqlite" as const,
+      get inTransaction() { return database.inTransaction; },
       query(sql: string) {
         statements.push(sql);
         return database.query(sql);

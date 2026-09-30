@@ -216,6 +216,7 @@ describe("issue timeline hydration query count", () => {
     databases.push(db);
     let queryCount = 0;
     const countingDb = markSqliteDialect<SqlDatabase>({
+      get inTransaction() { return db.inTransaction; },
       query(sql) {
         queryCount += 1;
         return db.query(sql);

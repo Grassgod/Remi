@@ -16,6 +16,7 @@ import type { MultiremiDaemon, MultiremiDaemonOptions, MultiremiDaemonProviderFa
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import type { PeerChannel } from "../../../packages/server/src/api/peer/peer-channel.js";
+import type { LiveHub } from "@multiremi/api/hub/live-hub.js";
 
 export interface LedgerEntry {
   sessionId: string;
@@ -85,6 +86,7 @@ export class DaemonProtocolHarness {
   private apiRole: "all" | "runtime" = "all";
   private peerChannel: PeerChannel | null = null;
   private peerSecret = "";
+  private liveHub: LiveHub | undefined;
   private onRoundCard: ((taskId: string) => void) | null = null;
   get client() { return this.daemons[0]!.daemonProtocolClient(); }
   get daemon() { return this.daemons[0]!; }
@@ -93,7 +95,9 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
-    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs">;
+    daemonOptions?: Pick<MultiremiDaemonOptions,
+      "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs"
+      | "gcEnabled" | "gcIntervalMs" | "inProcessRuntimeModelDiscoveryEnabled" | "runtimeModelRefreshIntervalMs">;
     runtimeIds?: string[];
     outboxBackoffMs?: number[];
     providerFactory?: MultiremiDaemonProviderFactory;
@@ -104,6 +108,7 @@ export class DaemonProtocolHarness {
     apiRole?: "all" | "runtime";
     peerChannel?: PeerChannel;
     peerSecret?: string;
+    liveHub?: LiveHub;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
     onRoundCard?: (taskId: string) => void;
@@ -115,6 +120,7 @@ export class DaemonProtocolHarness {
       h.apiRole = options.apiRole ?? "all";
       h.peerChannel = options.peerChannel ?? null;
       h.peerSecret = options.peerSecret ?? "";
+      h.liveHub = options.liveHub;
       h.onRoundCard = options.onRoundCard ?? null;
       if (h.onRoundCard) {
         const recordCard = h.store.recordTurnCardCompletionFieldsWithinTransaction.bind(h.store);
@@ -176,6 +182,7 @@ export class DaemonProtocolHarness {
     this.server = startMultiremiServer({
       store: this.store, scheduler: null, backgroundJobs: false, hostname: "127.0.0.1", port,
       authToken: "fixture-master", apiRole: this.apiRole,
+      liveHub: this.liveHub,
       peerChannel: this.peerChannel, peerSecret: this.peerSecret,
       onDaemonProtocol: layer => {
         this.layer = layer;

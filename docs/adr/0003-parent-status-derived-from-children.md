@@ -335,6 +335,32 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      report transaction — before it, committing separately — and only its
      returned readiness lines feed the report. Verified on a scratch merge of
      the two branches: the combined path still measures depth 1 on Postgres.
+
+   **MUL-483 / ADR 0012 supplement (2026-09-29).** The post-commit E1/E2
+   report policy above describes the earlier implementation. Under
+   [ADR 0012](0012-unified-inbox-and-single-pending-turn.md), E2 child endings,
+   both E3 notifications, E4 decisions, delegation reports and agent mentions
+   write their inbox entries and pending-turn changes in the transaction that
+   owns the triggering state change. `sendEnvelopeWithinTransaction` delegates
+   to `ensurePendingTurnWithinTransaction`; neither opens a nested transaction.
+   A failure before COMMIT rolls back the state, inbox entry and wake together.
+   This removes the earlier compensation gap for these required reports.
+
+   The collector and commit-event queue remain required. E1 derivation and
+   required parent reports run through `notifyChildStatusChangeWithinTransaction`
+   at depth 1; recursive parent changes use the same transaction. Only E3's
+   durable automatic-start replay and optional notifications remain after the
+   outer COMMIT. The transaction owner publishes realtime events and task
+   enqueue notifications after COMMIT, and drops them on rollback. Optional
+   work must not reintroduce a savepoint inside the required write transaction.
+
+   The SQLite and real PostgreSQL regressions instrument E2, E3 and E4's outer
+   transaction and every task INSERT: `maxDepth === 1`, and each INSERT must
+   occur while the original transaction is open. Crash probes cover the
+   boundary after the inbox INSERT, after the pending-turn write and after
+   COMMIT. Existing parent guards, continuation semantics and Chat user queues
+   keep their contracts; a human comment joins queued work only according to
+   the Q-B constant defined in ADR 0012.
 9. **A batch update is pre-flighted as a whole, then written row by row.** Before
    the first write, `batchUpdateIssues` evaluates guard A (A1 and A4 included)
    for every row and refuses the whole batch if any row would be rejected,

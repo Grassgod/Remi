@@ -246,7 +246,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => f.api.fetch(request) });
         const client = new MultiremiDaemonClient(server.url.origin, f.access.token);
         const stop = registerQuestionCardClient("cli_mul487_restart", {
-          getRequest: (taskId, requestId) => client.getTaskHumanRequest(taskId, requestId),
+          getRequest: async (taskId, requestId) => {
+            const request = store.getTaskHumanRequest(requestId);
+            return request?.taskId === taskId ? request : null;
+          },
           respond: (taskId, requestId, response, credential) => client.respondTaskHumanRequest(taskId, requestId, response, credential),
           getDecision: (issueId, requestId) => client.getFeishuIssueDecision(issueId, requestId),
           answer: (issueId, requestId, answer, credential) => client.answerFeishuIssueDecision(issueId, requestId, { answer, ...credential }),

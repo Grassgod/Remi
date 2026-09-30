@@ -56,6 +56,7 @@ class RecordingDb implements SqlDatabase {
   constructor(private readonly inner: SqlDatabase) {
     this.dialect = inner.dialect;
   }
+  get inTransaction(): boolean | undefined { return this.inner.inTransaction; }
   query(sql: string): SqlStatement {
     this.statements.push(sql);
     return this.inner.query(sql);

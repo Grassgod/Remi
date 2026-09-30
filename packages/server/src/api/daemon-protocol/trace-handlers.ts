@@ -18,7 +18,7 @@ function traceRejection(error: unknown) {
   throw error;
 }
 
-/** PR 1 uses the A-0 memory sink; B's readTrace and C's Live Hub attach in PR 2. */
+/** Production startup supplies the runtime's Live Hub sink; isolated tests may use memory. */
 export class DaemonTraceService {
   readonly reader: SocketDaemonTraceReader;
   readonly sink: TraceSink;

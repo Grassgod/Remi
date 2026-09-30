@@ -1677,6 +1677,39 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const location = store.locateConversationLogEntry(sessionId, id);
     return location ? c.json(location) : c.json({ error: "entry not found" }, 404);
   });
+  app.get("/api/sessions/:sessionId/log/entry", (c) => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const rawSeq = c.req.query("seq");
+    const id = c.req.query("id");
+    if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
+    const seq = rawSeq == null ? store.locateConversationLogEntry(sessionId, id!)?.seq
+      : /^(0|[1-9]\d*)$/.test(rawSeq) ? Number(rawSeq) : NaN;
+    if (rawSeq != null && (!Number.isSafeInteger(seq) || seq! < 0)) return c.json({ error: "invalid seq" }, 400);
+    if (seq == null) return c.json({ error: "entry not found" }, 404);
+    const entry = store.getConversationLogEntry(sessionId, seq);
+    if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
+    const envelope = entry.metadata.envelope;
+    const recipient = envelope?.to;
+    const agentId = envelope?.recipient_agent_id
+      ?? (recipient?.role === "agent" && recipient.issueSessionId === sessionId
+        ? recipient.agentId
+        : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null);
+    const delivered: boolean | null = agentId === null ? null : (
+      store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
+      || store.listConversationLogShown(sessionId).some((turn) => {
+        if (turn.kind !== "turn") return false;
+        const receipt = turn.metadata.inbox;
+        if (receipt === null || typeof receipt !== "object"
+          || !(Number((receipt as Record<string, unknown>).delivered_to_seq) >= entry.seq)) return false;
+        // A queued turn may predate a coalesced envelope. An explicit author
+        // owns its receipt; only an unauthored mirror falls back to its task.
+        return turn.author_id !== null ? turn.author_id === agentId
+          : turn.task_id !== null && store.getTask(turn.task_id)?.agentId === agentId;
+      })
+    );
+    return c.json({ ...entry, delivered });
+  });
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;

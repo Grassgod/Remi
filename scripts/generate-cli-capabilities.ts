@@ -185,6 +185,7 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
     "GET /api/sessions/:sessionId/log": "session.log.window",
+    "GET /api/sessions/:sessionId/log/entry": "session.log.get",
     "GET /api/sessions/:sessionId/log/locate": "session.log.locate",
     "GET /api/issues/children": "issue.children",
     "GET /api/multiremi/issues/children": "issue.children",
@@ -769,6 +770,9 @@ function exemptRoute(route: string): CliManifestRoute | null {
   // becoming a `planned_command` that would never be implemented.
   if (path.startsWith("/internal/")) {
     return exempt("daemon_internal_protocol", "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow.");
+  }
+  if (route === "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired") {
+    return exempt("daemon_internal_protocol", "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command.");
   }
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");

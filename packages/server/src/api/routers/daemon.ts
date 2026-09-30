@@ -80,12 +80,6 @@ import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
-import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
-import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.js";
-
-/** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
-const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
-import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
@@ -370,6 +364,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     deregisterDaemonRuntimes(c, store, runtimeIds.runtimeIds);
     return c.json({ status: "ok" });
   });
+  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", (c) => c.json({ task: null }));
   app.post("/api/daemon/heartbeat", async (c) => {
     const body = await readJsonStrict<{
       runtime_id?: string;
@@ -384,8 +379,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       supports_bot_menu?: boolean;
       feishu_concierge_protocol?: number;
       feishu_decision_card?: number;
-      feishu_outbound_kinds?: number;
       feishu_issue_decision_card?: number;
+      feishu_outbound_kinds?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -450,75 +445,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       );
     }
     const response = daemonHeartbeatHttpResponse(ack);
-    response.codex_profile = store.getRuntimeCodexProfile(runtimeId);
-    response.claude_profile = store.getRuntimeClaudeProfile(runtimeId);
-    // Only the workspace this Runtime belongs to is needed here, and the heartbeat itself has
-    // already read and written the Runtime row. A hydrated read would add the usage scan, the
-    // execution-group membership and the model catalog to every heartbeat for nothing.
-    const runtime = store.getRuntimeLite(runtimeId);
-    const workspaceId = runtime?.workspaceId ?? "local";
-    // The role check behind `callerCanReceiveRelay` reads the membership list; ask once and use
-    // the same answer for both the payload and whether to attach the relay secrets.
-    const canReceiveRelay = callerCanReceiveRelay(c, store, workspaceId);
-    const workspaceConfig = workspaceReposResponse(store, workspaceId, canReceiveRelay);
-    if (workspaceConfig) {
-      response.workspace_settings = workspaceConfig.settings ?? {};
-      if (canReceiveRelay) response.relay = workspaceConfig.relay;
-    }
-    if (supportsFeishuBotConfig) {
-      // Carries a revision and a desired state, never a credential — the daemon
-      // fetches the payload itself over its own runtime-scoped route.
-      const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
-      if (directive) response.feishu_bot = directive;
-      const supportsKinds = body.feishu_outbound_kinds === 1
-        && feishuConciergeProtocol >= FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION;
-      const legacyOutbound = !supportsKinds && feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
-        ? store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined,
-            feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
-            feishuConciergeProtocol >= FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
-            feishuConciergeProtocol >= FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION)
-        : null;
-      const outbounds = supportsKinds ? store.claimFeishuBotOutbounds(workspaceId, runtimeId)
-        : legacyOutbound ? [legacyOutbound] : [];
-      if (supportsKinds) response.pending_feishu_outbounds = [];
-      for (const outbound of outbounds) {
-        const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
-          ? outbound.body
-          : degradeMarkdownImages(outbound.body, {
-              publicUrl: process.env.MULTIREMI_PUBLIC_URL?.trim() || null,
-            });
-        const wireOutbound = {
-          id: outbound.id,
-          claim_token: outbound.claimToken,
-          chat_id: outbound.chatId,
-          thread_id: outbound.threadId,
-          reply_to_message_id: outbound.replyToMessageId,
-          body,
-          body_origin: outbound.bodyOrigin,
-          ...(outbound.attachments ? { attachments: outbound.attachments } : {}),
-          idempotency_key: outbound.idempotencyKey,
-          ...(outbound.taskId ? { task_id: outbound.taskId, resume_message_id: outbound.resumeMessageId } : {}),
-          ...(outbound.mention ? { mention: outbound.mention } : {}),
-          ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
-          ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
-          ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
-          ...(outbound.kind ? { kind: outbound.kind } : {}),
-          ...(outbound.receiptState ? { receipt_state: outbound.receiptState } : {}),
-          ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
-          ...(outbound.decisionId ? { decision_id: outbound.decisionId } : {}),
-          ...(outbound.decisionIssueId ? { decision_issue_id: outbound.decisionIssueId } : {}),
-          // The host needs the asking Task to register a click the moment it
-          // sends the card, and needs to know a row is already plain text so it
-          // does not retry it as a malformed card (MUL-407).
-          ...(outbound.humanRequestTaskId ? { human_request_task_id: outbound.humanRequestTaskId } : {}),
-          ...(outbound.targetMessageId ? { target_message_id: outbound.targetMessageId } : {}),
-          ...(outbound.expiresAt ? { expires_at: outbound.expiresAt } : {}),
-          ...(outbound.degraded ? { degraded: outbound.degraded } : {}),
-        };
-        if (supportsKinds) (response.pending_feishu_outbounds as unknown[]).push(wireOutbound);
-        else response.pending_feishu_outbound = wireOutbound;
-      }
-    }
     return c.json(response);
   });
 
@@ -951,44 +877,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: (err as Error).message }, 400);
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown>; timeout_ms?: number }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
-    const kind = body.kind === "question" ? "question" : "permission";
-    const request = store.createTaskHumanRequest({
-      taskId,
-      kind,
-      payload: body.payload ?? {},
-      timeoutMs: body.timeout_ms,
-    });
-    return c.json({ request }, 201);
-  });
-  app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, c.req.param("taskId"));
-    if (identityDenied) return identityDenied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
-    return c.json({ request });
-  });
-  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/expire", async (c) => {
-    const body = await readJsonStrict<{ status?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    const status = body.status === "cancelled" ? "cancelled" : "timeout";
-    const expired = store.expireTaskHumanRequest(request.id, status);
-    // Lost the race to a human response: return the current row so the worker honors it.
-    return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
   app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/card", async (c) => {
     const taskId = c.req.param("taskId");

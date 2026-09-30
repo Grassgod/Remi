@@ -82,7 +82,7 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
       sessionId: placeholder("provider_session_id"),
       targetAgentId: placeholder("agent_id"),
       mode,
-      jsonl: placeholder("session_jsonl"),
+      jsonl: `{"type":"session_projection"}\n{"type":"inbox_toc","entries":[{"seq":1,"priority":1,"author_name":"{{inbox_author}}","created_at":"{{inbox_time}}","title":"{{inbox_title}}","chars":1,"folded":true}]}\n${placeholder("session_jsonl")}`,
     },
     issueSessionResults: [{
       id: placeholder("published_result_id"),

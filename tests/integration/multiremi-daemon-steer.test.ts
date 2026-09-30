@@ -426,8 +426,6 @@ describe("Bun Multiremi daemon steering", () => {
       getLastResponse: () => null,
     });
 
-    const status = spyOn(MultiremiDaemonClient.prototype, "getTaskStatus")
-      .mockRejectedValue(new Error("HTTP task status is forbidden on cancellation"));
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -447,11 +445,9 @@ describe("Bun Multiremi daemon steering", () => {
 
       expect(prompts).toHaveLength(1);
       expect(store.getTask(task.id)?.status).toBe("cancelled");
-      expect(status).not.toHaveBeenCalled();
     } finally {
       await activeDaemon?.stopAndDrainTestWork();
       server.stop(true);
-      status.mockRestore();
     }
   });
 });

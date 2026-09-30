@@ -806,22 +806,31 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
-    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
-    idempotencyKey: delivery.idempotencyKey })).messageId;
+    card: card!,
+    idempotencyKey: questionCardIdempotencyKey(card!, delivery.idempotencyKey) })).messageId;
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
   const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });
+  const waitAbort = new AbortController();
+  const waitSignal = AbortSignal.any([options.signal, waitAbort.signal]);
   try {
-    while (request.status === "pending") {
-      await sleep(750);
+    if (request.status === "pending") {
+      const settled = await Promise.race([
+        registration.wait(waitSignal).then(value => ({ source: "local" as const, value })),
+        daemon.waitFeishuBotHumanRequestSettled(requestId, waitSignal).then(value => ({ source: "daemon" as const, value })),
+      ]);
       options.signal.throwIfAborted();
-      request = registration.current() ?? await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+      if (settled.source === "local" && settled.value) request = settled.value;
+      else request = await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+      if (request.status === "pending") throw new FeishuDeliveryError("Interaction request has not settled", true);
     }
     await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName, sessionId, receipt: true }));
     return { messageId };
-  } finally { registration.dispose(); }
+  } finally { waitAbort.abort(); registration.dispose(); }
 }
 
 /**

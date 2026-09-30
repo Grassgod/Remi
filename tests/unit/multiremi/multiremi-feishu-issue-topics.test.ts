@@ -382,9 +382,21 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const terminalActivities: Array<{ index: number; inTransaction: boolean }> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string } | undefined)?.action === "task_completed") {
+          terminalActivities.push({ index: events.length - 1, inTransaction: db!.inTransaction });
+        }
       });
+      const logEvents: Array<{ id: string; index: number; inTransaction: boolean }> = [];
+      store.setConversationLogListener({ onEntry: (sessionId, entry) => {
+        if (sessionId === wake.chatSessionId && "kind" in entry && entry.author_type === "system") {
+          events.push({ type: "log:wake", inTransaction: db!.inTransaction });
+          logEvents.push({ id: entry.id, index: events.length - 1, inTransaction: db!.inTransaction });
+        }
+      } });
       const database = db!;
       const originalRun = database.run;
       let injected = false;
@@ -403,17 +415,27 @@ describe("Feishu Issue topics", () => {
       } finally {
         database.run = originalRun;
         unsubscribe();
+        store.setConversationLogListener(null);
       }
       if (rollback) {
         expect(injected).toBe(true);
         expect(store.getTask(leader.id)!.status).toBe("running");
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
         expect(events).toEqual([]);
+        expect(logEvents).toEqual([]);
+        expect(terminalActivities).toEqual([]);
       } else {
-        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
-        expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
-        expect(events[0].type).toBe("activity:created");
-        expect(events[0].inTransaction).toBe(false);
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
+        expect(logEvents).toHaveLength(1);
+        expect(logEvents[0].inTransaction).toBe(false);
+        const message = store.getConversationLogEntryById(logEvents[0].id)!;
+        expect(message.kind).toBe("message");
+        expect(message.author_type).toBe("system");
+        expect(message.body_md).toContain(leader.id);
+        expect(terminalActivities).toHaveLength(1);
+        expect(terminalActivities[0].inTransaction).toBe(false);
+        expect(logEvents[0].index).toBeLessThan(terminalActivities[0].index);
+        expect(store.listChatMessagesFromLog(wake.chatSessionId!).filter(message => message.role === "system")).toHaveLength(1);
       }
     });
   }
@@ -676,8 +698,12 @@ describe("Feishu Issue topics", () => {
     expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBe(issue.id);
     expect(store.getChatSession(inbound.chatSessionId)).not.toHaveProperty("issueId");
     store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Verify topic update delivery" });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
-    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain("Verify topic update delivery");
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const round = store.createSessionTask(session.id, { agentId: store.getFeishuBotConfig("local")!.agentId, prompt: "Report progress" });
+    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [round.id]);
+    store.completeTask(round.id, { output: "Round complete" });
+    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain(`会话 ${session.id}`);
+    expect(store.listConversationLogShown(session.id).some(entry => entry.body_md === "Verify topic update delivery")).toBe(true);
   });
 
   it("wakes the bound topic Agent when an Issue task asks a human", () => {

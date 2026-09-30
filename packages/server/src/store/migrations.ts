@@ -15,6 +15,7 @@ import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
+import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION, preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -3454,6 +3455,16 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // MUL-432 segment 2 (ADR 0006 decision 8): on-demand session archive
   // requests. Plain idempotent DDL, same reason as above.
   createSessionArchiveRequests(db);
+  migrateTaskExecutionScope(db);
+  runMigrationOnce(db, "20260929_relay_issue_log_to_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_to_seq INTEGER");
+  });
+  runMigrationOnce(db, "20260929_relay_issue_log_delivered_seq", () => {
+    addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_delivered_seq INTEGER");
+  });
+  runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
+    preparePendingTurnConstraintsWithinTransaction(db);
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
@@ -4245,6 +4256,14 @@ function parseLegacyJsonRecord(value: unknown): Record<string, unknown> {
 
 function stringOrNull(value: unknown): string | null {
   return value === null || value === undefined || value === "" ? null : String(value);
+}
+
+export function migrateTaskExecutionScope(db: SqlDatabase): void {
+  runMigrationOnce(db, TASK_EXECUTION_SCOPE_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_tasks", "execution_scope TEXT NOT NULL DEFAULT ''");
+    addColumnIfMissing(db, "multiremi_tasks", "wake_seq INTEGER NOT NULL DEFAULT 0");
+    db.run(`UPDATE multiremi_tasks SET execution_scope = ${executionScopeSql("multiremi_tasks")}`);
+  });
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

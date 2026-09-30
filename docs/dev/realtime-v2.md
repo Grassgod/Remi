@@ -103,3 +103,11 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 - 冷流、真实 PG peer 补帧与关停顺序：`bun test tests/unit/multiremi/conversation-log-server-wiring.test.ts`。
 - 客户端：`cd frontend/packages/core && bunx vitest run api/ws-client-streams.test.ts api/trace-socket.test.ts`。
 - 路由清单：`bun run scripts/snapshot-api-routes.ts --check`；角色守卫计数：`bun test tests/unit/multiremi/api-role-guard.test.ts`。
+
+runtime/all 角色默认启动时，HTTP trace 读取委托给 daemon socket reader，
+trace append/close 写入进程自己持有的 Live Hub。注入 EmptyLiveHub 的测试仍使用
+内存 sink；ui 角色不持有 trace 路由或 daemon socket，trace WS 继续返回 421。
+裸 task id 的 TraceSink 订阅同步回放保留窗口，供协议消费者读取快照；后续事件
+与浏览器的 keyed 订阅仍由 Hub flush 推送。
+`tests/integration/daemon-protocol-v2/default-trace-wiring.test.ts` 在 SQLite/PG 上
+验证默认启动、HTTP 读取、浏览器推送、协议回放及 closed，不注入 reader 或 sink。

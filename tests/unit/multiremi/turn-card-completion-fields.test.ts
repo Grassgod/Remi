@@ -198,7 +198,8 @@ for (const backend of backends) {
         expect(seam.calls).toEqual([{ taskId: task.id, fields: FIELDS, changed: true, depth: 1 }]);
         const fieldPatch = seam.patches.find(({ patch }) => patch.target_seq === after.seq
           && patch.fields.metadata?.event_count === CARD_FIELDS.event_count)!;
-        expect(fieldPatch.inTransaction).toBe(true);
+        // The card is written at seam depth 1 and rolls back with the terminal transaction; listeners see it after COMMIT.
+        expect(fieldPatch.inTransaction).toBe(false);
         expect(fieldPatch.patch.fields.metadata).toMatchObject(CARD_FIELDS);
 
         // A replayed frame is absorbed by the terminal state and rewrites nothing.

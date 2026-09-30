@@ -39,7 +39,7 @@ export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: str
   if (!runtime) throw new Error("Runtime not found");
   const layer = new DaemonProtocolLayer({ store });
   const downlinks = new DaemonDownlinks({ layer, snapshot: (rt, session, active) => [
-    ...runtimeInputSnapshot(store, rt, session), ...taskInputSnapshot(store, rt, active, id => downlinks.forgetTask(rt, id)),
+    ...runtimeInputSnapshot(store, rt, session), ...taskInputSnapshot(store, rt, session.daemonId, active, id => downlinks.forgetTask(rt, id)),
   ] });
   registerTaskInputRpcs(layer, store, rt => downlinks.kick(rt));
   const frames: Array<{ t: string; seq?: number; re?: string; p: Record<string, any> }> = [];

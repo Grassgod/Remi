@@ -17,7 +17,11 @@ import {
   conversationLogBodyHtmlColumnsExist,
 } from "@multiremi/render/body-html-backfill.js";
 import { RENDER_VERSION } from "@multiremi/render/markdown.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore as createMigratedStore, db, resetMultiremiTestEnv } from "./helpers.js";
+
+function createStore() {
+  return createMigratedStore();
+}
 
 afterEach(resetMultiremiTestEnv);
 

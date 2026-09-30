@@ -4,6 +4,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 
@@ -320,7 +321,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const wake = store.listTasksForIssue(f.parent.id)
         .find(task => task.agentId === leader.id && task.delegationId === delegated.delegationId);
       expect(wake).toMatchObject({ status: "queued" });
-      expect(wake?.prompt).toContain("was cancelled");
+      expect(inboxReportBody(store, wake!, delegated.id)).toContain("was cancelled");
       expect(store.getTask(delegatedId)).toMatchObject({ status: "cancelled", prompt: "Delegated original request" });
       expect(observed.events.filter(event => event.type === "task:enqueued"))
         .toContainEqual({ type: "task:enqueued", taskId: wake!.id, inTransaction: false });

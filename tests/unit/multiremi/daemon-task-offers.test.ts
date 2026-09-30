@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, spyOn, setSystemTime } from "bun:test"
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
-import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, DAEMON_OFFER_COOLDOWN_MS, DAEMON_OFFER_TIMEOUT_MS } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import { createLocalStore, resetMultiremiTestEnv, db } from "./helpers.js";
 
@@ -48,6 +48,76 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
 }
 
 describe("A-3 task offers", () => {
+  it("clears only capacity cooldown when the active count changes on heartbeat", async () => {
+    const h = fixture(); const task = h.task(); await h.hello();
+    const first = h.offered()[0]!;
+    await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
+    await h.send("res", { ok: false, code: "capacity" }, { re: String(first.seq), ack: first.seq });
+    await h.layer.drain();
+    expect(h.offered()).toHaveLength(1);
+    await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
+    expect(h.offered().map(frame => frame.p.id)).toEqual([task.id, task.id]);
+    expect(h.clock.now()).toBeLessThan(Date.now() + DAEMON_OFFER_COOLDOWN_MS);
+  });
+
+  it("bounds full-capacity offers and falls back to 30 seconds when release heartbeat is lost", async () => {
+    const h = fixture(); h.task(); await h.hello();
+    await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
+    const startedAt = h.clock.now();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const offer = h.offered().at(-1)!;
+      await h.send("res", { ok: false, code: "capacity" }, { re: String(offer.seq), ack: offer.seq });
+      await h.layer.drain();
+      h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
+      expect(h.offered()).toHaveLength(attempt + 1);
+      h.clock.advance(1); await h.layer.drain();
+    }
+    expect(h.clock.now() - startedAt).toBe(60_000);
+    expect(h.offered()).toHaveLength(3);
+  });
+
+  for (const reason of ["draining", "claims_paused", "binary_skill_files_unsupported"] as const) {
+    it(`keeps ${reason} rejection on the full cooldown despite a changed heartbeat`, async () => {
+      const h = fixture(); h.task(); await h.hello();
+      const first = h.offered()[0]!;
+      await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
+      await h.send("res", { ok: false, code: reason }, { re: String(first.seq), ack: first.seq });
+      await h.layer.drain();
+      await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
+      h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
+      expect(h.offered()).toHaveLength(1);
+      h.clock.advance(1); await h.layer.drain();
+      expect(h.offered()).toHaveLength(2);
+    });
+  }
+
+  it("does not clear a timed-out offer cooldown on changed heartbeat", async () => {
+    const h = fixture(); h.task(); await h.hello();
+    await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
+    h.clock.advance(DAEMON_OFFER_TIMEOUT_MS); await h.layer.drain();
+    await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
+    h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
+    expect(h.offered()).toHaveLength(1);
+    h.clock.advance(1); await h.layer.drain();
+    expect(h.offered()).toHaveLength(2);
+  });
+
+  it("keeps disconnect cooldown through a new hello and changed heartbeat", async () => {
+    const h = fixture(); h.task(); await h.hello();
+    h.session.handleSocketClose();
+    const reconnected = h.layer.openSession({ send: text => { h.frames.push(JSON.parse(text)); return text.length; }, close() {} },
+      { accessToken: null, masterToken: true });
+    await reconnected.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2,
+      daemon_id: "dmn_offer", cli_version: DAEMON_MIN_CLI_VERSION, caps: ["offer"],
+      runtimes: [{ runtime_id: h.runtimeIds[0], provider: "claude", max_concurrency: 1, active_task_ids: [] }] } }));
+    await reconnected.handleMessage(JSON.stringify({ v: 2, t: "hb", p: { active_task_count: 0 } }));
+    await h.layer.drain();
+    h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
+    expect(h.offered()).toHaveLength(1);
+    h.clock.advance(1); await h.layer.drain();
+    expect(h.offered()).toHaveLength(2);
+  });
+
   it("keeps the sweep disabled by default so a missing direct trigger remains observable", async () => {
     const h = fixture(); await h.hello(); h.task();
     h.clock.advance(60_000); await h.layer.drain();

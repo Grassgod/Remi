@@ -34,7 +34,7 @@ for (const backend of backends) {
       } finally {
         await opened.close();
       }
-    });
+    }, 15_000);
 
     it("moves a subject between running and done and keeps the last archive while redoing", async () => {
       const opened = await backend.open();

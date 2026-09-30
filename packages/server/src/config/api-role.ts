@@ -98,7 +98,9 @@ export function isRuntimeAllowedPath(pathname: string): boolean {
  */
 export function isMisdirectedPath(role: ApiRole, pathname: string): boolean {
   if (role === "all") return false;
-  if (role === "ui") return isDaemonPath(pathname) || isTraceReadPath(pathname);
+  // Trace reads and the trace socket belong to runtime, including upgrades
+  // that bypass Hono routing. The UI process refuses each with 421.
+  if (role === "ui") return isDaemonPath(pathname) || isTraceReadPath(pathname) || pathname === "/api/trace/ws";
   return !isRuntimeAllowedPath(pathname);
 }
 

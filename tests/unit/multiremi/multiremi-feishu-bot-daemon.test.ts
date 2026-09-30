@@ -25,6 +25,7 @@ import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { daemonReportTransport } from "@multiremi/worker/report-transport.js";
 import { deliverFeishuOutbound } from "@multiremi/worker/feishu-outbound.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { questionCardAction } from "@shared/feishu-task-card.js";
@@ -299,7 +300,8 @@ describe("Feishu bot control-plane delivery", () => {
     const removed = await test.app.request(`/api/daemon/runtimes/rt_a/feishu-bot/outbound/${first.id}/result`, {
       method: "POST", headers: daemonHeaders(test.tokens.rt_a!), body: JSON.stringify(payload),
     });
-    expect(removed.status).toBe(404);
+    expect(removed.status).toBe(426);
+    expect(await removed.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(first.id)).toEqual(current);
   });
 
@@ -392,9 +394,13 @@ describe("Feishu bot control-plane delivery", () => {
     });
     const taskPath = `/api/daemon/tasks/${submitted.taskId}`;
     for (const endpoint of ["status", "messages"]) {
-      expect((await test.app.request(`${taskPath}/${endpoint}`, {
+      const response = await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_a!),
-      })).status).toBe(endpoint === "messages" ? 404 : 200);
+      });
+      expect(response.status).toBe(endpoint === "messages" ? 426 : 200);
+      if (endpoint === "messages") {
+        expect(await response.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
+      }
       expect((await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_b!),
       })).status).toBe(403);
@@ -407,7 +413,8 @@ describe("Feishu bot control-plane delivery", () => {
       { runtimeId: "rt_claude", headers: daemonHeaders(executor.token), authToken: "MASTER" });
     expect(sent).toMatchObject({ ok: true, hub_head: 1 });
     const messages = await test.app.request(`${taskPath}/messages`, { headers: daemonHeaders(test.tokens.rt_a!) });
-    expect(messages.status).toBe(404);
+    expect(messages.status).toBe(426);
+    expect(await messages.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     expect(await reportFrame(test.store, "trace.head", { task_id: submitted.taskId },
       { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: true, head: 1 });
     const streamed: TraceEvent[] = [];
@@ -506,7 +513,7 @@ describe("Feishu bot control-plane delivery", () => {
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
   });
 
-  it("queues native inbound replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
+  it("queues legacy bundled native replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
     const test = await scaffold();
     await report(test, "rt_a", { applied_revision: 1, state: "online" });
     const input = { revision: 1, externalSessionKey: "oc_native:thread:om_root", externalMessageId: "om_question",
@@ -517,6 +524,8 @@ describe("Feishu bot control-plane delivery", () => {
     expect(test.store.submitFeishuBotMessage("local", "rt_a", input)).toMatchObject({ duplicate: true, taskId: submitted.taskId });
     expect(db!.query("SELECT count(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?").get(submitted.taskId)).toEqual({ n: 1 });
     expect(test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, false, true)).toBeNull();
+    // An already bundled delivery stays bundled when it resumes through v2.
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET delivery_mode = 'legacy' WHERE task_id = ?", [submitted.taskId]);
     const next = async () => (await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION })).json()).pending_feishu_outbound;
     const delivery = await next();
     expect(delivery).toMatchObject({ task_id: submitted.taskId, chat_id: "oc_native", thread_id: "om_root",

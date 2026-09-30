@@ -227,9 +227,10 @@ describe("daemon heartbeat network recovery", () => {
     const bed = await faultTestBed("retired-body");
     try {
       await waitUntil(() => bed.state.claims > 0, "initial healthy polling");
+      // Block v2 hb before retirement so the terminal close exercises cleanup.
+      bed.state.armed = true;
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
       expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
-      bed.state.armed = true;
       // The v2 terminal close takes priority over an HTTP response whose body
       // would be delayed by this fixture; local cleanup still runs.
       await waitUntil(() => bed.state.cleanupCalls >= 1, "retirement cleanup after an incomplete authority response", 1_500);

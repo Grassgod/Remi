@@ -1,11 +1,12 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonDownlinkEntity } from "./downlinks.js";
 
-export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, activeTaskIds: ReadonlySet<string>,
+export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daemonId: string, activeTaskIds: ReadonlySet<string>,
   forget: (taskId: string) => void): DaemonDownlinkEntity[] {
   const ids = new Set(activeTaskIds);
   for (const task of store.listTaskRefs({ runtimeId,
     statuses: ["dispatched", "running", "waiting_local_directory", "awaiting_human"] })) ids.add(task.id);
+  const host = store.getRuntimeLite(runtimeId);
   const entities: DaemonDownlinkEntity[] = [];
   for (const id of ids) {
     const task = store.getTaskIdentity(id);
@@ -22,6 +23,13 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, acti
     for (const request of store.listTaskHumanRequests(id)) {
       if (request.status === "pending") continue;
       entities.push({ key: `human:${request.id}`, type: "task.human_request.settled", payload: { task_id: id, request } });
+    }
+  }
+  if (host?.daemonId === daemonId && host.workspaceId) {
+    for (const candidate of store.listFeishuBotSettledHumanRequestCandidates(host.workspaceId, runtimeId, daemonId)) {
+      const request = candidate.request!;
+      entities.push({ key: `human:${request.id}`, type: "task.human_request.settled",
+        payload: { task_id: candidate.taskId, request } });
     }
   }
   return entities;
