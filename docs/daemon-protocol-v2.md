@@ -302,8 +302,11 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 `config.runtimeId`；两者相同只发一次。bot host 候选来自当前应用绑定下已送达的决策卡
 （终态卡片补丁尚未报告 `sent`），或近 24 小时已结束的 Chat 绑定请求；任一终态补丁
 报告 `sent`、Chat 请求超过 24 小时后退出相应候选来源。按结束时间取最近 1024 条，
-避免重连推送无限历史；超过上限的较旧请求依赖卡片补丁出站队列或按需
-`human_request.get` 读取。每个候选还须通过该 RPC 对应的飞书任务权限校验；其他 runtime
+避免重连推送无限历史。已发出的 Issue 决策卡有持久补丁出站队列，补丁重试不受上述
+时间窗限制。Chat 卡只有近 24 小时、最新 1024 条请求的有界恢复窗口：bot host 离线超过
+24 小时，或候选被挤出 1024 条后，卡片可能停在待处理。这是已知限制，持久恢复链路留待后续单。
+`human_request.get` 只能按已知请求 ID 读取，不提供窗口外候选发现。每个候选还须通过该 RPC
+对应的飞书任务权限校验；其他 runtime
 和 workspace 不接收。
 写入进程通过 workspace 事件跨进程唤醒持有 socket 的 runtime 进程；断线重连重新推快照，
 不新增帧或持久 seq。bot host 端最多缓存 1024 条已结束请求：释放执行任务时仍主动清理，
