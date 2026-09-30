@@ -2915,6 +2915,9 @@ export class FeishuBotRepo {
           String(row.id), nowIsoValue, nowIsoValue],
       );
       if (updated.changes !== 1) return null;
+      row.delivery_mode = mode;
+      row.kind = kind;
+      if (mode === 'split' && carrier) this.materializeTaskDeliveriesWithinTransaction(String(row.task_id), nowIsoValue);
       if ((kind === "decision_card" || kind === "decision_reminder") && !row.degraded && Number(row.attempt_count) > 0) {
         const card = this.rotatedQuestionCard(row, cleanOptionalString(row.interaction_open_id));
         if (card) {
@@ -2922,9 +2925,6 @@ export class FeishuBotRepo {
           this.ctx.db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET body = ? WHERE id = ?", [row.body, String(row.id)]);
         }
       }
-      row.delivery_mode = mode;
-      row.kind = kind;
-      if (mode === 'split' && carrier) this.materializeTaskDeliveriesWithinTransaction(String(row.task_id), nowIsoValue);
       return {
         ...outboundDelivery({ ...row, kind: carrier && mode === 'legacy' ? null : kind }, claimToken),
         // The decision lanes carry their own recipient checkpoint and need no

@@ -86,6 +86,23 @@ pendingTurnBackendTests("transactional inbox writers", (fixture) => {
     expect(f.queued()).toBe(1);
   });
 
+  it("T4: next_turn coalesces queued work even while another turn is running", () => {
+    const f = setup();
+    const running = f.ensure().task!;
+    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    const queued = f.ensure({ wake: { seq: 10, reason: "test" } }).task!;
+    const result = f.ensure({ wake: { mode: "next_turn", seq: 30, reason: "notice" },
+      create: () => { throw new Error("Queued work must be coalesced"); } });
+    expect(result.action).toBe("coalesced");
+    expect(result.task!.id).toBe(queued.id);
+    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(queued.id).wake_seq)).toBe(30);
+    expect(f.queued()).toBe(1);
+    expect(f.store.getTask(running.id)!.status).toBe("running");
+    const audit = f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_coalesced' AND issue_id = ?")
+      .all(f.issue.id).map(row => JSON.parse(row.data));
+    expect(audit).toContainEqual({ task_id: queued.id, seq: 30, reason: "notice", commentId: null });
+  });
+
   it("keeps execution scopes independent and coalesces Chat-only turns", () => {
     const f = setup();
     const main = f.ensure();
@@ -257,6 +274,21 @@ pendingTurnBackendTests("transactional inbox writers", (fixture) => {
     expect(issue.entry.metadata.envelope!.priority).toBe(4);
     expect(chat.entry.metadata.envelope!.priority).toBe(4);
     expect(f.queued()).toBe(0);
+  });
+
+  it("points a coalesced recovery turn at the arriving envelope without copying its body", () => {
+    const f = setup();
+    const recovery = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, issueSessionId: f.session.id,
+      wakeSource: "re_ring", prompt: `读收件箱\n\n${f.session.id}: (0, 1000000]` });
+    f.db.run("UPDATE multiremi_tasks SET wake_seq = 1000000 WHERE id = ?", [recovery.id]);
+    const delivery = f.send({ source: { taskId: "source_report" } })[0]!;
+    expect(delivery.action).toBe("coalesced");
+    expect(delivery.task!.id).toBe(recovery.id);
+    expect(delivery.entry.metadata.envelope!.source.taskId).toBe("source_report");
+    expect(delivery.entry.body_md).toBe(f.env.body);
+    expect(delivery.task!.prompt).toBe(`读收件箱\n\n${f.session.id}:${delivery.entry.seq} (${delivery.entry.id})`);
+    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(recovery.id).wake_seq)).toBe(1000000);
+    expect(f.queued()).toBe(1);
   });
 
   it("uses sessionId in dedupe keys and resolves Issue owners and parent owners", () => {

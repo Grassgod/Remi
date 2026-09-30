@@ -12,6 +12,7 @@ import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { DEPENDENCY_AUTO_START_REPLAY_DELAY_MS } from "@multiremi/store/repos/autopilots-repo.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(() => {
   setSystemTime();
@@ -926,7 +927,8 @@ describe("MUL-400 E3 — automatic start", () => {
     const rounds = store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled");
     expect(rounds).toHaveLength(1);
     expect(rounds[0]!.id).toBe(queued.id);
-    expect(rounds[0]!.prompt).toContain(dependent.key);
+    expect(inboxReportBody(store, rounds[0]!)).toContain(dependent.key);
+    expect(rounds[0]!.prompt).toBe("waiting round");
   });
 
   it("is idempotent when the prerequisite is written done twice", () => {
@@ -1646,8 +1648,7 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
   });
 
   it("records a real coalesced-readiness event", () => {
-    // dependency_satisfied_coalesced is written when a readiness line joins an
-    // already-queued parent round; the frontend case above renders it.
+    // Readiness entries advance the existing turn's wake without changing its prompt.
     const { store, agent } = storeWithAgent();
     const member = store.listWorkspaceMembers("local")[0]!;
     const prerequisiteParent = store.createIssue({ title: "Prereq parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
@@ -1665,9 +1666,14 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
 
     store.updateIssue(prerequisite.id, { status: "done" });
 
-    const coalesced = allActivityRows(store, dependentParent.id, "dependency_satisfied_coalesced");
+    const coalesced = allActivityRows(store, dependentParent.id, "pending_turn_coalesced");
     expect(coalesced).toHaveLength(1);
-    expect((coalesced[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({ agentId: agent.id });
+    const merged = (coalesced[0]!.data ?? {}) as Record<string, unknown>;
+    expect(merged).toMatchObject({ reason: "dependency" });
+    expect(store.getTask(merged.task_id as string)!.agentId).toBe(agent.id);
+    const entry = store.getConversationLogEntryById(merged.commentId as string)!;
+    expect(entry.metadata.envelope?.wake).toBe("next_turn");
+    expect(entry.seq).toBe(merged.seq as number);
     // The line joined the existing round instead of creating a second one.
     expect(store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
   });

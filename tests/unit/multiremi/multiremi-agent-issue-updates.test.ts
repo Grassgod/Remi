@@ -1,6 +1,7 @@
 import { beforeEach, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { installPendingTurnTestConstraints, pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
@@ -151,6 +152,32 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(f.lane()?.cursorSeq).toBe(0);
   });
 
+  it("reports a zero-row delivery marker update without advancing the relay cursor", () => {
+    const f = setup();
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    expect(f.store.getBoundIssueLogToSeq(relay.id)).toBe(3);
+    expect(f.store.markBoundIssueLogDelivered(relay.id, 4)).toBe(false);
+    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+      .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: null });
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "No matching delivery window" });
+    expect(f.lane()?.cursorSeq).toBe(0);
+  });
+
+  it("replays the relay and pending-turn migrations twice without losing either column", () => {
+    const f = setup();
+    runMigrations(f.db);
+    runMigrations(f.db);
+    const task = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Migration check" });
+    expect(f.db.query("SELECT bound_issue_log_to_seq, bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+      .get(task.id)).toEqual({ bound_issue_log_to_seq: null, bound_issue_log_delivered_seq: null });
+    for (const id of ["20260929_relay_issue_log_to_seq", "20260929_relay_issue_log_delivered_seq", "20260929_tasks_one_pending_turn"]) {
+      const row = f.db.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
+        .get(id) as { count: number | bigint };
+      expect(Number(row.count)).toBe(1);
+    }
+  });
+
   it("clears a prior delivery marker before retrying a stale relay claim", () => {
     const f = setup();
     const relay = claimRelayAfterCompletedIssueRound(f);
@@ -219,6 +246,26 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
     expect(nextLog.content_jsonl).toContain("First result");
     expect(nextLog.content_jsonl).toContain("Second result");
+  });
+
+  it("folds only expandable relay log bodies and keeps the full entry readable", () => {
+    const f = setup();
+    const body = "Relay detail: " + "x".repeat(4_001);
+    const entry = f.store.appendConversationLog({
+      sessionId: f.session.id, kind: "message", authorType: "member", bodyMd: body,
+    });
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
+      content_jsonl: string;
+    };
+    const lines = log.content_jsonl.split("\n").map((line) => JSON.parse(line));
+    const projected = lines.find((line) => line.type === "session_event" && line.seq === entry.seq);
+    expect(projected).toMatchObject({
+      body_folded: true,
+      expand: `remi session log get ${f.session.id} ${entry.seq}`,
+    });
+    expect(projected.body).toBeUndefined();
+    expect(f.store.getConversationLogEntry(f.session.id, entry.seq)?.body_md).toBe(body);
   });
 
   it("caps claimed Issue log rows at 100 and provides a continuation cursor", () => {

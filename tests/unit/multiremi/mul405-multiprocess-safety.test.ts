@@ -13,10 +13,11 @@
  * 3. `createIssue` takes the per-workspace number lock inside its transaction.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { advisoryLock, advisoryXactLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -29,7 +30,7 @@ afterEach(() => {
 });
 
 function freshDb(): Database {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   openDbs.push(db);
   return db;
 }
@@ -115,7 +116,9 @@ describe("MUL-405 issue number allocation lock", () => {
     const db = freshDb();
     const database = db as unknown as SqlDatabase;
     const statements: string[] = [];
-    const store = new MultiremiStore({
+    const countedDb = {
+      dialect: "sqlite" as const,
+      get inTransaction() { return database.inTransaction; },
       query(sql: string) {
         statements.push(sql);
         return database.query(sql);
@@ -131,7 +134,10 @@ describe("MUL-405 issue number allocation lock", () => {
         statements.push(`LOCK ${key}`);
       },
       close: () => database.close(),
-    } as SqlDatabase);
+    } as SqlDatabase;
+    expect(countedDb.dialect).toBe("sqlite");
+    expect(resolveSqlDialect(countedDb)).toBe("sqlite");
+    const store = new MultiremiStore(countedDb);
 
     store.createIssue({ title: "Locked", workspaceId: "local" });
 

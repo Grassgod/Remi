@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import type {
   MultiremiAttachment,
   MultiremiNotificationChannel,
@@ -879,8 +880,8 @@ describe("Multiremi notification channels", () => {
   it("uses a database lease to prevent two dispatchers from sending the same delivery", async () => {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-notification-lease-"));
     const databasePath = join(directory, "shared.sqlite");
-    const firstDb = new Database(databasePath, { create: true });
-    const secondDb = new Database(databasePath, { create: true });
+    const firstDb = openSqliteDatabase(databasePath, { create: true });
+    const secondDb = openSqliteDatabase(databasePath, { create: true });
     let releaseFirst!: () => void;
     let reportFirstStarted!: () => void;
     const firstStarted = new Promise<void>((resolve) => {
@@ -963,8 +964,8 @@ describe("Multiremi notification channels", () => {
   it("uses a monotonic claim sequence to fence an old worker across manual retry", async () => {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-notification-fence-"));
     const databasePath = join(directory, "shared.sqlite");
-    const firstDb = new Database(databasePath, { create: true });
-    const secondDb = new Database(databasePath, { create: true });
+    const firstDb = openSqliteDatabase(databasePath, { create: true });
+    const secondDb = openSqliteDatabase(databasePath, { create: true });
     let releaseFirst!: () => void;
     let reportFirstStarted!: () => void;
     let releaseSecond!: () => void;
@@ -1128,7 +1129,7 @@ function createTestStore(
     publicUrl?: string;
   } = {},
 ): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   store = new MultiremiStore(db, {
     notificationSenders: sender ? { feishu_group: sender } : undefined,
     notificationMaxAttempts: options.maxAttempts,

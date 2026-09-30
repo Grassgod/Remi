@@ -2,7 +2,8 @@
 // Drives the carved-out repo directly over its StoreContext (not through the
 // MultiremiStore facade) so a broken delegation cannot mask a broken move.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
@@ -10,7 +11,7 @@ import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 let db: Database | null = null;
 
 function createRepo(): AgentsSkillsRepo {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   const store = new MultiremiStore(db);
   return new AgentsSkillsRepo(new StoreContext(db, () => store));

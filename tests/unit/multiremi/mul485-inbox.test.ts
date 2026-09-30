@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { CONVERSATION_LOG_HIDDEN_KINDS, CONVERSATION_LOG_SHOWN_KINDS } from "@multiremi/contracts/conversation-log.js";
 import type { MultiremiSessionEvent } from "@multiremi/contracts/types.js";
 import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -65,6 +66,84 @@ async function verifyLegacyDeliveryUnknown(store: MultiremiStore): Promise<void>
   }
 }
 
+async function verifyLegacyReportStaysWhole(store: MultiremiStore): Promise<void> {
+  const agent = store.createAgent({ name: "Legacy report reader", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Long legacy report", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const body = "R".repeat(4_001);
+  const report = store.appendSessionEvent(session.id, { kind: "delegation_report", authorType: "system", body });
+  const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read report" });
+  const projection = store.buildTaskSessionProjection(task.id)!;
+  const lines = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+  const rendered = lines.find((line) => line.type === "session_event" && line.seq === report.seq);
+  expect(rendered.body).toBe(body);
+  expect(rendered.body_folded).toBeUndefined();
+  expect(rendered.expand).toBeUndefined();
+  expect(lines[1].entries.find((entry: { seq: number }) => entry.seq === report.seq).folded).toBe(false);
+}
+
+async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<void> {
+  const agent = store.createAgent({ name: "Expansion invariant reader", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Expansion invariant", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const expected = new Map<number, { id: string; body: string; expandable: boolean }>();
+  for (const kind of CONVERSATION_LOG_SHOWN_KINDS) {
+    if (kind === "head") continue;
+    const body = `${kind}:${"x".repeat(4_001)}`;
+    const entry = store.appendConversationLog({ sessionId: session.id, kind, authorType: "system", bodyMd: body });
+    expected.set(entry.seq, { id: entry.id, body, expandable: true });
+  }
+  for (const kind of CONVERSATION_LOG_HIDDEN_KINDS) {
+    const body = `${kind}:${"x".repeat(4_001)}`;
+    const entry = store.appendConversationLog({ sessionId: session.id, kind, authorType: "system", bodyMd: body });
+    expected.set(entry.seq, { id: entry.id, body, expandable: false });
+  }
+  const reportBody = "D".repeat(4_001);
+  const report = store.appendSessionEvent(session.id, { kind: "delegation_report", authorType: "system", body: reportBody });
+  expected.set(report.seq, { id: report.id, body: reportBody, expandable: false });
+  const editedBody = "E".repeat(4_001);
+  const edited = store.createIssueComment(issue.id, { issueSessionId: session.id, body: editedBody });
+  const editedEntry = store.getConversationLogEntryById(edited.id)!;
+  store.updateIssueComment(edited.id, { body: "Edited" });
+  expected.set(editedEntry.seq, { id: edited.id, body: editedBody, expandable: false });
+  const deletedBody = "X".repeat(4_001);
+  const deleted = store.createIssueComment(issue.id, { issueSessionId: session.id, body: deletedBody });
+  const deletedEntry = store.getConversationLogEntryById(deleted.id)!;
+  store.deleteIssueComment(deleted.id);
+  expected.set(deletedEntry.seq, { id: deleted.id, body: deletedBody, expandable: false });
+
+  const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read every kind" });
+  const projection = store.buildTaskSessionProjection(task.id)!;
+  expect(projection.omittedEvents).toBe(0);
+  const lines = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+  const toc = lines[1].entries as Array<{ seq: number; folded: boolean }>;
+  const rendered = lines.filter((line) => line.type === "session_event");
+  const app = createMultiremiApp({ store });
+  let foldedCount = 0;
+  for (const [seq, entry] of expected) {
+    const line = rendered.find((candidate) => candidate.seq === seq);
+    expect(line).toBeDefined();
+    expect(toc.find((candidate) => candidate.seq === seq)?.folded).toBe(entry.expandable);
+    if (!entry.expandable) {
+      expect(line.body).toBe(entry.body);
+      expect(line.body_folded).toBeUndefined();
+      expect(line.expand).toBeUndefined();
+      continue;
+    }
+    foldedCount += 1;
+    expect(line.body_folded).toBe(true);
+    expect(line.expand).toBe(`remi session log get ${session.id} ${seq}`);
+    expect(line.body).toBeUndefined();
+    for (const locator of [`seq=${seq}`, `id=${entry.id}`]) {
+      const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).body_md).toBe(entry.body);
+    }
+  }
+  expect(foldedCount).toBe(CONVERSATION_LOG_SHOWN_KINDS.length - 1);
+  expect(rendered.filter((line) => line.body_folded).length).toBe(foldedCount);
+}
+
 async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "MUL485 recipient", provider: "codex", visibility: "workspace" });
   const issue = store.createIssue({ title: "Receipt", workspaceId: "local" });
@@ -83,6 +162,92 @@ async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
     authorId: agent.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
   expect((await (await app.request(path)).json()).delivered).toBe(true);
+}
+
+async function verifyCursorDeliveryAcrossScopes(
+  store: MultiremiStore,
+  lanes: Array<{ scope: string; cursor: number }>,
+  delivered: boolean,
+): Promise<void> {
+  const agent = store.createAgent({ name: "Scoped receipt agent", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Scoped receipt", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this" });
+  const entry = store.getConversationLogEntryById(comment.id)!;
+  expect(entry.seq).toBe(1);
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
+    fields: { metadata: { ...entry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, source: {},
+    } } },
+  }))();
+  for (const { scope, cursor } of lanes) {
+    store.getOrCreateSessionAgentLane(session.id, agent.id, scope);
+    (store as any).db.run(
+      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      [cursor, session.id, agent.id, scope],
+    );
+  }
+  expect(store.getSessionAgentMaxCursorSeq(session.id, agent.id))
+    .toBe(Math.max(0, ...lanes.filter((lane) => !lane.scope.startsWith("relay:")).map((lane) => lane.cursor)));
+  if (lanes.length === 1 && lanes[0]!.scope) {
+    expect(store.getSessionAgentLane(session.id, agent.id)).toBeNull();
+  }
+  const app = createMultiremiApp({ store });
+  for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+    const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).delivered).toBe(delivered);
+  }
+}
+
+async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "session" | "agent"): Promise<void> {
+  const recipient = store.createAgent({ name: "Lane isolation recipient", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Lane isolation", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this entry" });
+  const entry = store.getConversationLogEntryById(comment.id)!;
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
+    fields: { metadata: { ...entry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "agent", agentId: recipient.id, issueSessionId: session.id }, source: {},
+    } } },
+  }))();
+
+  let otherSessionId = session.id;
+  let otherAgentId = recipient.id;
+  if (otherLane === "session") {
+    const otherIssue = store.createIssue({ title: "Other lane session", workspaceId: "local" });
+    otherSessionId = store.getOrCreateDefaultIssueSession(otherIssue.id).id;
+    store.createIssueComment(otherIssue.id, { issueSessionId: otherSessionId, body: "Unrelated entry" });
+  } else {
+    otherAgentId = store.createAgent({ name: "Other lane agent", provider: "codex", visibility: "workspace" }).id;
+  }
+  store.getOrCreateSessionAgentLane(otherSessionId, otherAgentId, "dlg_other");
+  (store as any).db.run(
+    "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+    [entry.seq, otherSessionId, otherAgentId, "dlg_other"],
+  );
+  const app = createMultiremiApp({ store });
+  const assertDelivered = async (delivered: boolean) => {
+    for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+      const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).delivered).toBe(delivered);
+    }
+  };
+
+  await assertDelivered(false);
+  expect(store.getSessionAgentMaxCursorSeq(session.id, recipient.id)).toBe(0);
+  if (otherLane === "agent") {
+    store.getOrCreateSessionAgentLane(session.id, recipient.id, "dlg_recipient");
+    (store as any).db.run(
+      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      [entry.seq, session.id, recipient.id, "dlg_recipient"],
+    );
+    expect(store.getSessionAgentMaxCursorSeq(session.id, recipient.id)).toBe(entry.seq);
+    await assertDelivered(true);
+  }
 }
 
 async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<void> {
@@ -112,6 +277,27 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
       to: { role: "chat", chatSessionId: chatId, agentId: agent.id }, source: {},
     } } },
   }))();
+  const extraMessages = (store as any).db.transaction(() => [
+    store.appendChatMessageWithinTransaction({ chatSessionId: chatId, role: "system", body: `System:${"s".repeat(4_001)}` }),
+    store.appendChatMessageWithinTransaction({ chatSessionId: chatId, role: "assistant",
+      body: `Assistant:${"a".repeat(4_001)}` }),
+  ])();
+  const extraEntries = extraMessages.map((message: { id: string }) => store.getConversationLogEntryById(message.id)!);
+  const coldProjection = store.buildTaskSessionProjection(firstTaskId)!;
+  const coldEvents = coldProjection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line));
+  const systemEntry = extraEntries[0]!;
+  const systemLine = coldEvents.find((line) => line.type === "session_event" && line.seq === systemEntry.seq);
+  expect(systemLine?.body_folded).toBe(true);
+  expect(systemLine?.expand).toBe(`remi session log get ${chatId} ${systemEntry.seq}`);
+  for (const locator of [`seq=${systemEntry.seq}`, `id=${systemEntry.id}`]) {
+    const allowed = await app.request(`/api/sessions/${chatId}/log/entry?${locator}`, { headers: aliceHeaders });
+    expect(allowed.status).toBe(200);
+    expect((await allowed.json()).body_md).toBe(systemEntry.body_md);
+  }
+  const assistantLine = coldEvents.find((line) => line.type === "session_event" && line.seq === extraEntries[1]!.seq);
+  expect(assistantLine?.body).toBe(extraMessages[1]!.body);
+  expect(assistantLine?.body_folded).toBeUndefined();
+  expect(assistantLine?.expand).toBeUndefined();
   expect(store.claimTask(runtime.id)?.id).toBe(firstTaskId);
   store.startTask(firstTaskId);
   store.completeTask(firstTaskId, { output: "Read", workDir: "/tmp/mul485-chat" });
@@ -126,10 +312,21 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
     .find((line) => line.type === "session_event" && line.body_folded);
   const firstEntry = toc.entries.find((entry: { id: string }) => entry.id === messageId);
   expect(folded?.expand).toBe(`remi session log get ${chatId} ${firstEntry.seq}`);
+  const foldedEvents = projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line))
+    .filter((line) => line.type === "session_event" && line.body_folded);
+  const expected = [{ seq: firstEntry.seq, id: messageId, body: plan },
+    { seq: extraEntries[0]!.seq, id: extraEntries[0]!.id, body: extraEntries[0]!.body_md }];
+  expect(foldedEvents.length).toBe(expected.length);
+  for (const entry of expected) {
+    expect(foldedEvents.find((line) => line.seq === entry.seq)?.expand)
+      .toBe(`remi session log get ${chatId} ${entry.seq}`);
+    for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+      const allowed = await app.request(`/api/sessions/${chatId}/log/entry?${locator}`, { headers: aliceHeaders });
+      expect(allowed.status).toBe(200);
+      expect((await allowed.json()).body_md).toBe(entry.body);
+    }
+  }
   const path = `/api/sessions/${chatId}/log/entry?id=${messageId}`;
-  const allowed = await app.request(path, { headers: aliceHeaders });
-  expect(allowed.status).toBe(200);
-  expect((await allowed.json()).body_md).toBe(plan);
   const denied = await app.request(path, { headers: { Authorization: `Bearer ${bob.token}` } });
   expect(denied.status).not.toBe(200);
 }
@@ -176,8 +373,42 @@ describe("MUL-485 SQLite", () => {
     await verifyDeliveryReceipt(createStore());
   });
 
+  it("reports a non-default execution scope cursor as delivered without a turn receipt", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "dlg_scoped", cursor: 1 }], true);
+  });
+
+  it("reports the default scope cursor as delivered without a turn receipt", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "", cursor: 1 }], true);
+  });
+
+  it("does not mistake a relay cursor for issue inbox delivery", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "relay:chat_bound", cursor: 1 }], false);
+  });
+
+  it("reports undelivered when every execution scope cursor is behind", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [
+      { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
+    ], false);
+  });
+
+  it("ignores a read lane for the same agent in another session", async () => {
+    await verifyDeliveryLaneIsolation(createStore(), "session");
+  });
+
+  it("ignores another agent's read lane until the recipient reads", async () => {
+    await verifyDeliveryLaneIsolation(createStore(), "agent");
+  });
+
   it("reports unknown delivery for a legacy entry without a recipient", async () => {
     await verifyLegacyDeliveryUnknown(createStore());
+  });
+
+  it("keeps a 4,001-character legacy delegation report whole", async () => {
+    await verifyLegacyReportStaysWhole(createStore());
+  });
+
+  it("expands every folded log kind by seq and id without folding unavailable bodies", async () => {
+    await verifyEveryFoldedEntryExpands(createStore());
   });
 });
 
@@ -288,7 +519,41 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
     await verifyDeliveryReceipt(store);
   });
 
+  it("reports a non-default execution scope cursor as delivered on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "dlg_scoped", cursor: 1 }], true);
+  });
+
+  it("reports the default scope cursor as delivered on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "", cursor: 1 }], true);
+  });
+
+  it("does not mistake a relay cursor for issue inbox delivery on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "relay:chat_bound", cursor: 1 }], false);
+  });
+
+  it("reports undelivered when every execution scope cursor is behind on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [
+      { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
+    ], false);
+  });
+
+  it("ignores a read lane for the same agent in another session on real PostgreSQL", async () => {
+    await verifyDeliveryLaneIsolation(store, "session");
+  });
+
+  it("ignores another agent's read lane until the recipient reads on real PostgreSQL", async () => {
+    await verifyDeliveryLaneIsolation(store, "agent");
+  });
+
   it("reports unknown delivery for a legacy entry without a recipient on real PostgreSQL", async () => {
     await verifyLegacyDeliveryUnknown(store);
+  });
+
+  it("keeps a 4,001-character legacy delegation report whole on real PostgreSQL", async () => {
+    await verifyLegacyReportStaysWhole(store);
+  });
+
+  it("expands every folded log kind by seq and id on real PostgreSQL", async () => {
+    await verifyEveryFoldedEntryExpands(store);
   });
 });

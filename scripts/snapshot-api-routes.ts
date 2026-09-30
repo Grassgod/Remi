@@ -37,7 +37,8 @@
  * preserved, fields are never dropped.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -1162,7 +1163,7 @@ async function buildApp(
   // Declare the backend: the store runs migrations immediately, and an
   // inherited MULTIREMI_DATABASE_URL must not turn this SQLite fixture into a
   // Postgres migration (MUL-407).
-  db: Database = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }),
+  db: Database = openSqliteDatabase(":memory:"),
 ): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);

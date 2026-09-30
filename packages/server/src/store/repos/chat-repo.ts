@@ -580,7 +580,8 @@ export class ChatRepo {
       if (!session) return null;
       const agent = this.ctx.agents().getAgent(task.agentId);
       const currentLineageTaskIds = chatTaskLineageIds(this.ctx, task);
-      const messages = this.ctx.conversationLog().listConversationLogEntries(session.id)
+      const entries = this.ctx.conversationLog().listConversationLogEntries(session.id);
+      const messages = entries
         .filter((entry) => entry.kind !== "head" && entry.deleted_at === null)
         .map((entry) => ({ ...conversationLogChatMessage(entry), seq: entry.seq, metadata: entry.metadata })).filter((message) => {
         if (message.role !== "user" || !message.taskId || currentLineageTaskIds.has(message.taskId)) return true;
@@ -588,6 +589,11 @@ export class ChatRepo {
         return source?.status !== "queued";
       });
       const events = chatMessagesAsSessionEvents(messages, session, task.id, currentLineageTaskIds);
+      const entriesBySeq = new Map(entries.map((entry) => [entry.seq, entry]));
+      const expandableSeqs = new Set(events.filter((event) => {
+        const entry = entriesBySeq.get(event.seq);
+        return entry?.visibility === "shown" && entry.deleted_at === null && event.body === entry.body_md;
+      }).map((event) => event.seq));
       const detachedChatIssue = (task.issueId && topicIssueId !== task.issueId)
         || (task.issueSessionId && !topicIssueId);
       // Workspace validation may reject an active lease's old directory without
@@ -603,6 +609,7 @@ export class ChatRepo {
         sessionId: session.id,
         targetAgentId: task.agentId,
         events,
+        expandableSeqs,
         // createTask persists session_id only when resolveTaskAffinity concluded
         // that this exact provider lineage is resumable. Stored Chat messages are
         // already in that lineage; the current request is rendered separately.

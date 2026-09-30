@@ -753,6 +753,7 @@ function appendDaemonClaimBoundIssueLog(
         body: entry.body_md, taskId: entry.task_id, sourceCommentId: null,
         metadata: entry.metadata, createdAt: entry.created_at,
       })),
+      expandableSeqs: new Set(entries.map((entry) => entry.seq)),
       cursorSeq: fromSeq, fromSeq, toSeq, providerSessionId: null,
       perspectiveMode: "inherited",
       tokenBudget: Math.min(12_000, Math.floor(resolveProjectionTokenBudget({
@@ -776,7 +777,9 @@ function appendDaemonClaimBoundIssueLog(
     return;
   }
   try {
-    store.markBoundIssueLogDelivered(task.id, (response.bound_issue_log as { to_seq: number }).to_seq);
+    if (!store.markBoundIssueLogDelivered(task.id, (response.bound_issue_log as { to_seq: number }).to_seq)) {
+      log.warn(`Failed to mark bound Issue log delivered for claimed task ${task.id}: task or frozen window changed`);
+    }
   } catch (error) {
     log.warn(
       `Failed to mark bound Issue log delivered for claimed task ${task.id}: `

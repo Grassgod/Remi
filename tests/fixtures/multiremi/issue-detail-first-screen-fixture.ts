@@ -74,14 +74,15 @@ const FIXTURE_EPOCH_MS = Date.UTC(2026, 8, 20, 12, 0, 0);
 const NOW = FIXTURE_EPOCH_MS;
 
 /**
- * Re-anchors the pinned clock, when one is installed.
+ * Re-anchors the pinned clock and id generator, when installed.
  *
  * `installDeterministicIds` ticks once per clock read, so anything that reads
  * the clock between installing the pin and seeding — store construction, schema
  * migrations — would otherwise shift every fixture timestamp and invalidate the
- * golden. Seeding therefore resets the clock to a fixed epoch first.
+ * golden. Seeding resets both generators before writing the fixture.
  */
 let activeClockReset: (() => void) | null = null;
+let activeIdReset: (() => void) | null = null;
 
 /** Stable filler so the fixture body sizes do not drift between runs. */
 function filler(prefix: string, index: number, bytes: number): string {
@@ -103,6 +104,7 @@ export function seedIssueDetailFirstScreenFixture(
   options: IssueDetailFixtureOptions = {},
 ): IssueDetailFixture {
   activeClockReset?.();
+  activeIdReset?.();
   const startedAt = performance.now();
   const rootComments = options.rootComments ?? 105;
   const replies = options.replies ?? 68;
@@ -496,6 +498,9 @@ export function installDeterministicIds(): () => void {
     clock = FIXTURE_EPOCH_MS;
   };
   let state = 0x385_9a71;
+  activeIdReset = () => {
+    state = 0x385_9a71;
+  };
   const nextByte = (): number => {
     state ^= state << 13;
     state ^= state >>> 17;
@@ -511,6 +516,7 @@ export function installDeterministicIds(): () => void {
   };
   return () => {
     activeClockReset = null;
+    activeIdReset = null;
     (globalThis.crypto as { getRandomValues: unknown }).getRandomValues = realGetRandomValues;
     (globalThis as { Date: unknown }).Date = RealDate;
   };

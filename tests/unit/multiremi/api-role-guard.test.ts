@@ -18,7 +18,8 @@
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -139,7 +140,7 @@ function concreteRequest(pattern: string): { method: string; path: string } {
 }
 
 function memoryStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   return { store, db };
@@ -397,10 +398,13 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // /api/sessions/:sessionId/log[/locate] routes leave this count unchanged.
     // (l): GET /api/tasks/:id/trace and /api/shares/:token/tasks/:task_id/trace
     // add two served reads. MUL-479's context-window PUT adds one served
-    // browser route. MUL-487 adds a runtime card mint; MUL-485 adds one
-    // UI-owned Session log entry read route.
-    expect(statuses.size).toBe(792);
+    // browser route. MUL-487's native card mint adds a refused route.
+    // MUL-467's workspace abandonment POST and MUL-485's Session log entry
+    // read are browser/CLI traffic served by ui, bringing the sweep to 793.
+    expect(statuses.size).toBe(793);
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
+    expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
+    expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
     expect(misdirected, routeCountHint("ui")).toHaveLength(87);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(88);
   });
@@ -415,7 +419,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     }
     // 696 of the 792 swept patterns are refused; the two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 697. Every browser route main added before MUL-462 sits outside
+    // total is 698. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
@@ -431,14 +435,18 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // routes are inside /api/daemon/, so runtime serves them and the count stands.
     // (l): the two exact trace-read patterns join the runtime allowlist. Both
     // are also ui reads; unlike other browser routes they do not add refusals.
-    // MUL-479's context-window PUT and MUL-485's Session log entry read are
-    // browser-only refusals. MUL-487's card mint is served by runtime.
+    // MUL-479's context-window PUT adds one browser-only refusal.
+    expect(statuses.size).toBe(793);
+    // MUL-467's abandonment POST and MUL-479's context-window PUT are outside
+    // the runtime allowlist; MUL-485's log entry read adds another refusal.
+    // The native card mint is served by runtime and leaves these totals unchanged.
     const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
-    expect(statuses.size).toBe(792);
-    expect(refused, routeCountHint("runtime")).toBe(696);
-    expect(refused + 2, routeCountHint("runtime")).toBe(698);
+    expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
+    expect(statuses.get("GET /api/sessions/:sessionId/log/entry")).toBe(421);
+    expect(refused, routeCountHint("runtime")).toBe(697);
+    expect(refused + 2, routeCountHint("runtime")).toBe(699);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

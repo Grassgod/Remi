@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -25,19 +26,35 @@ type Store = ReturnType<typeof createStore>;
  * target on every read, so wrapping the target observes every call the store
  * makes, including the ones that start from a repo.
  */
-export function transactionDepthCounter(database: unknown): { maxTopLevel: number; maxNested: number; reset(): void } {
+interface DepthCounter {
+  maxTopLevel: number;
+  maxNested: number;
+  taskInserts: Array<{ depth: number; inTransaction: boolean }>;
+  reset(): void;
+}
+
+export function transactionDepthCounter(database: unknown): DepthCounter {
   const target = database as {
     readonly inTransaction?: boolean;
     transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown;
+    run: (sql: string, params?: unknown[]) => unknown;
   };
   const original = target.transaction;
-  const counter = {
+  const counter: DepthCounter = {
     maxTopLevel: 0,
     maxNested: 0,
-    reset() { counter.maxTopLevel = 0; counter.maxNested = 0; },
+    taskInserts: [],
+    reset() { counter.maxTopLevel = 0; counter.maxNested = 0; counter.taskInserts = []; },
   };
   let topLevelDepth = 0;
   let nestedDepth = 0;
+  const execute = target.run.bind(target);
+  target.run = (sql, params) => {
+    if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) {
+      counter.taskInserts.push({ depth: topLevelDepth + nestedDepth, inTransaction: target.inTransaction === true });
+    }
+    return execute(sql, params);
+  };
   target.transaction = (fn: (...args: never[]) => unknown) => {
     const run = original.call(target, fn);
     return (...args: unknown[]) => {
@@ -61,7 +78,7 @@ export function transactionDepthCounter(database: unknown): { maxTopLevel: numbe
  * the tests count the target sqlite handle the helper created instead — same
  * call tree one `transaction()` layer down.
  */
-function wrapStore(store: Store): { maxTopLevel: number; maxNested: number; reset(): void } {
+function wrapStore(store: Store): DepthCounter {
   return transactionDepthCounter(db);
 }
 
@@ -112,6 +129,8 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       counter.reset();
       store.updateIssue(child.id, { status });
       expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
       // The report still landed as exactly one queued round.
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
@@ -124,9 +143,22 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       counter.reset();
       store.updateIssue(child.id, { status });
       expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
   }
+
+  it("inserts the E4 pending turn inside the decision transaction at depth 1", () => {
+    const { store } = setupDepthStore();
+    const flow = inboxFlowFixture(store, "e4");
+    const counter = wrapStore(store);
+    counter.reset();
+    triggerInboxFlow(store, flow);
+    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
+  });
 
   it("keeps the in_review-parent re-derivation for a new child at depth 1", () => {
     const { store } = setupDepthStore();
@@ -1327,8 +1359,8 @@ describe("MUL-400 E2 hook atomicity", () => {
     }
     ctx.appendIssueActivity = original;
 
-    // ADR 0003: the child's own status was committed before the hook ran.
-    expect(store.getIssue(child.id)?.status).toBe("done");
+    // ADR 0012: the source status and wake belong to the same transaction.
+    expect(store.getIssue(child.id)?.status).toBe("in_progress");
     // The failure is observable at the call site ...
     expect(thrown?.message).toBe("injected hook failure");
     // ... and nothing half-written is left behind: no round, no notification

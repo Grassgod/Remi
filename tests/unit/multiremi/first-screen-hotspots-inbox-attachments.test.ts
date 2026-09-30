@@ -15,7 +15,7 @@
 //      immutable cache directive, and answers `304` when the client already has
 //      the bytes.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { SQLQueryBindings } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

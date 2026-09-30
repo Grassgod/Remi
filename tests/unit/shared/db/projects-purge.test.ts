@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ describe("legacy local project schema purge", () => {
   it("drops the projects table while preserving persistent sessions", () => {
     root = mkdtempSync(join(tmpdir(), "remi-projects-purge-"));
     const path = join(root, "remi.db");
-    const legacy = new Database(path);
+    const legacy = openSqliteDatabase(path);
     legacy.exec(`
       CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, cwd TEXT);
       INSERT INTO projects (id, name, cwd) VALUES ('legacy', 'Legacy', '/tmp/legacy');

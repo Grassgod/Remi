@@ -52,7 +52,7 @@ import type {
   TraceSinkListener,
   TraceSinkSubscription,
 } from "@multiremi/api/trace/trace-sink.js";
-import type { HubTransport } from "./hub-transport.js";
+import type { HubPeerLossReason, HubPeerLink, HubTransport } from "./hub-transport.js";
 import {
   HUB_RING_LIMITS,
   HubRingBuffer,
@@ -156,7 +156,7 @@ export const HUB_LIMITS: HubLimits = {
 
 export interface HubOptions {
   transport: HubTransport;
-  /** Reported through `/readyz`; behaviour does not depend on it. */
+  /** Reported through `/health`; behaviour does not depend on it. */
   role?: HubRole;
   /** The repair reader. Absent means "serve only what was handed to me". */
   fill?: HubFillReader | null;
@@ -169,7 +169,7 @@ export interface HubOptions {
   onWarn?: (message: string) => void;
 }
 
-/** The state `/health` and `/readyz` publish (plan 2/6 §1, item 9). */
+/** The state `/health` publishes (plan 2/6 §1, item 9). */
 export interface HubSnapshot {
   role: HubRole;
   transport: string;
@@ -188,6 +188,10 @@ export interface HubSnapshot {
   dropped_frames: number;
   pending_frames: number;
   evicted_streams: number;
+  peer_link: HubPeerLink;
+  hub_peer_loss_detected: Record<HubPeerLossReason, number>;
+  hub_peer_reconcile_streams: number;
+  hub_peer_duplicate_dropped: number;
 }
 
 /** A hub that can describe itself; what the API's health routes ask for. */
@@ -304,6 +308,14 @@ export class HubImpl implements ObservableLiveHub {
   private readonly holeWaitSamples: number[] = [];
   private readonly closedTasks = new Set<string>();
   private readonly transportSubscription: { unsubscribe(): void };
+  private readonly peerSubscriptions: { unsubscribe(): void }[] = [];
+  private readonly reconciledAt = new Map<HubStreamKey, number>();
+  private readonly peerLossDetected: Record<HubPeerLossReason, number> = {
+    first_epoch: 0,
+    epoch_change: 0,
+    sequence_gap: 0,
+  };
+  private peerReconcileStreams = 0;
   private flushDirty = new Set<HubStreamKey>();
   private flushScheduled = false;
   private closed = false;
@@ -333,6 +345,18 @@ export class HubImpl implements ObservableLiveHub {
     this.transportSubscription = this.transport.subscribe((input) => {
       this.enqueue(input.key, input.frames, "remote");
     });
+    if (this.transport.onRemoteHead) {
+      this.peerSubscriptions.push(this.transport.onRemoteHead(async (key, head, version, changedSeq) => {
+        await this.applyRemoteHead(key, head, version);
+        if (changedSeq !== undefined) this.invalidateRemoteRevision(key, changedSeq);
+      }));
+    }
+    if (this.transport.onHumanRequest) {
+      this.peerSubscriptions.push(this.transport.onHumanRequest((event) => this.deliverHumanRequest(event)));
+    }
+    if (this.transport.onPossibleLoss) {
+      this.peerSubscriptions.push(this.transport.onPossibleLoss((reason) => this.reconcileLogStreams(reason)));
+    }
   }
 
   // ── Writes ──────────────────────────────────────────────────────────────────────────────────
@@ -420,17 +444,21 @@ export class HubImpl implements ObservableLiveHub {
     head: number,
     logVersion: number | null = null,
   ): Promise<number> {
+    const previous = this.knownHeads.get(key);
+    if (previous && head < previous.head) return 0;
+    const effectiveVersion = head === previous?.head && logVersion === null
+      ? previous.log_version : logVersion;
     const stream = this.ring.get(key);
     if (!stream) {
-      this.rememberHead(key, head, logVersion);
+      this.rememberHead(key, head, effectiveVersion);
       return 0;
     }
     this.ring.touch(stream);
-    this.rememberHead(key, head, logVersion);
+    this.rememberHead(key, head, effectiveVersion);
     if (head <= stream.headSeq) {
       // Already current. The freshness token still gets refreshed: a peer's
       // versioned head is newer information than whatever this ring stamped last.
-      if (head === stream.headSeq) this.stampLogVersion(stream, head, logVersion);
+      if (head === stream.headSeq) this.stampLogVersion(stream, head, effectiveVersion);
       return 0;
     }
     // A pointer may arrive before the frames it names, so it also arms the
@@ -441,7 +469,7 @@ export class HubImpl implements ObservableLiveHub {
     let pushed = 0;
     if (ceiling > stream.headSeq) pushed = await this.fillFrom(key, stream.headSeq, ceiling);
     await this.drainPending(key);
-    this.stampLogVersion(stream, head, logVersion);
+    this.stampLogVersion(stream, head, effectiveVersion);
     this.scheduleFlushFor(key);
     return pushed;
   }
@@ -553,6 +581,11 @@ export class HubImpl implements ObservableLiveHub {
    * `expires_at` on its own timer.
    */
   publishHumanRequest(event: HumanRequestEvent): void {
+    this.deliverHumanRequest(event);
+    this.transport.publishHumanRequest?.(event);
+  }
+
+  private deliverHumanRequest(event: HumanRequestEvent): void {
     const listeners = this.humanRequestListeners.get(event.workspace_id);
     if (!listeners) return;
     for (const listener of [...listeners]) {
@@ -562,6 +595,19 @@ export class HubImpl implements ObservableLiveHub {
         this.warn(`human request listener threw for ${event.request_id}: ${errorText(error)}`);
       }
     }
+  }
+
+  private invalidateRemoteRevision(key: HubStreamKey, seq: number): void {
+    const known = this.knownHeads.get(key);
+    if (known) this.rememberHead(key, known.head, null);
+    const stream = this.ring.get(key);
+    if (!stream) return;
+    this.ring.markStale(stream, seq);
+    this.stampLogVersion(stream, stream.headSeq, null);
+    for (const subscriber of this.subscribers.get(key) ?? []) {
+      if (subscriber.active && this.hasDelivered(subscriber, seq)) this.deferChangeGap(subscriber, seq);
+    }
+    this.scheduleFlushFor(key);
   }
 
   /** True while any subscriber is attached to the stream. */
@@ -613,6 +659,10 @@ export class HubImpl implements ObservableLiveHub {
       dropped_frames: this.droppedFrames,
       pending_frames: pending,
       evicted_streams: this.evictedStreams,
+      peer_link: this.transport.peerStatus?.().peer_link ?? "disabled",
+      hub_peer_loss_detected: { ...this.peerLossDetected },
+      hub_peer_reconcile_streams: this.peerReconcileStreams,
+      hub_peer_duplicate_dropped: this.transport.peerStatus?.().duplicate_dropped ?? 0,
     };
   }
 
@@ -650,6 +700,38 @@ export class HubImpl implements ObservableLiveHub {
     this.flushDirty.clear();
     this.liveChanges.clear();
     this.transportSubscription.unsubscribe();
+    for (const subscription of this.peerSubscriptions) subscription.unsubscribe();
+    this.transport.close();
+  }
+
+  /** Repair every log stream a browser currently watches after a proven peer gap. */
+  private async reconcileLogStreams(reason: HubPeerLossReason): Promise<void> {
+    this.peerLossDetected[reason] += 1;
+    if (!this.fill || this.closed) return;
+    const keys = [...this.subscribers.entries()]
+      .filter(([key, subscribers]) => key.startsWith("log:") && subscribers.size > 0)
+      .map(([key]) => key);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < keys.length && !this.closed) {
+        const key = keys[next++]!;
+        const elapsed = this.now() - (this.reconciledAt.get(key) ?? -Infinity);
+        if (elapsed < 2_000) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2_000 - elapsed));
+        }
+        if (this.closed) return;
+        this.reconciledAt.set(key, this.now());
+        try {
+          const current = await this.fill!.logHead(key.slice(4));
+          if (!current) continue;
+          await this.applyRemoteHead(key, current.head, current.log_version);
+          this.peerReconcileStreams += 1;
+        } catch (error) {
+          this.warn(`peer reconciliation failed for ${key}: ${errorText(error)}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, keys.length) }, worker));
   }
 
   // ── Enqueue, continuity and fill ────────────────────────────────────────────────────────────
@@ -681,7 +763,7 @@ export class HubImpl implements ObservableLiveHub {
         // Retention only controls replay. Active subscribers may hold a base
         // long after it left the ring, so every edit must reach the flush.
         dirty = true;
-        if (origin === "local" && stream.kind === "log") this.transport.publish({ key, frames: [frame] });
+        if (origin === "local" && stream.kind === "log") this.transport.publish({ key, frames: [frame], head: Math.max(stream.headSeq, frame.seq) });
         continue;
       }
       if (frame.seq <= stream.headSeq) {
@@ -925,7 +1007,7 @@ export class HubImpl implements ObservableLiveHub {
    */
   private push(stream: HubRingStream, frame: HubFrame, announce: boolean): void {
     this.ring.push(stream, frame);
-    if (announce && stream.kind === "log") this.transport.publish({ key: stream.key, frames: [frame] });
+    if (announce && stream.kind === "log") this.transport.publish({ key: stream.key, frames: [frame], head: stream.headSeq });
   }
 
   // ── Fan-out ─────────────────────────────────────────────────────────────────────────────────

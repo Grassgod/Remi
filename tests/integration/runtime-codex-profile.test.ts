@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { MultiremiDaemon } from "@multiremi/daemon.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {
   const root = mkdtempSync(join(tmpdir(), "remi-profile-daemon-"));
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const originalKey = process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY;

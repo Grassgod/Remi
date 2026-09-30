@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile, rm, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
@@ -65,6 +65,30 @@ describe("native collaboration CLI contracts", () => {
     await capture(() => registryFor([list]).execute([
       ...list.path, "MUL-485", "ises_1", "--since-seq", "3", "--to-seq", "12", "--output", "json",
     ]));
+  });
+
+  it("requires confirmation for orphaned Issue workspace abandonment and preserves the read command", async () => {
+    useCliEnv();
+    const abandon = specById("issue.workspace.abandon");
+    const read = specById("issue.workspace");
+    const registry = registryFor([read, abandon]);
+    const requests: Request[] = [];
+    const handler = (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "ok", issue_workspaces_abandoned: 1 });
+    };
+    globalThis.fetch = capabilityFetch(abandon.id, handler);
+    await expect(registry.execute(["issue", "workspace", "abandon", "MUL-467"]))
+      .rejects.toThrow("requires --yes");
+    expect(requests).toHaveLength(0);
+    const result = await capture(() => registry.execute(["issue", "workspace", "abandon", "MUL-467", "--yes", "--output", "json"]));
+    expect(requests[0]!.method).toBe("POST");
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/issues/MUL-467/workspace/abandon");
+    expect(JSON.parse(result.stdout).issue_workspaces_abandoned).toBe(1);
+    globalThis.fetch = capabilityFetch(read.id, handler);
+    await capture(() => registry.execute(["issue", "workspace", "MUL-467", "--output", "json"]));
+    expect(requests[1]!.method).toBe("GET");
+    expect(new URL(requests[1]!.url).pathname).toBe("/api/issues/MUL-467/workspace");
   });
 
   it("issue grouped sends only the plural assignee type query parameter", async () => {
@@ -154,7 +178,7 @@ describe("native collaboration CLI contracts", () => {
   });
   it("runs the five decision commands through the real issue routes", async () => {
     useCliEnv();
-    const database = new Database(":memory:");
+    const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();

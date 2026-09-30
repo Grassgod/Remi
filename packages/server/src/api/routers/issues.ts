@@ -1047,6 +1047,31 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       },
     });
   });
+  app.post("/api/issues/:id/workspace/abandon", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const result = store.abandonIssueWorkspace(issue.id, issue.workspaceId);
+    if (result.status === "not_found") return c.json({ error: "issue workspace not found" }, 404);
+    if (result.status === "runtime_attached") {
+      return c.json({
+        error: "issue workspace still belongs to a Runtime; use runtime deletion or daemon retirement to abandon it",
+        code: "issue_workspace_runtime_attached",
+        runtime_id: result.runtimeId,
+      }, 409);
+    }
+    return c.json({
+      status: "ok",
+      issue_workspaces_abandoned: result.issueWorkspacesAbandoned,
+      workspace: {
+        issue_id: result.workspace.issueId,
+        runtime_id: result.workspace.runtimeId,
+        status: result.workspace.status,
+        cleaned_at: result.workspace.cleanedAt,
+      },
+    });
+  });
   app.get("/api/multiremi/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -1639,7 +1664,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ? recipient.agentId
       : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null;
     const delivered: boolean | null = agentId === null ? null : (
-      (store.getSessionAgentLane(sessionId, agentId)?.cursorSeq ?? 0) >= entry.seq
+      store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
       || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
         if (turn.kind !== "turn" || turn.author_id !== agentId) return false;
         const receipt = turn.metadata.inbox;
