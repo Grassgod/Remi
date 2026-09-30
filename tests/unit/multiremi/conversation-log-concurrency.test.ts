@@ -5,9 +5,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { Hono } from "hono";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
-import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresReplyTooLargeError, PostgresSyncDatabase, postgresReplyMaxBytes, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { createRequestMetricsMiddleware, currentDbReplyPolicy } from "@multiremi/observability/request-metrics.js";
 import { AgentIssueUpdatesRepo } from "@multiremi/store/repos/agent-issue-updates-repo.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 
@@ -166,37 +168,54 @@ function verifyNestedTransactions(db: SqlDatabase): void {
   expect(db.query("SELECT n FROM nested_tx_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 3, 4, 6, 7]);
 }
 
-function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
+async function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): Promise<void> {
   db.exec("CREATE TABLE local_reply_case (n INTEGER PRIMARY KEY)");
   const previousLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
   process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "200";
+  process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
   resetDbReplyLimitForTest();
   try {
-    db.transaction(() => {
-      db.run("INSERT INTO local_reply_case (n) VALUES (1)");
-      const caughtQuery = () => {
-        let caught = false;
-        try {
-          if (db instanceof PostgresSyncDatabase) {
-            db.query("SELECT repeat('x', 1000) AS payload").get();
-          } else {
-            db.query("SELECT 1 AS payload").get();
-            throw new PostgresReplyTooLargeError(1000, 200);
+    const app = new Hono();
+    let handlerError: unknown;
+    app.use("*", createRequestMetricsMiddleware({ enabled: false, slowRequestMs: 500,
+      summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 256, role: "all" }));
+    app.onError((error, c) => { handlerError = error; return c.text("failed", 500); });
+    app.get("/api/local-reply-limit-fixture", (c) => {
+      expect(postgresReplyMaxBytes()).toBe(200);
+      expect(currentDbReplyPolicy()).toMatchObject({ enforced: true, exempt: false });
+      db.transaction(() => {
+        db.run("INSERT INTO local_reply_case (n) VALUES (1)");
+        const caughtQuery = () => {
+          let caught = false;
+          try {
+            if (db instanceof PostgresSyncDatabase) {
+              db.query("SELECT repeat('x', 1000) AS payload").get();
+            } else {
+              db.query("SELECT 1 AS payload").get();
+              throw new PostgresReplyTooLargeError(1000, 200);
+            }
+          } catch (error) {
+            expect(error).toBeInstanceOf(PostgresReplyTooLargeError);
+            caught = true;
           }
-        } catch (error) {
-          expect(error).toBeInstanceOf(PostgresReplyTooLargeError);
-          caught = true;
-        }
-        expect(caught).toBe(true);
-      };
-      if (nested) db.transaction(caughtQuery)();
-      else caughtQuery();
-      db.run("INSERT INTO local_reply_case (n) VALUES (2)");
-    })();
-    expect(db.query("SELECT n FROM local_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+          expect(caught).toBe(true);
+        };
+        if (nested) db.transaction(caughtQuery)();
+        else caughtQuery();
+        db.run("INSERT INTO local_reply_case (n) VALUES (2)");
+      })();
+      expect(db.query("SELECT n FROM local_reply_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+      return c.body(null, 204);
+    });
+    const response = await app.request("/api/local-reply-limit-fixture");
+    if (handlerError) throw handlerError;
+    expect(response.status).toBe(204);
   } finally {
     if (previousLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousLimit;
+    if (previousEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+    else process.env.MULTIREMI_PG_REPLY_ENFORCE = previousEnforce;
     resetDbReplyLimitForTest();
   }
 }

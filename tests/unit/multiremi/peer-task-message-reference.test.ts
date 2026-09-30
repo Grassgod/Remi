@@ -41,12 +41,16 @@ async function withPgPair(run: (writer: SqlDatabase, reader: SqlDatabase) => Pro
 
 async function withReplyLimit(bytes: number, run: () => Promise<void>): Promise<void> {
   const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
   process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(bytes);
+  process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
   resetDbReplyLimitForTest();
   try { await withNonExceptionContext(run); }
   finally {
     if (previous === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previous;
+    if (previousEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+    else process.env.MULTIREMI_PG_REPLY_ENFORCE = previousEnforce;
     resetDbReplyLimitForTest();
   }
 }
@@ -280,10 +284,12 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
     await withPgPair(async (writer, reader) => {
       const pair = fanoutPair(writer, reader, 1024, true);
       const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
       try {
         pair.store.appendTaskMessages(pair.task.id, [{ type: "assistant", content: CONTENT }]);
         pair.setBeforeReference(() => {
           process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(128 * 1024);
+          process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
           resetDbReplyLimitForTest();
         });
         await pair.drained();
@@ -298,6 +304,8 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
       } finally {
         if (previous === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
         else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previous;
+        if (previousEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+        else process.env.MULTIREMI_PG_REPLY_ENFORCE = previousEnforce;
         resetDbReplyLimitForTest(); pair.close();
       }
     });
