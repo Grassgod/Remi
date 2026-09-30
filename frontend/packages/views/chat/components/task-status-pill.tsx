@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { UnicodeSpinner } from "@multiremi/ui/components/common/unicode-spinner";
 import type { AgentAvailability } from "@multiremi/core/agents";
-import type { ChatPendingTask, TaskMessagePayload } from "@multiremi/core/types";
+import type { ChatPendingTask } from "@multiremi/core/types";
+
+type StageMessage = { type: string; tool?: string | null };
 import { formatElapsedSecs } from "../../common/format";
 import { useT } from "../../i18n";
 
@@ -12,7 +14,7 @@ interface Props {
   /** Server-authoritative pending-task snapshot (`created_at` anchors the timer). */
   pendingTask: ChatPendingTask;
   /** Live task-message stream — the latest non-error entry decides the running-stage label. */
-  taskMessages: readonly TaskMessagePayload[];
+  taskMessages: readonly StageMessage[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
   availability: AgentAvailability | undefined;
 }
@@ -60,7 +62,7 @@ const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
 // follow the priority rules without translation noise.
 export function pickStageKeys(
   status: string | undefined,
-  taskMessages: readonly TaskMessagePayload[],
+  taskMessages: readonly StageMessage[],
   availability: AgentAvailability | undefined,
 ): { stageKey: StageKey; toolKey?: ToolKey; static?: boolean } {
   if (
@@ -92,7 +94,7 @@ export function pickStageKeys(
   if (status === "dispatched") return { stageKey: "starting_up" };
 
   // running: latest meaningful message decides the label.
-  let latest: TaskMessagePayload | null = null;
+  let latest: StageMessage | null = null;
   for (let i = taskMessages.length - 1; i >= 0; i--) {
     const m = taskMessages[i];
     if (m && m.type !== "error" && m.type !== "tool_result") {
@@ -116,7 +118,7 @@ export function pickStageKeys(
 
 function useResolveStage(): (
   status: string | undefined,
-  taskMessages: readonly TaskMessagePayload[],
+  taskMessages: readonly StageMessage[],
   availability: AgentAvailability | undefined,
 ) => Stage {
   const { t } = useT("chat");

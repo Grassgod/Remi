@@ -54,7 +54,6 @@ import {
   useChatStore,
   type PendingChatTaskRef,
 } from "@multiremi/core/chat";
-import { useChatScopeSubscription } from "@multiremi/core/realtime";
 import { ChatMessageList } from "./chat-message-list";
 import { clientIdOf, type OptimisticChatRow } from "../lib/optimistic-log";
 import { ChatInput } from "./chat-input";
@@ -188,14 +187,13 @@ export function ChatWindow({
 
   // Server-authoritative pending task. Survives refresh / reopen / session
   // switch because it's keyed on sessionId in the Query cache; WS events
-  // (chat:message / chat:done / task:*) keep it invalidated in real time.
+  // Chat lifecycle events keep it current; the SessionLog stream owns content.
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
   const { data: pendingTask } = useQuery(
     pendingChatTaskOptions(displayedSessionId ?? "", { enabled: chatVisible }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
-  useChatScopeSubscription(displayedSessionId, !!displayedSessionId);
 
   // Archived sessions remain readable; restore them before sending.
   const currentSession = activeSessionId

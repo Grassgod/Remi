@@ -94,7 +94,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 
 ## 兼容
 
-旧 `task`/`chat` scope、`task:message`/`chat:message` 帧与 v1 `subscribe`/`unsubscribe` 系列帧在本版保留，统一由 C12（MUL-447）删除。`chat:done | queue_updated | session_*` 已改为投递到会话创建者的 user 注册表（[realtime.ts](../../packages/server/src/api/realtime.ts)）。
+旧 `task`/`chat` scope、消息帧与 v1 `subscribe`/`unsubscribe` 系列帧已移除。SessionLog 内容由 `log:` 流送达，执行事件由 `trace:` 流送达；`chat:done | queue_updated | session_*` 投递到会话创建者的 user 注册表（[realtime.ts](../../packages/server/src/api/realtime.ts)）。
 
 ## 验证入口
 

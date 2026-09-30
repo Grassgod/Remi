@@ -5,9 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { Bot, ChevronDown, Clock, Loader2, Square } from "lucide-react";
 import { api } from "@multiremi/core/api";
-import { chatKeys, mergeTaskMessages } from "@multiremi/core/chat/queries";
 import { useWSEvent, useWSReconnect } from "@multiremi/core/realtime";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -15,10 +13,10 @@ import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import {
   TranscriptButton,
-  buildTimeline,
   countToolCalls,
-  type TimelineItem,
 } from "../../common/task-transcript";
+import { buildTraceTimeline } from "../../common/task-transcript/build-timeline";
+import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
 import { useT } from "../../i18n";
 import { TerminateTaskConfirmDialog } from "./terminate-task-confirm-dialog";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
@@ -34,13 +32,11 @@ import { TaskSteerActions } from "./task-steer-actions";
 // ExecutionLogSection — this card is just a header-style anchor that
 // answers "is anyone working on this issue right now?" at a glance.
 //
-// Per-task message state still drives the compact tool count. Opening the
-// transcript reads the task's trace; it does not consume these messages.
+// Trace events drive the compact tool count and the transcript.
 
 
 interface TaskState {
   task: AgentTask;
-  messages: TaskMessagePayload[];
 }
 
 interface AgentLiveCardProps {
@@ -57,7 +53,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
     (qc.getQueryData<AgentTask[]>(issueKeys.tasks(issueId)) ?? [])
       .filter(task => (!issueSessionId || task.issue_session_id === issueSessionId)
         && ["queued", "dispatched", "waiting_local_directory", "running", "awaiting_human"].includes(task.status))
-      .map(task => [task.id, { task, messages: [] }] as const),
+      .map(task => [task.id, { task }] as const),
   ));
   // AskUser requests belong to the Issue, not to whichever product Session is
   // currently selected in the right panel. Keep this issue-wide view separate
@@ -78,9 +74,6 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // banner so all states read at one consistent width. A popover would
   // force the list into a narrow floating card ≠ the full-width banner.
   const [expanded, setExpanded] = useState(false);
-  const seenSeqs = useRef(new Set<string>());
-  const hydratedTaskIds = useRef(new Set<string>());
-  const taskMessagesRef = useRef(new Map<string, TaskMessagePayload[]>());
   const mountedRef = useRef(true);
   // Monotonic counter — each reconcile() call captures its issued seq and
   // only applies its response if it's still the latest issued. This stops
@@ -97,9 +90,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // server's active set: tasks no longer active are dropped (this is what
   // self-heals a stale "is working" banner when a task:completed/failed/
   // cancelled event was lost during a WS reconnect window), and tasks
-  // still active keep their messages for the banner's tool count. New tasks get a one-shot
-  // listTaskMessages hydration to backfill any messages that landed
-  // before the WS subscription saw them.
+  // still active keep their identity; each row reads its live trace directly.
   const reconcile = useCallback(() => {
     const mySeq = ++reconcileSeq.current;
     api.getActiveTasksForIssue(issueId).then(({ tasks: issueTasks }) => {
@@ -113,60 +104,8 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
       // resolve in B-then-A order and A re-adds tasks B already cleared.
       if (mySeq !== reconcileSeq.current) return;
       setHumanRequestTasks(issueTasks.filter((task) => task.status === "awaiting_human"));
-      const activeIds = new Set(tasks.map((t) => t.id));
-
-      setTaskStates((prev) => {
-        const next = new Map<string, TaskState>();
-        for (const task of tasks) {
-          const existing = prev.get(task.id);
-          next.set(task.id, existing
-            ? { task, messages: existing.messages }
-            : { task, messages: [] });
-        }
-        return next;
-      });
+      setTaskStates(new Map(tasks.map((task) => [task.id, { task }])));
       onInitialReconcile?.();
-
-      // Drop bookkeeping for tasks that vanished, so a future re-dispatch
-      // of the same id (very rare, but possible) re-hydrates cleanly.
-      for (const key of Array.from(seenSeqs.current)) {
-        const taskId = key.slice(0, key.indexOf(":"));
-        if (!activeIds.has(taskId)) seenSeqs.current.delete(key);
-      }
-      for (const id of Array.from(hydratedTaskIds.current)) {
-        if (!activeIds.has(id)) hydratedTaskIds.current.delete(id);
-      }
-      for (const id of Array.from(taskMessagesRef.current.keys())) {
-        if (!activeIds.has(id)) taskMessagesRef.current.delete(id);
-      }
-
-      // Hydrate messages for tasks we haven't fetched yet. Per-task guard
-      // prevents duplicate fetches when reconcile fires repeatedly (mount
-      // + reconnect + queued/dispatch can stack within a single tick).
-      for (const task of tasks) {
-        if (hydratedTaskIds.current.has(task.id)) continue;
-        hydratedTaskIds.current.add(task.id);
-        api.listTaskMessages(task.id).then((msgs) => {
-          if (!mountedRef.current) return;
-          const key = chatKeys.taskMessages(task.id);
-          const cached = qc.getQueryData<TaskMessagePayload[]>(key) ?? [];
-          const local = taskMessagesRef.current.get(task.id) ?? [];
-          const messages = mergeTaskMessages(msgs, cached, local);
-          taskMessagesRef.current.set(task.id, messages);
-          qc.setQueryData(key, messages);
-          for (const m of messages) seenSeqs.current.add(`${m.task_id}:${m.seq}`);
-          setTaskStates((prev) => {
-            const next = new Map(prev);
-            const existing = next.get(task.id);
-            if (!existing) return prev;
-            next.set(task.id, { task: existing.task, messages });
-            return next;
-          });
-        }).catch((e) => {
-          hydratedTaskIds.current.delete(task.id);
-          console.error(e);
-        });
-      }
     }).catch(error => { console.error(error); onInitialReconcile?.(); });
   }, [issueId, issueSessionId, onInitialReconcile, qc]);
 
@@ -179,29 +118,6 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // notably task:completed / task:failed / task:cancelled) won't replay,
   // so re-pull the truth and let reconcile drop any stale banners.
   useWSReconnect(reconcile);
-
-  // Real-time messages — route by task_id and dedupe by seq.
-  useWSEvent(
-    "task:message",
-    useCallback((payload: unknown) => {
-      const msg = payload as TaskMessagePayload;
-      if (msg.issue_id !== issueId) return;
-      const key = `${msg.task_id}:${msg.seq}`;
-      if (seenSeqs.current.has(key)) return;
-      seenSeqs.current.add(key);
-      const messages = mergeTaskMessages(taskMessagesRef.current.get(msg.task_id) ?? [], [msg]);
-      taskMessagesRef.current.set(msg.task_id, messages);
-
-      setTaskStates((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(msg.task_id);
-        if (existing) {
-          next.set(msg.task_id, { ...existing, messages });
-        }
-        return next;
-      });
-    }, [issueId]),
-  );
 
   // Task end — optimistically drop the banner for snappy UX, then
   // reconcile to also clean up sibling tasks whose own end events may
@@ -217,7 +133,6 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
       return next;
     });
     setHumanRequestTasks((prev) => prev.filter((task) => task.id !== p.task_id));
-    taskMessagesRef.current.delete(p.task_id);
     reconcile();
   }, [issueId, reconcile]);
 
@@ -229,7 +144,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // to both events matters because retry creates a queued child without
   // emitting task:dispatch (only the daemon's claim does), so listening
   // to dispatch alone leaves the banner stale during the queued window.
-  // reconcile is idempotent (per-task hydration guard) and also drops
+  // reconcile is idempotent and also drops
   // stale tasks, so it's safe to fire once per event.
   const handleTaskActive = useCallback((payload: unknown) => {
     const p = payload as { issue_id?: string };
@@ -351,11 +266,10 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
             </button>
             {expanded && (
               <div className="divide-y divide-info/15 border-t border-info/15">
-                {entries.map(({ task, messages }) => (
+                {entries.map(({ task }) => (
                   <AgentLiveRow
                     key={task.id}
                     task={task}
-                    items={buildTimeline(messages)}
                     agentName={resolveName(task.agent_id)}
                     onRequestCancel={() => setCancelTarget(task)}
                     cancelling={cancellingIds.has(task.id)}
@@ -367,7 +281,6 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
         ) : (
           <AgentLiveRow
             task={firstEntry.task}
-            items={buildTimeline(firstEntry.messages)}
             agentName={resolveName(firstEntry.task.agent_id)}
             onRequestCancel={() => setCancelTarget(firstEntry.task)}
             cancelling={cancellingIds.has(firstEntry.task.id)}
@@ -400,7 +313,6 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
 
 interface AgentLiveRowProps {
   task: AgentTask;
-  items: TimelineItem[];
   agentName: string;
   // Cancel is owned by the parent AgentLiveCard (a single confirm dialog
   // serves both the lone row and the multi-agent list). The row only
@@ -409,9 +321,12 @@ interface AgentLiveRowProps {
   cancelling: boolean;
 }
 
-function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: AgentLiveRowProps) {
+function AgentLiveRow({ task, agentName, onRequestCancel, cancelling }: AgentLiveRowProps) {
   const { t } = useT("issues");
   const [elapsed, setElapsed] = useState("");
+  const traceActive = ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
+  const events = useTaskTrace(task.id, traceActive, traceActive);
+  const items = buildTraceTimeline(events);
 
   const isQueued = task.status === "queued";
   const queuedWaitReason = isQueued && typeof task.wait_reason === "string" ? task.wait_reason.trim() : "";

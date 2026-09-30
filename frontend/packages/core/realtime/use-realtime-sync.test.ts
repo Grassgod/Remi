@@ -1,4 +1,4 @@
-import { QueryClient, type InfiniteData } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
@@ -9,9 +9,7 @@ import { notificationPreferenceKeys } from "../notification-preferences/queries"
 import { workspaceKeys } from "../workspace/queries";
 import type {
   ChatDonePayload,
-  ChatMessage,
   ChatPendingTask,
-  ChatMessagesPage,
   InboxItem,
   Workspace,
 } from "../types";
@@ -24,7 +22,6 @@ import {
 
 const sessionId = "session-1";
 const taskId = "task-1";
-const messagesKey = chatKeys.messages(sessionId);
 const pendingKey = chatKeys.pendingTask(sessionId);
 
 function createQueryClient() {
@@ -33,17 +30,6 @@ function createQueryClient() {
       queries: { retry: false },
     },
   });
-}
-
-function userMessage(): ChatMessage {
-  return {
-    id: "msg-user",
-    chat_session_id: sessionId,
-    role: "user",
-    content: "hello",
-    task_id: null,
-    created_at: "2026-05-13T05:00:00Z",
-  };
 }
 
 function donePayload(overrides: Partial<ChatDonePayload> = {}): ChatDonePayload {
@@ -59,47 +45,21 @@ function donePayload(overrides: Partial<ChatDonePayload> = {}): ChatDonePayload 
 }
 
 describe("applyChatDoneToCache", () => {
-  it("writes the assistant message before clearing pending task", () => {
+  it("clears the pending task when the reply completes", () => {
     const qc = createQueryClient();
-    qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
       task_id: taskId,
       status: "running",
     });
 
-    const setQueryData = vi.spyOn(qc, "setQueryData");
-
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
     applyChatDoneToCache(qc, donePayload());
-
-    expect(setQueryData.mock.calls[0]?.[0]).toEqual(messagesKey);
-    expect(setQueryData.mock.calls[2]?.[0]).toEqual(pendingKey);
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
-    expect(qc.getQueryData<ChatMessage[]>(messagesKey)).toEqual([
-      userMessage(),
-      {
-        id: "msg-assistant",
-        chat_session_id: sessionId,
-        role: "assistant",
-        content: "done",
-        task_id: taskId,
-        created_at: "2026-05-13T05:00:02Z",
-        elapsed_ms: 1234,
-      },
-    ]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["task-trace", taskId] });
   });
 
-  it("does not duplicate a replayed chat done event", () => {
+  it("handles a replayed chat done event", () => {
     const qc = createQueryClient();
-    const assistant: ChatMessage = {
-      id: "msg-assistant",
-      chat_session_id: sessionId,
-      role: "assistant",
-      content: "done",
-      task_id: taskId,
-      created_at: "2026-05-13T05:00:02Z",
-      elapsed_ms: 1234,
-    };
-    qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage(), assistant]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
       task_id: taskId,
       status: "running",
@@ -107,16 +67,11 @@ describe("applyChatDoneToCache", () => {
 
     applyChatDoneToCache(qc, donePayload());
 
-    expect(qc.getQueryData<ChatMessage[]>(messagesKey)).toEqual([
-      userMessage(),
-      assistant,
-    ]);
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
   });
 
-  it("falls back to invalidation-only when older servers omit message fields", () => {
+  it("settles pending tasks when older servers omit message fields", () => {
     const qc = createQueryClient();
-    qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
       task_id: taskId,
       status: "running",
@@ -127,9 +82,6 @@ describe("applyChatDoneToCache", () => {
       donePayload({ message_id: undefined, content: undefined }),
     );
 
-    expect(qc.getQueryData<ChatMessage[]>(messagesKey)).toEqual([
-      userMessage(),
-    ]);
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
   });
 });
@@ -211,35 +163,6 @@ describe("applyWorkspaceUpdatedToCache", () => {
 });
 
 
-describe("applyChatDoneToCache paged messages", () => {
-  it("patches page zero and skips older pages without duplicating replayed events", () => {
-    const qc = createQueryClient();
-    const older = userMessage();
-    const latest: ChatMessage = {
-      id: "msg-latest",
-      chat_session_id: sessionId,
-      role: "user",
-      content: "latest",
-      task_id: null,
-      created_at: "2026-05-13T05:00:01Z",
-    };
-    qc.setQueryData<InfiniteData<ChatMessagesPage>>(chatKeys.messagesPage(sessionId), {
-      pages: [
-        { messages: [latest], limit: 1, has_more: true, next_cursor: { created_at: latest.created_at, id: latest.id } },
-        { messages: [older], limit: 1, has_more: false, next_cursor: null },
-      ],
-      pageParams: [null, { created_at: latest.created_at, id: latest.id }],
-    });
-
-    applyChatDoneToCache(qc, donePayload());
-    applyChatDoneToCache(qc, donePayload());
-
-    const paged = qc.getQueryData<InfiniteData<ChatMessagesPage>>(chatKeys.messagesPage(sessionId));
-
-    expect(paged?.pages[0]?.messages.map((m) => m.id)).toEqual(["msg-latest", "msg-assistant"]);
-    expect(paged?.pages[1]?.messages.map((m) => m.id)).toEqual(["msg-user"]);
-  });
-});
 describe("resolveInboxSourceSlug", () => {
   function workspace(overrides: Partial<Workspace> = {}): Workspace {
     return {

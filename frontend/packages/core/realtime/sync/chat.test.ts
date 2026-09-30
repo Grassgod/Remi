@@ -143,19 +143,18 @@ describe("chat queue realtime", () => {
     try {
       await observer.refetch();
       expect(listPendingChatTasks).toHaveBeenCalledTimes(1);
-      handlers["chat:message"]?.({ chat_session_id: "chat-1" });
+      handlers["chat:queue_updated"]?.({ chat_session_id: "chat-1" });
       await vi.waitFor(() => expect(listPendingChatTasks).toHaveBeenCalledTimes(2));
     } finally {
       unsubscribe();
     }
   });
 
-  it("refreshes paged messages, queue, summaries and detail in the current workspace", () => {
+  it("refreshes queue, summaries and detail in the current workspace", () => {
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     handlers["chat:queue_updated"]?.({ chat_session_id: "chat-1" });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTasks("ws-1") });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messagesPage("chat-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.session("ws-1", "chat-1") });
     expect(qc.getQueryState(chatKeys.sessionList("ws-1", "active"))?.isInvalidated).toBe(true);
     expect(qc.getQueryState(chatKeys.sessionList("ws-1", "archived"))?.isInvalidated).toBe(true);
@@ -170,10 +169,8 @@ describe("chat queue realtime", () => {
     expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-2"))?.[0]).toMatchObject({ status: "active", pinned: false });
   });
 
-  it("removes paged history and selected draft after a remote session deletion", () => {
-    qc.setQueryData(chatKeys.messagesPage("chat-1"), { pages: [], pageParams: [] });
+  it("removes session detail and selected draft after a remote session deletion", () => {
     handlers["chat:session_deleted"]?.({ chat_session_id: "chat-1" });
-    expect(qc.getQueryData(chatKeys.messagesPage("chat-1"))).toBeUndefined();
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toBeUndefined();
     expect(qc.getQueryData(chatKeys.sessionList("ws-1", "active"))).toEqual([]);
     expect(store.clearInputDraft).toHaveBeenCalledWith("chat-1");

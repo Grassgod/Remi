@@ -1,4 +1,4 @@
-import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { createLogger } from "../../logger";
 import { getCurrentWsId } from "../../platform/workspace-storage";
 import { chatKeys } from "../../chat/queries";
@@ -14,11 +14,9 @@ import type {
   TaskFailedPayload,
   TaskCancelledPayload,
   ChatDonePayload,
-  ChatMessage,
   ChatPendingTask,
   TaskAwaitingHumanPayload,
   TaskProgressPayload,
-  ChatMessagesPage,
   ChatSession,
 } from "../../types";
 import type { SyncContext, SyncModule } from "./types";
@@ -42,58 +40,10 @@ export function applyChatDoneToCache(
 ) {
   const sessionId = payload.chat_session_id;
   const taskId = payload.task_id;
-  const messageId = payload.message_id;
-  const content = payload.content;
-  if (messageId && content !== undefined) {
-    const assistant: ChatMessage = {
-      id: messageId,
-      chat_session_id: sessionId,
-      role: "assistant",
-      content,
-      task_id: taskId,
-      created_at: payload.created_at ?? new Date().toISOString(),
-      elapsed_ms: payload.elapsed_ms ?? null,
-    };
-    qc.setQueryData<ChatMessage[] | undefined>(
-      chatKeys.messages(sessionId),
-      (old) => {
-        if (!old) return old; // first fetch will pick it up
-        // Idempotent against reconnect replay.
-        if (old.some((m) => m.id === messageId)) return old;
-        return [...old, assistant];
-      },
-    );
-    qc.setQueryData<InfiniteData<ChatMessagesPage> | undefined>(
-      chatKeys.messagesPage(sessionId),
-      (old) => patchLatestChatMessagePage(old, assistant),
-    );
-  }
-  // The reply is persisted; advance only its matching queue head.
+  // SessionLog owns the reply; advance only its matching queue head.
   settleChatPendingTask(qc, sessionId, taskId);
-  // Authoritative refetch reconciles redaction / migrations / clients
-  // that took the fallback branch above.
-  qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
-  qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
   qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-}
-
-function patchLatestChatMessagePage(
-  old: InfiniteData<ChatMessagesPage> | undefined,
-  message: ChatMessage,
-): InfiniteData<ChatMessagesPage> | undefined {
-  if (!old?.pages.length) return old;
-  const seen = old.pages.some((page) => page.messages.some((m) => m.id === message.id));
-  if (seen) return old;
-  return {
-    ...old,
-    pages: old.pages.map((page, index) => {
-      if (index !== 0) return page;
-      return {
-        ...page,
-        messages: [...page.messages, message],
-      };
-    }),
-  };
+  qc.invalidateQueries({ queryKey: ["task-trace", taskId] });
 }
 
 /**
@@ -102,8 +52,8 @@ function patchLatestChatMessagePage(
  * Server state lives in Query cache. Only selection/draft cleanup after a
  * confirmed session deletion touches the client store.
  *
- * chat:message / chat:done / task:completed / task:failed invalidate
- * messages + pending-task so the DB remains authoritative.
+ * Chat and task lifecycle frames update the pending-task cache. SessionLog
+ * owns message content and its realtime subscription.
  */
 export function createChatHandlers({ qc }: SyncContext): SyncModule {
   const invalidateIssueDecisionSurfaces = () => {
@@ -127,8 +77,6 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
   };
   const invalidateQueue = (sessionId: string) => {
     qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-    qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
-    qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
     invalidatePendingAggregate();
     invalidateSessionLists();
     invalidateSession(sessionId);
@@ -136,17 +84,6 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
 
   return {
     handlers: {
-      "chat:message": (p) => {
-        const payload = p as { chat_session_id: string };
-        chatWsLogger.info("chat:message (global)", { chat_session_id: payload.chat_session_id });
-        qc.invalidateQueries({ queryKey: chatKeys.messages(payload.chat_session_id) });
-        qc.invalidateQueries({ queryKey: chatKeys.messagesPage(payload.chat_session_id) });
-        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
-        invalidatePendingAggregate();
-        invalidateSessionLists();
-        invalidateSession(payload.chat_session_id);
-      },
-
       "chat:queue_updated": (p) => {
         const payload = p as { chat_session_id: string };
         invalidateQueue(payload.chat_session_id);
@@ -159,18 +96,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           chat_session_id: payload.chat_session_id,
           has_message: !!payload.message_id,
         });
-        // Inline-insert the assistant message into the messages cache BEFORE
-        // clearing pending-task. Both writes land in the same React render
-        // tick, so ChatMessageList sees `pendingAlreadyPersisted === true`
-        // and the live TimelineView unmounts only after AssistantMessage has
-        // mounted — no flicker window. This applies TkDodo's "combine
-        // setQueryData (active query) + invalidateQueries (others)" pattern
-        // (https://tkdodo.eu/blog/using-web-sockets-with-react-query).
-        //
-        // Falls back to invalidate-only when the server omits the message
-        // payload (older builds). Older clients hitting a newer server also
-        // work: they ignore the extra fields and rely on the invalidate
-        // below, which keeps the old behavior alive.
+        // The SessionLog stream delivers the persisted assistant turn.
         applyChatDoneToCache(qc, payload);
         invalidatePendingAggregate();
         // Assistant message just landed → has_unread may have flipped to true.
@@ -180,7 +106,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
 
       // Chat task lifecycle writethrough: keep `chatKeys.pendingTask(sessionId)`
       // synchronized with the server state machine via setQueryData rather than
-      // invalidate-refetch. Same pattern as task:message — the WS payload
+      // invalidate-refetch. The WS payload
       // carries everything we need, and an HTTP roundtrip just to read what we
       // already know would add latency to every stage transition.
       //

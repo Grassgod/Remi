@@ -3,7 +3,6 @@ import { createIssueHandlers } from "./issues";
 import { createInboxHandlers } from "./inbox";
 import { createTimelineHandlers } from "./timeline";
 import { createWorkspaceHandlers } from "./workspace";
-import { createTaskHandlers } from "./tasks";
 import { createChatHandlers } from "./chat";
 import type { SyncContext, SyncHandler, SyncRegistrar } from "./types";
 
@@ -23,7 +22,6 @@ export const SYNC_REGISTRARS: readonly SyncRegistrar[] = [
   createInboxHandlers,
   createTimelineHandlers,
   createWorkspaceHandlers,
-  createTaskHandlers,
   createChatHandlers,
 ];
 

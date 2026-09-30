@@ -372,7 +372,7 @@ describe("Feishu Issue topics", () => {
   }
 
   for (const rollback of [false, true]) {
-    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "publishes Chat before terminal events after commit"} on SQLite`, () => {
+    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "persists Chat before terminal events after commit"} on SQLite`, () => {
       const { store } = scaffold();
       configureTopics(store);
       const wake = prepareReport(store);
@@ -382,10 +382,8 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
-      const chatActorIds: Array<string | null | undefined> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
-        if (event.type === "chat:message") chatActorIds.push(event.actorId);
       });
       const database = db!;
       const originalRun = database.run;
@@ -410,14 +408,12 @@ describe("Feishu Issue topics", () => {
         expect(injected).toBe(true);
         expect(store.getTask(leader.id)!.status).toBe("running");
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
-        expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
         expect(events).toEqual([]);
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
-        expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
-        expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
-        expect(events[0].type).toBe("chat:message");
-        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+        expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
+        expect(events[0].type).toBe("activity:created");
+        expect(events[0].inTransaction).toBe(false);
       }
     });
   }

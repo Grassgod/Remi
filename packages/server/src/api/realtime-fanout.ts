@@ -30,9 +30,8 @@
  * messages, and references need not preserve overwritten intermediate versions.
  */
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type { ApiRole } from "../config/api-role.js";
-import type { MultiremiTask, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import {
   PEER_EVENT_PROTOCOL_VERSION,
   type PeerEventEnvelope,
@@ -40,14 +39,11 @@ import {
   type PeerWorkspaceEvent,
 } from "@multiremi/contracts/peer-events.js";
 import type {
-  BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
 } from "./helpers/realtime-types.js";
 import {
   notifyBrowserTaskEvent,
-  notifyBrowserTaskMessages,
-  notifyBrowserTaskMessageReadFailed,
   notifyBrowserWorkspaceEvent,
 } from "./realtime.js";
 import {
@@ -69,7 +65,6 @@ export type LocalRealtimeRole = ApiRole;
 export interface RealtimeFanoutRegistries {
   browser: BrowserWebSocketRegistry;
   browserUser: BrowserUserWebSocketRegistry;
-  browserScope: BrowserScopeWebSocketRegistry;
 }
 
 export interface RealtimeFanoutOptions {
@@ -103,25 +98,14 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   // wrote it" from "the peer wrote it"; there is no third case.
   const deliverTaskEnqueued = (task: MultiremiTask): void => {
     if (deliversToBrowser) {
-      notifyBrowserTaskEvent(registries.browser, registries.browserScope, "task:queued", task);
+      notifyBrowserTaskEvent(registries.browser, registries.browserUser, store, "task:queued", task);
     }
   };
 
   const deliverTaskEvent = (event: { type: string; task: MultiremiTask }): void => {
     if (deliversToBrowser) {
-      notifyBrowserTaskEvent(registries.browser, registries.browserScope, event.type, event.task);
+      notifyBrowserTaskEvent(registries.browser, registries.browserUser, store, event.type, event.task);
     }
-  };
-
-  const deliverTaskMessages = (event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] }): void => {
-    if (!deliversToBrowser) return;
-    notifyBrowserTaskMessages(
-      store,
-      registries.browser,
-      registries.browserScope,
-      event.task,
-      event.messages,
-    );
   };
 
   const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): void => {
@@ -129,7 +113,6 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
     notifyBrowserWorkspaceEvent(
       registries.browser,
       registries.browserUser,
-      registries.browserScope,
       event,
       { store },
     );
@@ -152,35 +135,6 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
         if (task) deliverTaskEvent({ type: envelope.payload.type, task });
         return;
       }
-      case "task_messages": {
-        if (!deliversToBrowser) return;
-        const task = ("task" in envelope.payload ? envelope.payload.task : null)
-          ?? store.getTaskIdentity(envelope.payload.task_id, "fanout");
-        if (!task) return;
-        if (!("seq_start" in envelope.payload)) {
-          deliverTaskMessages({ task, messages: envelope.payload.messages });
-          return;
-        }
-        const pageRows = store.getTaskMessagePageRows();
-        let cursor = envelope.payload.seq_start - 1;
-        try {
-          while (cursor < envelope.payload.seq_end) {
-            const messages = store.listTaskMessages(envelope.payload.task_id, cursor, envelope.payload.seq_end, pageRows);
-            if (messages.length === 0) break;
-            deliverTaskMessages({ task, messages });
-            cursor = messages.at(-1)!.seq;
-            if (messages.length < pageRows) break;
-          }
-        } catch {
-          peer?.recordReferenceReadFailure();
-          console.warn("[realtime-fanout] reference read failed; requesting browser message refetch");
-          if (deliversToBrowser) notifyBrowserTaskMessageReadFailed(
-            store, registries.browser, registries.browserScope, task,
-            { seq_start: envelope.payload.seq_start, seq_end: envelope.payload.seq_end },
-          );
-        }
-        return;
-      }
       case "workspace_event":
         deliverWorkspaceEvent(envelope.payload.event);
         return;
@@ -197,15 +151,6 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   const unsubscribeTaskEvent = store.onTaskEvent((event) => {
     deliverTaskEvent(event);
     forwardToPeer("task_event", { type: event.type, task: event.task, task_id: event.task.id });
-  });
-  const unsubscribeTaskMessages = store.onTaskMessages((event) => {
-    deliverTaskMessages(event);
-    const { id, workspaceId, agentId, chatSessionId, issueId, issueSessionId } = event.task;
-    forwardToPeer("task_messages", {
-      task: { id, workspaceId, agentId, chatSessionId, issueId, issueSessionId },
-      task_id: id,
-      messages: event.messages,
-    });
   });
   const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
     deliverWorkspaceEvent(event);
@@ -225,7 +170,6 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
       closed = true;
       unsubscribeEnqueued();
       unsubscribeTaskEvent();
-      unsubscribeTaskMessages();
       unsubscribeWorkspaceEvent();
       subscription?.unsubscribe();
       peer?.close();

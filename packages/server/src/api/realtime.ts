@@ -2,29 +2,20 @@
 // client registries, the notify/broadcast fan-out and the upgrade/auth-frame
 // authorizers. Moved verbatim out of api/helpers.ts by the D5 split; the
 // WebSocket upgrade wiring itself stays in api/server.ts.
-import {
-  canUserViewTaskMessages,
-  createTaskAuthMemo,
-  hasJwtWorkspaceAccess,
-  verifyJwtToken,
-} from "./helpers.js";
+import { hasJwtWorkspaceAccess, verifyJwtToken } from "./helpers.js";
 import type {
-  BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
   MultiremiWebSocketClient,
 } from "./helpers.js";
 import {
   cleanString,
-  taskMessageRealtimePayload,
   taskRealtimePayload,
 } from "./wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiAccessToken,
   MultiremiTask,
-  MultiremiTaskMessage,
 } from "@multiremi/contracts/types.js";
 
 
@@ -64,122 +55,10 @@ export function unregisterBrowserUserWebSocketClient(registry: BrowserUserWebSoc
   if (clients.size === 0) registry.delete(client.data.userId);
 }
 
-export function handleBrowserScopeSubscribe(
-  registry: BrowserScopeWebSocketRegistry,
-  store: MultiremiStore,
-  client: MultiremiWebSocketClient,
-  event: Record<string, any>,
-): void {
-  const payload = parseBrowserScopePayload(event);
-  if (!payload) {
-    sendBrowserScopeFrame(client, "subscribe_error", "", "", "invalid payload");
-    return;
-  }
-  const authorized = authorizeBrowserScope(store, client, payload.scope, payload.id);
-  if (!authorized.ok) {
-    sendBrowserScopeFrame(client, "subscribe_error", payload.scope, payload.id, authorized.error);
-    return;
-  }
-  if (payload.scope === "task" || payload.scope === "chat") {
-    registerBrowserScopeWebSocketClient(registry, client, payload.scope, payload.id);
-  }
-  sendBrowserScopeFrame(client, "subscribe_ack", payload.scope, payload.id);
-}
-
-export function handleBrowserScopeUnsubscribe(
-  registry: BrowserScopeWebSocketRegistry,
-  client: MultiremiWebSocketClient,
-  event: Record<string, any>,
-): void {
-  const payload = parseBrowserScopePayload(event);
-  if (payload) unregisterBrowserScopeWebSocketClient(registry, client, payload.scope, payload.id);
-  sendBrowserScopeFrame(client, "unsubscribe_ack", payload?.scope ?? "", payload?.id ?? "");
-}
-
-export function parseBrowserScopePayload(event: Record<string, any>): { scope: string; id: string } | null {
-  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
-  const scope = cleanString(payload.scope);
-  const id = cleanString(payload.id);
-  return scope && id ? { scope, id } : null;
-}
-
-export function authorizeBrowserScope(
-  store: MultiremiStore,
-  client: MultiremiWebSocketClient,
-  scope: string,
-  id: string,
-): { ok: true } | { ok: false; error: string } {
-  if (client.data.kind !== "browser" || !client.data.authenticated) return { ok: false, error: "forbidden" };
-  if (scope === "workspace") return id === client.data.workspaceId ? { ok: true } : { ok: false, error: "forbidden" };
-  if (scope === "user") return id === client.data.userId ? { ok: true } : { ok: false, error: "forbidden" };
-  if (scope === "task") {
-    const task = store.getTask(id);
-    if (!task || task.workspaceId !== client.data.workspaceId) return { ok: false, error: "forbidden" };
-    // Chat-creator + private-agent visibility both live in canUserViewTaskMessages.
-    return canUserViewTaskMessages(store, client.data.userId, task) ? { ok: true } : { ok: false, error: "forbidden" };
-  }
-  if (scope === "chat") {
-    const session = store.getChatSession(id);
-    if (!session || session.workspaceId !== client.data.workspaceId) return { ok: false, error: "forbidden" };
-    return session.creatorId === client.data.userId ? { ok: true } : { ok: false, error: "forbidden" };
-  }
-  return { ok: false, error: "unknown_scope" };
-}
-
-export function registerBrowserScopeWebSocketClient(
-  registry: BrowserScopeWebSocketRegistry,
-  client: MultiremiWebSocketClient,
-  scope: string,
-  id: string,
-): void {
-  if (client.data.kind !== "browser" || !client.data.authenticated) return;
-  const key = browserScopeKey(scope, id);
-  let clients = registry.get(key);
-  if (!clients) {
-    clients = new Set();
-    registry.set(key, clients);
-  }
-  clients.add(client);
-  if (!client.data.scopeSubscriptions.includes(key)) client.data.scopeSubscriptions.push(key);
-}
-
-export function unregisterBrowserScopeWebSocketClient(
-  registry: BrowserScopeWebSocketRegistry,
-  client: MultiremiWebSocketClient,
-  scope?: string,
-  id?: string,
-): void {
-  if (client.data.kind !== "browser") return;
-  const keys = scope && id ? [browserScopeKey(scope, id)] : [...client.data.scopeSubscriptions];
-  for (const key of keys) {
-    const clients = registry.get(key);
-    if (!clients) continue;
-    clients.delete(client);
-    if (clients.size === 0) registry.delete(key);
-  }
-  client.data.scopeSubscriptions = client.data.scopeSubscriptions.filter((key) => !keys.includes(key));
-}
-
-export function browserScopeKey(scope: string, id: string): string {
-  return `${scope}\u0000${id}`;
-}
-
-export function sendBrowserScopeFrame(
-  client: MultiremiWebSocketClient,
-  type: "subscribe_ack" | "subscribe_error" | "unsubscribe_ack",
-  scope: string,
-  id: string,
-  error?: string,
-): void {
-  const payload: Record<string, string> = { scope, id };
-  if (error) payload.error = error;
-  client.sendText(JSON.stringify({ type, payload }));
-}
-
-
 export function notifyBrowserTaskEvent(
   workspaceRegistry: BrowserWebSocketRegistry,
-  scopeRegistry: BrowserScopeWebSocketRegistry,
+  userRegistry: BrowserUserWebSocketRegistry,
+  store: MultiremiStore,
   type: string,
   task: MultiremiTask,
 ): void {
@@ -192,98 +71,12 @@ export function notifyBrowserTaskEvent(
     actor_type: "agent",
   });
   if (task.chatSessionId) {
-    // Chat-linked task state carries private chat content (assistant result text,
-    // chat_session_id). Like the chat:* events, route it to the chat creator's
-    // chat/task subscriptions instead of broadcasting to every workspace client.
-    sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId], ["task", task.id]]);
+    const session = store.getChatSession(task.chatSessionId);
+    if (session?.creatorId) notifyBrowserUserEventByAudience(userRegistry, session.creatorId,
+      { human: frame, restricted: frame }, undefined, task.workspaceId);
     return;
   }
   notifyBrowserWorkspaceClients(workspaceRegistry, task.workspaceId, frame);
-}
-
-// Broadcast one task-message frame per persisted row. Mirrors notifyBrowserTaskEvent's
-// routing, but every recipient is filtered through canUserViewTaskMessages so a
-// private-agent task's raw input/diff/output can't leak to non-owners on the
-// workspace-wide broadcast path.
-export function notifyBrowserTaskMessages(
-  store: MultiremiStore,
-  workspaceRegistry: BrowserWebSocketRegistry,
-  scopeRegistry: BrowserScopeWebSocketRegistry,
-  task: TaskMessageFanoutSubject,
-  messages: MultiremiTaskMessage[],
-): void {
-  if (messages.length === 0) return;
-  const send = taskMessageFrameSender(store, workspaceRegistry, scopeRegistry, task);
-  for (const message of messages) {
-    send(JSON.stringify({
-      type: "task:message",
-      payload: taskMessageRealtimePayload(message, task),
-      actor_id: task.agentId,
-      actor_type: "agent",
-    }));
-  }
-}
-
-/** A failed reference must invalidate history, not invent a partial message row. */
-export function notifyBrowserTaskMessageReadFailed(
-  store: MultiremiStore,
-  workspaceRegistry: BrowserWebSocketRegistry,
-  scopeRegistry: BrowserScopeWebSocketRegistry,
-  task: TaskMessageFanoutSubject,
-  range: { seq_start: number; seq_end: number },
-): void {
-  const payload: Record<string, unknown> = {
-    task_id: task.id, issue_id: task.issueId, degraded: true, ...range,
-  };
-  if (task.chatSessionId) payload.chat_session_id = task.chatSessionId;
-  if (task.issueSessionId) payload.issue_session_id = task.issueSessionId;
-  taskMessageFrameSender(store, workspaceRegistry, scopeRegistry, task)(JSON.stringify({
-    type: "task:message", payload, actor_id: task.agentId, actor_type: "agent",
-  }));
-}
-
-function taskMessageFrameSender(
-  store: MultiremiStore,
-  workspaceRegistry: BrowserWebSocketRegistry,
-  scopeRegistry: BrowserScopeWebSocketRegistry,
-  task: TaskMessageFanoutSubject,
-): (frame: string) => void {
-  if (task.chatSessionId) {
-    return frame => sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId!], ["task", task.id]]);
-  }
-  const memo = createTaskAuthMemo();
-  const allowedByUser = new Map<string | null, boolean>();
-  const allowedClients = new Set([...(workspaceRegistry.get(task.workspaceId) ?? [])].filter((client) => {
-    const userId = client.data.kind === "browser" ? client.data.userId : null;
-    if (!allowedByUser.has(userId)) {
-      allowedByUser.set(userId, canUserViewTaskMessages(store, userId, task, memo));
-    }
-    return allowedByUser.get(userId);
-  }));
-  return frame => sendFrameToBrowserWorkspaceClientsFiltered(workspaceRegistry, task.workspaceId, frame, client => allowedClients.has(client));
-}
-
-export function sendFrameToBrowserWorkspaceClientsFiltered(
-  registry: BrowserWebSocketRegistry,
-  workspaceId: string,
-  frame: string,
-  allow: (client: MultiremiWebSocketClient) => boolean,
-): void {
-  const clients = registry.get(workspaceId);
-  if (!clients?.size) return;
-  for (const client of [...clients]) {
-    if (!allow(client)) continue;
-    try {
-      client.sendText(frame);
-    } catch {
-      unregisterBrowserWebSocketClient(registry, client);
-      try {
-        client.close();
-      } catch {
-        // Already closed.
-      }
-    }
-  }
 }
 
 /**
@@ -311,7 +104,6 @@ export function chatEventCreatorId(
 export function notifyBrowserWorkspaceEvent(
   workspaceRegistry: BrowserWebSocketRegistry,
   userRegistry: BrowserUserWebSocketRegistry,
-  scopeRegistry: BrowserScopeWebSocketRegistry,
   event: {
     type: string;
     workspaceId: string;
@@ -327,6 +119,7 @@ export function notifyBrowserWorkspaceEvent(
    */
   options: { store?: MultiremiStore | null } = {},
 ): void {
+  if (event.type.startsWith("chat:") && !isChatRealtimeEvent(event.type)) return;
   const envelope = {
     type: event.type,
     payload: event.payload,
@@ -341,21 +134,10 @@ export function notifyBrowserWorkspaceEvent(
     }),
   };
   if (isChatRealtimeEvent(event.type)) {
-    const chatSessionId = chatEventSessionId(event);
-    // MUL-438: the chat lifecycle signals are per-session invalidations, not
-    // stream data. They used to ride the `chat` scope, which the C0 plan deletes
-    // at C12; routing them to the creator's user registry keeps a reconnecting
-    // client's chat caches correct without the scope, and keeps the payload out
-    // of every other workspace member's socket. `chat:message` stays on the scope
-    // until C12 (plan 2/6 §2's compatibility rule).
-    if (CHAT_CREATOR_ROUTED_EVENTS.has(event.type)) {
-      const creatorId = chatEventCreatorId(options.store, event);
-      if (creatorId) {
-        notifyBrowserUserEventByAudience(userRegistry, creatorId, frames, undefined, event.workspaceId);
-      }
-      return;
+    const creatorId = chatEventCreatorId(options.store, event);
+    if (creatorId) {
+      notifyBrowserUserEventByAudience(userRegistry, creatorId, frames, undefined, event.workspaceId);
     }
-    if (chatSessionId) notifyBrowserScopeClientsByAudience(scopeRegistry, "chat", chatSessionId, frames);
     return;
   }
   if (event.type === "invitation:created" || event.type === "invitation:revoked") {
@@ -420,28 +202,6 @@ function browserWorkspaceEventFrame(
   return tokenType == null || tokenType === "pat" ? frames.human : frames.restricted;
 }
 
-function notifyBrowserScopeClientsByAudience(
-  registry: BrowserScopeWebSocketRegistry,
-  scope: string,
-  id: string,
-  frames: BrowserWorkspaceEventFrames,
-): void {
-  const clients = registry.get(browserScopeKey(scope, id));
-  if (!clients?.size) return;
-  for (const client of [...clients]) {
-    try {
-      client.sendText(browserWorkspaceEventFrame(client, frames));
-    } catch {
-      unregisterBrowserScopeWebSocketClient(registry, client, scope, id);
-      try {
-        client.close();
-      } catch {
-        // Already closed.
-      }
-    }
-  }
-}
-
 function notifyBrowserWorkspaceClientsByAudience(
   registry: BrowserWebSocketRegistry,
   workspaceId: string,
@@ -496,21 +256,8 @@ function notifyBrowserUserEventByAudience(
   }
 }
 
-/**
- * Chat invalidations that belong to the session's creator rather than to the
- * `chat` scope (MUL-438, plan 2/6 §2's 事件归属调整).
- */
-export const CHAT_CREATOR_ROUTED_EVENTS: ReadonlySet<string> = new Set([
-  "chat:done",
-  "chat:queue_updated",
-  "chat:session_read",
-  "chat:session_deleted",
-  "chat:session_updated",
-]);
-
 export function isChatRealtimeEvent(type: string): boolean {
-  return type === "chat:message"
-    || type === "chat:done"
+  return type === "chat:done"
     || type === "chat:session_read"
     || type === "chat:session_deleted"
     || type === "chat:session_updated"
@@ -524,56 +271,6 @@ export function chatEventSessionId(event: {
   if (event.chatSessionId) return event.chatSessionId;
   const raw = event.payload.chat_session_id;
   return typeof raw === "string" && raw ? raw : null;
-}
-
-export function notifyBrowserScopeClients(
-  registry: BrowserScopeWebSocketRegistry,
-  scope: string,
-  id: string,
-  frame: string,
-): void {
-  const clients = registry.get(browserScopeKey(scope, id));
-  if (!clients?.size) return;
-  for (const client of [...clients]) {
-    try {
-      client.sendText(frame);
-    } catch {
-      unregisterBrowserScopeWebSocketClient(registry, client, scope, id);
-      try {
-        client.close();
-      } catch {
-        // Already closed.
-      }
-    }
-  }
-}
-
-// Deliver one frame across several scope subscriptions without double-sending to a
-// client subscribed to more than one of them (e.g. both the chat and its task scope).
-export function sendFrameToBrowserScopes(
-  registry: BrowserScopeWebSocketRegistry,
-  frame: string,
-  keys: Array<[scope: string, id: string]>,
-): void {
-  const delivered = new Set<MultiremiWebSocketClient>();
-  for (const [scope, id] of keys) {
-    const clients = registry.get(browserScopeKey(scope, id));
-    if (!clients?.size) continue;
-    for (const client of [...clients]) {
-      if (delivered.has(client)) continue;
-      delivered.add(client);
-      try {
-        client.sendText(frame);
-      } catch {
-        unregisterBrowserScopeWebSocketClient(registry, client, scope, id);
-        try {
-          client.close();
-        } catch {
-          // Already closed.
-        }
-      }
-    }
-  }
 }
 
 export function notifyBrowserWorkspaceClients(

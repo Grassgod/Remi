@@ -37,7 +37,6 @@ beforeEach(() => {
   qc.setQueryData(chatKeys.sessionList("ws-1", "active"), [session]);
   qc.setQueryData(chatKeys.sessionList("ws-1", "archived"), []);
   qc.setQueryData(chatKeys.session("ws-1", "chat-1"), session);
-  qc.setQueryData(chatKeys.messagesPage("chat-1"), { pages: [], pageParams: [] });
   qc.setQueryData(chatKeys.sessions("ws-2"), [{ ...session, id: "chat-2", workspace_id: "ws-2" }]);
 });
 afterEach(() => qc.clear());
@@ -57,7 +56,7 @@ describe("chat session mutations", () => {
     expect(mock.clearInputDraft).not.toHaveBeenCalled();
   });
 
-  it("does not remove selection, messages or drafts while delete is pending or rejected", async () => {
+  it("does not remove selection or drafts while delete is pending or rejected", async () => {
     let reject!: (error: Error) => void;
     mock.deleteChatSession.mockReturnValue(new Promise((_resolve, rejectPromise) => { reject = rejectPromise; }));
     const { result } = renderHook(() => useDeleteChatSession(), { wrapper });
@@ -70,7 +69,6 @@ describe("chat session mutations", () => {
       await expect(pending).rejects.toThrow("delete failed");
     });
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toEqual(session);
-    expect(qc.getQueryData(chatKeys.messagesPage("chat-1"))).toBeDefined();
     expect(mock.setActiveSession).not.toHaveBeenCalled();
     expect(mock.clearInputDraft).not.toHaveBeenCalled();
   });
@@ -82,7 +80,6 @@ describe("chat session mutations", () => {
     expect(qc.getQueryData(chatKeys.sessions("ws-1"))).toEqual([]);
     expect(qc.getQueryData(chatKeys.sessionList("ws-1", "active"))).toEqual([]);
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toBeUndefined();
-    expect(qc.getQueryData(chatKeys.messagesPage("chat-1"))).toBeUndefined();
     expect(mock.setActiveSession).toHaveBeenCalledWith(null);
     expect(mock.clearInputDraft).toHaveBeenCalledWith("chat-1");
   });
@@ -123,13 +120,12 @@ describe("chat session mutations", () => {
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toMatchObject({ has_unread: false, unread_count: 0 });
   });
 
-  it("refreshes queue and transcript after prioritizing without issuing an extra cancel", async () => {
+  it("refreshes queue after prioritizing without issuing an extra cancel", async () => {
     mock.prioritizeQueuedChatMessage.mockResolvedValue({ task_id: "task-2", active_task_id: "task-1" });
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     const { result } = renderHook(() => usePrioritizeChatQueuedTask(), { wrapper });
     await act(async () => { await result.current.mutateAsync({ sessionId: "chat-1", taskId: "task-2" }); });
     expect(mock.prioritizeQueuedChatMessage).toHaveBeenCalledWith("chat-1", "task-2");
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.messagesPage("chat-1") });
   });
 });

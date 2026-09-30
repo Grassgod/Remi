@@ -6,9 +6,5 @@ export {
   useLogStreamSubscription,
   useTraceStreamSubscription,
 } from "./streams";
-export {
-  useChatScopeSubscription,
-  useTaskScopeSubscription,
-} from "./use-task-scope-subscription";
 export { useRealtimeSync } from "./use-realtime-sync";
 export type { RealtimeSyncStores } from "./use-realtime-sync";

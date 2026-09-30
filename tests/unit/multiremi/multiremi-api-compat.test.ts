@@ -1261,11 +1261,10 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ body: "hello page" }),
     });
-    const chatPage = await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`);
-    const chatPageBody = await chatPage.json();
-    expect(chatPageBody.messages[0].chat_session_id).toBe(chat.id);
-    expect(chatPageBody.limit).toBe(1);
-    expect(chatPageBody.has_more).toBe(false);
+    const chatLog = await app.request(`/api/sessions/${chat.id}/log?before=1`);
+    const chatLogBody = await chatLog.json();
+    expect(chatLogBody.entries.at(-1).session_id).toBe(chat.id);
+    expect(chatLogBody.entries.at(-1).body_md).toBe("hello page");
 
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const waitLocalDirectory = await app.request(`/api/daemon/tasks/${task.id}/wait-local-directory`, {

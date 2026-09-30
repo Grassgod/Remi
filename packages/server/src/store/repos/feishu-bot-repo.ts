@@ -786,10 +786,6 @@ export class FeishuBotRepo {
       }
       return { message, attachments, delivery_ids: deliveryIds };
     })();
-    const session = this.ctx.chat().getChatSession(result.message.chatSessionId)!;
-    this.ctx.emitChatEvent(session, "chat:message", { message_id: result.message.id,
-      role: "assistant", content: result.message.body, task_id: taskId, created_at: result.message.createdAt },
-      { actorType: "agent", actorId: this.ctx.tasks().getTask(taskId)!.agentId });
     return result;
   }
 

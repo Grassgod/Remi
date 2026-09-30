@@ -218,7 +218,6 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(await reader`SELECT id FROM multiremi_session_events WHERE task_id = ${leader.id} AND kind = 'task_completed'`).toHaveLength(0);
     expect(store.listIssueActivity(issue.id).filter(entry => entry.type === "task_completed"
       && (entry.data as { taskId?: string } | null)?.taskId === leader.id)).toHaveLength(0);
-    expect(events.filter(type => type === "chat:message")).toHaveLength(0);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
     expect(db.inTransaction).toBe(false);
@@ -252,17 +251,9 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(workspaceLocks.length).toBeGreaterThanOrEqual(2);
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
-    const chatEvents = events.filter(event => event.type === "chat:message");
-    expect(chatEvents).toHaveLength(1);
-    expect(chatEvents[0].inTransaction).toBe(false);
-    expect(chatEvents[0].actorId).toBe(store.getChatSession(wake.chatSessionId!)!.creatorId);
-    expect(events[0]).toBe(chatEvents[0]);
-    expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
-    expect(chatEvents[0].payload).toMatchObject({
-      chat_session_id: wake.chatSessionId, role: "system", task_id: null,
-      content: store.listChatMessages(wake.chatSessionId!)
-        .find(message => message.id === chatEvents[0].payload.message_id)!.body,
-    });
+    expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
+    expect(events[0]?.type).toBe("activity:created");
+    expect(events[0]?.inTransaction).toBe(false);
   });
 
   const roleUpdates = [

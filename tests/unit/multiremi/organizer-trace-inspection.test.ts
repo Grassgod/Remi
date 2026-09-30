@@ -38,8 +38,7 @@ describe("organizer trace inspection", () => {
       expect(response.status).toBe(200);
       const { inspection } = await response.json();
       expect(inspection).toMatchObject(counts.eventCount === null ? {
-        tool_call_count: 1, event_count: 2,
-        message_type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Bash", count: 1 }],
+        tool_call_count: 0, event_count: 0, message_type_histogram: [], last_message: null,
       } : {
         tool_call_count: counts.toolCallCount, event_count: counts.eventCount,
         message_type_histogram: counts.typeHistogram,
@@ -58,7 +57,7 @@ describe("organizer trace inspection", () => {
     });
   });
 
-  it("preserves the legacy last_message on a completed task with full persisted turn-card statistics", async () => {
+  it("uses persisted turn-card statistics without a legacy last_message", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Organizer tail", provider: "codex", workspaceId: "local" });
@@ -73,22 +72,19 @@ describe("organizer trace inspection", () => {
     const terminal = store.getTask(task.id)!;
     const previous = await organizerTaskInspection(store, terminal, { getTurnStats: () => null });
     const inspection = await organizerTaskInspection(store, terminal, { getTurnStats: (id) => organizerTurnStats(store, id) });
-    const tail = store.listTaskMessages(task.id).at(-1)!;
-    expect(previous.last_message).toEqual({ seq: tail.seq, created_at: tail.createdAt });
-    expect(inspection.last_message).toEqual(previous.last_message);
+    expect(previous.last_message).toBeNull();
+    expect(inspection.last_message).toBeNull();
     expect(inspection).toMatchObject({
       tool_call_count: 7, event_count: 30,
       message_type_histogram: [{ type: "tool_use", tool: "Read", count: 7 }],
     });
   });
 
-  it("falls back to legacy rows when a terminal card has no statistics", async () => {
+  it("does not fall back to legacy rows when a terminal card has no statistics", async () => {
     const { store, task } = fixture();
     const inspection = await organizerTaskInspection(store, { ...task, status: "completed" }, { getTurnStats: () => null });
-    expect(inspection).toMatchObject({ tool_call_count: 1, event_count: 2, last_message: { seq: 2 } });
-    expect(inspection.message_type_histogram).toEqual([
-      { type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Bash", count: 1 },
-    ]);
+    expect(inspection).toMatchObject({ tool_call_count: 0, event_count: 0, last_message: null });
+    expect(inspection.message_type_histogram).toEqual([]);
   });
 
   it("uses a readTrace tail window for running tasks", async () => {
@@ -109,12 +105,12 @@ describe("organizer trace inspection", () => {
     expect(inspection).toMatchObject({ tool_call_count: 1, event_count: 1, last_message: { seq: 300 }, message_type_histogram: [{ type: "tool_use", tool: "Read", count: 1 }] });
   });
 
-  it("keeps the legacy detail when hot reading is unreachable", async () => {
+  it("does not surface legacy detail when hot reading is unreachable", async () => {
     const { store, task } = fixture();
     const readTrace = {
       readTrace: async () => ({ events: [], next_after_seq: 0, head: 0, eof: true, closed: false, source: "daemon" as const, state: "unreachable" as const }),
     } as Pick<TraceReader, "readTrace">;
     const inspection = await organizerTaskInspection(store, { ...task, status: "running" }, { readTrace });
-    expect(inspection).toMatchObject({ event_count: 2, last_message: { seq: 2 } });
+    expect(inspection).toMatchObject({ event_count: 0, last_message: null });
   });
 });

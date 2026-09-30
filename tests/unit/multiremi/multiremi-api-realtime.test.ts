@@ -26,7 +26,6 @@ describe("Multiremi API — realtime websockets", () => {
         authenticated: true,
         userId: "local",
         accessToken,
-        scopeSubscriptions: [],
       },
       sendText: (frame: string) => frames.push(frame),
       close: () => {},
@@ -35,7 +34,7 @@ describe("Multiremi API — realtime websockets", () => {
     const task = client(taskFrames, { type: "task" });
     const workspaceRegistry = new Map([["local", new Set([human, task])]]) as any;
 
-    notifyBrowserWorkspaceEvent(workspaceRegistry, new Map(), new Map(), {
+    notifyBrowserWorkspaceEvent(workspaceRegistry, new Map(), {
       type: "autopilot:updated",
       workspaceId: "local",
       payload: {
@@ -274,27 +273,6 @@ describe("Multiremi API — realtime websockets", () => {
 
       local.send(JSON.stringify({ type: "ping" }));
       expect(await nextWebSocketMessage(local)).toEqual({ type: "pong" });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "workspace", id: "local" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "workspace", id: "local" } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "user", id: "local" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "user", id: "local" } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: localTask.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "task", id: localTask.id } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "subscribe_ack", payload: { scope: "chat", id: chat.id } });
-      local.send(JSON.stringify({ type: "subscribe", payload: { scope: "unknown", id: "scope-1" } }));
-      expect(await nextWebSocketMessage(local)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "unknown", id: "scope-1", error: "unknown_scope" },
-      });
-      otherLocal.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(otherLocal)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "chat", id: chat.id, error: "forbidden" },
-      });
-      local.send(JSON.stringify({ type: "unsubscribe", payload: { scope: "task", id: localTask.id } }));
-      expect(await nextWebSocketMessage(local)).toEqual({ type: "unsubscribe_ack", payload: { scope: "task", id: localTask.id } });
-
       // A task inherits its agent's workspace, so the remote-workspace task
       // needs an agent that actually lives in the remote workspace.
       const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id });
@@ -356,7 +334,7 @@ describe("Multiremi API — realtime websockets", () => {
     }
   });
 
-  it("routes chat realtime events privately to the chat creator scope", async () => {
+  it("routes chat lifecycle events privately to the chat creator", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Chat Claude", provider: "claude", workspaceId: "local" });
     const runtime = store.registerRuntime({ id: "rt_chat_realtime", name: "chat runtime", provider: "claude", workspaceId: "local" });
@@ -373,15 +351,6 @@ describe("Multiremi API — realtime websockets", () => {
     try {
       await authenticateBrowserWebSocket(creator, creatorToken.token);
       await authenticateBrowserWebSocket(peer, peerToken.token);
-
-      creator.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(creator)).toEqual({ type: "subscribe_ack", payload: { scope: "chat", id: chat.id } });
-      // A workspace peer cannot subscribe to a chat it does not own.
-      peer.send(JSON.stringify({ type: "subscribe", payload: { scope: "chat", id: chat.id } }));
-      expect(await nextWebSocketMessage(peer)).toEqual({
-        type: "subscribe_error",
-        payload: { scope: "chat", id: chat.id, error: "forbidden" },
-      });
 
       // Accumulate every frame each socket receives from here on.
       creator.addEventListener("message", (event) => creatorMessages.push(JSON.parse(String(event.data))));
@@ -402,10 +371,6 @@ describe("Multiremi API — realtime websockets", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
 
       const first = (type: string) => creatorMessages.find((m) => m.type === type);
-      expect(first("chat:message")).toMatchObject({
-        type: "chat:message",
-        payload: { chat_session_id: chat.id, message_id: sent.message.id, role: "user", content: "hello private", task_id: sent.task.id },
-      });
       expect(first("chat:done")).toMatchObject({
         type: "chat:done",
         actor_type: "system",

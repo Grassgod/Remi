@@ -95,7 +95,6 @@ function registries() {
       authenticated: true,
       userId: "local",
       accessToken: null,
-      scopeSubscriptions: [] as string[],
     },
     sendText: (frame: string) => browserFrames.push(frame),
     close: () => {},

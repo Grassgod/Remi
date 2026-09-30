@@ -179,19 +179,15 @@ import {
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
-  handleBrowserScopeSubscribe,
-  handleBrowserScopeUnsubscribe,
   isWebSocketUpgrade,
   parseDaemonWebSocketMessage,
   registerBrowserUserWebSocketClient,
   registerBrowserWebSocketClient,
   resolveBrowserWebSocketWorkspaceId,
-  unregisterBrowserScopeWebSocketClient,
   unregisterBrowserUserWebSocketClient,
   unregisterBrowserWebSocketClient,
 } from "./realtime.js";
 import type {
-  BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
   MultiremiRealtimeState,
@@ -1114,7 +1110,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
-  const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
   const streamAuth: StreamAuthReader = options.streamAuth
     ?? (readPool
       ? createPostgresStreamAuthReader(readPool)
@@ -1140,7 +1135,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     registries: {
       browser: browserWebSockets,
       browserUser: browserUserWebSockets,
-      browserScope: browserScopeWebSockets,
     },
   });
   const server = Bun.serve<MultiremiWebSocketData>({
@@ -1206,7 +1200,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
               authenticated: authorization.authenticated,
               userId: authorization.userId,
               accessToken: authorization.accessToken,
-              scopeSubscriptions: [],
               streamEndpoint: "trace" as const,
             },
           });
@@ -1228,7 +1221,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
               authenticated: authorization.authenticated,
               userId: authorization.userId,
               accessToken: authorization.accessToken,
-              scopeSubscriptions: [],
               streamEndpoint: "log" as const,
             },
           });
@@ -1289,14 +1281,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
             ws.sendText(JSON.stringify({ type: "auth_ack" }));
             return;
           }
-          if (event.type === "subscribe") {
-            handleBrowserScopeSubscribe(browserScopeWebSockets, store, ws, event);
-            return;
-          }
-          if (event.type === "unsubscribe") {
-            handleBrowserScopeUnsubscribe(browserScopeWebSockets, ws, event);
-            return;
-          }
           // MUL-438 v2 frames. Each endpoint serves exactly one stream kind:
           // `/ws` carries `log:*`, `/api/trace/ws` carries `trace:*`.
           if (event.type === "stream.subscribe") {
@@ -1328,7 +1312,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
         else {
           unregisterBrowserWebSocketClient(browserWebSockets, ws);
           unregisterBrowserUserWebSocketClient(browserUserWebSockets, ws);
-          unregisterBrowserScopeWebSocketClient(browserScopeWebSockets, ws);
           browserStreams.disposeClient(ws);
           traceStreams.disposeClient(ws);
         }

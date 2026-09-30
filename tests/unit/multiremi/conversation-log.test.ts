@@ -225,7 +225,7 @@ describe("conversation log (MUL-426)", () => {
     expect((await updated.json()).entries[0].metadata.attachments).toEqual([]);
   });
 
-  it("keeps unbackfilled chat history in the legacy list and seq page", async () => {
+  it("retains an unbackfilled legacy row while new reads use the session log", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "History agent", provider: "codex", visibility: "workspace" });
     const chat = store.createChatSession({ agentId: agent.id, title: "History" });
@@ -240,16 +240,11 @@ describe("conversation log (MUL-426)", () => {
     expect(store.getConversationLogEntryById(sent.message.id)?.seq).toBe(2);
 
     const app = createMultiremiApp({ store });
-    const list = await (await app.request(`/api/chat/sessions/${chat.id}/messages`)).json();
-    expect(list.map((message: { content: string }) => message.content)).toEqual(["old message", "new message"]);
-    const newest = await (await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).json();
-    expect(newest.messages.map((message: { content: string }) => message.content)).toEqual(["new message"]);
-    expect(newest.has_more).toBe(true);
-    const query = new URLSearchParams({
-      limit: "1", before_id: newest.next_cursor.id, before_created_at: newest.next_cursor.created_at,
-    });
-    const older = await (await app.request(`/api/chat/sessions/${chat.id}/messages/page?${query}`)).json();
-    expect(older.messages.map((message: { content: string }) => message.content)).toEqual(["old message"]);
-    expect(older.has_more).toBe(false);
+    const window = await (await app.request(`/api/sessions/${chat.id}/log?before=10`)).json();
+    expect(window.entries.filter((entry: { kind: string }) => entry.kind === "message")
+      .map((entry: { body_md: string }) => entry.body_md)).toEqual(["new message"]);
+    expect(store.listChatMessagesFromLog(chat.id).map(message => message.body)).toEqual(["old message", "new message"]);
+    expect((await app.request(`/api/chat/sessions/${chat.id}/messages`)).status).toBe(404);
+    expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
   });
 });

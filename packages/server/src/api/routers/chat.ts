@@ -121,48 +121,6 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (!deleted) return c.json({ error: "chat session not found" }, 404);
     return c.body(null, 204);
   });
-  app.get("/api/chat/sessions/:sessionId/messages", (c) => {
-    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
-    if (loaded instanceof Response) return loaded;
-    const messages = store.listChatMessagesFromLog(loaded.session.id);
-    const attachments = store.listAttachmentsForChatMessages(messages.map((message) => message.id));
-    return c.json(messages.map((message) => chatMessageCompatibilityResponse(message, attachments.get(message.id) ?? [])));
-  });
-  app.get("/api/chat/sessions/:sessionId/messages/page", (c) => {
-    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
-    if (loaded instanceof Response) return loaded;
-    const rawLimit = c.req.query("limit");
-    let limit = 50;
-    if (rawLimit != null && rawLimit !== "") {
-      const parsedLimit = Number(rawLimit);
-      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
-        return c.json({ error: "invalid limit" }, 400);
-      }
-      limit = parsedLimit;
-    }
-    const beforeCreatedAt = c.req.query("before_created_at");
-    const beforeId = c.req.query("before_id");
-    if ((!beforeCreatedAt && beforeId) || (beforeCreatedAt && !beforeId)) {
-      return c.json({ error: "invalid cursor" }, 400);
-    }
-    if (beforeCreatedAt && Number.isNaN(Date.parse(beforeCreatedAt))) {
-      return c.json({ error: "invalid cursor" }, 400);
-    }
-    const page = store.listChatMessagesPageFromLog(loaded.session.id, limit, beforeId, beforeCreatedAt);
-    if (!page) return c.json({ error: "invalid cursor" }, 400);
-    const attachments = store.listAttachmentsForChatMessages(page.messages.map((message) => message.id));
-    const pageMessages = page.messages.map((message) => chatMessageCompatibilityResponse(message, attachments.get(message.id) ?? []));
-    const hasMore = page.hasMore;
-    const nextCursor = hasMore && pageMessages[0]
-      ? { created_at: pageMessages[0].created_at, id: pageMessages[0].id }
-      : null;
-    return c.json({
-      messages: pageMessages,
-      limit,
-      has_more: hasMore,
-      next_cursor: nextCursor,
-    });
-  });
   app.post("/api/chat/sessions/:sessionId/messages", async (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
     if (loaded instanceof Response) return loaded;

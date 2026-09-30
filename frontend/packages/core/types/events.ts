@@ -46,7 +46,6 @@ export type WSEventType =
   | "task:progress"
   | "task:completed"
   | "task:failed"
-  | "task:message"
   | "task:cancelled"
   | "inbox:new"
   | "inbox:read"
@@ -71,7 +70,6 @@ export type WSEventType =
   | "reaction:removed"
   | "issue_reaction:added"
   | "issue_reaction:removed"
-  | "chat:message"
   | "chat:done"
   | "chat:session_read"
   | "chat:session_deleted"
@@ -238,13 +236,8 @@ export interface ActivityCreatedPayload {
   entry: TimelineEntry;
 }
 
-// Canonical snake_case shape after the normalizer runs. The wire delivers this
-// two ways with different casing — browser GET returns the camelCase store
-// object, the WS frame is snake_case — so both are funnelled through
-// normalizeTaskMessage (task-transcript/normalize.ts) before landing here, or
-// pairing/rendering silently breaks (live has tool_call_id, a refetch has
-// toolCallId). `type` stays an open string so a new daemon message kind
-// (usage / plan / …) degrades to a generic row instead of being dropped.
+// Legacy task message shape retained for historical API payloads. Live task
+// transcripts use TraceEvent; its `type` remains open for new daemon kinds.
 export type KnownTaskMessageType =
   | "text"
   | "thinking"
@@ -277,17 +270,6 @@ export interface TaskMessagePayload {
   meta?: Record<string, unknown>;
   /** Server insert time; present on the wire already (GET as createdAt, WS as created_at). */
   created_at?: string;
-}
-
-/** Header-only task:message: the peer could not read a referenced seq range. */
-export interface TaskMessageRefetchPayload {
-  task_id: string;
-  issue_id: string | null;
-  chat_session_id?: string;
-  issue_session_id?: string;
-  degraded: true;
-  seq_start: number;
-  seq_end: number;
 }
 
 export interface TaskProgressPayload {
@@ -528,7 +510,6 @@ export interface WSEventPayloadMap {
   "task:awaiting_human": TaskAwaitingHumanPayload;
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
-  "task:message": TaskMessagePayload | TaskMessageRefetchPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": TaskProgressPayload;
   "inbox:new": InboxNewPayload;
@@ -544,7 +525,6 @@ export interface WSEventPayloadMap {
   "subscriber:added": SubscriberAddedPayload;
   "subscriber:removed": SubscriberRemovedPayload;
   "activity:created": ActivityCreatedPayload;
-  "chat:message": ChatMessageEventPayload;
   "chat:done": ChatDonePayload;
   "chat:session_read": ChatSessionReadPayload;
   "chat:session_deleted": ChatSessionDeletedPayload;

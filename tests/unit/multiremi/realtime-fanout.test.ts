@@ -21,7 +21,6 @@ import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import {
   notifyBrowserTaskEvent,
-  notifyBrowserTaskMessages,
   notifyBrowserWorkspaceEvent,
 } from "../../../packages/server/src/api/realtime.js";
 import {
@@ -47,7 +46,6 @@ function fakeBrowserClient(frames: string[], options: { workspaceId?: string; us
       authenticated: true,
       userId: options.userId ?? "local",
       accessToken: null,
-      scopeSubscriptions: [] as string[],
     },
     sendText: (frame: string) => frames.push(frame),
     close: () => {},
@@ -59,7 +57,6 @@ type DaemonTaskEvent = Parameters<NonNullable<RealtimeFanoutOptions["onDaemonTas
 function registriesFor(workspaceId = "local") {
   const browserFrames: string[] = [];
   const userFrames: string[] = [];
-  const scopeFrames: string[] = [];
   const daemonEvents: DaemonTaskEvent[] = [];
   const browserClient = fakeBrowserClient(browserFrames, { workspaceId });
   return {
@@ -69,7 +66,6 @@ function registriesFor(workspaceId = "local") {
     registries: {
       browser: new Map([[workspaceId, new Set([browserClient])]]) as any,
       browserUser: new Map([["local", new Set([fakeBrowserClient(userFrames)])]]) as any,
-      browserScope: new Map() as any,
     },
   };
 }
@@ -130,29 +126,6 @@ describe("realtime fanout — role routing", () => {
       });
       expect(browserFrames).toHaveLength(0);
       expect(daemonEvents).toEqual([]);
-    } finally {
-      fanout.close();
-    }
-  });
-
-  it("delivers a peer task_messages event to the browser registries of a `ui` process", () => {
-    const store = createStore();
-    const agent = store.createAgent({ name: "Fanout messages", provider: "codex" });
-    const task = store.createTask({ agentId: agent.id, prompt: "messages" });
-    store.appendTaskMessages(task.id, [{ type: "assistant", content: "hello" }]);
-    const messages = store.listTaskMessages(task.id);
-    const { registries, browserFrames, daemonEvents, onDaemonTask } = registriesFor();
-    const fanout = createRealtimeFanout({ role: "ui", store, registries, onDaemonTask });
-
-    try {
-      fanout.deliverRemote({
-        v: 1,
-        origin: "process-runtime",
-        kind: "task_messages",
-        payload: { task: store.getTask(task.id)!, task_id: task.id, messages },
-      });
-      expect(daemonEvents).toHaveLength(0);
-      expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:message", payload: { seq: 1 } });
     } finally {
       fanout.close();
     }
@@ -589,35 +562,6 @@ describe("realtime fanout — two servers over one database", () => {
     }
   });
 
-  it("delivers task messages appended on B to A's task-scope subscription", async () => {
-    const two = shared!;
-    {
-      const { storeA, storeB, serverA } = two;
-      const agent = storeA.createAgent({ name: "Peer messages agent", provider: "codex" });
-      const task = storeA.createTask({ agentId: agent.id, prompt: "peer messages" });
-      const token = await storeA.createAccessToken({ name: "Peer scope", type: "pat", workspaceId: "local" });
-
-      const socket = openBrowserSocket(serverA.port, token.token);
-      await authenticateBrowserSocket(socket, token.token);
-      try {
-        socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: task.id } }));
-        expect(await nextWebSocketMessage(socket)).toEqual({
-          type: "subscribe_ack",
-          payload: { scope: "task", id: task.id },
-        });
-
-        const frame = nextWebSocketMessage(socket);
-        storeB.appendTaskMessages(task.id, [{ type: "assistant", content: "crossed the channel" }]);
-        expect(await frame).toMatchObject({
-          type: "task:message",
-          payload: { task_id: task.id, seq: 1, content: "crossed the channel" },
-        });
-      } finally {
-        socket.close();
-      }
-    }
-  });
-
   it("answers /internal/peer/health on both sides and 401s a bad secret", async () => {
     const two = shared!;
     {
@@ -661,13 +605,11 @@ describe("realtime fanout — two servers over one database", () => {
     }
   });
 
-  it("delivers one task's 100 messages in seq order across the channel", async () => {
+  it("delivers 100 workspace invalidations in order across the channel", async () => {
     const two = shared!;
     {
       const { storeA, storeB, serverA } = two;
-      const agent = storeA.createAgent({ name: "Peer order agent", provider: "codex" });
-      const task = storeA.createTask({ agentId: agent.id, prompt: "peer order" });
-      const token = await storeA.createAccessToken({ name: "Peer order scope", type: "pat", workspaceId: "local" });
+      const token = await storeA.createAccessToken({ name: "Peer order browser", type: "pat", workspaceId: "local" });
 
       const socket = openBrowserSocket(serverA.port, token.token);
       await authenticateBrowserSocket(socket, token.token);
@@ -675,13 +617,10 @@ describe("realtime fanout — two servers over one database", () => {
         const seqs: number[] = [];
         socket.addEventListener("message", (event) => {
           const frame = JSON.parse(String(event.data));
-          if (frame.type === "task:message") seqs.push(frame.payload.seq);
+          if (frame.type === "issue:updated") seqs.push(frame.payload.seq);
         });
-        socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: task.id } }));
-        await nextWebSocketMessage(socket);
-
         for (let seq = 1; seq <= 100; seq += 1) {
-          storeB.appendTaskMessages(task.id, [{ seq, type: "assistant", content: `message ${seq}` }]);
+          storeB.emitWorkspaceEvent({ type: "issue:updated", workspaceId: "local", payload: { seq } });
         }
 
         const deadline = Date.now() + 20_000;
@@ -757,9 +696,7 @@ describe("realtime fanout — two servers over one database", () => {
     const two = await startTwoServers({ queueLimit: 10 });
     try {
       const { storeA, storeB, serverA } = two;
-      const agent = storeA.createAgent({ name: "Peer down agent", provider: "codex" });
-      const task = storeA.createTask({ agentId: agent.id, prompt: "peer down" });
-      const token = await storeA.createAccessToken({ name: "Peer down scope", type: "pat", workspaceId: "local" });
+      const token = await storeA.createAccessToken({ name: "Peer down browser", type: "pat", workspaceId: "local" });
 
       const socket = openBrowserSocket(serverA.port, token.token);
       await authenticateBrowserSocket(socket, token.token);
@@ -767,18 +704,15 @@ describe("realtime fanout — two servers over one database", () => {
         const received: number[] = [];
         socket.addEventListener("message", (event) => {
           const frame = JSON.parse(String(event.data));
-          if (frame.type === "task:message") received.push(frame.payload.seq);
+          if (frame.type === "issue:updated") received.push(frame.payload.seq);
         });
-        socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: task.id } }));
-        await nextWebSocketMessage(socket);
-
         // B can no longer reach A. Every write below is therefore a write whose
         // realtime delivery fails; none of them may slow the caller down.
         two.setLink("b", false);
         const writeMs: number[] = [];
         for (let seq = 1; seq <= 40; seq += 1) {
           const startedAt = performance.now();
-          storeB.appendTaskMessages(task.id, [{ seq, type: "assistant", content: `queued ${seq}` }]);
+          storeB.emitWorkspaceEvent({ type: "issue:updated", workspaceId: "local", payload: { seq } });
           writeMs.push(performance.now() - startedAt);
         }
         expect(Math.max(...writeMs)).toBeLessThan(250);
@@ -820,18 +754,14 @@ describe("realtime fanout — two servers over one database", () => {
 describe("realtime fanout — dedupe and guards", () => {
   /**
    * QA item 6: the receiver handles a batch, the response is lost, the sender
-   * retries. Before dedupe the browser got `[1, 1]` for one message; the raw WS
+   * retries. Before dedupe the browser got two invalidations; the raw WS
    * frames are what the browser sees, so the assertion is on those, not on the
    * client cache (which dedupes by seq and would hide the protocol bug).
    */
   it("does not re-deliver a batch whose ACK was lost", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Dedupe agent", provider: "codex" });
-    const task = store.createTask({ agentId: agent.id, prompt: "dedupe" });
-    // Persisted before the fanout subscribes, so this message reaches the browser
-    // through the peer path only: a local append here would deliver one frame by
-    // itself and hide whether the retry was deduplicated.
-    const [persisted] = store.appendTaskMessages(task.id, [{ type: "assistant", content: "once" }]);
+    store.createTask({ agentId: agent.id, prompt: "dedupe" });
     const { registries, browserFrames } = registriesFor();
 
     let posts = 0;
@@ -870,19 +800,17 @@ describe("realtime fanout — dedupe and guards", () => {
     }
 
     try {
-      sender.forwardRealtime("task_messages", {
-        task,
-        task_id: task.id,
-        messages: [persisted!],
-      });
+      sender.forwardRealtime("workspace_event", { event: {
+        type: "issue:updated", workspaceId: "local", payload: { issue_id: "issue-dedupe" },
+      } });
 
       const deadline = Date.now() + 5_000;
       while (sender.stats().batches < 1 && Date.now() < deadline) await Bun.sleep(10);
       // Wait for the retry to be answered, then let a late duplicate land if any.
       await Bun.sleep(150);
 
-      const frames = browserFrames.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "task:message");
-      expect(frames.map((frame) => frame.payload.seq)).toEqual([1]);
+      const frames = browserFrames.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "issue:updated");
+      expect(frames.map((frame) => frame.payload.issue_id)).toEqual(["issue-dedupe"]);
       expect(posts).toBeGreaterThanOrEqual(2);
       expect(receiverPeer.stats().duplicates).toBe(1);
       expect(receiverPeer.stats().received).toBe(1);

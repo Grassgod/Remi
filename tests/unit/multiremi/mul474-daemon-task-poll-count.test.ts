@@ -32,13 +32,6 @@ import {
   seedDaemonTaskPollResultCases,
   type DaemonTaskPollFixture,
 } from "../../fixtures/multiremi/daemon-task-poll-fixture.js";
-import { notifyBrowserTaskMessages } from "@multiremi/api/realtime.js";
-import {
-  driveTaskMessageFanout,
-  fanoutFixtureStore,
-  installDeterministicFanoutClock,
-} from "../../fixtures/multiremi/task-message-fanout-fixture.js";
-import fanoutGolden from "../../fixtures/multiremi/task-message-fanout-golden.json";
 import golden from "../../fixtures/multiremi/daemon-task-poll-golden.json";
 
 const AUTH_TOKEN = "mul474-count-token";
@@ -482,37 +475,5 @@ describe("MUL-474 daemon task authority matrix", () => {
       domain: "feishu",
     });
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(403);
-  });
-});
-
-/**
- * The browser task-message frames are a contract as well: the fan-out now takes a
- * `TaskMessageFanoutSubject` instead of a whole Task, and the payload must not
- * have moved with it. The golden was captured on the pre-change commit with the
- * same fixture (both fan-out branches, a visible and a denied recipient), and the
- * comparison is on the emitted frame text — what a browser actually receives.
- */
-describe("MUL-474 browser task-message fan-out wire payload", () => {
-  it("emits the same frames the pre-change implementation emitted, byte for byte", () => {
-    const restoreClock = installDeterministicFanoutClock();
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
-    databases.push(db);
-    try {
-      const store = fanoutFixtureStore(db);
-      const frames = driveTaskMessageFanout(store, notifyBrowserTaskMessages);
-
-      expect(frames.workspaceFrames).toEqual(fanoutGolden.workspaceFrames);
-      expect(frames.chatFrames).toEqual(fanoutGolden.chatFrames);
-      // A recipient without access to the Task receives nothing, before and after.
-      expect(frames.deniedFrames).toEqual(fanoutGolden.deniedFrames);
-      // Serialized comparison too: the daemon-facing consumers read the bytes.
-      expect(JSON.stringify(frames)).toBe(JSON.stringify({
-        workspaceFrames: fanoutGolden.workspaceFrames,
-        chatFrames: fanoutGolden.chatFrames,
-        deniedFrames: fanoutGolden.deniedFrames,
-      }));
-    } finally {
-      restoreClock();
-    }
   });
 });

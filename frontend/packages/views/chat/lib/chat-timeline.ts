@@ -1,6 +1,6 @@
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { ChatTimelineItem } from "@multiremi/core/chat";
-import { buildTimeline } from "../../common/task-transcript";
+import { buildTraceTimeline, coalesceTimelineItems } from "../../common/task-transcript/build-timeline";
 
 /**
  * Adapt a task transcript to what the compact chat surface can render.
@@ -12,8 +12,8 @@ import { buildTimeline } from "../../common/task-transcript";
  * boundary. A run whose last event is a compaction chunk would push the real
  * final answer inside the fold and leave `final` empty.
  */
-export function toChatTimeline(msgs: TaskMessagePayload[]): ChatTimelineItem[] {
-  return buildTimeline(msgs).filter(
-    (item): item is ChatTimelineItem => item.type !== "compaction",
-  );
+export function toChatTimeline(events: readonly TraceEvent[]): ChatTimelineItem[] {
+  return coalesceTimelineItems(buildTraceTimeline(events)).filter(
+    (item) => !["compaction", "usage", "execution"].includes(item.type),
+  ) as ChatTimelineItem[];
 }

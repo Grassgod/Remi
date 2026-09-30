@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { browserScopeKey, notifyBrowserTaskEvent } from "@multiremi/api/realtime.js";
+import { notifyBrowserTaskEvent } from "@multiremi/api/realtime.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Project Chat startup progress", () => {
-  it("publishes scoped progress and recovers it from the pending task after reopening Chat", async () => {
+  it("publishes creator-private progress and recovers it from the pending task after reopening Chat", async () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const project = store.createProject({ title: "Project" });
@@ -19,10 +19,11 @@ describe("Project Chat startup progress", () => {
     expect(events.map(event => event.type)).toEqual(["task:progress"]);
     const frames: string[] = [];
     const unrelatedFrames: string[] = [];
-    const chatClient = { sendText: (frame: string) => frames.push(frame) } as any;
+    const chatClient = { data: { kind: "browser", workspaceId: "local" }, sendText: (frame: string) => frames.push(frame) } as any;
     notifyBrowserTaskEvent(
       new Map([["local", new Set([{ sendText: (frame: string) => unrelatedFrames.push(frame) } as any])]]),
-      new Map([[browserScopeKey("chat", chat.id), new Set([chatClient])]]),
+      new Map([[chat.creatorId!, new Set([chatClient])]]),
+      store,
       events[0]!.type, events[0]!.task,
     );
     expect(JSON.parse(frames[0]!)).toMatchObject({ type: "task:progress", payload: {

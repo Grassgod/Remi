@@ -149,7 +149,6 @@ interface FakeClient {
     authenticated: boolean;
     userId: string | null;
     accessToken: null;
-    scopeSubscriptions: string[];
     streamEndpoint?: "log" | "trace";
   };
   frames: any[];
@@ -167,7 +166,6 @@ function fakeClient(workspaceId: string, userId: string | null): FakeClient {
       authenticated: true,
       userId,
       accessToken: null,
-      scopeSubscriptions: [],
     },
     frames,
     sendText(message: string) {

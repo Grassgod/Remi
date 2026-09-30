@@ -3,10 +3,8 @@ import type {
   AgentRunCount,
   AgentTask,
   IssueUsageSummary,
-  TaskMessagePayload,
   TaskPromptArtifact,
 } from "../../types";
-import { normalizeTaskMessages } from "../../chat/normalize-message";
 import type { HttpClient } from "../http";
 import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
@@ -50,12 +48,6 @@ export class TasksEndpoints {
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {
     return this.http.fetch(`/api/issues/${issueId}/active-task`);
-  }
-
-  async listTaskMessages(taskId: string): Promise<TaskMessagePayload[]> {
-    // GET returns the camelCase store object; the WS wire is snake_case. Funnel
-    // both through the one normalizer so the cache holds a single shape.
-    return normalizeTaskMessages(await this.http.fetch(`/api/tasks/${taskId}/messages`));
   }
 
   async getTaskTrace(taskId: string, afterSeq = 0, limit = 500): Promise<TaskTraceRead> {

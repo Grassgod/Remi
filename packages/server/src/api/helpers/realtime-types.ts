@@ -31,11 +31,9 @@ export type BrowserWebSocketData = {
   authenticated: boolean;
   userId: string | null;
   accessToken: MultiremiAccessToken | null;
-  scopeSubscriptions: string[];
   /**
    * Which v2 stream kind this socket serves (MUL-438): `/ws` carries `log:*`,
-   * `/api/trace/ws` carries `trace:*`. Optional so the v1 scope path and the
-   * existing test doubles keep their current shape.
+   * `/api/trace/ws` carries `trace:*`.
    */
   streamEndpoint?: "log" | "trace";
 }
@@ -53,5 +51,3 @@ export type MultiremiWebSocketClient = {
 export type BrowserWebSocketRegistry = Map<string, Set<MultiremiWebSocketClient>>;
 
 export type BrowserUserWebSocketRegistry = Map<string, Set<MultiremiWebSocketClient>>;
-
-export type BrowserScopeWebSocketRegistry = Map<string, Set<MultiremiWebSocketClient>>;
