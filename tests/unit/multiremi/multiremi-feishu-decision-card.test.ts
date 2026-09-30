@@ -696,6 +696,53 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
   });
 
+  it("settles an offline cancellation with its Issue card in the task transaction", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_offline_cancel",
+      interactionOpenId: "ou_the_person",
+    });
+    const storeDb = (store as unknown as { db: SqlDatabase }).db;
+    const notifications: string[] = [];
+    const offWorkspace = store.onWorkspaceEvent(event => notifications.push(event.type));
+    const offTask = store.onTaskEvent(event => notifications.push(event.type));
+    try {
+      expect(() => storeDb.transaction(() => {
+        store.cancelTask(taskId);
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(notifications).toEqual([]);
+        throw new Error("rollback cancellation");
+      })()).toThrow("rollback cancellation");
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+      expect(notifications).toEqual([]);
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 0 });
+
+      store.cancelTask(taskId);
+      const cancelled = store.getTaskHumanRequest(request.id)!;
+      expect(cancelled.status).toBe("cancelled");
+      expect(cancelled.response).toBeNull();
+      expect(cancelled.respondedAt).not.toBeNull();
+      expect(notifications).toContain("daemon:task_input");
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 1 });
+      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {})
+        .filter(entity => entity.type === "task.human_request.settled"))
+        .toEqual([expect.objectContaining({ payload: { task_id: taskId, request: cancelled } })]);
+      expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+        .get(request.id)).toEqual({ n: 1 });
+      expect(store.getTaskHumanRequest(request.id)).toEqual(cancelled);
+    } finally {
+      offWorkspace();
+      offTask();
+    }
+  });
+
   it("fans out a Chat-bound request without a decision card and rejects a disabled host", () => {
     const { store, agentId, config } = scaffold();
     const chat = store.submitFeishuBotMessage("local", "rt_bot", {

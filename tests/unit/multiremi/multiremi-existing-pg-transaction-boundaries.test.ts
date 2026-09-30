@@ -105,6 +105,40 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     } };
   }
 
+  it("closes pending human requests only when an outer task cancellation commits", () => {
+    const { workspaceId, agent, runtime } = freshAgent();
+    const task = store.createTask({ agentId: agent.id, workspaceId, runtimeId: runtime.id, prompt: "Wait" });
+    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { message: "Continue?" } });
+    const events: Array<{ type: string; inTransaction: boolean }> = [];
+    const offWorkspace = store.onWorkspaceEvent(event => {
+      if (event.payload.task_id === task.id) events.push({ type: event.type, inTransaction: db.inTransaction === true });
+    });
+    const offTask = store.onTaskEvent(event => {
+      if (event.task.id === task.id) events.push({ type: event.type, inTransaction: db.inTransaction === true });
+    });
+    try {
+      expect(() => db.transaction(() => {
+        store.cancelTask(task.id);
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(events).toEqual([]);
+        throw new Error("rollback cancellation");
+      })()).toThrow("rollback cancellation");
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+      expect(events).toEqual([]);
+      db.transaction(() => {
+        store.cancelTask(task.id);
+        expect(events).toEqual([]);
+      })();
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+      expect(events.filter(event => event.type === "daemon:task_input")).toHaveLength(1);
+      expect(events.every(event => !event.inTransaction)).toBe(true);
+      expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
+    } finally {
+      offWorkspace();
+      offTask();
+    }
+  });
+
   it("rolls back Feishu Chat, steer and delivery writes after a later failure", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
     const events: string[] = [];

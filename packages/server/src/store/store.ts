@@ -5011,6 +5011,10 @@ runMigrations(this.db);
     return this.tasks.getTaskHumanRequest(requestId);
   }
 
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void {
+    this.tasks.cancelPendingHumanRequestsWithinTransaction(taskId, now);
+  }
+
   prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
     return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
   }
@@ -5032,6 +5036,10 @@ runMigrations(this.db);
     const request = this.tasks.expireTaskHumanRequest(requestId, status);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
     return request;
+  }
+
+  enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest): void {
+    this.feishuBot.enqueueDecisionCardPatch(request);
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {

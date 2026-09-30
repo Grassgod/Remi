@@ -571,6 +571,7 @@ export interface TasksSurface {
   listTasksForIssue(issueId: string): MultiremiTask[];
   /** Read one human request without going through the facade (MUL-407). */
   getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
@@ -698,6 +699,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  enqueueDecisionCardPatch(request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest): void;
   getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
   isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];

@@ -4560,7 +4560,7 @@ ${placementAfter.sql}
     const deferredEvents = createCommitEventQueue();
     const terminal = this.ctx.db.transaction(() =>
       this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents))();
-    this.runChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
     this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminal.task;
@@ -4666,7 +4666,7 @@ ${placementAfter.sql}
       this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
       return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents));
     })();
-    this.runChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminals.length;
@@ -5587,6 +5587,7 @@ ${placementAfter.sql}
     deferredEvents: CommitEventQueue,
   ): TaskTerminalFollowUps {
     const now = nowIso();
+    this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.
     if (status !== "cancelled") {
@@ -5971,6 +5972,24 @@ ${placementAfter.sql}
     return { retry, delegationReturns, roundPushTasks };
   }
 
+  /** Terminal task writers call this inside their task transaction. */
+  cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string = nowIso()): void {
+    const pending = this.ctx.db.query(
+      "SELECT id FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
+    ).all(taskId) as Array<{ id: string }>;
+    if (pending.length === 0) return;
+    this.ctx.db.run(
+      `UPDATE multiremi_task_human_requests SET status = 'cancelled', responded_at = ?
+       WHERE task_id = ? AND status = 'pending'`,
+      [now, taskId],
+    );
+    for (const { id } of pending) {
+      const request = this.getTaskHumanRequest(id)!;
+      this.ctx.feishuBot().enqueueDecisionCardPatch(request);
+    }
+    this.publishTaskInputChanged(taskId);
+  }
+
   /**
    * Caller holds the task workspace lifecycle lock. `childStatusChanges` is the
    * caller's collector for the post-commit E1/E2 hook; the same lock is held by
@@ -6012,10 +6031,12 @@ ${placementAfter.sql}
   }
 
   notifyCancelledTask(terminal: CancelTaskResult): void {
-    for (const delegationReturn of terminal.followUps.delegationReturns) {
-      this.ctx.notifyTaskEnqueued(delegationReturn);
-    }
-    this.ctx.notifyTaskEvent("task:cancelled", terminal.task);
+    afterCommit(this.ctx.db, () => {
+      for (const delegationReturn of terminal.followUps.delegationReturns) {
+        this.ctx.notifyTaskEnqueued(delegationReturn);
+      }
+      this.ctx.notifyTaskEvent("task:cancelled", terminal.task);
+    });
   }
 
   /**
