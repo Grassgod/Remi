@@ -3,6 +3,7 @@ import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-
 import type { TaskSteerSource } from "./steer.js";
 
 type Terminal = Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">;
+const MAX_SETTLED_REQUESTS = 1024;
 
 /** Per-runtime push inbox. The executing task owns cancellation and steer consumption. */
 export class DaemonTaskDownlinks implements TaskSteerSource {
@@ -31,6 +32,8 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
       if (this.settled.has(request.id)) return;
       this.settled.set(request.id, request);
       for (const listener of this.humanListeners.get(request.id) ?? []) listener(request);
+      // A bot host receives other runtimes' requests and never calls release(taskId).
+      while (this.settled.size > MAX_SETTLED_REQUESTS) this.settled.delete(this.settled.keys().next().value!);
     });
     client.registerFrameHandler("task.cancelled", frame => {
       if (frame.rt !== runtimeId() || typeof frame.payload.task_id !== "string") return;

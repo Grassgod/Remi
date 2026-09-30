@@ -287,7 +287,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 | `task.offer` | `multiremi_tasks` 中 queued / dispatched 的行 |
 | `task.steer` | 未消费的 steer 行 |
 | `task.cancelled` | 任务已终态而 daemon 仍在跑 |
-| `task.human_request.settled` | human request 的状态 |
+| `task.human_request.settled` | 已结束的 human request 状态（`responded`、`timeout`、`cancelled`） |
 | `runtime.*` 各类待办 | 各自请求表 |
 | `platform.drain` | 平台维护状态行 |
 | `plugin.desired_revision` | `desiredRevision` |
@@ -296,6 +296,18 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、steer 的 `seen` 集合今天就有，
 补齐 update / command / skills 的同类集合即可）。服务端对每条下行可靠帧记发送时刻，15 s 未 ack
 即关连接（4000），由重连后的快照重推兜底。
+
+`task.human_request.settled` 的载荷固定为 `{task_id, request}`，`pending` 不发。
+服务端从已提交的请求状态推导快照，同时发给任务执行 runtime 和该 workspace 的飞书 bot host
+`config.runtimeId`；两者相同只发一次。bot host 候选来自当前配置名下已送达的决策卡
+（终态卡片补丁尚未报告 `sent`），或近 24 小时已结束的 Chat 绑定请求；任一终态补丁
+报告 `sent`、Chat 请求超过 24 小时后退出相应候选来源。按结束时间取最近 1024 条，
+避免重连推送无限历史；超过上限的较旧请求依赖卡片补丁出站队列或按需
+`human_request.get` 读取。每个候选还须通过该 RPC 对应的飞书任务权限校验；其他 runtime
+和 workspace 不接收。
+写入进程通过 workspace 事件跨进程唤醒持有 socket 的 runtime 进程；断线重连重新推快照，
+不新增帧或持久 seq。bot host 端最多缓存 1024 条已结束请求：释放执行任务时仍主动清理，
+长期不释放的外部任务按最早收到的顺序淘汰，避免内存随历史卡片无限增长。
 
 **trace 流：** 见 §5。
 

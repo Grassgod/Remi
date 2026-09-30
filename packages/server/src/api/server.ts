@@ -1007,7 +1007,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
     snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
-      ...taskInputSnapshot(store, rt, activeIds, id => downlinks.forgetTask(rt, id))] });
+      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id))] });
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store);

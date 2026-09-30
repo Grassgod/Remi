@@ -44,11 +44,23 @@ function reply(value: Record<string, unknown>): void {
 
 reply({ ready: true, port: server.port });
 for await (const line of createInterface({ input: process.stdin })) {
-  const command = JSON.parse(line) as { op: string; runtimeId?: string; taskId?: string; agentId?: string };
+  const command = JSON.parse(line) as { op: string; runtimeId?: string; taskId?: string; agentId?: string;
+    issueId?: string; requestId?: string; status?: "timeout" | "cancelled" };
   try {
     if (command.op === "create_task") {
-      const task = store.createTask({ agentId: command.agentId!, prompt: "cross-process offer" });
+      const task = store.createTask({ agentId: command.agentId!, issueId: command.issueId, runtimeId: command.runtimeId,
+        prompt: "cross-process offer" });
       reply({ op: command.op, taskId: task.id });
+    } else if (command.op === "create_human_request") {
+      const request = store.createTaskHumanRequest({ taskId: command.taskId!, kind: "question",
+        payload: { message: "Continue?", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
+      reply({ op: command.op, requestId: request.id });
+    } else if (command.op === "respond_human_request") {
+      const request = store.respondTaskHumanRequest(command.requestId!, { response: { answer: "Yes" } });
+      reply({ op: command.op, requestId: request?.id });
+    } else if (command.op === "expire_human_request") {
+      const request = store.expireTaskHumanRequest(command.requestId!, command.status ?? "timeout");
+      reply({ op: command.op, requestId: request?.id });
     } else if (command.op === "create_command") {
       const request = store.createRuntimeCommandRequest(command.runtimeId!, {
         command: "echo", args: ["cross-process"], createdBy: "fixture",

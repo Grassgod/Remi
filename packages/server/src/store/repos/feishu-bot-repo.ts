@@ -2292,6 +2292,41 @@ export class FeishuBotRepo {
     }));
   }
 
+  /** Bounded recovery for sent cards and recent Chat transport requests. */
+  listSettledHumanRequestCandidates(workspaceId: string, runtimeId: string): Array<{ requestId: string; taskId: string }> {
+    const chatCutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const rows = this.ctx.db.query(`
+      SELECT request.id AS request_id, request.task_id
+      FROM multiremi_task_human_requests request
+      JOIN multiremi_tasks task ON task.id = request.task_id
+      JOIN multiremi_feishu_bot_configs c ON c.workspace_id = task.workspace_id
+      JOIN multiremi_runtimes host ON host.id = c.runtime_id AND host.workspace_id = c.workspace_id
+      WHERE c.workspace_id = ? AND c.runtime_id = ? AND c.enabled = 1
+        AND request.status IN ('responded', 'timeout', 'cancelled')
+        AND NOT EXISTS (
+          SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries patch
+          WHERE patch.kind = 'decision_card_patch' AND patch.human_request_id = request.id
+            AND patch.status = 'sent'
+        )
+        AND (
+          EXISTS (
+            SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries o
+            WHERE o.workspace_id = c.workspace_id AND o.human_request_id = request.id
+              AND o.human_request_task_id = request.task_id AND o.kind = 'decision_card'
+              AND o.status = 'sent' AND o.degraded IS NULL AND o.external_message_id IS NOT NULL
+          )
+          OR (request.responded_at >= ? AND EXISTS (
+            SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
+            WHERE b.workspace_id = c.workspace_id AND b.app_id = c.app_id
+              AND b.chat_session_id = task.chat_session_id AND b.agent_id = task.agent_id
+          ))
+        )
+      ORDER BY request.responded_at DESC, request.id DESC
+      LIMIT 1024
+    `).all(workspaceId, runtimeId, chatCutoff) as Row[];
+    return rows.map(row => ({ requestId: String(row.request_id), taskId: String(row.task_id) }));
+  }
+
   /**
    * The Issue a delivery belongs to, so a host-reported outcome can be recorded
    * on the same timeline the queue entry was. Returns null when the row is not

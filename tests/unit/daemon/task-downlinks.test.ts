@@ -58,7 +58,7 @@ function fixture() {
     await waitFor(() => client.connectionState() === "disconnected" && layer.registry.size === 0);
     await client.drain(); await layer.drain();
   };
-  return { store, rt, task, inbox, frames, errors,
+  return { store, rt, task, inbox, client, frames, errors,
     async start() { client.startLane(lane); await waitFor(() => client.connectionState() === "connected"); await client.drain(); await layer.drain(); },
     disconnect,
     async reconnect() { clock.advance(1_000); await waitFor(() => client.connectionState() === "connected"); await client.drain(); await layer.drain(); },
@@ -71,8 +71,47 @@ function fixture() {
 }
 
 describe("A-4 task push inbox over native WS", () => {
+  it("resumes a connected human waiter from the settled frame without get polling", async () => {
+    const h = fixture();
+    const task = h.task();
+    const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    const rpc = spyOn(h.client, "rpc");
+    try {
+      await h.start();
+      const human = h.inbox.waitForHumanDecision(request.id, new AbortController().signal, 1_000);
+      const start = performance.now();
+      const settled = h.store.respondTaskHumanRequest(request.id, { response: { answer: "Yes" } });
+      expect(await human).toEqual(settled);
+      expect(performance.now() - start).toBeLessThan(1_000);
+      expect(h.frames.filter(frame => frame.t === "task.human_request.settled"
+        && frame.p.request.id === request.id)).toHaveLength(1);
+      expect(rpc.mock.calls.filter(([type]) => type === "human_request.get")).toHaveLength(0);
+    } finally { await h.close(); rpc.mockRestore(); }
+  });
+
+  it("bounds settled records received for other runtimes without losing a live waiter", async () => {
+    let handler!: (frame: any) => void;
+    const client = { registerFrameHandler(type: string, callback: (frame: any) => void) {
+      if (type === "task.human_request.settled") handler = callback;
+    } } as unknown as DaemonProtocolClient;
+    const inbox = new DaemonTaskDownlinks(client, () => "rt_bot");
+    const waiting = inbox.waitForHumanDecision("hrq_live", new AbortController().signal, 1_000);
+    for (let index = 0; index < 1025; index++) handler({ rt: "rt_bot", payload: {
+      task_id: `tsk_other_${index}`, request: { id: `hrq_other_${index}`,
+        taskId: `tsk_other_${index}`, status: "responded" },
+    } });
+    const live = { id: "hrq_live", taskId: "tsk_live", status: "responded" };
+    handler({ rt: "rt_bot", payload: { task_id: "tsk_live", request: live } });
+    expect(await waiting).toMatchObject(live);
+    const settled = (inbox as unknown as { settled: Map<string, unknown> }).settled;
+    expect(settled.size).toBe(1024);
+    expect(settled.has("hrq_other_0")).toBe(false);
+    expect(settled.has("hrq_other_1024")).toBe(true);
+  });
+
   it("processes offline steer, human settlement and cancellation once across two reconnect snapshots", async () => {
     const h = fixture();
+    const rpc = spyOn(h.client, "rpc");
     const steerTask = h.task(); const humanTask = h.task(); const cancelledTask = h.task();
     const request = h.store.createTaskHumanRequest({ taskId: humanTask.id, kind: "question", payload: { question: "Continue?" } });
     let steerCount = 0; let cancelCount = 0;
@@ -98,8 +137,9 @@ describe("A-4 task push inbox over native WS", () => {
       expect(h.store.listPendingTaskSteerMessages(steerTask.id)).toEqual([]);
       expect(h.inbox.pendingTaskSteerMessages(steerTask.id)).toEqual([]);
       expect(h.store.getTaskHumanRequest(request.id)).toEqual(settled);
+      expect(rpc.mock.calls.filter(([type]) => type === "human_request.get").length).toBeLessThanOrEqual(1);
       expect(h.errors).toEqual([]);
-    } finally { unsubscribe(); unwatch(); await h.close(); }
+    } finally { unsubscribe(); unwatch(); await h.close(); rpc.mockRestore(); }
   });
 
   it("ignores a non-running task cancellation without purging its pending terminal outbox row", async () => {

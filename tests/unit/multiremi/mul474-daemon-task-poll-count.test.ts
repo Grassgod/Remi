@@ -154,7 +154,8 @@ async function countRoute(
  *   - putting the task payload back is caught by the column assertions below
  *     rather than by the count, because the projection is what changes.
  */
-const MAX_STATEMENTS = { status: 6, steer: 5, messages: 9 } as const;
+// The v2 steer snapshot also checks runtime workspace identity and bot-host cards.
+const MAX_STATEMENTS = { status: 6, steer: 7, messages: 9 } as const;
 
 /** Statements that must never appear on a task-level poll. */
 const FORBIDDEN_SQL = [
@@ -182,7 +183,9 @@ describe("MUL-474 daemon task-level polls", () => {
   it("bounds the steer push snapshot and never reads the task payload", async () => {
     const scaffolded = await scaffold();
     scaffolded.probe.reset();
-    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId, new Set([scaffolded.fixture.taskId]), () => {});
+    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId,
+      scaffolded.store.getRuntimeLite(scaffolded.fixture.runtimeId)!.daemonId!,
+      new Set([scaffolded.fixture.taskId]), () => {});
     const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.steer);
     expectNoTaskPayloadReads(sql);
