@@ -4238,13 +4238,12 @@ runMigrations(this.db);
 
   recordTaskInboxDelivery(taskId: string, fromSeq: number, toSeq: number): void {
     this.ctx.db.transaction(() => {
-      this.conversationLog.updateTurnCardWithinTransaction(taskId, { inbox: {
-        delivered_from_seq: fromSeq,
-        delivered_to_seq: toSeq,
-        delivered_at: new Date().toISOString(),
-        task_id: taskId,
-      } });
+      this.conversationLog.recordTurnInboxDeliveryWithinTransaction(taskId, fromSeq, toSeq);
     })();
+  }
+
+  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
+    return this.conversationLog.recordTurnInboxDeliveryWithinTransaction(taskId, fromSeq, toSeq);
   }
 
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {

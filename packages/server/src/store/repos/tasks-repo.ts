@@ -3982,7 +3982,7 @@ ${placementAfter.sql}
         )?.cursorSeq ?? 0;
         const wakeSeq = Number(row.wake_seq ?? 0);
         if (wakeSeq > 0 && cursorSeq >= wakeSeq
-          && this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, cursorSeq) === null) {
+          && this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, taskExecutionScope(task), cursorSeq) === null) {
           const cancelledAt = nowIso();
           this.ctx.db.run(`UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?,
             updated_at = ? WHERE id = ? AND status = 'dispatched'`, [cancelledAt, cancelledAt, task.id]);
@@ -4525,6 +4525,19 @@ ${placementAfter.sql}
     if (reportedEventCount === 0) this.ctx.taskTraces().markTaskTraceNone(taskId);
   }
 
+  private recordChatInboxDeliveryAfterReply(task: MultiremiTask): void {
+    if (!task.chatSessionId || task.projectionFromSeq == null || task.projectionToSeq == null) return;
+    try {
+      this.ctx.db.transaction(() => {
+        this.ctx.conversationLog().recordTurnInboxDeliveryWithinTransaction(
+          task.id, task.projectionFromSeq!, task.projectionToSeq!,
+        );
+      })();
+    } catch (error) {
+      log.warn(`inbox delivery receipt failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   completeTask(taskId: string, input: {
     output: string;
     traceEventCount?: number;
@@ -4576,6 +4589,9 @@ ${placementAfter.sql}
       return { task: completed, followUps };
     })();
     const task = terminal.task;
+    // Chat's turn card is the assistant reply, so it exists only after the
+    // terminal transaction. Issue turn cards already receive their receipt at claim.
+    this.recordChatInboxDeliveryAfterReply(task);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     this.postAgentReplyComment(task, input.output);
@@ -5743,15 +5759,20 @@ ${placementAfter.sql}
         if (status === "completed") {
           this.promoteSessionAgentLane(task);
           this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
-        } else if (status === "cancelled" && !replacementPlanned) {
+        } else if (status === "cancelled") {
           // Redispatch creates a replacement in this transaction that covers the unread lane.
-          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+        } else if (status === "failed" && !retry) {
+          if (!RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
+            && this.promoteSessionAgentLane(task)) {
+            this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          } else {
+            this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
+              reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
+              taskId: task.id,
+            }, deferredEvents);
+          }
         }
-        else if (!retry)
-          this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
-            reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
-            taskId: task.id,
-          }, deferredEvents);
         // A pending recovery retry already suppresses this wakeup for its own
         // source: the drain below skips any delegation source that has a
         // successor attempt with the same lineage. The retry carries that
@@ -5974,20 +5995,28 @@ ${placementAfter.sql}
       [now, now, now, current.id],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${current.id}`);
+    let redrain: DelegationReturnDrainResult | null = null;
     if (current.projectionToSeq == null) {
-      this.ctx.db.run(
+      const cleared = this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET delegation_return_task_id = NULL, updated_at = ?
          WHERE delegation_return_task_id = ?`,
         [now, current.id],
       );
+      if (cleared.changes > 0 && current.issueSessionId) {
+        redrain = this.drainDelegationReturnsWithinWorkspaceLock(
+          current.issueSessionId, null, childStatusChanges, deferredEvents,
+        );
+      }
     }
     const cancelled = this.getTask(current.id)!;
+    const followUps = this.afterTaskTerminal(
+      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
+    );
+    if (redrain) followUps.delegationReturns.push(...redrain.createdTasks);
     return {
       task: cancelled,
-      followUps: this.afterTaskTerminal(
-        cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
-      ),
+      followUps,
     };
   }
 
@@ -6081,9 +6110,32 @@ ${placementAfter.sql}
     return updated.changes === 1;
   }
 
-  private unreadNowEnvelopeSeq(sessionId: string, agentId: string, cursorSeq: number): number | null {
+  private unreadNowEnvelopeSeq(sessionId: string, agentId: string, executionScope: string, cursorSeq: number): number | null {
     const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
-    return entries.find(entry => entry.author_id !== agentId && entry.metadata.envelope?.wake === "now")?.seq ?? null;
+    const addressed = entries.filter(entry => {
+      if (entry.author_id === agentId || entry.metadata.envelope?.wake !== "now") return false;
+      const to = entry.metadata.envelope.to;
+      if (to.role === "agent") return to.issueSessionId === sessionId && to.agentId === agentId && executionScope === "";
+      if (to.role === "delegator") {
+        const source = entry.metadata.envelope.source.taskId
+          ? this.getTask(entry.metadata.envelope.source.taskId) : null;
+        if (!source || source.delegatedByAgentId !== agentId
+          || (source.delegatedFromIssueSessionId ?? source.issueSessionId) !== sessionId) return false;
+        const parent = source.parentTaskId ? this.getTask(source.parentTaskId) : null;
+        const scope = parent?.agentId === agentId && parent.issueSessionId === sessionId
+          ? taskExecutionScope(parent) : "";
+        return scope === executionScope;
+      }
+      const issue = to.role === "issue_owner" ? this.ctx.issues().getIssue(to.issueId)
+        : to.role === "parent_owner" ? (() => {
+            const child = this.ctx.issues().getIssue(to.childIssueId);
+            return child?.parentIssueId ? this.ctx.issues().getIssue(child.parentIssueId) : null;
+          })() : null;
+      if (!issue || this.ctx.issueSessions().getIssueSession(sessionId)?.issueId !== issue.id
+        || executionScope !== "" || !issue.assigneeType || !issue.assigneeId) return false;
+      return this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id === agentId;
+    });
+    return addressed.at(-1)?.seq ?? null;
   }
 
   private reRingUnreadIssueLane(
@@ -6094,8 +6146,12 @@ ${placementAfter.sql}
     if (!task.issueSessionId || !task.issueId || task.chatSessionId) return;
     const executionScope = taskExecutionScope(task);
     const lane = this.ctx.issueSessions().getSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
-    const cursorSeq = lane?.cursorSeq ?? 0;
-    const seq = this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, cursorSeq);
+    let cursorSeq = lane?.cursorSeq ?? 0;
+    if (task.status === "completed") {
+      const row = this.ctx.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(task.id) as { wake_seq: number } | null;
+      cursorSeq = Math.max(cursorSeq, task.projectionToSeq ?? 0, Number(row?.wake_seq ?? 0));
+    }
+    const seq = this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, executionScope, cursorSeq);
     if (seq === null) return;
     const result = this.ensurePendingTurnWithinTransaction({
       lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId, executionScope },

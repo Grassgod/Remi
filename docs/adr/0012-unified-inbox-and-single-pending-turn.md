@@ -64,12 +64,15 @@ notification wakes to this decision.
    On a Chat lane there is no cursor and no re-ring: `now` rides a queued
    task, steers a running one in the same transaction, or creates a
    `wake_source = 'relay'` row; `next_turn` never creates.
-6. **Receipts are best effort and coarse.** Once the claim response has built
-   and committed its projection, a separate transaction patches the turn card's
-   `metadata.inbox` with `delivered_from_seq`, `delivered_to_seq`, `delivered_at`,
-   and `task_id`. A patch failure is logged without failing the claim. "Delivered"
-   for a single entry is derived from the recipient lane cursor and turn
-   coverage, never stored per entry.
+6. **Receipts are best effort and coarse.** The claim response persists its
+   projection boundaries on the task. An Issue turn card already exists, so a
+   separate transaction patches its `metadata.inbox` after claim. A Chat turn
+   card is the assistant reply itself (same id and seq); it is created only when
+   that reply lands, then a separate transaction patches the saved boundaries.
+   A missing Chat reply has no receipt. The patch contains `delivered_from_seq`,
+   `delivered_to_seq`, `delivered_at`, and `task_id`; failure is logged without
+   undoing the claim or reply. "Delivered" for a single entry is derived from
+   the recipient lane cursor and turn coverage, never stored per entry.
 7. **The unread projection gets a table of contents and folding.** Entries are
    ranked human decision > failed/stuck > done > notice, from
    `envelopePriority(entry)`; bodies over the fold threshold are summarised

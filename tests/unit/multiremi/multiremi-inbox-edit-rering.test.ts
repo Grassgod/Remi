@@ -100,4 +100,41 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
     expect(f.store.listTasksForIssue(f.issue.id)).toHaveLength(1);
     expect(f.store.getConversationLogEntryById(delivery.entry.id)).not.toBeNull();
   });
+
+  for (const order of ["edit_first", "finish_first"] as const) {
+    it(`D2: ${order} joins comment cancellation and terminal re-ring without duplicating a turn`, () => {
+      const { db, store } = fixture();
+      const agent = store.createAgent({ name: "Round owner", provider: "codex" });
+      const runtime = store.registerRuntime({ name: "Round runtime", provider: "codex" });
+      const member = store.findWorkspaceMemberForUser("local", "local")!;
+      const issue = store.createIssue({ title: "Dual re-ring", assigneeType: "agent", assigneeId: agent.id });
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const running = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Original round" });
+      expect(store.claimTask(runtime.id)?.id).toBe(running.id);
+      store.buildTaskSessionProjection(running.id);
+      store.startTask(running.id);
+      const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: member.id,
+        body: `Original [@${agent.name}](mention://agent/${agent.id})` });
+      const queued = store.listTasksForIssue(issue.id).find(task => task.status === "queued")!;
+      const send = (wake: "now" | "next_turn", body: string) => db.transaction(() =>
+        store.sendEnvelopeWithinTransaction({ to: { role: "issue_owner", issueId: issue.id },
+          kind: "report", wake, body, source: {} }, [], createCommitEventQueue())[0]!)();
+      const next = send("next_turn", "Deferred update");
+      expect(next.task?.id).toBe(queued.id);
+      const now = send("now", "New work after the trigger");
+      expect(now.task?.id).toBe(queued.id);
+      const edit = () => store.updateIssueComment(comment.id, { body: "Edited without mention" });
+      const finish = () => store.completeTask(running.id, { output: "Task completed.", sessionId: "round_provider" });
+      if (order === "edit_first") { edit(); finish(); } else { finish(); edit(); }
+      expect(store.getTask(queued.id)?.status).toBe("cancelled");
+      const replacements = store.listTasksForIssue(issue.id).filter(task => task.status === "queued");
+      expect(replacements).toHaveLength(1);
+      expect(replacements[0]).toMatchObject({ wakeSource: "re_ring", triggerCommentId: null });
+      expect(inboxWakeSeq(db, replacements[0]!.id)).toBe(now.entry.seq);
+      expect(store.getConversationLogEntryById(now.entry.id)?.body_md).toBe(now.entry.body_md);
+      const rings = store.listIssueActivity(issue.id).filter(row => row.type === "re_ring");
+      expect(rings.map(row => (row.data as { action: string }).action)).toContain("created");
+      expect(rings).toHaveLength(2);
+    });
+  }
 });

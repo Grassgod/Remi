@@ -567,6 +567,15 @@ export class ConversationLogRepo {
     return this.updateWithinTransaction(current.session_id, current.seq, { fields: { metadata } });
   }
 
+  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
+    return this.updateTurnCardWithinTransaction(taskId, { inbox: {
+      delivered_from_seq: fromSeq,
+      delivered_to_seq: toSeq,
+      delivered_at: new Date().toISOString(),
+      task_id: taskId,
+    } });
+  }
+
   /** Shown rows in the inclusive seq range, oldest first. */
   listShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
     const since = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));

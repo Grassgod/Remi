@@ -708,6 +708,11 @@ export interface ConversationLogSurface {
   ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
   /** The `turn` card of a task, updated in place through its lifecycle. */
   findTurnEntry(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  recordTurnInboxDeliveryWithinTransaction(
+    taskId: string,
+    fromSeq: number,
+    toSeq: number,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
   updateTurnCardWithinTransaction(
     taskId: string,
     fields: {

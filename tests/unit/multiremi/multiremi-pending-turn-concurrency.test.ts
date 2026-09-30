@@ -77,7 +77,8 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
     }, 40_000);
   }
 
-  it.skipIf(backend !== "PostgreSQL")("coalesces two concurrent transactions under the workspace lock without a unique violation", async () => {
+  for (const reason of ["concurrent", "re_ring"] as const) {
+  it.skipIf(backend !== "PostgreSQL")(`coalesces two concurrent ${reason} transactions under the workspace lock without a unique violation`, async () => {
     installPendingTurnTestConstraints(fixture());
     const f = fixture();
     const agent = f.store.createAgent({ name: "Concurrent owner", provider: "codex" });
@@ -87,10 +88,10 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, kind: "report",
       wake: "inbox_only", body: "Concurrent pointer", source: {},
     }, [], createCommitEventQueue()))[0]!.entry;
-    const dir = mkdtempSync(join(tmpdir(), "mul483-pending-"));
+    const dir = mkdtempSync(join(tmpdir(), `mul483-${reason}-pending-`));
     const blocker = new Bun.SQL(f.databaseUrl!, { max: 1 });
     const observer = new Bun.SQL(f.databaseUrl!, { max: 1 });
-    const names = [0, 1].map(i => `mul483_pending_${process.pid}_${i}`);
+    const names = [0, 1].map(i => `mul483_${reason}_${process.pid}_${i}`);
     const children = names.map((name, i) => {
       const url = new URL(f.databaseUrl!);
       url.searchParams.set("application_name", name);
@@ -107,7 +108,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
         await tx`UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ${agent.workspaceId}`;
         for (const [i, child] of children.entries()) {
           child.stdin.write(JSON.stringify({ lane: { kind: "issue", agentId: agent.id, issueSessionId: session.id, executionScope: "" },
-            wake: { seq: 10 + i * 10, reason: "concurrent" } }));
+            wake: { seq: 10 + i * 10, reason } }));
           child.stdin.end();
         }
         await waitFor(async () => {
@@ -127,6 +128,10 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
         .all(session.id, agent.id);
       expect(rows).toHaveLength(1);
       expect(Number(rows[0]!.wake_seq)).toBe(20);
+      if (reason === "re_ring") {
+        expect(f.db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_coalesced'").all(issue.id)
+          .map(row => JSON.parse(String(row.data)))).toContainEqual(expect.objectContaining({ reason: "re_ring" }));
+      }
     } finally {
       for (const child of children) if (child.exitCode === null) child.kill();
       await Promise.all(output);
@@ -135,4 +140,5 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 40_000);
+  }
 });
