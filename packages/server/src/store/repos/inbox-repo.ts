@@ -36,12 +36,12 @@ export class InboxRepo {
     const sourceComment = env.source.commentId ? this.ctx.issues().getIssueComment(env.source.commentId) : null;
     const sourceTask = env.source.taskId ? this.ctx.tasks().getTask(env.source.taskId) : null;
     const { body, ...envelope } = env;
-    const metadata: EnvelopeMetadata = { envelope: {
+    const envelopeMetadata: EnvelopeMetadata["envelope"] = {
       ...envelope,
       priority: envelopePriority({ ...env, senderType: sourceComment?.authorType,
         lifecycleEvent: sourceTask?.status === "failed" ? "task_failed"
           : sourceTask?.status === "cancelled" ? "task_cancelled" : undefined }),
-    } };
+    };
     for (const recipient of recipients) {
       const sessionId = recipient.issueSessionId ?? recipient.chatSessionId!;
       if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId
@@ -68,6 +68,11 @@ export class InboxRepo {
           if (previous.session_id !== sessionId) throw new Error("Envelope id belongs to another session");
           stored = { entry: previous, deduplicated: true };
         } else {
+          const metadata: EnvelopeMetadata = { envelope: {
+            ...envelopeMetadata,
+            ...(env.to.role === "issue_owner" || env.to.role === "parent_owner" || env.to.role === "delegator"
+              ? { recipient_agent_id: recipient.agentId } : {}),
+          } };
           if (recipient.issueSessionId) {
             const comment = this.ctx.issues().createSystemIssueCommentWithinTransaction(
               recipient.issueId!, body, { type: "envelope", ...metadata }, deferredEvents,

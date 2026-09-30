@@ -2,8 +2,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { CONVERSATION_LOG_HIDDEN_KINDS, CONVERSATION_LOG_SHOWN_KINDS } from "@multiremi/contracts/conversation-log.js";
+import type { EnvelopeAddress } from "@multiremi/contracts/inbox.js";
 import type { MultiremiSessionEvent } from "@multiremi/contracts/types.js";
 import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -162,6 +164,76 @@ async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
     authorId: agent.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
   expect((await (await app.request(path)).json()).delivered).toBe(true);
+}
+
+async function verifySymbolicRecipientDelivery(
+  store: MultiremiStore,
+  role: "issue_owner" | "parent_owner" | "delegator",
+): Promise<void> {
+  const recipient = store.createAgent({ name: "Symbolic recipient", provider: "codex", visibility: "workspace" });
+  const other = store.createAgent({ name: "Other recipient", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Symbolic report", workspaceId: "local", status: "in_progress",
+    assigneeType: "agent", assigneeId: recipient.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  let to: EnvelopeAddress = { role: "issue_owner", issueId: issue.id };
+  let source: { taskId?: string } = {};
+  if (role !== "issue_owner") {
+    const child = store.createIssue({ title: "Report source", workspaceId: "local", parentIssueId: issue.id });
+    if (role === "parent_owner") {
+      to = { role: "parent_owner", childIssueId: child.id };
+    } else {
+      const worker = store.createAgent({ name: "Delegated worker", provider: "codex", visibility: "workspace" });
+      const parentTask = store.createTask({ agentId: recipient.id, issueId: issue.id,
+        issueSessionId: session.id, prompt: "Original turn" });
+      const delegated = store.createTask({ agentId: worker.id, issueId: child.id,
+        prompt: "Delegated turn", parentTaskId: parentTask.id, delegationId: "mul485_return",
+        delegatedByAgentId: recipient.id, delegatedFromIssueSessionId: session.id });
+      to = { role: "delegator", delegationId: "mul485_return" };
+      source = { taskId: delegated.id };
+    }
+  }
+  const body = `# Completed report\n${"R".repeat(4_001)}`;
+  const [delivery] = (store as any).db.transaction(() => store.sendEnvelopeWithinTransaction({
+    to, kind: "report", outcome: "done", wake: "next_turn", body, source,
+  }, [], createCommitEventQueue()))();
+  const entry = delivery.entry;
+  expect(delivery.recipient.agentId).toBe(recipient.id);
+  expect(entry.metadata.envelope?.to).toEqual(to);
+  expect(entry.metadata.envelope?.recipient_agent_id).toBe(recipient.id);
+
+  const event: MultiremiSessionEvent = {
+    id: entry.id, sessionId: session.id, seq: entry.seq, kind: entry.kind,
+    authorType: "system", authorId: null, body: entry.body_md, taskId: null,
+    sourceCommentId: entry.id, metadata: entry.metadata, createdAt: entry.created_at,
+  };
+  const projection = buildSessionProjection({ sessionId: session.id, targetAgentId: recipient.id,
+    events: [event], cursorSeq: 0, providerSessionId: null, tokenBudget: 20_000 });
+  const lines = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+  expect(lines[1].entries[0]).toMatchObject({ id: entry.id, priority: 3, folded: true });
+  expect(lines[2]).toMatchObject({ body_folded: true, expand: `remi session log get ${session.id} ${entry.seq}` });
+
+  const app = createMultiremiApp({ store });
+  const assertDelivered = async (expected: boolean) => {
+    for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+      const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+      expect(response.status).toBe(200);
+      const expanded = await response.json();
+      expect(expanded.body_md).toBe(body);
+      expect(expanded.delivered).toBe(expected);
+    }
+  };
+  await assertDelivered(false);
+  if (role === "issue_owner") {
+    store.updateIssue(issue.id, { assigneeType: "agent", assigneeId: other.id });
+    expect(store.getIssue(issue.id)?.assigneeId).toBe(other.id);
+    await assertDelivered(false);
+  }
+  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
+    authorId: other.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  await assertDelivered(false);
+  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
+    authorId: recipient.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  await assertDelivered(true);
 }
 
 async function verifyCursorDeliveryAcrossScopes(
@@ -372,6 +444,12 @@ describe("MUL-485 SQLite", () => {
     await verifyDeliveryReceipt(createStore());
   });
 
+  for (const role of ["issue_owner", "parent_owner", "delegator"] as const) {
+    it(`resolves a ${role} report recipient at write time and uses its receipt`, async () => {
+      await verifySymbolicRecipientDelivery(createStore(), role);
+    });
+  }
+
   it("reports a non-default execution scope cursor as delivered without a turn receipt", async () => {
     await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "dlg_scoped", cursor: 1 }], true);
   });
@@ -513,6 +591,12 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
   it("derives the delivery flag from a recipient turn receipt on real PostgreSQL", async () => {
     await verifyDeliveryReceipt(store);
   });
+
+  for (const role of ["issue_owner", "parent_owner", "delegator"] as const) {
+    it(`resolves a ${role} report recipient at write time on real PostgreSQL`, async () => {
+      await verifySymbolicRecipientDelivery(store, role);
+    });
+  }
 
   it("reports a non-default execution scope cursor as delivered on real PostgreSQL", async () => {
     await verifyCursorDeliveryAcrossScopes(store, [{ scope: "dlg_scoped", cursor: 1 }], true);
