@@ -22,7 +22,7 @@
  *   handshake     hello / welcome / reject - one exchange per connection
  *   best_effort   dropped when the socket is gone; no `seq`, no replay
  *   event         reliable, carries `seq`, replayed until acknowledged
- *   rpc           request, paired with a reply through `id` / `re`
+ *   rpc           request, paired through `id` / `re`; trace resumes by head
  *   reply         `res`, the answer to an rpc frame
  *   ack           cumulative acknowledgement on its own
  *
@@ -31,11 +31,12 @@
  * code: a reply has a different validation path than a request, and
  * `runtime.ready` / `concierge.status` are best effort for exactly the same
  * reason `hb` is - each is recomputed from local state, so losing one costs
- * nothing. A frame's category decides both its transport and its replay story,
- * so the classification lives here as data rather than in a comment.
+ * nothing. Category decides the envelope; trace-head reliability is separate
+ * from the event sequence and window, so the classification lives here as data.
  */
 
 import type { TraceEvent } from "./trace.js";
+import type { MultiremiDaemonHeartbeatAck } from "./types.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 
@@ -99,9 +100,9 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
 ] as const;
 
 /**
- * daemon -> server trace stream. Reliable and resumable, but deliberately NOT in
- * the outbox: the daemon's trace file is the only buffer, and the client resumes
- * from the head the server reports. See `docs/daemon-protocol-v2.md` §5.
+ * daemon -> server trace RPC. Paired by id/re, reliable through task trace heads,
+ * and deliberately NOT in the outbox or the sequence window. The daemon's trace
+ * file is the buffer. See `docs/daemon-protocol-v2.md` §5.
  */
 export const DAEMON_UPLINK_TRACE_FRAMES = [
   "trace.append",
@@ -117,7 +118,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
   "concierge.status",
 ] as const;
 
-/** daemon -> server RPC requests, paired with a `res` by `id`. */
+/** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
 export const DAEMON_UPLINK_RPC_FRAMES = [
   "steer.consume",
   "human_request.create",
@@ -175,7 +176,7 @@ export const DAEMON_DOWNLINK_TRACE_FRAMES = [
 export type DaemonUplinkEventFrame = (typeof DAEMON_UPLINK_EVENT_FRAMES)[number];
 export type DaemonUplinkTraceFrame = (typeof DAEMON_UPLINK_TRACE_FRAMES)[number];
 export type DaemonUplinkBestEffortFrame = (typeof DAEMON_UPLINK_BEST_EFFORT_FRAMES)[number];
-export type DaemonUplinkRpcFrame = (typeof DAEMON_UPLINK_RPC_FRAMES)[number];
+export type DaemonUplinkRpcFrame = (typeof DAEMON_UPLINK_RPC_FRAMES)[number] | DaemonUplinkTraceFrame;
 export type DaemonDownlinkEventFrame = (typeof DAEMON_DOWNLINK_EVENT_FRAMES)[number];
 export type DaemonDownlinkRpcFrame = (typeof DAEMON_DOWNLINK_RPC_FRAMES)[number];
 export type DaemonDownlinkTraceFrame = (typeof DAEMON_DOWNLINK_TRACE_FRAMES)[number];
@@ -224,7 +225,8 @@ export function daemonFrameCategory(type: string): DaemonProtocolFrameCategory |
   if (type === "res") return "reply";
   if (type === "ack") return "ack";
   if (UPLINK_EVENT_TYPES.has(type) || DOWNLINK_EVENT_TYPES.has(type)) return "event";
-  if (UPLINK_TRACE_TYPES.has(type) || DOWNLINK_TRACE_TYPES.has(type)) return "event";
+  if (DOWNLINK_TRACE_TYPES.has(type)) return "event";
+  if (UPLINK_TRACE_TYPES.has(type)) return "rpc";
   if (UPLINK_RPC_TYPES.has(type) || DOWNLINK_RPC_TYPES.has(type)) return "rpc";
   return null;
 }
@@ -232,9 +234,8 @@ export function daemonFrameCategory(type: string): DaemonProtocolFrameCategory |
 /**
  * Whether a frame must be replayed until the peer acknowledges it.
  *
- * `trace.append` and `trace.push` are reliable too, but they resume from a trace
- * head instead of a sliding window, so they are not window-managed; see
- * {@link daemonFrameUsesOutboxWindow}.
+ * `trace.append` resumes through task trace heads, not its RPC envelope. It is
+ * reliable without a sender sequence; `trace.push` remains a sequenced event.
  */
 export function daemonFrameIsReliable(type: string): boolean {
   return UPLINK_EVENT_TYPES.has(type)
@@ -245,7 +246,7 @@ export function daemonFrameIsReliable(type: string): boolean {
 
 /** Whether the frame carries a sender-assigned `seq`. */
 export function daemonFrameUsesSeq(type: string): boolean {
-  return daemonFrameIsReliable(type);
+  return UPLINK_EVENT_TYPES.has(type) || DOWNLINK_EVENT_TYPES.has(type) || DOWNLINK_TRACE_TYPES.has(type);
 }
 
 /**
@@ -275,6 +276,12 @@ export interface DaemonProtocolOkReply {
   ok: true;
 }
 
+/** feishu.outbound_result acknowledges stale leases without blocking the queue. */
+export type DaemonFeishuOutboundOkReply = DaemonProtocolOkReply & {
+  mention_open_id?: string | null;
+  lease_lost?: true;
+};
+
 /** `res` payload on failure. `retryable` tells the sender whether to replay. */
 export interface DaemonProtocolErrorReply {
   ok: false;
@@ -282,6 +289,11 @@ export interface DaemonProtocolErrorReply {
   message: string;
   retryable: boolean;
 }
+
+/** Only gc.* replies retain the business error from the former HTTP endpoint. */
+export type DaemonGcErrorReply = DaemonProtocolErrorReply & {
+  operation_error?: { status: number; code: string | null; message: string };
+};
 
 export type DaemonProtocolReply = DaemonProtocolOkReply | DaemonProtocolErrorReply;
 
@@ -377,7 +389,11 @@ export interface DaemonTaskCompletionModel {
   model: string;
 }
 
-/** Fields `task.complete` and `task.fail` add to the existing report payloads. */
+/**
+ * Fields `task.complete` and `task.fail` add to the existing report payloads.
+ * Daemons must send them; servers tolerate missing or malformed card metadata
+ * with a blank card so that it can never block the terminal state transition.
+ */
 export interface DaemonTaskCompletionFields {
   trace: DaemonTaskCompletionTrace;
   /** Markdown of the turn's final answer, or null when the turn produced none. */
@@ -431,6 +447,60 @@ export interface DaemonTraceAppendPayload {
   task_id: string;
   events: TraceEvent[];
   closed: boolean;
+}
+
+/**
+ * `hb`, daemon -> server (spec §4).
+ *
+ * Best-effort liveness for one daemon process: losing a heartbeat costs nothing
+ * because the next one recomputes the same facts. The payload is deliberately
+ * three fields - a live socket already proves every runtime it advertises is
+ * reachable, so the only things the server cannot derive are the daemon's own
+ * view of its load, its queue, and whether it has applied a drain.
+ */
+export interface DaemonHeartbeatPayload {
+  /** Tasks this process is executing right now, across every runtime it serves. */
+  active_task_count: number;
+  /** Local outbox pressure, so an operator can see a daemon that cannot drain. */
+  outbox?: DaemonHeartbeatOutboxStats;
+  /** Drain generation this daemon has applied; absent means "none observed yet". */
+  drain_ack_generation?: number;
+}
+
+/**
+ * The daemon's own outbox counters, split by partition.
+ *
+ * `pending` counts rows not yet sent, `unacked` counts rows sent but not yet
+ * acknowledged by the server. Both are the daemon's numbers, reported for
+ * observability only: the server never drives the outbox from them.
+ */
+export interface DaemonHeartbeatOutboxStats {
+  pending: number;
+  unacked: number;
+  /** Newest outbox row id, so a gap in what the server has seen is visible. */
+  head_seq?: number;
+}
+
+/**
+ * The server's answer to one `hb`.
+ *
+ * `runtime_acks` is one entry per runtime the `hello` advertised, and it carries
+ * the SAME structure the v1 HTTP heartbeat returned (`MultiremiDaemonHeartbeatAck`
+ * in `./types.js`), including `status: "runtime_gone"` with `runtime_gone: true`
+ * for a runtime whose row no longer exists.
+ *
+ * Why per-runtime and not one status for the connection: a socket serves every
+ * runtime of one daemon process, so a missing runtime row is a fact about that
+ * runtime only. The daemon reacts to `runtime_gone` by registering again (its
+ * existing recovery path), so the server must report it WITHOUT closing the
+ * socket - closing would strand the daemon's other, healthy runtimes.
+ *
+ * Drained runtimes are skipped here rather than reported as gone: a shutdown that
+ * deleted them said so directly, and the daemon must not treat that as "register
+ * me again".
+ */
+export interface DaemonHeartbeatReplyPayload {
+  runtime_acks: MultiremiDaemonHeartbeatAck[];
 }
 
 /** `trace.push`, server -> daemon, for a task this daemon subscribed to. */
@@ -510,6 +580,7 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   "authority_revoked",
   "invalid_report",
   "start_replayed",
+  "steer_pending",
   // offer rejections and dispatch
   "capacity",
   "claims_paused",
@@ -524,6 +595,8 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   // transport
   "ack_timeout",
   "protocol_violation",
+  // server fault
+  "server_error",
 ] as const;
 
 export type DaemonProtocolErrorCode = (typeof DAEMON_PROTOCOL_ERROR_CODES)[number];
@@ -532,6 +605,7 @@ export type DaemonProtocolErrorCode = (typeof DAEMON_PROTOCOL_ERROR_CODES)[numbe
 export const DAEMON_RETRYABLE_ERROR_CODES = [
   "daemon_busy",
   "daemon_timeout",
+  "server_error",
 ] as const satisfies readonly DaemonProtocolErrorCode[];
 
 /** Codes that end a partition permanently on the daemon (mirrors today's terminal HTTP statuses). */
@@ -552,6 +626,18 @@ export const DAEMON_PROTOCOL_CLOSE_CODES = {
   ack_timeout: 4000,
   /** Routine server shutdown (deploy, restart). Reconnect with backoff. */
   server_closing: 4001,
+  /**
+   * The peer broke the protocol in a way no reply can address: a frame before the
+   * handshake, a malformed `hello`, unparseable JSON, or an oversized frame that
+   * carries neither `seq` nor `id` to answer.
+   *
+   * Deliberately NOT 4426. 4426 means "you are the wrong version, go and upgrade",
+   * which parks the daemon in `upgrade_wait` and stops it claiming work - wrong for
+   * a client bug or a race where no upgrade is coming. Deliberately not 4001
+   * either, so an operator can tell an ordinary deploy apart from a peer that is
+   * sending rubbish; both are retryable, so the difference is diagnostics only.
+   */
+  protocol_violation: 4002,
   /** Credential revoked or workspace access lost. Stop reconnecting. */
   authority_revoked: 4401,
   /** Token lacks the scope for the daemon socket. Stop reconnecting. */

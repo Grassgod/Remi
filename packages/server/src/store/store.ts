@@ -2288,6 +2288,10 @@ runMigrations(this.db);
     return this.feishuBot.prepareOutboundMention(workspaceId, runtimeId, deliveryId, claimToken, openId, now);
   }
 
+  getFeishuBotOutboundReportState(workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string) {
+    return this.feishuBot.getOutboundReportState(workspaceId, runtimeId, deliveryId, claimToken);
+  }
+
   reportFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -2996,6 +3000,10 @@ runMigrations(this.db);
   /** The Runtime row without the derived usage/model/group reads. */
   getRuntimeLite(id: string): MultiremiRuntime | null {
     return this.runtimes.getRuntimeLite(id);
+  }
+
+  recordDaemonProtocol(runtimeId: string, daemonId: string, version: number, cliVersion?: string): void {
+    this.runtimes.recordDaemonProtocol(runtimeId, daemonId, version, cliVersion);
   }
 
   getRuntimeCodexProfile(id: string) {
@@ -5462,6 +5470,7 @@ runMigrations(this.db);
     return this.tasks.pinTaskSession(taskId, sessionId, workDir);
   }
 
+  /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     return this.tasks.appendTaskMessages(taskId, messages);
   }

@@ -5,7 +5,6 @@ import { I18nProvider } from "@multiremi/core/i18n/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { issueKeys } from "@multiremi/core/issues/queries";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
@@ -17,7 +16,7 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 // Capture WS event handlers so the test can drive them directly. The card
 // subscribes to task:queued, task:dispatch, task:completed, task:failed,
-// task:cancelled, and task:message via useWSEvent. We mirror the real
+// task:cancelled via useWSEvent. We mirror the real
 // hook's useEffect-based subscription so stale subscriptions clean up
 // across re-renders (otherwise every render would stack a duplicate
 // handler and one event would fan out into many reconcile calls).
@@ -44,6 +43,7 @@ vi.mock("@multiremi/core/realtime", () => ({
       };
     }, [cb]);
   },
+  useTraceStreamSubscription: () => {},
 }));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -79,11 +79,12 @@ vi.mock("../../common/human-request-dock", () => ({
 
 const mockApi = vi.hoisted(() => ({
   getActiveTasksForIssue: vi.fn(),
-  listTaskMessages: vi.fn(),
+  getTaskTrace: vi.fn(),
   cancelTask: vi.fn(),
 }));
 
-vi.mock("@multiremi/core/api", () => ({
+vi.mock("@multiremi/core/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(),
   api: mockApi,
 }));
 
@@ -146,25 +147,12 @@ function renderCard(issueId = "issue-1", issueSessionId?: string, seededTasks?: 
   return { ...view, qc };
 }
 
-function taskMessage(
-  seq: number,
-  type: TaskMessagePayload["type"] = "tool_use",
-): TaskMessagePayload {
-  return {
-    task_id: "task-1",
-    issue_id: "issue-1",
-    seq,
-    type,
-    tool: "Bash",
-  };
-}
-
 beforeEach(() => {
   wsHandlers.clear();
   wsReconnectCallbacks.clear();
   mockApi.getActiveTasksForIssue.mockReset();
-  mockApi.listTaskMessages.mockReset();
-  mockApi.listTaskMessages.mockResolvedValue([]);
+  mockApi.getTaskTrace.mockReset();
+  mockApi.getTaskTrace.mockResolvedValue({ events: [], eof: true, state: "ok", next_after_seq: 0 });
   mockApi.cancelTask.mockReset();
 });
 
@@ -185,7 +173,6 @@ describe("AgentLiveCard reconcile race", () => {
       makeTask("worker", { status: "queued", agent_id: "worker" }),
       makeTask("qa", { status: "queued", agent_id: "qa" }),
     ] });
-    mockApi.listTaskMessages.mockResolvedValue([]);
     renderCard();
     await screen.findByText("1 running · 2 queued");
     mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [
@@ -195,56 +182,24 @@ describe("AgentLiveCard reconcile race", () => {
     await screen.findByText("3 running");
   });
 
-  it("keeps the visible tool count on the complete hydrated message set", async () => {
-    const hydration = deferred<TaskMessagePayload[]>();
+  it("counts tool calls from the hydrated trace", async () => {
+    const hydration = deferred<{ events: Array<{ seq: number; ts: string; type: string; tool?: string }>; eof: boolean; state: string; next_after_seq: number }>();
     mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
-    mockApi.listTaskMessages.mockReturnValue(hydration.promise);
+    mockApi.getTaskTrace.mockReturnValue(hydration.promise);
 
     renderCard();
-    await waitFor(() => expect(mockApi.listTaskMessages).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(mockApi.getTaskTrace).toHaveBeenCalledWith("task-1", 0));
 
     await act(async () => {
-      hydration.resolve([
-        taskMessage(1),
-        taskMessage(2, "tool_result"),
-        taskMessage(3, "text"),
-        taskMessage(4),
-      ]);
+      hydration.resolve({ events: [
+        { seq: 1, ts: "2026-01-01T00:00:00Z", type: "tool_use", tool: "Bash" },
+        { seq: 2, ts: "2026-01-01T00:00:00Z", type: "tool_result" },
+        { seq: 3, ts: "2026-01-01T00:00:00Z", type: "text" },
+        { seq: 4, ts: "2026-01-01T00:00:00Z", type: "tool_use", tool: "Bash" },
+      ], eof: true, state: "ok", next_after_seq: 4 });
     });
     await screen.findByText("2 tools");
-
-    act(() => {
-      fireEvent("task:message", taskMessage(5));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("3 tools")).toBeTruthy();
-      expect(screen.getByTestId("transcript-button")).toBeInTheDocument();
-    });
-  });
-
-  it("publishes hydrated history plus in-flight WS frames to the shared cache", async () => {
-    const hydration = deferred<TaskMessagePayload[]>();
-    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
-    mockApi.listTaskMessages.mockReturnValue(hydration.promise);
-
-    const { qc } = renderCard();
-    await waitFor(() => expect(mockApi.listTaskMessages).toHaveBeenCalledWith("task-1"));
-
-    act(() => {
-      fireEvent("task:message", taskMessage(3));
-    });
-    await act(async () => {
-      hydration.resolve([taskMessage(1), taskMessage(2)]);
-    });
-
-    await waitFor(() => {
-      expect(qc.getQueryData<TaskMessagePayload[]>(["task-messages", "task-1"])?.map((item) => item.seq)).toEqual([
-        1,
-        2,
-        3,
-      ]);
-    });
+    expect(screen.getByTestId("transcript-button")).toBeInTheDocument();
   });
 
   it("does not re-add a banner when an older active-task response resolves after a newer empty one", async () => {

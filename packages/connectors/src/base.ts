@@ -7,8 +7,8 @@ import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import type {
   FeishuBotTaskSnapshot,
   MultiremiTaskHumanRequest,
-  MultiremiTaskMessage,
 } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -52,7 +52,7 @@ export type StreamingHandler = (
 ) => Promise<void>;
 
 export type TaskStreamEvent =
-  | { kind: "message"; message: MultiremiTaskMessage }
+  | { kind: "message"; message: TraceEvent }
   | { kind: "snapshot"; snapshot: FeishuBotTaskSnapshot };
 
 export interface TaskStreamMeta {

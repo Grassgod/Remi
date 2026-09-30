@@ -1,12 +1,15 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { chatKeys } from "@multiremi/core/chat/queries";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
-import { createTaskHandlers } from "../../test/task-handlers";
+
+vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
+  useTraceStreamSubscription: vi.fn(),
+}));
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
 
@@ -67,16 +70,14 @@ describe("cached message observer visibility", () => {
 
   it.each(["live", "assistant"])("keeps the %s task observer inactive while hidden and refetches after opening", async (kind) => {
     const taskId = "tsk_visibility";
-    const listTaskMessages = vi.fn(async () => []);
-    setApiInstance({ listTaskMessages } as never);
+    const getTaskTrace = vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 }));
+    setApiInstance({ getTaskTrace } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const entries = kind === "assistant" ? [{ session_id: "cs-1", seq: 1, id: "msg-1", revision: 1,
       kind: "turn", author_type: "agent", body_md: "Cached reply", body_html: null,
       render_version: null, task_id: taskId, metadata: { attachments: [], elapsed_ms: 1, final_reply_md: "Cached reply" },
       created_at: "2026-09-16T00:00:00Z" } as SessionLogEntry] : [];
     const replica = new MemorySessionReplica({ "cs-1": { entries } });
-    client.setQueryData(chatKeys.taskMessages(taskId), []);
-    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
     const content = (visible: boolean) => <QueryClientProvider client={client}>
       <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
         pendingTask={kind === "live" ? { task_id: taskId, status: "running" } as ChatPendingTask : null}
@@ -84,23 +85,20 @@ describe("cached message observer visibility", () => {
     </QueryClientProvider>;
     const view = render(content(false));
     try {
-      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 }); });
-      expect(listTaskMessages).not.toHaveBeenCalled();
-      expect(client.getQueryCache().find({ queryKey: chatKeys.taskMessages(taskId) })?.isActive()).toBe(false);
+      expect(getTaskTrace).not.toHaveBeenCalled();
       view.rerender(content(true));
-      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
-      listTaskMessages.mockClear();
-      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 3, seq_end: 4 }); });
-      expect(listTaskMessages).toHaveBeenCalledTimes(1);
-    } finally { view.unmount(); sync.dispose?.(); client.clear(); }
+      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
+      view.rerender(content(false));
+      expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); client.clear(); }
   });
 });
 
 const TASK_ID = "task_01hzzzzzzzzzzzzzzzzzzzzzzz";
 const TIMELINE_TEXT = "Timeline answer from the task transcript.";
 
-const taskMessages: TaskMessagePayload[] = [
-  { task_id: TASK_ID, issue_id: "", seq: 1, type: "text", content: TIMELINE_TEXT },
+const taskEvents: TraceEvent[] = [
+  { seq: 1, ts: "2026-09-16T00:00:00Z", type: "text", content: TIMELINE_TEXT },
 ];
 
 function attachment(id: string): Attachment {
@@ -145,9 +143,7 @@ function renderList(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  // Seed the transcript the way useRealtimeSync does during the run, so no
-  // component in the tree needs to fetch.
-  client.setQueryData(chatKeys.taskMessages(TASK_ID), taskMessages);
+  client.setQueryData(["task-trace", TASK_ID], taskEvents);
   const entries = messages.map((message, index) => ({
     session_id: "cs-1", seq: index + 1, id: message.id, revision: 1,
     kind: message.role === "user" ? "message" : "turn",

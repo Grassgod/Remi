@@ -169,41 +169,19 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     const sentBody = await sent.json();
     expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "queued", "supports_queue", "task_id"]);
     expect(store.getTask(sentBody.task_id)?.chatSessionId).toBe(createdBody.id);
-    const messages = await app.request(`/api/chat/sessions/${createdBody.id}/messages`, { headers: aliceAuthHeaders });
-    const messagesBody = await messages.json();
-    expect(Object.keys(messagesBody[0]).sort()).toEqual([
-      "attachments",
-      "chat_session_id",
-      "content",
-      "created_at",
-      "elapsed_ms",
-      "failure_reason",
-      "id",
-      "role",
-      "task_id",
-    ]);
+    const messagesBody = store.listChatMessagesFromLog(createdBody.id);
     expect(messagesBody[0]).toMatchObject({
-      chat_session_id: createdBody.id,
-      content: "Use Go-compatible content",
+      chatSessionId: createdBody.id,
+      body: "Use Go-compatible content",
       role: "user",
-      task_id: sentBody.task_id,
+      taskId: sentBody.task_id,
     });
-    expect(messagesBody[0].attachments[0]).toMatchObject({
-      id: attachment.id,
-      chat_session_id: createdBody.id,
-      chat_message_id: messagesBody[0].id,
-      filename: "brief.txt",
-      content_type: "text/plain",
-      size_bytes: 12,
-      download_url: `/api/attachments/${attachment.id}/download`,
-    });
-    expect(Object.keys(messagesBody[0].attachments[0]).filter((key) => /[A-Z]/.test(key))).toEqual([]);
     expect(store.getAttachment(attachment.id)?.chatMessageId).toBe(messagesBody[0].id);
-    const invalidPageLimit = await app.request(`/api/chat/sessions/${createdBody.id}/messages/page?limit=101`, {
-      headers: aliceAuthHeaders,
-    });
-    expect(invalidPageLimit.status).toBe(400);
-    expect(await invalidPageLimit.json()).toEqual({ error: "invalid limit" });
+    const log = await (await app.request(`/api/sessions/${createdBody.id}/log?before=10`, { headers: aliceAuthHeaders })).json();
+    expect(log.entries.find((entry: { id: string }) => entry.id === messagesBody[0].id)?.metadata.attachments)
+      .toMatchObject([{ id: attachment.id, filename: "brief.txt" }]);
+    expect((await app.request(`/api/chat/sessions/${createdBody.id}/messages`, { headers: aliceAuthHeaders })).status).toBe(404);
+    expect((await app.request(`/api/chat/sessions/${createdBody.id}/messages/page?limit=101`, { headers: aliceAuthHeaders })).status).toBe(404);
 
     const pendingAlice = await app.request("/api/chat/pending-tasks", { headers: aliceAuthHeaders });
     expect((await pendingAlice.json()).tasks.map((task: any) => task.chat_session_id)).toEqual([createdBody.id]);
@@ -215,15 +193,14 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     store.completeTask(sentBody.task_id, { output: "Done with chat", sessionId: "provider-chat-session" });
     const unreadDetail = await app.request(`/api/chat/sessions/${createdBody.id}`, { headers: aliceAuthHeaders });
     expect((await unreadDetail.json()).has_unread).toBe(true);
-    const terminalMessages = await app.request(`/api/chat/sessions/${createdBody.id}/messages`, { headers: aliceAuthHeaders });
-    const terminalMessagesBody = await terminalMessages.json();
+    const terminalMessagesBody = store.listChatMessagesFromLog(createdBody.id);
     expect(terminalMessagesBody[1]).toMatchObject({
       role: "assistant",
-      content: "Done with chat",
-      failure_reason: null,
-      task_id: sentBody.task_id,
+      body: "Done with chat",
+      failureReason: null,
+      taskId: sentBody.task_id,
     });
-    expect(terminalMessagesBody[1].elapsed_ms).toBeGreaterThanOrEqual(0);
+    expect(terminalMessagesBody[1].elapsedMs).toBeGreaterThanOrEqual(0);
     expect((await app.request(`/api/chat/sessions/${createdBody.id}/read`, {
       method: "POST",
       headers: aliceAuthHeaders,
@@ -234,8 +211,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     const bobForbiddenRequests: Array<[string, string, unknown?]> = [
       ["GET", `/api/chat/sessions/${createdBody.id}`],
       ["PATCH", `/api/chat/sessions/${createdBody.id}`, { title: "Bob rename" }],
-      ["GET", `/api/chat/sessions/${createdBody.id}/messages`],
-      ["GET", `/api/chat/sessions/${createdBody.id}/messages/page?limit=1`],
+      ["GET", `/api/sessions/${createdBody.id}/log`],
       ["POST", `/api/chat/sessions/${createdBody.id}/messages`, { content: "Bob should not send" }],
       ["GET", `/api/chat/sessions/${createdBody.id}/pending-task`],
       ["POST", `/api/chat/sessions/${createdBody.id}/read`],

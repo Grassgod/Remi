@@ -6,6 +6,7 @@
  * degradation, reminder dedupe, and the terminal in-place rewrite.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { bindReportFrames } from "../../fixtures/report-session.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -23,6 +24,7 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { FeishuConciergeHost, FeishuConciergeSupervisor } from "@multiremi/worker/feishu-concierge.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import {
   controlPlaneConciergeHost,
   sendDecisionLane as sendDecisionLaneForTest,
@@ -1524,13 +1526,15 @@ describe("Feishu decision card heartbeat delivery", () => {
     //     -> real deliverFeishuOutbound -> real sendDecisionLane over the real
     //        FeishuConnector (only the SDK's HTTP layer is scripted)
     //     -> real MultiremiDaemonClient.reportFeishuBotOutboundResult
-    //     -> real POST /api/daemon/.../outbound/:id/result route
+    //     -> real v2 feishu.outbound_result session dispatcher
     //     -> real store.reportFeishuBotOutbound
     //
     // Only two things are test scaffolding: the channel handle (the process has
-    // no Feishu app) and the HTTP hop, which the real client reaches through the
-    // in-process app the way the existing heartbeat cases already do.
+    // no Feishu app) and the transport hop, which uses the in-process session
+    // dispatcher for reports and the app for the remaining HTTP calls.
     const { store, agentId, app } = scaffold();
+    // This case exercises delivery, not installing a CLI through an upgrade ack.
+    store.updateRuntime("rt_bot", { metadata: { ...store.getRuntimeLite("rt_bot")!.metadata, cli_version: DAEMON_MIN_CLI_VERSION } });
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
@@ -1557,6 +1561,9 @@ describe("Feishu decision card heartbeat delivery", () => {
       // gates delivery on, so the delivery below runs only because a real start
       // reported this runtime online.
       await supervisor.apply({ revision: 1, desired_state: "running", config_available: true });
+      const reportDeadline = Date.now() + 2_000;
+      while (store.feishuBotStatusSnapshot("local").status !== "online" && Date.now() < reportDeadline) await Bun.sleep(5);
+      expect(store.feishuBotStatusSnapshot("local").status).toBe("online");
       const beat = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
       const outbound = beat.pending_feishu_outbound!;
       expect(outbound).toBeTruthy();
@@ -1720,8 +1727,10 @@ async function withRealBotHostClient<T>(
     }
     return scripted(input, init);
   }) as typeof fetch;
-  try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
-  finally { globalThis.fetch = scripted; }
+  const client = new MultiremiDaemonClient("http://local", token.token);
+  const drainReports = bindReportFrames(client, store, { headers: { Authorization: `Bearer ${token.token}` } });
+  try { return await fn(client); }
+  finally { await drainReports(); globalThis.fetch = scripted; }
 }
 
 /** A fake channel handle that records what the decision lane actually sends. */

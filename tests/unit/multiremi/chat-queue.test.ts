@@ -327,7 +327,7 @@ describe("Chat queues", () => {
     expect(invalid.status).toBe(400);
   });
 
-  it("keeps same-millisecond messages, previews, and legacy page cursors in insertion order", async () => {
+  it("keeps same-millisecond messages and previews in insertion order after retiring the page route", async () => {
     const { store, runtime, chat } = setup();
     const first = store.sendChatMessage(chat.id, { content: "first" });
     store.claimTask(runtime.id);
@@ -340,12 +340,8 @@ describe("Chat queues", () => {
     expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual(["first", "answer"]);
     expect(store.getChatSession(chat.id)?.lastMessage?.content).toBe("answer");
     const app = createMultiremiApp({ store });
-    const newest = await (await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).json();
-    expect(newest.messages[0].id).toBe("msg_a_answer");
-    const query = new URLSearchParams({ limit: "1", before_id: newest.next_cursor.id, before_created_at: newest.next_cursor.created_at });
-    const older = await (await app.request(`/api/chat/sessions/${chat.id}/messages/page?${query}`)).json();
-    expect(older.messages.map((message: any) => message.content)).toEqual(["first"]);
-    expect(older.has_more).toBe(false);
+    expect(store.listChatMessages(chat.id).map((message) => message.id)).toEqual(["msg_z_first", "msg_a_answer"]);
+    expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
   });
 
   it("migrates legacy Chat order once and continues the sequence after reopening", () => {

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { ElicitationCreateParams, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon, type MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTaskHumanRequest, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 
@@ -269,7 +270,7 @@ describe("Multiremi approval routing e2e", () => {
       expect(settled.respondedBy).toBeTruthy();
 
       // Transcript carries the request/response audit rows.
-      const types = h.store.listTaskMessages(h.taskId).map((m) => m.type);
+      const types = h.daemon.traceStore().read(h.taskId).events.map((m) => m.type);
       expect(types).toContain("permission_request");
       expect(types).toContain("permission_response");
     } finally {
@@ -308,7 +309,7 @@ describe("Multiremi approval routing e2e", () => {
       await h.run;
       expect(h.elicitationResults).toEqual([{ action: "accept", content: { question_0: "staging" } }]);
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
-      const types = h.store.listTaskMessages(h.taskId).map((m) => m.type);
+      const types = h.daemon.traceStore().read(h.taskId).events.map((m) => m.type);
       expect(types).toContain("question_request");
       expect(types).toContain("question_response");
     } finally {

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "../../packages/server/src/store/advisory-locks.js";
 import {
   pollUntil, redactDiagnostic, TwoProcessResources,
@@ -10,7 +11,7 @@ if (!configured) console.info("[MUL-463] SKIP: MULTIREMI_TEST_POSTGRES_URL is no
 
 interface Seed { agentId: string; issueId: string; browserToken: string }
 interface Queue { agentId: string; runtimeIds: [string, string] }
-interface Frame { type: string; payload?: any }
+interface Frame { type?: string; payload?: any; t?: string; p?: any; seq?: number; rt?: string }
 interface TaskState { id: string; status: string; runtimeId: string }
 interface PeerHealth { enabled: boolean; sent: number; dropped: number; failed: number; queued: number; inflight: number }
 const BunSocket = WebSocket as unknown as { new(url: string, options?: Bun.WebSocketOptions): WebSocket };
@@ -27,8 +28,8 @@ class SocketFrames {
     expect(await pollUntil(() => this.socket.readyState === WebSocket.OPEN)).toBe(true);
   }
   async wait(type: string, predicate: (frame: Frame) => boolean = () => true): Promise<Frame | undefined> {
-    await pollUntil(() => this.frames.some((frame) => frame.type === type && predicate(frame)), 5000);
-    return this.frames.find((frame) => frame.type === type && predicate(frame));
+    await pollUntil(() => this.frames.some((frame) => (frame.type ?? frame.t) === type && predicate(frame)), 5000);
+    return this.frames.find((frame) => (frame.type ?? frame.t) === type && predicate(frame));
   }
   close(): void { this.socket.close(); }
 }
@@ -63,10 +64,15 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
   }
 
   async function daemon(runtimeId: string): Promise<SocketFrames> {
-    const collector = new SocketFrames(`${pair[1].url.replace("http:", "ws:")}/api/daemon/ws?runtime_ids=${runtimeId}`, resources.authToken);
+    const collector = new SocketFrames(`${pair[1].url.replace("http:", "ws:")}/api/daemon/ws?protocol=2`, resources.authToken);
     sockets.add(collector);
     await collector.open();
-    expect((await collector.wait("ready"))?.type).toBe("ready");
+    collector.socket.send(JSON.stringify({ v: 2, t: "hello", p: {
+      protocol: 2, cli_version: DAEMON_MIN_CLI_VERSION,
+      daemon_id: runtimeId.replace(/^rt_/, "daemon_"),
+      runtimes: [{ runtime_id: runtimeId, provider: "codex", max_concurrency: 2, active_task_ids: [] }],
+    } }));
+    expect((await collector.wait("welcome"))?.t).toBe("welcome");
     return collector;
   }
 
@@ -76,8 +82,7 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
       signal: AbortSignal.timeout(10_000),
     });
     expect(response.status).toBe(200);
-    // The real claim response contains a task credential. Keep it in memory and
-    // assert only the ID so an assertion failure never dumps that credential.
+    // The response contains a task credential; keep it out of assertion output.
     const body = await response.json() as { task: { id: string } | null };
     return body.task?.id ?? null;
   }
@@ -157,20 +162,18 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     } finally { socket.close(); }
   }), 20_000);
 
-  it("3. wakes a daemon on B for a task enqueued on A and claims that exact task on B", () => timed(3, async () => {
+  it("3. claims a task enqueued on A from a v2 daemon session on B", () => timed(3, async () => {
     const queue = await pair[0].call<Queue>("queue");
     const socket = await daemon(queue.runtimeIds[0]);
     try {
       const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId, runtimeId: queue.runtimeIds[0] });
-      const wakeup = await socket.wait("daemon:task_available", (frame) => frame.payload.task_id === id);
-      expect(wakeup?.payload).toMatchObject({ task_id: id, runtime_id: queue.runtimeIds[0] });
       expect(await claim(queue.runtimeIds[0])).toBe(id);
       expect(await pair[1].call<TaskState>("task", { id })).toEqual({ id, status: "dispatched", runtimeId: queue.runtimeIds[0] });
       await pair[0].call("complete", { id });
     } finally { socket.close(); }
   }), 20_000);
 
-  it("4. lets two daemons on B race to claim the same queue 200 times without duplicates", () => timed(4, async () => {
+  it("4. lets two v2 daemons on B race for the same queue 200 times without duplicate claims", () => timed(4, async () => {
     const queue = await pair[0].call<Queue>("queue");
     const daemons = await Promise.all(queue.runtimeIds.map((id) => daemon(id)));
     const delivered: string[] = [];

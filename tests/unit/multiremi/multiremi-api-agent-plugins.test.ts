@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -695,12 +696,8 @@ describe("Multiremi API — agent plugins", () => {
         headers: { Authorization: `Bearer ${token}` },
       });
       expect(deniedDesired.status, `${label} desired state`).toBe(403);
-      const deniedReport = await app.request(statePath, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-      });
-      expect(deniedReport.status, `${label} state report`).toBe(403);
+      const deniedReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, authToken: "root-secret" });
+      expect(deniedReport).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
     }
     const masterDesired = await app.request(desiredPath, {
       headers: { Authorization: "Bearer root-secret" },
@@ -767,38 +764,19 @@ describe("Multiremi API — agent plugins", () => {
       status: "pending",
     });
 
-    const reported = await app.request(
-      statePath,
-      {
-        method: "POST",
-        headers: { ...daemonHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-      },
-    );
-    expect(reported.status).toBe(200);
-    expect((await reported.json()).state).toMatchObject({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest });
-    const repeatedReport = await app.request(statePath, {
-      method: "POST",
-      headers: { ...daemonHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-    });
-    expect(repeatedReport.status).toBe(200);
+    const reported = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret" });
+    expect(reported.ok).toBe(true);
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({ status: "ready", observedDigest: plugin.activeVersion!.artifactDigest });
+    const repeatedReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret" });
+    expect(repeatedReport.ok).toBe(true);
     expect(runtimeStateEvents).toHaveLength(1);
 
-    const masterReport = await app.request(statePath, {
-      method: "POST",
-      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-    });
-    expect(masterReport.status).toBe(200);
+    const masterReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" }, authToken: "root-secret" });
+    expect(masterReport.ok).toBe(true);
 
     const openApp = createMultiremiApp({ store, authToken: "" });
     expect((await openApp.request(desiredPath)).status).toBe(200);
-    expect((await openApp.request(statePath, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-    })).status).toBe(200);
+    expect((await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { "Content-Type": "application/json" }, authToken: "" })).ok).toBe(true);
     expect((await openApp.request(desiredPath, {
       headers: { Authorization: `Bearer ${localPat.token}` },
     })).status).toBe(403);
@@ -1115,15 +1093,8 @@ describe("Multiremi API — agent plugins", () => {
 
     // Daemon-observed state is excluded: the daemon produces it, so reporting it
     // must not look like a control-plane change and re-trigger the desired GET.
-    const report = await app.request(
-      `/api/daemon/runtimes/${runtime.id}/agent-plugins/${plugin.activeVersionId}/state`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
-      },
-    );
-    expect(report.status).toBe(200);
+    const report = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: headers, authToken: "root-secret" });
+    expect(report.ok).toBe(true);
     expect(await desiredRevision()).toBe(initialRevision);
     expect((await heartbeat()).agent_plugins).toEqual({ revision: initialRevision });
 

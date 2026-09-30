@@ -13,6 +13,7 @@
     "./inbox": "./src/inbox.ts",
     "./attachments": "./src/attachments.ts",
     "./runtime-health": "./src/runtime-health.ts",
+    "./runtime-protocol": "./src/runtime-protocol.ts",
     "./codex-profile": "./src/codex-profile.ts",
     "./claude-profile": "./src/claude-profile.ts",
     "./runtime-connection": "./src/runtime-connection.ts",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import {
   cleanTraceField,
   normalizeTraceStatus,
@@ -11,44 +11,8 @@ import {
   TRACE_TOOL_MAX_BYTES,
   TRACE_TRUNCATION_MARKER,
 } from "@shared/trace-sanitize.js";
-import { createStore, db, resetMultiremiTestEnv } from "../multiremi/helpers.js";
-
-afterEach(resetMultiremiTestEnv);
-
-/**
- * Write one message through the store's real `appendTaskMessages` and return the
- * raw stored columns. This is the reference the shared module must match — not a
- * restatement of what the columns are supposed to hold.
- */
-function storedColumns(message: Record<string, unknown>) {
-  const store = createStore();
-  const runtime = store.registerRuntime({ id: "rt_trace", name: "trace", provider: "claude", workspaceId: "local" });
-  const agent = store.createAgent({ name: "Trace Bot", provider: "claude", runtimeId: runtime.id });
-  const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "p" });
-  store.appendTaskMessages(task.id, [message as never]);
-  return db!.query(
-    `SELECT type, tool, content, input, output, tool_call_id, status, meta
-       FROM multiremi_task_messages WHERE task_id = ? AND seq = 1`,
-  ).get(task.id) as Record<string, unknown>;
-}
-
-/**
- * The sanitize rules moved from `store/repos/tasks-repo.ts` into
- * `@shared/trace-sanitize.js` (MUL-402 ruling 6b). The move is only correct if the
- * two produce identical stored values, so every case below states the value the
- * historical implementation writes and asserts the shared implementation writes
- * the same thing.
- *
- * The fixtures deliberately include the cases that are easy to get subtly wrong:
- * a multi-byte character straddling the byte cap, a value that is exactly at the
- * cap, a base64 payload that must be elided before the cap applies, and a
- * structured field whose cap fires AFTER serialization.
- *
- * The `tasks-repo.ts` reference implementation is replaced by the stated values
- * rather than imported, because it is a private function in a store class. Each
- * expected value below is the literal the old code produces; A-6 deletes the old
- * path and this file's expectations stay valid.
- */
+// Pin the shared sanitizer's boundaries without treating a legacy DB writer as
+// an independent reference implementation: that writer now delegates here too.
 
 describe("truncateUtf8 matches the historical byte-cap behaviour", () => {
   it("leaves a value at or under the cap untouched", () => {
@@ -237,74 +201,46 @@ describe("parseStoredTraceJson mirrors the historical read path", () => {
 
 
 /** `{ a: { a: { ... "leaf" } } }` with exactly `depth` nested objects. */
-function nestedDepth(depth: number): Record<string, unknown> {
-  let value: unknown = "leaf";
+function nestedDepth(depth: number, leaf = "leaf"): Record<string, unknown> {
+  let value: unknown = leaf;
   for (let index = 0; index < depth; index += 1) value = { a: value };
   return value as Record<string, unknown>;
 }
 
-/**
- * The equivalence suite proper: run one fixture set through the store's real
- * write path and through the shared module, and require identical bytes for every
- * capped column. This is what makes "faithful extraction" checkable rather than
- * asserted; A-6 deletes this describe block's store half when it deletes
- * `appendTaskMessages`.
- */
-describe("shared sanitize equals the store's real write path", () => {
-  const fixtures: Array<[string, Record<string, unknown>]> = [
-    ["plain text", { type: "text", content: "hello" }],
-    ["empty strings become null", { type: "text", content: "", tool: "", output: "" }],
-    ["tool name at the cap", { type: "tool_use", tool: "T".repeat(512), status: "pending" }],
-    ["tool name over the cap", { type: "tool_use", tool: "T".repeat(513) }],
-    ["content at the cap", { type: "text", content: "C".repeat(TRACE_CONTENT_MAX_BYTES) }],
-    ["content over the cap", { type: "text", content: "C".repeat(TRACE_CONTENT_MAX_BYTES + 1) }],
-    ["content cut mid multi-byte char", { type: "text", content: `${"中".repeat(TRACE_CONTENT_MAX_BYTES / 3)}中` }],
-    ["output over the cap", { type: "tool_result", output: "O".repeat(64 * 1024 + 1) }],
-    ["status accepted", { type: "tool_use", status: "completed" }],
-    ["status rejected", { type: "tool_use", status: "cancelled" }],
-    ["input object", { type: "tool_use", input: { command: "ls", nested: { a: [1, 2] } } }],
-    ["meta object", { type: "tool_result", meta: { duration_ms: 42, title: "Read" } }],
-    ["input base64 elided", { type: "tool_use", input: { image: "A".repeat(5000) } }],
-    ["input base64 at threshold", { type: "tool_use", input: { image: "A".repeat(4096) } }],
-    ["input array capped", { type: "tool_use", input: { items: Array.from({ length: 300 }, (_, i) => i) } }],
-    ["unknown type survives raw", { type: "assistant", content: "legacy" }],
-    ["tool_call_id kept raw", { type: "tool_use", toolCallId: "tc_1" }],
+describe("shared sanitizer boundary fixtures", () => {
+  const fixtures: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ["plain text", { type: "text", content: "hello" }, { content: "hello" }],
+    ["empty strings become null", { type: "text", content: "", tool: "", output: "" }, {}],
+    ["tool name at the cap", { type: "tool_use", tool: "T".repeat(512), status: "pending" }, { tool: "T".repeat(512), status: "pending" }],
+    ["tool name over the cap", { type: "tool_use", tool: "T".repeat(513) }, { tool: "T".repeat(512) + TRACE_TRUNCATION_MARKER }],
+    ["content at the cap", { type: "text", content: "C".repeat(TRACE_CONTENT_MAX_BYTES) }, { content: "C".repeat(256 * 1024) }],
+    ["content over the cap", { type: "text", content: "C".repeat(TRACE_CONTENT_MAX_BYTES + 1) }, { content: "C".repeat(256 * 1024) + TRACE_TRUNCATION_MARKER }],
+    ["content cut mid multi-byte char", { type: "text", content: `${"中".repeat(TRACE_CONTENT_MAX_BYTES / 3)}中` }, { content: "中".repeat(Math.floor(256 * 1024 / 3)) + TRACE_TRUNCATION_MARKER }],
+    ["output over the cap", { type: "tool_result", output: "O".repeat(64 * 1024 + 1) }, { output: "O".repeat(64 * 1024) + TRACE_TRUNCATION_MARKER }],
+    ["status accepted", { type: "tool_use", status: "completed" }, { status: "completed" }],
+    ["status rejected", { type: "tool_use", status: "cancelled" }, {}],
+    ["input object", { type: "tool_use", input: { command: "ls", nested: { a: [1, 2] } } }, { input: '{"command":"ls","nested":{"a":[1,2]}}' }],
+    ["meta object", { type: "tool_result", meta: { duration_ms: 42, title: "Read" } }, { meta: '{"duration_ms":42,"title":"Read"}' }],
+    ["input base64 elided", { type: "tool_use", input: { image: "A".repeat(5000) } }, { input: '{"image":"[base64-elided]"}' }],
+    ["input base64 at threshold", { type: "tool_use", input: { image: "A".repeat(4096) } }, { input: JSON.stringify({ image: "A".repeat(4096) }) }],
+    ["input array capped", { type: "tool_use", input: { items: Array.from({ length: 300 }, (_, i) => i) } }, { input: JSON.stringify({ items: [...Array.from({ length: 256 }, (_, i) => i), "[+44 more]"] }) }],
+    ["unknown type survives raw", { type: "assistant", content: "legacy" }, { content: "legacy" }],
+    ["tool_call_id kept raw", { type: "tool_use", tool_call_id: "tc_1" }, { tool_call_id: "tc_1" }],
     // Depth boundary: `sanitizeTraceJson` returns "[depth-limited]" once depth
     // exceeds 8. 7 and 8 stay intact, 9 and 12 are capped, so the pair brackets
     // the boundary rather than only testing one side of it.
-    ["input nested depth 7", { type: "tool_use", input: nestedDepth(7) }],
-    ["input nested depth 8", { type: "tool_use", input: nestedDepth(8) }],
-    ["input nested depth 9", { type: "tool_use", input: nestedDepth(9) }],
-    ["input nested depth 12", { type: "tool_use", input: nestedDepth(12) }],
+    ["input nested depth 7", { type: "tool_use", input: nestedDepth(7) }, { input: JSON.stringify(nestedDepth(7)) }],
+    ["input nested depth 8", { type: "tool_use", input: nestedDepth(8) }, { input: JSON.stringify(nestedDepth(8)) }],
+    ["input nested depth 9", { type: "tool_use", input: nestedDepth(9) }, { input: JSON.stringify(nestedDepth(9, "[depth-limited]")) }],
+    ["input nested depth 12", { type: "tool_use", input: nestedDepth(12) }, { input: JSON.stringify(nestedDepth(9, "[depth-limited]")) }],
   ];
 
-  for (const [name, message] of fixtures) {
-    it(`matches for: ${name}`, () => {
-      const row = storedColumns(message);
-      const shared = sanitizeTraceEventFields({
-        type: String(message.type),
-        tool: message.tool,
-        content: message.content,
-        input: message.input,
-        output: message.output,
-        tool_call_id: message.toolCallId,
-        status: message.status,
-        meta: message.meta,
+  for (const [name, message, expected] of fixtures) {
+    it(`bounds: ${name}`, () => {
+      expect(sanitizeTraceEventFields({ ...message, type: String(message.type) })).toEqual({
+        type: String(message.type), tool: null, content: null, input: null,
+        output: null, tool_call_id: null, status: null, meta: null, ...expected,
       });
-
-      // Compare as nullable strings: sqlite hands back `unknown` for a column
-      // that may be text or null, and every one of these columns is exactly one
-      // of those two.
-      const text = (value: unknown): string | null => (value == null ? null : String(value));
-      // `type` is the one column that is never null; the rest are nullable.
-      expect(shared.type).toBe(String(row.type));
-      expect(shared.tool).toBe(text(row.tool));
-      expect(shared.content).toBe(text(row.content));
-      expect(shared.input).toBe(text(row.input));
-      expect(shared.output).toBe(text(row.output));
-      expect(shared.tool_call_id).toBe(text(row.tool_call_id));
-      expect(shared.status).toBe(text(row.status));
-      expect(shared.meta).toBe(text(row.meta));
     });
   }
 
@@ -318,18 +254,13 @@ describe("shared sanitize equals the store's real write path", () => {
     expect(deep).toContain("[depth-limited]");
   });
 
-  it("agrees that a capped structured field reads back as null on both paths", () => {
+  it("caps serialized structured fields at the byte boundary before parsing", () => {
     const message = {
       type: "tool_use",
       input: { rows: Array.from({ length: 200 }, (_, index) => ({ id: index, note: "x".repeat(2000) })) },
     };
-    const row = storedColumns(message);
-    expect(row.input).not.toBeNull();
-    expect(String(row.input).endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
-
     const shared = sanitizeTraceEventFields({ type: "tool_use", input: message.input });
-    expect(shared.input).toBe(String(row.input));
-    // Both the store read path and the shared parse return null here.
+    expect(shared.input).toBe(JSON.stringify(message.input).slice(0, 256 * 1024) + TRACE_TRUNCATION_MARKER);
     expect(parseStoredTraceJson(shared.input)).toBeNull();
   });
 });

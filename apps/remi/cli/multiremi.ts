@@ -17,6 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type {
   FeishuBotCancelCandidate,
   FeishuBotCancelResult,
@@ -26,6 +27,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
+import { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { locksForRole, startHubRoleGuard } from "@multiremi/api/hub/hub-role-guard.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
 import { createLogger, setLogLevel } from "@shared/logger.js";
@@ -428,12 +430,25 @@ export function instantiateCoResidentWorkerDaemons(
     ? new MultiremiCliUpdateCoordinator()
     : null;
   const readyProviders = new Set<number>();
+  const first = options[0];
+  const protocolClient = first?.protocolClient ?? (first ? new DaemonProtocolClient({
+    serverUrl: first.serverUrl,
+    token: first.token ?? process.env.MULTIREMI_TOKEN,
+    daemonId: first.daemonId ?? process.env.MULTIREMI_DAEMON_ID
+      ?? first.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID
+      ?? first.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`,
+    cliVersion: multiremiVersion,
+    launchedBy: first.launchedBy,
+    log,
+    ...first.protocolClientOptions,
+  }) : undefined);
   const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
     const extraReadyCheck = daemonOptions.supervisorReady;
     const notifyReadyChange = daemonOptions.onReadyChange;
     return new MultiremiDaemon({
       ...daemonOptions,
+      protocolClient,
       issueWorkspaceLifecycleLocker,
       ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
       // Provider lanes share one Issue workspace tree. A single lane owns its
@@ -707,7 +722,7 @@ export function controlPlaneConciergeHost(deps: {
         const threadId = delivery.threadId ?? delivery.replyToMessageId;
         const sessionKey = threadId ? `${delivery.chatId}:thread:${threadId}` : delivery.chatId;
         return handle.streamProactiveTask(delivery.chatId, sessionKey,
-          pollFeishuTask(daemon, taskId, options.signal), {
+          subscribeFeishuTask(daemon, taskId, options.signal, delivery.presentation?.throughSeq ?? 0), {
             // `null` until the first snapshot pins the provider session, so the
             // card opens as "刚醒来的 <agent>" instead of a bare agent name.
             taskId, displayName, sessionId: null, signal: options.signal,
@@ -1182,7 +1197,7 @@ export function createFeishuTaskHandler(
     // second card.
     if (submitted.steered || submitted.duplicate || submitted.deliveryQueued) return;
 
-    await consumer(pollFeishuTask(daemon, submitted.taskId), {
+    await consumer(subscribeFeishuTask(daemon, submitted.taskId), {
       taskId: submitted.taskId,
       displayName: submitted.agentName,
       sessionId: null,
@@ -1330,43 +1345,51 @@ function renderFeishuStatus(snapshot: FeishuBotSessionSnapshot): string {
   ].join("\n");
 }
 
-async function* pollFeishuTask(
-  daemon: MultiremiDaemon,
+export async function* subscribeFeishuTask(
+  daemon: Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">,
   taskId: string,
   signal?: AbortSignal,
+  throughSeq = 0,
 ): AsyncGenerator<TaskStreamEvent> {
-  let sinceSeq = 0;
-  let reportedSessionId: string | null = null;
-  for (;;) {
-    signal?.throwIfAborted();
-    const messages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
-    for (const message of messages) {
+  const batches: Array<{ events: TraceEvent[]; closed: boolean }> = [];
+  let wake: (() => void) | undefined;
+  let active = true;
+  let unsubscribe: (() => Promise<void>) | undefined;
+  const onAbort = () => wake?.();
+  signal?.throwIfAborted();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    // A-0's cursor is exclusive. Reconnects and gap filling belong to subscribeTrace.
+    unsubscribe = await daemon.subscribeTrace(taskId, throughSeq, (events, closed) => {
+      if (!active) return;
+      batches.push({ events, closed });
+      wake?.();
+    });
+    for (;;) {
       signal?.throwIfAborted();
-      sinceSeq = Math.max(sinceSeq, message.seq);
-      yield { kind: "message", message };
-    }
-    const snapshot = await daemon.getFeishuBotTaskSnapshot(taskId);
-    if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "cancelled") {
-      // Completion and Task messages commit together, but they are read over
-      // separate HTTP calls. Drain once more so a completion that landed
-      // between the first list and this snapshot cannot hide the final tool,
-      // thinking, or text events.
-      const finalMessages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
-      for (const message of finalMessages) {
-        sinceSeq = Math.max(sinceSeq, message.seq);
+      const batch = batches.shift();
+      if (!batch) {
+        await new Promise<void>(resolve => { wake = resolve; });
+        wake = undefined;
+        continue;
+      }
+      for (const message of batch.events) {
+        signal?.throwIfAborted();
         yield { kind: "message", message };
       }
-      yield { kind: "snapshot", snapshot };
-      return;
+      if (batch.closed) {
+        // One final read supplies display metadata; closed alone ends the subscription.
+        signal?.throwIfAborted();
+        const snapshot = await daemon.getFeishuBotTaskSnapshot(taskId);
+        signal?.throwIfAborted();
+        yield { kind: "snapshot", snapshot };
+        return;
+      }
     }
-    // The provider session is pinned before the Task finishes on a continued
-    // conversation. Surface it early so the live approval and question cards
-    // carry the same session label as the result card.
-    if (snapshot.sessionId && snapshot.sessionId !== reportedSessionId) {
-      reportedSessionId = snapshot.sessionId;
-      yield { kind: "snapshot", snapshot };
-    }
-    await sleep(400);
+  } finally {
+    active = false;
+    signal?.removeEventListener("abort", onAbort);
+    await unsubscribe?.();
   }
 }
 
@@ -1374,18 +1397,16 @@ async function* singleMessageStream(text: string): AsyncGenerator<TaskStreamEven
   yield {
     kind: "message",
     message: {
-      id: "feishu-command-message",
-      taskId: "feishu-command",
       seq: 1,
       type: "text",
       tool: null,
       content: text,
       input: null,
       output: null,
-      toolCallId: null,
+      tool_call_id: null,
       status: null,
       meta: null,
-      createdAt: new Date().toISOString(),
+      ts: new Date().toISOString(),
     },
   };
   yield {

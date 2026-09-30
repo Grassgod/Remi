@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { IssueTopicConfigError, readWorkspaceIssueTopicsLenient } from "@multiremi/issue-topics/config.js";
@@ -371,7 +372,7 @@ describe("Feishu Issue topics", () => {
   }
 
   for (const rollback of [false, true]) {
-    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "publishes Chat before terminal events after commit"} on SQLite`, () => {
+    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "persists Chat before terminal events after commit"} on SQLite`, () => {
       const { store } = scaffold();
       configureTopics(store);
       const wake = prepareReport(store);
@@ -381,10 +382,8 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
-      const chatActorIds: Array<string | null | undefined> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
-        if (event.type === "chat:message") chatActorIds.push(event.actorId);
       });
       const database = db!;
       const originalRun = database.run;
@@ -409,14 +408,12 @@ describe("Feishu Issue topics", () => {
         expect(injected).toBe(true);
         expect(store.getTask(leader.id)!.status).toBe("running");
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
-        expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
         expect(events).toEqual([]);
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
-        expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
-        expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
-        expect(events[0].type).toBe("chat:message");
-        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+        expect(store.listChatMessagesFromLog(wake.chatSessionId!).some(message => message.role === "system")).toBe(true);
+        expect(events[0].type).toBe("activity:created");
+        expect(events[0].inTransaction).toBe(false);
       }
     });
   }
@@ -573,22 +570,18 @@ describe("Feishu Issue topics", () => {
     expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)?.mention).toBeUndefined();
   });
 
-  it("uses the existing authenticated result endpoint to prepare a recipient", async () => {
+  it("uses the authenticated result frame to prepare the same recipient and signals a lost lease", async () => {
     const { store } = scaffold();
     configureTopics(store);
     prepareReport(store);
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
     const token = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const app = createMultiremiApp({ store, authToken: "MASTER" });
-    const request = (body: object) => app.request(`/api/daemon/runtimes/rt_bot/feishu-bot/outbound/${delivery.id}/result`, {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.token}` },
-      body: JSON.stringify({ status: "prepared", claim_token: delivery.claimToken, ...body }),
-    });
-    expect((await request({ mention_open_id: "all" })).status).toBe(400);
-    expect((await request({ mention_open_id: "ou_owner", claim_token: "stale" })).status).toBe(409);
+    const request = (body: object) => reportFrame(store, "feishu.outbound_result", { runtime_id: "rt_bot", request_id: delivery.id, status: "prepared", claim_token: delivery.claimToken, ...body }, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.token}` }, authToken: "" });
+    expect(await request({ mention_open_id: "all" })).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
+    expect(await request({ mention_open_id: "ou_owner", claim_token: "stale" })).toEqual({ ok: true, lease_lost: true });
     const response = await request({ mention_open_id: "ou_owner" });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok", mention_open_id: "ou_owner" });
+    expect(response).toEqual({ ok: true, mention_open_id: "ou_owner" });
   });
   it("stores explicit notification targets and preserves them for older clients", async () => {
     const { store } = scaffold();

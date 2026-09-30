@@ -246,13 +246,8 @@ const SPECIFIC_EVENTS = new Set([
   "subscriber:added", "subscriber:removed",
   "daemon:heartbeat",
   // Chat events are handled explicitly below; do not double-invalidate.
-  "chat:message", "chat:done", "chat:session_read", "chat:session_deleted",
+  "chat:done", "chat:session_read", "chat:session_deleted",
   "chat:session_updated", "chat:queue_updated",
-  // task:message stays out of the prefix path because it fires per
-  // streamed message during a long run — invalidating the snapshot on
-  // every message would flood the network. Specific chat handlers below
-  // still receive it via ws.on() (a separate subscription channel).
-  "task:message",
   // task:completed / task:failed deliberately NOT here. They go through
   // both the task-prefix invalidate (refreshes the agent-task-snapshot
   // cache) AND the chat-specific ws.on() handlers below. The two

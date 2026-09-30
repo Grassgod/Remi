@@ -5,14 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Clock, Loader2, LockKeyhole, XCircle } from "lucide-react";
 import { api } from "@multiremi/core/api";
 import { issueKeys } from "@multiremi/core/issues/queries";
-import { taskMessagesOptions } from "@multiremi/core/chat/queries";
 import type { AgentTask } from "@multiremi/core/types/agent";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { cn } from "@multiremi/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
-import { buildTimeline } from "../../common/task-transcript";
+import { buildTraceTimeline } from "../../common/task-transcript/build-timeline";
+import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatToolInputSummary, toolIcon } from "../../common/task-transcript/tool-summaries";
 import { useT } from "../../i18n";
@@ -92,10 +91,11 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman || isWaitingToStart;
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
-  const { data: messages } = useQuery(taskMessagesOptions(task.id));
+  const traceActive = ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
+  const events = useTaskTrace(task.id, traceActive, traceActive);
   const items = useMemo(
-    () => (messages ? buildTimeline(messages as TaskMessagePayload[]) : []),
-    [messages],
+    () => buildTraceTimeline(events),
+    [events],
   );
 
   // The step the agent is on right now — the last tool call to start.

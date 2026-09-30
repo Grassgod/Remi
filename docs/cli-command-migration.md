@@ -524,6 +524,8 @@ remove any alias.
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
 | `remi task message list` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
 | `remi task messages` | `remi task trace read` | One-release compatibility alias |
+| `remi issue run-messages` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
+| `remi chat message list` | `remi session log window` | One-release compatibility alias; use sequence `--anchor`/`--before`/`--after` instead of the retired timestamp cursor |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
 | `remi agent edit` | `remi agent update` | One-release compatibility alias |

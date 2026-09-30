@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -44,13 +45,9 @@ describe("assembled task prompt audit", () => {
 
     const prompt = "# Delta Prompt\n\n## Current Request\nDo it";
     const sha256 = createHash("sha256").update(prompt).digest("hex");
-    const reported = await app.request(`/api/daemon/tasks/${task.id}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "delta", prompt, sha256 }),
-    });
-    expect(reported.status).toBe(200);
-    expect(await reported.json()).toMatchObject({ task_id: task.id, mode: "delta", sha256 });
+    const reported = await reportFrame(store, "task.prompt", { task_id: task.id, mode: "delta", prompt, sha256 }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(reported.ok).toBe(true);
+    expect(store.getTaskPrompt(task.id)).toMatchObject({ taskId: task.id, mode: "delta", sha256 });
 
     const fetched = await app.request(`/api/tasks/${task.id}/prompt`);
     expect(fetched.status).toBe(200);

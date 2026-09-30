@@ -832,29 +832,16 @@ describe("queued task model capability waits", () => {
     });
     expect(rebound.status).toBe(200);
     expect(store.getTask(task.id)?.status).toBe("cancelled");
-    let cursor: { created_at: string; id: string } | null = null;
-    let originalMessage: { role: string; task_id: string; content: string } | undefined;
-    let pages = 0;
-    do {
-      const query = new URLSearchParams();
-      if (cursor) { query.set("before_created_at", cursor.created_at); query.set("before_id", cursor.id); }
-      const listed = await app.request(`/api/chat/sessions/${command![3]}/messages/page?${query}`, { headers });
-      expect(listed.status).toBe(200);
-      const page = await listed.json() as { messages: Array<{ role: string; task_id: string; content: string }>;
-        next_cursor: { created_at: string; id: string } | null };
-      pages++;
-      originalMessage = page.messages.find((message) => message.role === "user" && message.task_id === task.id);
-      cursor = page.next_cursor;
-    } while (!originalMessage && cursor);
-    expect(pages).toBeGreaterThan(1);
-    expect(originalMessage?.content).toBe(original.message.body);
+    const originalMessage = store.listChatMessagesFromLog(command![3]!)
+      .find((message) => message.role === "user" && message.taskId === task.id);
+    expect(originalMessage?.body).toBe(original.message.body);
     const resent = await app.request(`/api/chat/sessions/${command![4]}/messages`, {
-      method: "POST", headers, body: JSON.stringify({ content: originalMessage!.content }),
+      method: "POST", headers, body: JSON.stringify({ content: originalMessage!.body }),
     });
     expect(resent.status).toBe(201);
     const resentBody = await resent.json() as { task_id: string; message_id: string };
     const replayed = store.getTask(resentBody.task_id)!;
-    expect(store.getChatMessage(resentBody.message_id)?.body).toBe(originalMessage!.content);
+    expect(store.getChatMessage(resentBody.message_id)?.body).toBe(originalMessage!.body);
     expect(replayed.chatSessionId).toBe(task.chatSessionId);
     expect(replayed.prompt).toBe(task.prompt);
     expect(store.claimTask(b.id)).toBeNull();

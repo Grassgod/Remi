@@ -4,14 +4,42 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { startMultiremiServer as startServer } from "@multiremi/api.js";
+import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 const roots: string[] = [];
 const databases: Database[] = [];
+const activeDaemons = new Set<TestMultiremiDaemon>();
+const activeServers = new Set<ReturnType<typeof startServer>>();
 
-afterEach(() => {
+class MultiremiDaemon extends TestMultiremiDaemon {
+  constructor(options: MultiremiDaemonOptions) {
+    super(options);
+    activeDaemons.add(this);
+  }
+}
+
+function startMultiremiServer(...options: Parameters<typeof startServer>) {
+  const server = startServer(...options);
+  activeServers.add(server);
+  return server;
+}
+
+async function stopDaemons() {
+  while (activeDaemons.size) {
+    const daemons = [...activeDaemons];
+    for (const daemon of daemons) daemon.stop();
+    await Promise.all(daemons.map((daemon) => daemon.stopAndDrainTestWork()));
+    for (const daemon of daemons) activeDaemons.delete(daemon);
+  }
+}
+
+afterEach(async () => {
+  await stopDaemons();
+  for (const server of activeServers) server.stop(true);
+  activeServers.clear();
   for (const db of databases.splice(0)) db.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -113,8 +141,10 @@ describe("Project-bound Chat daemon startup", () => {
           expect(readFileSync(join(cwd, "wiki", "guide.md"), "utf8")).toBe("Current Project Wiki.\n");
         }
       } finally {
+        await daemon.stopAndDrainTestWork();
         sync.mockRestore();
         checkout.mockRestore();
+        await stopDaemons();
         server.stop(true);
       }
     });
@@ -206,6 +236,7 @@ describe("Project-bound Chat daemon startup", () => {
           { projectId: project.id, repoUrl, path: repoPath },
         ]);
       } finally {
+        await firstDaemon.stopAndDrainTestWork();
         sync.mockRestore();
         checkout.mockRestore();
       }
@@ -230,10 +261,12 @@ describe("Project-bound Chat daemon startup", () => {
         expect(prompts).toHaveLength(2);
         expect(secondCache.lookup("local", catalogOnlyUrl)).toBeNull();
       } finally {
+        await secondDaemon.stopAndDrainTestWork();
         secondSync.mockRestore();
         secondCheckout.mockRestore();
       }
     } finally {
+      await stopDaemons();
       server.stop(true);
     }
   });
@@ -311,6 +344,7 @@ describe("Project-bound Chat daemon startup", () => {
             expect(sync).toHaveBeenCalledTimes(!localDirectory && turn === 0 ? 1 : 0);
             expect(checkout).toHaveBeenCalledTimes(!localDirectory && turn === 0 ? 1 : 0);
           } finally {
+            await daemon.stopAndDrainTestWork();
             sync.mockRestore();
             checkout.mockRestore();
           }
@@ -355,6 +389,7 @@ describe("Project-bound Chat daemon startup", () => {
             });
           }
         } finally {
+          await stopDaemons();
           server.stop(true);
         }
       });
@@ -435,6 +470,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
         expect(checkout).not.toHaveBeenCalled();
         return { ...observed!, runtimeId, lockPaths: acquire.mock.calls.map((args) => args[0]) };
       } finally {
+        await daemon.stopAndDrainTestWork();
         acquire.mockRestore();
         sync.mockRestore();
         checkout.mockRestore();
@@ -479,6 +515,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       expect(existsSync(join(directoryB, ".multiremi", "wiki-base"))).toBe(false);
       expect(directoryContents(directoryA)).toEqual(beforeA);
     } finally {
+      await stopDaemons();
       server.stop(true);
     }
   });
@@ -548,6 +585,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
             expect(sync).not.toHaveBeenCalled();
             expect(checkout).not.toHaveBeenCalled();
           } finally {
+            await daemon.stopAndDrainTestWork();
             acquire.mockRestore();
             sync.mockRestore();
             checkout.mockRestore();
@@ -584,6 +622,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
             expect(store.getChatSession(chat.id)).toMatchObject({ projectId: project.id, workDir: chatPath, sessionId: "managed-directory-provider" });
           }
         } finally {
+          await stopDaemons();
           server.stop(true);
         }
       });
@@ -662,6 +701,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
           await daemon.start();
           if (rejectInheritedPath) expect(prepare).not.toHaveBeenCalled();
         } finally {
+          await daemon.stopAndDrainTestWork();
           claim.mockRestore();
           prepare.mockRestore();
         }
@@ -706,6 +746,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(existsSync(join(userPath, "wiki"))).toBe(false);
         expect(existsSync(join(userPath, ".multiremi", "wiki-base"))).toBe(false);
       } finally {
+        await stopDaemons();
         server.stop(true);
       }
     });

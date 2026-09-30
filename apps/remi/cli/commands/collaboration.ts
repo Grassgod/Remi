@@ -177,9 +177,6 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "retitle"]),
     legacySpec("issue.cancel", ["issue", "cancel-task"], "Cancel an issue task", "destructive", HUMAN_TASK, [refPositional("task")], [], ["issue", "cancel-task"]),
     legacySpec("issue.task-runs", ["issue", "runs"], "List issue task runs", "read", HUMAN_TASK, [refPositional("issue")], [], ["issue", "runs"]),
-    legacySpec("task.messages", ["issue", "run-messages"], "List task execution messages", "read", HUMAN_TASK, [refPositional("task")], [
-      { name: "since", type: "integer", valueName: "seq", description: "First sequence number" },
-    ], ["issue", "run-messages"]),
   ];
 }
 
@@ -336,7 +333,9 @@ function sessionCommandSpecs(): CommandSpec[] {
       await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log`, ["entries"], {
         anchor: integerOption(invocation, "anchor"), before: integerOption(invocation, "before"), after: integerOption(invocation, "after"),
       });
-    }),
+    }, [
+      { path: ["chat", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi session log window" },
+    ]),
     nativeSpec("session.log.locate", ["session", "log", "locate"], "Locate a Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
       await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/locate`, [], {
         id: positional(invocation, 1, "entry"),
@@ -729,23 +728,6 @@ function chatCommandSpecs(): CommandSpec[] {
       const chat = await resolveChat(invocation, positional(invocation, 0, "chat"));
       await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
-    nativeSpec("chat.message.list", ["chat", "message", "list"], "List chat messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      const rawCursor = stringOption(invocation, "cursor");
-      let cursor: { created_at: string; id: string } | null = null;
-      if (rawCursor) {
-        try {
-          const parsed: unknown = JSON.parse(rawCursor);
-          if (isRecord(parsed) && typeof parsed.created_at === "string" && typeof parsed.id === "string"
-            && parsed.created_at && parsed.id) cursor = { created_at: parsed.created_at, id: parsed.id };
-        } catch { /* Report the same usage error as a malformed cursor object. */ }
-        if (!cursor) throw new CliError("usage", "--cursor must be the previous page's next_cursor JSON object");
-      }
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], {
-        limit: integerOption(invocation, "limit"),
-        before_created_at: cursor?.created_at,
-        before_id: cursor?.id,
-      });
-    }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
     }),
@@ -922,6 +904,7 @@ function taskCommandSpecs(): CommandSpec[] {
     }, [
       { path: ["task", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
       { path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+      { path: ["issue", "run-messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
     ]),
     nativeSpec("task.inspect", ["task", "inspect"], "Inspect derived task health metadata", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/inspection`, ["inspection"]);

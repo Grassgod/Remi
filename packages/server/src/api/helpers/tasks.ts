@@ -7,7 +7,6 @@ import type {
   MultiremiRuntime,
   MultiremiTask,
   MultiremiTaskStatus,
-  TaskMessageInput,
   TaskUsageEntry,
 } from "@multiremi/contracts/types.js";
 
@@ -49,34 +48,6 @@ export function taskFromParam(
   param: string,
 ): MultiremiTask | null {
   return store.getTaskByRef(c.req.param(param) ?? "");
-}
-
-export const MAX_TASK_MESSAGES_PER_REQUEST = 256;
-
-// Whitelist an untrusted daemon message body to TaskMessageInput, tolerating
-// both camelCase (the daemon client serializes TaskMessageInput directly) and
-// snake_case field names.
-export function daemonTaskMessageInput(raw: unknown): TaskMessageInput {
-  const m = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const str = (...keys: string[]): string | undefined => {
-    for (const k of keys) if (typeof m[k] === "string") return m[k] as string;
-    return undefined;
-  };
-  const obj = (...keys: string[]): Record<string, unknown> | undefined => {
-    for (const k of keys) if (m[k] && typeof m[k] === "object" && !Array.isArray(m[k])) return m[k] as Record<string, unknown>;
-    return undefined;
-  };
-  return {
-    seq: typeof m.seq === "number" ? m.seq : undefined,
-    type: str("type") ?? "text",
-    tool: str("tool") ?? null,
-    content: str("content") ?? null,
-    input: obj("input") ?? null,
-    output: str("output") ?? null,
-    toolCallId: str("toolCallId", "tool_call_id") ?? null,
-    status: str("status") ?? null,
-    meta: obj("meta") ?? null,
-  };
 }
 
 export function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, task: MultiremiTask): boolean {

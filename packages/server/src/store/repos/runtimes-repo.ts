@@ -1,4 +1,6 @@
 import { createLogger } from "@shared/logger.js";
+import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_VERSION, meetsDaemonMinCliVersion } from "@multiremi/contracts/daemon-protocol.js";
+import type { RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
 import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
@@ -497,6 +499,18 @@ export class RuntimesRepo {
     return row ? withRuntimeLiveness(toRuntime(row)) : null;
   }
 
+  recordDaemonProtocol(runtimeId: string, daemonId: string, version: number, cliVersion?: string): void {
+    if (!this.readRuntimeRow(runtimeId)) return;
+    this.withRuntimeLifecycleLock(runtimeId, runtime => {
+      if (runtime.daemonId && runtime.daemonId !== daemonId) return;
+      const metadata = cliVersion === undefined ? runtime.metadata : { ...runtime.metadata, cli_version: cliVersion };
+      this.ctx.db.run(
+        "UPDATE multiremi_runtimes SET daemon_protocol_version = ?, metadata = ? WHERE id = ?",
+        [version, toJson(metadata), runtimeId],
+      );
+    });
+  }
+
   /**
    * The Runtime's own columns, without the derived reads `hydrateRuntime` adds.
    *
@@ -541,7 +555,7 @@ export class RuntimesRepo {
   }
 
   /**
-   * The same list, narrowed to one workspace in SQL, with the three derived
+   * The same list, narrowed to one workspace in SQL, with derived
    * reads batched per table instead of per Runtime (MUL-473).
    *
    * The old list hydrates all deployment rows before the caller filters them.
@@ -550,15 +564,29 @@ export class RuntimesRepo {
    */
   listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
     const rows = this.ctx.db.query(
-      `SELECT runtime.*, profile.display_name AS daemon_display_name
+      `SELECT runtime.*, profile.display_name AS daemon_display_name,
+              upgrade.status AS protocol_upgrade_status, upgrade.error AS protocol_upgrade_error
        FROM multiremi_runtimes runtime
        LEFT JOIN multiremi_daemon_profiles profile
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
+       LEFT JOIN (
+         SELECT runtime_id, status, error,
+                ROW_NUMBER() OVER (PARTITION BY runtime_id
+                  ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                           created_at DESC, updated_at DESC, id DESC) AS update_rank
+         FROM multiremi_runtime_update_requests
+         WHERE scope = 'cli' AND runtime_id IN (
+           SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?
+         )
+       ) upgrade ON upgrade.runtime_id = runtime.id AND upgrade.update_rank = 1
        WHERE COALESCE(runtime.workspace_id, 'local') = ?
        ORDER BY runtime.updated_at DESC, runtime.id DESC`,
-    ).all(workspaceId) as Row[];
-    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId);
+    ).all(workspaceId, workspaceId) as Row[];
+    const latestUpdateByRuntime = new Map(rows.map((row) => [String(row.id), row.protocol_upgrade_status == null
+      ? null
+      : { status: String(row.protocol_upgrade_status), error: row.protocol_upgrade_error == null ? null : String(row.protocol_upgrade_error) }]));
+    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId, latestUpdateByRuntime);
   }
 
   /**
@@ -567,7 +595,10 @@ export class RuntimesRepo {
    * List usage uses the existing parser on one workspace-scoped task read.
    * Single-runtime reads keep their existing PostgreSQL settled-usage cache.
    */
-  private hydrateRuntimes(runtimes: MultiremiRuntime[], workspaceId: string): MultiremiRuntime[] {
+  private hydrateRuntimes(
+    runtimes: MultiremiRuntime[], workspaceId: string,
+    latestUpdateByRuntime: Map<string, { status: string; error: string | null } | null>,
+  ): MultiremiRuntime[] {
     if (!runtimes.length) return [];
     const groupsByRuntime = new Map<string, string[]>();
     const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
@@ -617,6 +648,7 @@ export class RuntimesRepo {
         taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
       }),
+      protocol: this.runtimeProtocolStatus(runtime, latestUpdateByRuntime.get(runtime.id) ?? null),
       executionGroupIds: groupsByRuntime.get(runtime.id) ?? [],
       models: modelsByRuntime.get(runtime.id) ?? [],
     }));
@@ -2332,9 +2364,31 @@ export class RuntimesRepo {
     return {
       ...runtime,
       ...stats,
+      protocol: this.runtimeProtocol(runtime),
       executionGroupIds: (this.ctx.db.query("SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider").all(runtime.id) as { group_id: string }[]).map(row => row.group_id),
       models: this.listRuntimeModelsForExistingRuntime(runtime.id),
     };
+  }
+
+  private runtimeProtocol(runtime: MultiremiRuntime, latest?: { status: string; error: string | null } | null): RuntimeProtocolStatus {
+    const version = runtime.daemonProtocolVersion ?? 1;
+    if (latest === undefined) latest = this.ctx.db.query(
+      `SELECT status, error FROM multiremi_runtime_update_requests
+       WHERE runtime_id = ? AND scope = 'cli'
+       ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                created_at DESC, updated_at DESC, id DESC LIMIT 1`,
+    ).get(runtime.id) as { status: string; error: string | null } | null;
+    return this.runtimeProtocolStatus(runtime, latest);
+  }
+
+  private runtimeProtocolStatus(runtime: MultiremiRuntime, latest: { status: string; error: string | null } | null): RuntimeProtocolStatus {
+    const version = runtime.daemonProtocolVersion ?? 1;
+    // A successfully negotiated current daemon is healthy even if an old upgrade failed.
+    const compatible = version === DAEMON_PROTOCOL_VERSION && meetsDaemonMinCliVersion(runtimeCliVersion(runtime));
+    const state = compatible ? "ok"
+      : latest?.status === "pending" || latest?.status === "running" ? "upgrade_pending"
+      : latest?.status === "failed" ? "upgrade_failed" : "rejected";
+    return { version, state, min_version: DAEMON_MIN_CLI_VERSION, last_error: state === "upgrade_failed" ? latest?.error ?? "runtime update failed" : null };
   }
 
   private assertRuntimeOnline(runtime: MultiremiRuntime): void {
@@ -2709,6 +2763,7 @@ function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"])
 
 function toRuntime(row: Row): MultiremiRuntime {
   return {
+    daemonProtocolVersion: row.daemon_protocol_version == null ? null : Number(row.daemon_protocol_version),
     id: String(row.id),
     name: String(row.name),
     provider: String(row.provider),

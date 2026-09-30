@@ -24,14 +24,12 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 - **风险推断：** 工作量随候选 issue 数和评论体积增长，返回 20 条并不意味着只读取 20 条。当前步骤还会处理最终不属于目标 workspace 的候选；不能只看返回条数评估 SQL 与内存成本。
 - **采集重点：** 用无命中词、标题命中词、评论命中词分别测量；固定目标 workspace，再增加其他 workspace 的数据，记录 SQL 次数、结果 bytes、p50/p95。真实用户可见结果与权限语义需保持不变。
 
-### 3. 实时任务：消息缓存 → transcript 派生 → 渲染与重连刷新
+### 3. 实时任务：SessionLog 与 trace → 展示与重连
 
-- **实现事实：** [createTaskHandlers](../../frontend/packages/core/realtime/sync/tasks.ts) 已按 task 缓冲 `task:message`，约每 80 ms 合并一次；卸载时 flush。消息通过 [appendTaskMessagesToHydratedCache](../../frontend/packages/core/chat/queries.ts) 更新已加载缓存，保留排序和去重，不能宣称“每帧都触发整页 refetch”。
-- **实现事实：** [createIssueHandlers](../../frontend/packages/core/realtime/sync/issues.ts) 已做 issue 精确缓存更新；[createPrefixRefresh](../../frontend/packages/core/realtime/sync/prefix-refresh.ts) 排除有专门处理器的事件并对其他刷新去抖；[useRealtimeSync](../../frontend/packages/core/realtime/use-realtime-sync.ts) 在重连时失效相关查询以补漏。
-- **实现事实：** [TasksRepo.listTaskMessages](../../packages/server/src/store/repos/tasks-repo.ts) 支持 `sinceSeq` 增量读取，但没有 page size；初次读取可返回该 task 全部消息。[buildTimeline / buildEntries / nestEntries](../../frontend/packages/views/common/task-transcript/build-timeline.ts) 派生展示数据；[AgentTranscriptDialog](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx) 用 `entries.map` 渲染事件列表，该弹窗目前没有列表虚拟化。
-- **实现事实：** [TasksRepo.appendTaskMessages](../../packages/server/src/store/repos/tasks-repo.ts) 对同一 `(task_id, seq)` 的相同内容重试跳过更新和通知，内容变化仍覆盖原行；[notifyBrowserTaskMessages](../../packages/server/src/api/realtime.ts) 在每批消息内复用可见性判断，不跨批缓存权限。daemon outbox 在超时后仍会重试，因此这里的幂等处理和私有任务权限过滤都需要保持。
-- **风险推断：** 长 transcript 的载荷、全数组派生与 DOM 成本可能随消息数增长；80 ms 合并已减少频率，但不能证明每次处理足够快。重连时的刷新展开可能与消息追赶叠加。其他视图是否虚拟化需逐处确认。
-- **采集重点：** 固定消息数、平均文本长度、工具/子 agent 比例和每秒事件数；记录首次打开、排序/过滤、滚动、实时追加和断线重连期间的请求数、长任务、React commit 时长与内存。
+- **实现事实：** Chat/Issue 正文由 [SessionReplica](../../frontend/packages/core/replica/browser.ts) 的 `log:` 流同步；运行中的工具摘要由 [use-task-trace.ts](../../frontend/packages/views/common/task-transcript/use-task-trace.ts) 分页读取 trace，并按 seq 合并实时帧。任务结束后不再占用 trace socket。
+- **实现事实：** [createIssueHandlers](../../frontend/packages/core/realtime/sync/issues.ts) 做 issue 精确缓存更新；[createPrefixRefresh](../../frontend/packages/core/realtime/sync/prefix-refresh.ts) 排除已有专门处理器的事件。[TaskTraceDialog](../../frontend/packages/views/common/task-transcript/task-trace-dialog.tsx) 只在打开时读取完整 trace。
+- **风险推断：** 长 trace 的分页、全数组派生与 DOM 成本仍可能随事件数增长；断线补读可能与当前帧追赶叠加。需要用请求数、长任务和 React commit 测量实际成本。
+- **采集重点：** 固定事件数、平均文本长度、工具/子 agent 比例和每秒事件数；记录首次打开、滚动、实时追加与断线重连期间的请求数、长任务、React commit 时长与内存。
 
 ## 收件箱已具备的加载边界
 
@@ -96,6 +94,7 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 **已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
 
 **环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
+上述五项请求指标设置同时管 `ws_minute_summary`，见下一节。
 
 **观测与验证入口**：
 
@@ -114,6 +113,53 @@ bun run tests/manual/smoke-request-metrics.ts
 ```
 
 冒烟脚本默认用 0 ms 阈值和 5 s 汇总间隔以便一次跑完就同时看到两个事件；`MUL367_SMOKE_PORT` / `MUL367_SMOKE_SUMMARY_MS` 可覆盖。它只连 127.0.0.1 的临时实例和内存 SQLite，不读凭证、不碰生产。上线后需要真实基线数字时，按本文档开头「复现顺序与记录」的模板记录环境、并发和样本数，**不要**把本页的示例行情当作实测结论。
+
+## WebSocket 帧汇总：`ws_minute_summary`（MUL-417）
+
+daemon 的流量从 HTTP 轮询搬到协议 v2 的 socket 之后，它的 DB 时间不再落在任何 HTTP 路由上，
+逐路由的口径会看不到这一段。`ws_minute_summary` 就是把 daemon 的那份**按帧类型**补回来。
+
+**它不报进程级 DB 总量，两者也不能相加。** 进程级计数器（`db_busy_pct` / `db_ms` /
+`db_queries`）只在 `api_minute_summary` 里出现一次；它统计的是**所有**跨 PG 桥的语句，本来就
+包含 WebSocket 帧处理期间发出的那些。也就是说换通道不会让 `db_busy_pct` 下降——同一份 DB 工作
+只是换了归属。两行相加会把同一批语句算两遍，这正是这一版把 WS 侧总量字段删掉的原因。
+
+- **实现**：[api/daemon-protocol/metrics.ts](../../packages/server/src/api/daemon-protocol/metrics.ts)。
+  固定容量的 typed-array 环形缓冲区，帧类型 intern 成整数 id；写满后覆盖最旧样本并记进
+  `dropped`，缓冲区不随流量增长。
+- **同一个窗**：窗口参数（开关、间隔、前 N、缓冲容量）由 HTTP 那一份配置派生，不在 WS 侧再读一次
+  环境变量。两者独立解析时，只要有一方被显式覆盖（`startMultiremiServer({ requestMetrics })`，
+  测试与冒烟脚本都这么做）就会错位。两行并排读时窗口才能对齐。
+- **归因**：每条帧按**帧类型 + 方向**汇总 `count / db_ms / db_queries`，另带 `violations`
+  （超长帧、未知帧、无法解析的帧）。`db_ms` 是处理该帧前后进程级计数器的差，所以它回答的是
+  「这段时间的 DB 时间大致归哪个帧类型」。**它只是归因参考**：进程计数器是同步的，异步帧会在两个
+  采样点之间混入并发工作，因此不要把它当成进程总量的分解，也不要和 `api_minute_summary` 相加。
+  A-8 的 DB 阻塞报告用 `api_minute_summary` 的进程级 `db_busy_pct` 做前后对比，本行只做归因。
+- **不写内容**：与 `api_minute_summary` 一样只写 stdout 的一行 JSON，不含 query、header、payload、
+  原始 path、user 或 token；帧类型是唯一的字符串来源。
+
+```json
+{"event":"ws_minute_summary","ts":"2026-09-27T13:02:11.482Z","window_ms":2001,"frames":4,"dropped":0,"types":[{"type":"hb","direction":"uplink","count":3,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":0.3,"p95_ms":2},{"type":"hello","direction":"uplink","count":1,"violations":0,"db_ms":0,"db_queries":0,"p50_ms":1.5,"p95_ms":1.5}]}
+```
+
+`types` 按 `db_ms`、`db_queries`、`count` 排序，取前 N（默认 20，且不低于 HTTP 侧的 N）；分位数用
+与 [bench-task-list-pagination.ts](../../tests/manual/bench-task-list-pagination.ts) 相同的最近秩法。
+空闲窗口同样每分钟一行，`frames: 0`，这样「没有 daemon 流量」和「这条线死了」可以区分。
+
+**观测与验证入口**：
+
+```bash
+# 生产容器里同时看两条汇总线
+docker logs multiremi-platform-app-api-1 | grep -E 'api_minute_summary|ws_minute_summary'
+
+# 单元测试：汇总口径、环形缓冲、计时器、脱敏
+bun test tests/unit/daemon/daemon-protocol-metrics.test.ts
+
+# 真实 socket 冒烟：起一个本地实例，握手 + 3 个 hb，读两条汇总线（两者各自一条，不可相加）
+bun run tests/manual/smoke-ws-minute-summary.ts
+```
+
+与 `api_minute_summary` 一样，上面示例行里的数字是冒烟运行的输出，不是生产基线。
 
 ## 页面测速脚本与基线（MUL-367）
 

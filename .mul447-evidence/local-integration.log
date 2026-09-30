@@ -1,0 +1,15 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/integration/feishu-trace-subscription.test.ts:
+[hermetic-env] stripped 17 inherited env var(s): CODEX_HOME, INVOCATION_ID, MULTIREMI_AGENT_NAME, MULTIREMI_DAEMON_PORT, MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS, MULTIREMI_GIT_REPOSITORIES_JSON, MULTIREMI_ISSUE_ID, MULTIREMI_ISSUE_SESSION_ID, MULTIREMI_PROJECT_ID, MULTIREMI_SERVER_URL, MULTIREMI_STATE_DIR, MULTIREMI_TASK_ID, MULTIREMI_TOKEN, MULTIREMI_WORKSPACE_ID, MULTIREMI_WORKSPACE_ROOT, OPENAI_API_KEY, REMI_CLAUDE_AGENT_ACP_DIR
+[19:07:18] INFO  [multiremi-api] [effective-config] {"mode":"local","nodeEnv":"test","databaseUrl":"unset","multiremiToken":"set(length=14)","jwtSecret":"unset","daemonDirectBaseUrl":null,"apiRole":"all","apiRoleConfigured":true}
+[19:07:18] WARN  [multiremi-api] [configuration-degradation] Session Archive direct upload disabled, falling back to 8 MiB proxy limit
+[19:07:18] INFO  [multiremi-daemon] Repo checkout server listening on 127.0.0.1:10431
+[19:07:18] INFO  [multiremi-daemon] Runtime registered: rt_xlbu5i (claude)
+MUL-447 evidence: .mul447-evidence/step1-local-integration.json
+(pass) presents continuous CoT through a real local daemon/API disconnect and resumes at checkpoint + 1 [3078.77ms]
+
+ 1 pass
+ 0 fail
+ 18 expect() calls
+Ran 1 test across 1 file. [3.62s]

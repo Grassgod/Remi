@@ -2,8 +2,9 @@ import type { TaskStreamEvent } from "@connectors/base.js";
 import type { FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 
 export function taskEvent(seq: number, type: string, patch: Record<string, unknown> = {}): TaskStreamEvent {
-  return { kind: "message", message: { id: `msg_${seq}`, taskId: "tsk_test", seq, type, tool: null, content: null,
-    input: null, output: null, toolCallId: null, status: null, meta: null, createdAt: new Date().toISOString(), ...patch } } as TaskStreamEvent;
+  const { toolCallId, ...fields } = patch;
+  return { kind: "message", message: { seq, type, tool: null, content: null,
+    input: null, output: null, tool_call_id: toolCallId ?? null, status: null, meta: null, ts: new Date().toISOString(), ...fields } } as TaskStreamEvent;
 }
 export const completed: TaskStreamEvent = { kind: "snapshot", snapshot: { taskId: "tsk_test", status: "completed",
   result: "Final answer", error: null, sessionId: "session_original", workDir: "/test", usage: [] } };

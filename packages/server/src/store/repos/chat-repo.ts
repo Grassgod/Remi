@@ -677,13 +677,6 @@ export class ChatRepo {
     this.ctx.notifyTaskEnqueued(result.task);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.emitChatEvent(result.session, "chat:message", {
-      message_id: result.message.id,
-      role: "user",
-      content: result.message.body,
-      task_id: result.task.id,
-      created_at: result.message.createdAt,
-    });
     return result;
   }
 

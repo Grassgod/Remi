@@ -2,7 +2,6 @@
 
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
 import { toast } from "sonner";
-import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -16,7 +15,6 @@ import {
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy, LoaderCircle, Check } from "lucide-react";
-import { isTaskMessageTaskId, taskMessagesOptions } from "@multiremi/core/chat/queries";
 import { AttachmentSchema } from "@multiremi/core/api/schemas";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
@@ -31,6 +29,7 @@ import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
 import { chatMessageMarkdown } from "../lib/message-attachments";
 import { TaskStatusPill } from "./task-status-pill";
+import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
@@ -111,12 +110,8 @@ export function ChatMessageList({
       && !isNonterminalTurn(row.metadata);
   });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
-  const { data: liveTaskMessages } = useQuery({
-    ...taskMessagesOptions(pendingTaskId ?? ""),
-    enabled: visible && canFetchLiveTimeline,
-  });
-  const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskMessages ?? []);
+  const liveTaskEvents = useTaskTrace(pendingTaskId, visible && showLiveTimeline, true);
+  const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskEvents);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
   const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
 
@@ -165,7 +160,7 @@ export function ChatMessageList({
     footer={<div className="space-y-4 pb-4">
       {hasLive && <TimelineView items={liveTimeline} isStreaming />}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
-        taskMessages={liveTaskMessages ?? []} availability={availability} />}
+        taskMessages={liveTaskEvents} availability={availability} />}
     </div>} />;
 }
 
@@ -232,19 +227,11 @@ function AssistantMessage({
   // follows. The timeline belongs to that reply: drawing it here would both
   // displace this row's own caption and, once the reply lands, repeat the
   // whole timeline a second time.
-  const canFetchTaskMessages = isTaskMessageTaskId(taskId) && !isPush;
-
-  // Use the shared taskMessagesOptions so this cache entry is the same one
-  // seeded by useRealtimeSync during task execution — zero refetch when the
-  // task finishes, since WS already populated it.
-  const { data: taskMessages } = useQuery({
-    ...taskMessagesOptions(taskId ?? ""),
-    enabled: visible && canFetchTaskMessages,
-  });
+  const taskEvents = useTaskTrace(taskId, visible && !isPush);
 
   const timeline: ChatTimelineItem[] = isPush
     ? []
-    : toChatTimeline(taskMessages ?? []);
+    : toChatTimeline(taskEvents);
 
   // Failure bubble path: when the server's FailTask wrote a failure
   // chat_message (failure_reason set), render a destructive bubble with the

@@ -18,7 +18,5 @@ export function removeChatSessionFromCache(qc: QueryClient, wsId: string, sessio
   qc.setQueriesData<ChatSession[]>({ queryKey: chatKeys.sessions(wsId) },
     previous => previous?.filter(session => session.id !== sessionId));
   qc.removeQueries({ queryKey: chatKeys.session(wsId, sessionId) });
-  qc.removeQueries({ queryKey: chatKeys.messages(sessionId) });
-  qc.removeQueries({ queryKey: chatKeys.messagesPage(sessionId) });
   qc.removeQueries({ queryKey: chatKeys.pendingTask(sessionId) });
 }

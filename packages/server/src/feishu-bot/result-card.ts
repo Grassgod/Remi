@@ -1,4 +1,5 @@
 import type { MultiremiTask, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import { taskMessageToTraceEvent } from "@multiremi/contracts/trace.js";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
 import { formatCardStats, formatExecutionSubtitle } from "@connectors/feishu/card-metadata.js";
 import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
@@ -9,7 +10,7 @@ export function buildFeishuTaskResult(task: MultiremiTask, messages: MultiremiTa
   let execution: AgentExecutionDisplay = { agentName };
   let context: ContextUsage | null = null;
   for (const message of messages) {
-    timeline.accept(message);
+    timeline.accept({ seq: message.seq, ...taskMessageToTraceEvent(message, message.createdAt), ts: message.createdAt });
     if (message.meta?.parent_tool_call_id) continue;
     if (message.type === "usage") context = readContextUsage(message.meta) ?? context;
     if (message.type === "execution") {

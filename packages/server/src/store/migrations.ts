@@ -2748,6 +2748,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     "pending_heartbeat_count INTEGER NOT NULL DEFAULT 0",
   );
   addColumnIfMissing(db, "multiremi_runtimes", "daemon_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtimes", "daemon_protocol_version INTEGER");
   addColumnIfMissing(db, "multiremi_runtimes", "legacy_daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "runtime_mode TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_runtimes", "device_info TEXT NOT NULL DEFAULT ''");

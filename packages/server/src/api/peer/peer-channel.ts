@@ -8,8 +8,8 @@
  * The sending half is a process-internal queue with one serial flush chain:
  * batching (`setTimeout(flush, 0)`) is what keeps a busy workspace from turning
  * every store write into a request, and the single chain is what keeps order —
- * the next POST only starts after the previous one returned, so `task:message`
- * rows arrive in `seq` order.
+ * the next POST only starts after the previous one returned, preserving event
+ * order across processes.
  *
  * Three size rules keep one write from becoming an unbounded or slow frame:
  *

@@ -1,13 +1,19 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, jest } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import { DaemonProtocolLayer, type DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
+import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable" | "retired-body";
+let pollingClock: ManualDaemonProtocolClock | null = null;
+let advancePoll: (() => void) | null = null;
+interface FaultSocketData { identity: DaemonProtocolIdentity; session: DaemonProtocolSession | null }
 
 // Real Bun HTTP transport and daemon polling against an isolated API/database.
 // No production Runtime, provider credentials, or operating-system service is used.
@@ -20,45 +26,39 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     name: "Heartbeat recovery test", type: "daemon", workspaceId: "local", daemonId: "heartbeat-test",
   });
   const app = createMultiremiApp({ store, authToken: "heartbeat-test-root" });
+  const protocol = new DaemonProtocolLayer({ store });
+  const clock = new ManualDaemonProtocolClock();
+  pollingClock = clock;
+  let pollingNow = Date.now();
+  const dateNow = jest.spyOn(Date, "now").mockImplementation(() => pollingNow);
   const state = { armed: false, failures: 0, heartbeats: 0, claims: 0, registrations: 0, cleanupCalls: 0, authorityStatus: 0 };
   const pending: Array<() => void> = [];
-  const serve = (port: number) => Bun.serve({
+  const work = new Set<Promise<void>>();
+  const sockets = new Set<Bun.ServerWebSocket<FaultSocketData>>();
+  const serve = (port: number) => Bun.serve<FaultSocketData>({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: async (request) => {
+    fetch: async (request, server) => {
       const path = new URL(request.url).pathname;
+      if (path === "/api/daemon/ws" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const resolved = await protocol.resolveIdentity(request, "heartbeat-test-root");
+        if ("response" in resolved) return resolved.response;
+        if (server.upgrade(request, { data: { identity: resolved.identity, session: null } })) return;
+        return new Response("upgrade failed", { status: 400 });
+      }
       const heartbeat = path === "/api/daemon/heartbeat";
       const claim = path.endsWith("/tasks/claim");
       const matches = fault === "plugins" ? path.endsWith("/agent-plugins/desired")
-        : fault === "claim" ? claim : heartbeat;
-      if (state.armed && matches && fault !== "retired-body") {
+        : fault === "retired-body" ? path.startsWith("/api/daemon/")
+          : fault === "claim" ? claim : heartbeat;
+      if (state.armed && matches && (fault === "plugins" || fault === "claim")) {
         state.failures++;
-        if (fault === "unavailable") return Response.json({ error: "temporarily unavailable" }, { status: 503 });
-        if (fault === "heartbeat-body") {
-          return new Response(new ReadableStream<Uint8Array>({
-            start(controller) {
-              // Send headers and an incomplete JSON body, then leave the connection open.
-              controller.enqueue(new TextEncoder().encode('{"status":"' + " ".repeat(8192)));
-              pending.push(() => { try { controller.close(); } catch {} });
-            },
-          }), { headers: { "Content-Type": "application/json" } });
-        }
         return new Promise<Response>((resolve) => {
           pending.push(() => resolve(Response.json({})));
         });
       }
-      let response = await app.fetch(request);
-      if (heartbeat && response.ok) {
-        // This bed exercises transport failures, and only the fallback path
-        // re-reads desired state on every round: once the server reports a
-        // revision (MUL-368 PR-1), an unchanged revision correctly skips the
-        // GET. Strip the field so the fault below still has something to fail
-        // on; the revision-skip path has its own tests.
-        const ack = await response.json() as Record<string, unknown>;
-        delete ack.agent_plugins;
-        response = Response.json(ack, { status: response.status });
-      }
+      const response = await app.fetch(request);
       if (state.armed && matches && fault === "retired-body" && !response.ok) {
         state.failures++;
         state.authorityStatus = response.status;
@@ -82,6 +82,32 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       }
       return response;
     },
+    websocket: {
+      open(socket) {
+        sockets.add(socket);
+        socket.data.session = protocol.openSession(socket, socket.data.identity);
+      },
+      message(socket, message) {
+        const frame = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+        if (frame.t === "hb" && state.armed) {
+          // Retirement is exercised through the incomplete HTTP authority body.
+          if (fault === "retired-body") return;
+          if (["heartbeat-headers", "heartbeat-body", "unavailable"].includes(fault)) {
+            state.failures++;
+            if (fault === "heartbeat-headers") return;
+            if (fault === "heartbeat-body") socket.send('{"t":"res","p":');
+            else socket.send(JSON.stringify({ v: 2, t: "res", re: frame.id, ts: clock.now(), p: { ok: false, code: "server_error", retryable: true } }));
+            return;
+          }
+        }
+        const run = socket.data.session!.handleMessage(message).then(() => {
+          if (frame.t === "hb") state.heartbeats++;
+        });
+        work.add(run);
+        void run.finally(() => work.delete(run));
+      },
+      close(socket) { socket.data.session?.handleSocketClose(); sockets.delete(socket); },
+    },
   });
   let server = serve(0);
   const port = server.port!;
@@ -89,6 +115,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     serverUrl: `http://127.0.0.1:${server.port}`,
     token: token.token,
     daemonId: "heartbeat-test",
+    protocolClientOptions: { clock },
     runtimeName: "Heartbeat recovery test",
     provider: "claude",
     workspaceId: "local",
@@ -96,9 +123,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     pollIntervalMs: 20,
     requestTimeoutMs,
     gcEnabled: false,
-    // The daemon now only re-reads desired state when the heartbeat ack reports
-    // a new revision (or on its periodic fallback). This bed exercises transport
-    // failures, so keep the fallback refresh prompt instead of waiting 30s.
+    // Exercise the temporary plugin fallback without waiting 30 real seconds.
     pluginDesiredRefreshMs: 20,
     workspacesRoot: join(root, "workspaces"),
     repoCacheRoot: join(root, "repos"),
@@ -110,6 +135,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       cleanupForRetirement: async () => { state.cleanupCalls++; },
     },
   });
+  advancePoll = () => { pollingNow += 1_000; daemon.wakeClaim(); };
   let settled = false;
   let runError: unknown;
   const run = daemon.start().catch((error) => { runError = error; }).finally(() => { settled = true; });
@@ -117,24 +143,32 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     state, store, daemon, run,
     isSettled: () => settled,
     error: () => runError,
-    disconnect: () => server.stop(true),
+    disconnect: () => { for (const socket of sockets) socket.close(4001, "test disconnect"); server.stop(true); },
     reconnect: () => { server = serve(port); },
     async close() {
       daemon.stop();
       for (const release of pending) release();
       await run;
+      await daemon.daemonProtocolClient().drain();
+      await Promise.allSettled([...work]);
       server.stop(true);
+      protocol.stop();
       db.close();
       rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      pollingClock = null;
+      advancePoll = null;
+      dateNow.mockRestore();
     },
   };
 }
 
 async function waitUntil(check: () => boolean, description: string, timeoutMs = 5_000) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   while (!check()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
     await Bun.sleep(10);
+    advancePoll?.();
+    pollingClock?.advance(1_000);
   }
 }
 

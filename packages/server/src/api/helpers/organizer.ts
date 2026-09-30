@@ -92,19 +92,17 @@ export async function organizerTaskInspection(
       if (tail.state === "ok") traceEvents = tail.events;
     }
   }
-  // TODO(MUL-432): switch last_message's legacy-tail source and remove the fallback when dropping the table.
-  const messages = traceEvents ? [] : store.listTaskMessages(task.id);
   const histogram = new Map<string, { type: string; tool: string | null; count: number }>();
-  for (const message of traceEvents ?? messages) {
+  for (const message of traceEvents ?? []) {
     const key = `${message.type}\u0000${message.tool ?? ""}`;
     const bucket = histogram.get(key) ?? { type: message.type, tool: message.tool ?? null, count: 0 };
     bucket.count += 1;
     histogram.set(key, bucket);
   }
-  const latestMessage = (traceEvents ?? messages).at(-1) ?? null;
+  const latestMessage = traceEvents?.at(-1) ?? null;
   const typeHistogram = card?.typeHistogram ?? [...histogram.values()];
-  const toolCallCount = card?.toolCallCount ?? (traceEvents ?? messages).filter((message) => message.type === "tool_use").length;
-  const eventCount = card?.eventCount ?? (traceEvents ? traceEvents.length : messages.length);
+  const toolCallCount = card?.toolCallCount ?? (traceEvents ?? []).filter((message) => message.type === "tool_use").length;
+  const eventCount = card?.eventCount ?? traceEvents?.length ?? 0;
   const requests = store.listTaskHumanRequests(task.id);
   const requestCounts = { pending: 0, responded: 0, timeout: 0, cancelled: 0 };
   for (const request of requests) requestCounts[request.status] += 1;
@@ -117,7 +115,7 @@ export async function organizerTaskInspection(
     dispatched_at: task.dispatchedAt,
     failed_at: task.failedAt,
     cancelled_at: task.cancelledAt,
-    last_message: latestMessage ? { seq: latestMessage.seq, created_at: "ts" in latestMessage ? latestMessage.ts : latestMessage.createdAt } : null,
+    last_message: latestMessage ? { seq: latestMessage.seq, created_at: latestMessage.ts } : null,
     tool_call_count: toolCallCount,
     event_count: eventCount,
     message_type_histogram: typeHistogram.map((bucket) => ({

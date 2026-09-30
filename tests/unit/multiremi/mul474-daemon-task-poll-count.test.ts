@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 // MUL-474 (MUL-383 S8e): the daemon's task-level polls must stay cheap.
 //
 // A running task hits `GET :id/status` and `GET :id/steer` every 2.5 s, and
@@ -31,13 +32,6 @@ import {
   seedDaemonTaskPollResultCases,
   type DaemonTaskPollFixture,
 } from "../../fixtures/multiremi/daemon-task-poll-fixture.js";
-import { notifyBrowserTaskMessages } from "@multiremi/api/realtime.js";
-import {
-  driveTaskMessageFanout,
-  fanoutFixtureStore,
-  installDeterministicFanoutClock,
-} from "../../fixtures/multiremi/task-message-fanout-fixture.js";
-import fanoutGolden from "../../fixtures/multiremi/task-message-fanout-golden.json";
 import golden from "../../fixtures/multiremi/daemon-task-poll-golden.json";
 
 const AUTH_TOKEN = "mul474-count-token";
@@ -182,11 +176,14 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds POST messages for one message and never reads the task payload", async () => {
+  it("bounds trace.append for one event and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "POST", `/api/daemon/tasks/${scaffolded.fixture.taskId}/messages`, {
-      messages: [{ type: "text", content: "one message" }],
-    });
+    scaffolded.probe.reset();
+    const response = await reportFrame(scaffolded.store, "trace.append", { task_id: scaffolded.fixture.taskId, closed: false,
+      events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "one message" }],
+    }, { headers: scaffolded.headers, authToken: AUTH_TOKEN, beforeFrame: () => scaffolded.probe.reset() });
+    expect(response).toEqual({ ok: true, hub_head: 1 });
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.messages);
     expectNoTaskPayloadReads(sql);
   });
@@ -196,17 +193,12 @@ describe("MUL-474 daemon task-level polls", () => {
     // The guard reads identity, the handler reads the row, `completeTask` writes
     // and then re-reads the row to build its response.
     scaffolded.probe.reset();
-    const response = await scaffolded.app.request(`/api/daemon/tasks/${scaffolded.fixture.taskId}/complete`, {
-      method: "POST",
-      headers: scaffolded.headers,
-      body: JSON.stringify({ output: "MUL-474 completed" }),
-    });
-    expect(response.status).toBe(200);
-    const body = await response.json() as { status?: string; result?: { output?: string } };
-    // The response is built from the post-write row: a stale cached row would
-    // report `running` and no result.
+    const response = await reportFrame(scaffolded.store, "task.complete", { task_id: scaffolded.fixture.taskId, output: "MUL-474 completed" }, { headers: scaffolded.headers, authToken: AUTH_TOKEN });
+    expect(response.ok).toBe(true);
+    const body = scaffolded.store.getTask(scaffolded.fixture.taskId)!;
+    // The post-write read must see completion, not a cached running row.
     expect(body.status).toBe("completed");
-    expect(body.result?.output).toBe("MUL-474 completed");
+    expect(body.result).toBe("MUL-474 completed");
 
     const sql = [...scaffolded.probe.statements];
     const writeIndex = sql.findIndex((statement) => /^UPDATE\s+multiremi_tasks\s+SET\s+status/i.test(statement));
@@ -467,19 +459,11 @@ describe("MUL-474 daemon task authority matrix", () => {
     // Exception holds: the hosting daemon may read the snapshot ...
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(200);
     // ... but not mutate the run it does not execute.
-    expect((await app.request(`${taskPath}/complete`, {
-      method: "POST",
-      headers: { ...host, "content-type": "application/json" },
-      body: JSON.stringify({ output: "not mine" }),
-    })).status).toBe(403);
+    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "not mine" }, { headers: { ...host, "content-type": "application/json" }, authToken: "" })).ok).toBe(false);
     // The executing daemon reads and writes it normally.
     const executing = { Authorization: `Bearer ${executor.token}` };
     expect((await app.request(`${taskPath}/status`, { headers: executing })).status).toBe(200);
-    expect((await app.request(`${taskPath}/complete`, {
-      method: "POST",
-      headers: { ...executing, "content-type": "application/json" },
-      body: JSON.stringify({ output: "Mine" }),
-    })).status).toBe(200);
+    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "Mine" }, { headers: { ...executing, "content-type": "application/json" }, authToken: "" })).ok).toBe(true);
     // Once the connector is reassigned away, the exception no longer holds.
     store.heartbeatRuntime("rt_mul474_executor", { supportsFeishuBotConfig: true });
     store.upsertFeishuBotConfig("local", {
@@ -491,37 +475,5 @@ describe("MUL-474 daemon task authority matrix", () => {
       domain: "feishu",
     });
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(403);
-  });
-});
-
-/**
- * The browser task-message frames are a contract as well: the fan-out now takes a
- * `TaskMessageFanoutSubject` instead of a whole Task, and the payload must not
- * have moved with it. The golden was captured on the pre-change commit with the
- * same fixture (both fan-out branches, a visible and a denied recipient), and the
- * comparison is on the emitted frame text — what a browser actually receives.
- */
-describe("MUL-474 browser task-message fan-out wire payload", () => {
-  it("emits the same frames the pre-change implementation emitted, byte for byte", () => {
-    const restoreClock = installDeterministicFanoutClock();
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
-    databases.push(db);
-    try {
-      const store = fanoutFixtureStore(db);
-      const frames = driveTaskMessageFanout(store, notifyBrowserTaskMessages);
-
-      expect(frames.workspaceFrames).toEqual(fanoutGolden.workspaceFrames);
-      expect(frames.chatFrames).toEqual(fanoutGolden.chatFrames);
-      // A recipient without access to the Task receives nothing, before and after.
-      expect(frames.deniedFrames).toEqual(fanoutGolden.deniedFrames);
-      // Serialized comparison too: the daemon-facing consumers read the bytes.
-      expect(JSON.stringify(frames)).toBe(JSON.stringify({
-        workspaceFrames: fanoutGolden.workspaceFrames,
-        chatFrames: fanoutGolden.chatFrames,
-        deniedFrames: fanoutGolden.deniedFrames,
-      }));
-    } finally {
-      restoreClock();
-    }
   });
 });

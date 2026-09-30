@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest";
-import type { TaskMessagePayload } from "@multiremi/core/types/events";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import { toChatTimeline } from "./chat-timeline";
 import { splitTimeline } from "./copy-text";
 
-const msg = (seq: number, type: string, content: string): TaskMessagePayload => ({
-  task_id: "t1",
-  issue_id: "i1",
+const msg = (seq: number, type: string, content: string): TraceEvent => ({
   seq,
+  ts: "2026-09-30T00:00:00Z",
   type,
   content,
 });

@@ -69,18 +69,13 @@ describe("native collaboration CLI contracts", () => {
     ]));
     expect(JSON.parse(output.stdout).archived_total).toBe(3);
   });
-  it("passes the previous Chat page cursor to the route and resends file contents unchanged", async () => {
+  it("routes the deprecated Chat list alias to Session log and resends file contents unchanged", async () => {
     useCliEnv();
-    const list = specById("chat.message.list");
+    const list = specById("session.log.window");
     const create = specById("chat.message.create");
     const registry = registryFor([list, create]);
     const content = "I can't retry\n\n  Keep inner spaces  \nlast line";
     expect(content).toBe(content.trim());
-    const messages = Array.from({ length: 65 }, (_, index) => ({
-      id: `msg_${index}`, task_id: index === 0 ? "tsk_original" : `tsk_${index}`,
-      role: "user", content: index === 0 ? content : `later ${index}`,
-      created_at: new Date(1_700_000_000_000 + index * 1_000).toISOString(),
-    }));
     const requests: URL[] = [];
     let sent: unknown;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -94,23 +89,15 @@ describe("native collaboration CLI contracts", () => {
         sent = await request.json();
         return Response.json({ task_id: "tsk_replayed" }, { status: 201 });
       }
-      const beforeId = url.searchParams.get("before_id");
-      const beforeCreatedAt = url.searchParams.get("before_created_at");
-      const end = beforeId ? messages.findIndex((message) => message.id === beforeId && message.created_at === beforeCreatedAt) : messages.length;
-      const page = messages.slice(Math.max(0, end - 50), end);
-      return Response.json({ messages: page, next_cursor: end > 50
-        ? { created_at: page[0]!.created_at, id: page[0]!.id } : null });
+      return Response.json({ entries: [{ seq: 3, content }] });
     }) as typeof fetch;
     const common = ["--output", "json"];
-    const first = JSON.parse((await capture(() => registry.execute([...list.path, "chat_1", ...common]))).stdout);
-    expect(first.messages).toHaveLength(50);
-    const older = JSON.parse((await capture(() => registry.execute([
-      ...list.path, "chat_1", "--cursor", JSON.stringify(first.next_cursor), ...common,
+    const first = JSON.parse((await capture(() => registry.execute([
+      "chat", "message", "list", "chat_1", "--anchor", "3", ...common,
     ]))).stdout);
-    expect(older.messages.find((message: { task_id: string }) => message.task_id === "tsk_original")?.content).toBe(content);
-    expect(requests[1]!.searchParams.get("before_created_at")).toBe(first.next_cursor.created_at);
-    expect(requests[1]!.searchParams.get("before_id")).toBe(first.next_cursor.id);
-    expect(requests[1]!.searchParams.has("cursor")).toBe(false);
+    expect(first.entries).toEqual([{ seq: 3, content }]);
+    expect(requests[0]!.pathname).toBe("/api/sessions/chat_1/log");
+    expect(requests[0]!.searchParams.get("anchor")).toBe("3");
     const dir = await mkdtemp(resolve(tmpdir(), "chat-resend-"));
     try {
       const file = resolve(dir, "original.txt");

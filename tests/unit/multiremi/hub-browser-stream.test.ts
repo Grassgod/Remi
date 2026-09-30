@@ -21,7 +21,7 @@ function fixture(stream: "log" | "trace" = "log") {
   const frames: Array<{ type: string; payload: any }> = [];
   let buffered = 0;
   const client = {
-    data: { kind: "browser", connectedAt: "", workspaceId: "w", authenticated: true, userId: "u", accessToken: null, scopeSubscriptions: [] },
+    data: { kind: "browser", connectedAt: "", workspaceId: "w", authenticated: true, userId: "u", accessToken: null },
     sendText: (text: string) => { frames.push(JSON.parse(text)); },
     close: () => {},
     getBufferedAmount: () => buffered,

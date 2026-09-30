@@ -2022,19 +2022,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "task.messages": {
-      "command": "remi issue run-messages",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "task.messages",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "comment.list": {
       "command": "remi comment list",
       "auth": [
@@ -3236,19 +3223,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "chat.delete",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "chat.message.list": {
-      "command": "remi chat message list",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "chat.message.list",
       "output": [
         "table",
         "json",

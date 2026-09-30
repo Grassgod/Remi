@@ -1,0 +1,30 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/unit/connectors/feishu-trace-subscription.test.ts:
+[hermetic-env] stripped 17 inherited env var(s): CODEX_HOME, INVOCATION_ID, MULTIREMI_AGENT_NAME, MULTIREMI_DAEMON_PORT, MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS, MULTIREMI_GIT_REPOSITORIES_JSON, MULTIREMI_ISSUE_ID, MULTIREMI_ISSUE_SESSION_ID, MULTIREMI_PROJECT_ID, MULTIREMI_SERVER_URL, MULTIREMI_STATE_DIR, MULTIREMI_TASK_ID, MULTIREMI_TOKEN, MULTIREMI_WORKSPACE_ID, MULTIREMI_WORKSPACE_ROOT, OPENAI_API_KEY, REMI_CLAUDE_AGENT_ACP_DIR
+67 | describe("Feishu trace subscription", () => {
+68 |   it("resumes from the consumed checkpoint, starting at throughSeq + 1 without duplicates or omissions", async () => {
+69 |     const f = fixture([1, 2, 3, 4, 5, 6].map(event), true);
+70 |     try {
+71 |       const received = await collect(subscribeFeishuTask(f.daemon, "task", AbortSignal.timeout(500), 3));
+72 |       expect(received.filter(item => item.kind === "message").map(item => item.message.seq)).toEqual([4, 5, 6]);
+                                                                                                  ^
+error: expect(received).toEqual(expected)
+
+  [
+-   4,
+    5,
+    6,
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/data00/home/hehuajie/.remi/multiremi/workspaces/issues/MUL-447/Remi/tests/unit/connectors/feishu-trace-subscription.test.ts:72:94)
+(fail) Feishu trace subscription > resumes from the consumed checkpoint, starting at throughSeq + 1 without duplicates or omissions [13.05ms]
+
+ 0 pass
+ 4 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [578.00ms]

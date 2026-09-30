@@ -7,9 +7,13 @@ import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
 import { antigravityCliVersion, resolveAntigravityExecutable } from "@acp/antigravity.js";
 import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport, daemonOutboxHasPriority } from "./report-transport.js";
+import { acquireDaemonTrace, releaseDaemonTrace, daemonTraceStore, type DaemonTraceTransport } from "./trace-transport.js";
+import type { DaemonTraceListener } from "./trace-subscriptions.js";
+import type { TraceStore } from "@multiremi/worker/trace-store.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -45,11 +49,12 @@ import {
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
-  DaemonWakeupSocket,
-  type DaemonWakeupConnect,
-  type DaemonWakeupStatus,
-  type DaemonWakeupTransport,
-} from "./daemon-websocket.js";
+  DaemonProtocolClient,
+  DaemonProtocolRpcError,
+  type DaemonProtocolClientOptions,
+  type DaemonProtocolLane,
+} from "./daemon-protocol-client.js";
+import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -209,7 +214,6 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
-  MultiremiTaskMessage,
   MultiremiTaskStatus,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
@@ -374,9 +378,7 @@ export async function installCodexPluginReadinessHome(
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
 const TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 /** The Feishu concierge host is the only Runtime whose ack latency users feel. */
-const CONCIERGE_HEARTBEAT_INTERVAL_MS = 3_000;
 const DEFAULT_CLAIM_IDLE_BASE_MS = 3_000;
 const DEFAULT_CLAIM_IDLE_MAX_MS = 30_000;
 const DEFAULT_PLUGIN_DESIRED_REFRESH_MS = 30_000;
@@ -386,7 +388,6 @@ const AUTHORITY_PROBE_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 480_000, 90
 const DEFAULT_AUTHORITY_PROBE_MAX_MS = 900_000;
 const DEFAULT_TASK_DRAIN_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS = 30_000;
-const OUTBOX_RECONCILE_CONCURRENCY = 6;
 const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
   "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
@@ -505,18 +506,14 @@ export interface MultiremiDaemonOptions {
   taskDrainTimeoutMs?: number;
   /** Maximum startup wait for persisted reports before the daemon becomes ready. */
   outboxStartupFlushTimeoutMs?: number;
-  /** Between heartbeats; the Feishu concierge host overrides this with a shorter cadence. */
-  heartbeatIntervalMs?: number;
   /** Ceiling for the idle claim backoff. */
   claimIdleMaxMs?: number;
   /** Fallback desired-state refresh for servers that do not report a revision. */
   pluginDesiredRefreshMs?: number;
-  /** Wake-up channel for `daemon:task_available`; disabled when false. */
-  taskWakeupEnabled?: boolean;
-  /** Injectable wake-up transport for tests. */
-  taskWakeup?: DaemonWakeupTransport;
-  /** Injectable socket factory for the wake-up channel. */
-  taskWakeupConnect?: DaemonWakeupConnect;
+  /** Shared by every provider lane in one supervisor process. */
+  protocolClient?: DaemonProtocolClient;
+  /** Injectable transport and clock for connection-layer tests. */
+  protocolClientOptions?: Partial<DaemonProtocolClientOptions>;
   /** Injectable probe schedule for terminal-authority tests. */
   authorityProbeDelaysMs?: number[];
 }
@@ -651,7 +648,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runWorkspaceGcPass" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "taskWakeupConnect" | "authorityProbeDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runWorkspaceGcPass" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -668,13 +665,9 @@ export class MultiremiDaemon {
     gcRequireArchive: boolean;
     sessionArchiveMaxSourceBytes: number;
     pluginCacheRoot: string;
-    taskWakeup: DaemonWakeupTransport | null;
-    taskWakeupConnect: DaemonWakeupConnect | undefined;
     authorityProbeDelaysMs: number[];
-    heartbeatIntervalMs: number | null;
     claimIdleMaxMs: number;
     pluginDesiredRefreshMs: number;
-    taskWakeupEnabled: boolean;
   };
   private providerFactory: MultiremiDaemonProviderFactory;
   private updateRunner: MultiremiDaemonUpdateRunner;
@@ -782,8 +775,10 @@ export class MultiremiDaemon {
   private serverDrainActive = false;
   private appliedDrainGeneration = 0;
   private outbox: MultiremiTaskReportOutbox | null = null;
+  private traceTransport: DaemonTraceTransport | null = null;
   private outboxAbort: AbortController | null = null;
   private readonly outboxPath: string;
+  private readonly legacyOutboxPath: string;
   private readonly outboxBackoffMs: number[] | undefined;
   private readonly outboxMaxBytes: number | undefined;
   private restartRequestedFlag = false;
@@ -821,13 +816,12 @@ export class MultiremiDaemon {
   private agentPluginReconcileAbort: AbortController | null = null;
   /** Wake-up handle for the claim timer installed by the poll loop. */
   private waitWake: (() => void) | null = null;
-  private taskWakeup: DaemonWakeupTransport | null = null;
+  private readonly protocolClient: DaemonProtocolClient;
+  private readonly protocolLane: DaemonProtocolLane;
   private readonly authorityProbeDelaysMs: number[];
-  /** Heartbeat/claim/desired cadences, split so an idle lane cannot slow the others. */
-  private nextHeartbeatAt = 0;
+  /** The plugin fallback remains until MUL-419 moves it to RPC/push. */
+  private nextPluginDesiredAt = 0;
   private nextClaimAt = 0;
-  /** Interval applied by the last cadence refresh, to detect a lane change. */
-  private appliedHeartbeatIntervalMs = 0;
   private claimIdleMs: number;
   private readonly claimIdleBaseMs: number;
   private lastDesired: { revision: string; artifacts: AgentPluginArtifactSpec[] } | null = null;
@@ -928,14 +922,6 @@ export class MultiremiDaemon {
       pluginCacheRoot: options.pluginCacheRoot
         ?? process.env.MULTIREMI_PLUGIN_CACHE_ROOT
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
-      // An explicit `pollIntervalMs` predates the split cadence and was the only
-      // loop timer (tests and embedded harnesses use it to stay fast). Honour it
-      // for both lanes; production leaves it unset and gets the slower defaults.
-      heartbeatIntervalMs: normalizeOptionalInterval(
-        options.heartbeatIntervalMs
-          ?? optionalNumberEnv(process.env.MULTIREMI_HEARTBEAT_INTERVAL_MS)
-          ?? options.pollIntervalMs,
-      ),
       claimIdleMaxMs: Math.max(
         DEFAULT_CLAIM_IDLE_BASE_MS,
         options.claimIdleMaxMs
@@ -948,9 +934,6 @@ export class MultiremiDaemon {
         options.pluginDesiredRefreshMs
           ?? numberEnv(process.env.MULTIREMI_PLUGIN_DESIRED_REFRESH_MS, DEFAULT_PLUGIN_DESIRED_REFRESH_MS),
       ),
-      taskWakeupEnabled: options.taskWakeupEnabled ?? true,
-      taskWakeup: options.taskWakeup ?? null,
-      taskWakeupConnect: options.taskWakeupConnect,
       authorityProbeDelaysMs: [],
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
@@ -988,7 +971,6 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    this.taskWakeup = options.taskWakeup ?? null;
     // Idle claims back off from the same legacy cadence when a caller pinned one.
     this.claimIdleBaseMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_CLAIM_IDLE_BASE_MS);
     this.claimIdleMs = this.claimIdleBaseMs;
@@ -1048,12 +1030,17 @@ export class MultiremiDaemon {
       this.options.daemonId ?? this.options.runtimeName,
       this.options.provider,
     ].join("|")).digest("hex").slice(0, 16);
-    this.outboxPath = options.outboxPath
+    this.legacyOutboxPath = options.outboxPath
       ?? join(
         process.env.MULTIREMI_OUTBOX_DIR
           ?? join(process.env.MULTIREMI_STATE_DIR ?? join(homedir(), ".multiremi"), "outbox"),
         `${this.options.provider}-${outboxIdentity}.db`,
       );
+    const processOutboxIdentity = createHash("sha256").update([
+      this.options.serverUrl, this.options.workspaceId ?? "local", this.options.daemonId ?? this.options.runtimeName,
+    ].join("|")).digest("hex").slice(0, 16);
+    this.outboxPath = options.outboxPath === ":memory:" ? ":memory:"
+      : join(dirname(this.legacyOutboxPath), `v2-${processOutboxIdentity}.db`);
     this.outboxBackoffMs = options.outboxBackoffMs;
     this.outboxMaxBytes = options.outboxMaxBytes
       ?? numberEnv(process.env.MULTIREMI_OUTBOX_MAX_BYTES, 256 * 1024 * 1024);
@@ -1068,6 +1055,65 @@ export class MultiremiDaemon {
         await this.client.reportRuntimeAgentPluginState(runtimeId, report.versionId, report.input);
       },
     });
+    this.protocolClient = options.protocolClient ?? new DaemonProtocolClient({
+      serverUrl: this.options.serverUrl,
+      token: this.options.token,
+      daemonId: this.options.daemonId ?? this.options.runtimeName,
+      cliVersion: multiremiVersion,
+      launchedBy: this.options.launchedBy,
+      log,
+      ...options.protocolClientOptions,
+    });
+    this.protocolLane = {
+      runtime: () => this.options.runtimeId && !this.stopped ? {
+        runtime_id: this.options.runtimeId,
+        provider: this.options.provider,
+        max_concurrency: this.options.maxConcurrency,
+        active_task_ids: [...new Set([...this.activeTaskIds, ...(this.outbox?.taskIdsWithPendingTerminal(this.options.runtimeId) ?? [])])],
+      } : null,
+      heartbeat: () => ({
+        active_task_count: this.activeTaskCount,
+        outbox: { pending: this.outboxStats()?.pending ?? 0, unacked: 0 },
+        drain_ack_generation: this.appliedDrainGeneration,
+      }),
+      onHeartbeatAck: async ack => {
+        if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;
+        // A v2 runtime ack is not a full HTTP configuration snapshot.
+        if (ack.status === "runtime_gone" || ack.runtime_gone) await this.handleHeartbeatAck(ack.runtime_id, ack);
+        this.wakeClaim();
+      },
+      probeUpgrade: async () => {
+        if (this.stopped || !this.options.runtimeId) return;
+        try {
+          const ack = await this.client.heartbeatRuntime(
+            this.options.runtimeId, this.sshMeshManager.getHeartbeatStatus(),
+            { ackGeneration: this.appliedDrainGeneration, activeTaskCount: this.activeTaskCount },
+            false, false, this.pollAbort.signal,
+          );
+          if (ack.pending_update) await this.handleRuntimeUpdate(this.options.runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");
+        } catch (error) {
+          if (isTerminalDaemonAuthorityError(error)) await this.stopAfterTerminalAuthority();
+        }
+      },
+      onTerminal: async code => {
+        if (this.stopped) return;
+        log.error(`daemon protocol authority rejected (close ${code}); entering cleanup-only mode`);
+        await this.stopAfterTerminalAuthority();
+      },
+      onStateChange: () => this.wakeClaim(),
+      readyToConnect: () => this.supervisorReady(),
+    };
+    this.protocolClient.addLane(this.protocolLane);
+    this.ensureTrace();
+    this.client.setReportTransport(daemonReportTransport(this.protocolClient, () => this.options.runtimeId, () => this.ensureOutbox(),
+      this.options.taskDrainTimeoutMs, () => this.pollAbort.signal, {
+        completion: taskId => {
+          const trace = this.ensureTrace();
+          if (this.options.runtimeId) trace.track(taskId, this.options.runtimeId);
+          return trace.completion(taskId);
+        },
+        close: (taskId, status) => this.ensureTrace().close(taskId, status),
+      }));
   }
 
   async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
@@ -1088,10 +1134,6 @@ export class MultiremiDaemon {
 
   downloadFeishuBotOutboundAttachment(deliveryId: string, claimToken: string, attachmentId: string): Promise<Buffer> {
     return this.client.downloadFeishuBotOutboundAttachment(this.options.runtimeId!, deliveryId, claimToken, attachmentId);
-  }
-
-  listFeishuBotTaskMessages(taskId: string, sinceSeq: number): Promise<MultiremiTaskMessage[]> {
-    return this.client.listTaskMessages(taskId, sinceSeq);
   }
 
   getFeishuBotTaskSnapshot(taskId: string): Promise<FeishuBotTaskSnapshot> {
@@ -1222,6 +1264,7 @@ export class MultiremiDaemon {
   }
 
   async start(): Promise<void> {
+    this.ensureTrace();
     this.startedAt = new Date();
     this.ready = false;
     this.stopped = false;
@@ -1233,9 +1276,6 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
     this.workspaceOwnershipLost = false;
-    // A reused instance (tests, an embedded harness) must not inherit the pause
-    // a previous terminal-authority failure left on the wake-up channel.
-    this.taskWakeup?.setAuthoritySuspended(false);
     this.onReadyChange(false);
     this.assertWorkspaceRootOwner();
     const outbox = this.ensureOutbox();
@@ -1243,13 +1283,9 @@ export class MultiremiDaemon {
     try {
       await this.registerCurrentRuntime();
       this.assertWorkspaceRootOwner();
-      // Replay reports left over from a previous run BEFORE recover-orphans:
-      // recoverOrphans marks in-flight tasks failed, so an undelivered
-      // complete/fail must land first or a finished task gets mislabelled.
-      // Purely non-terminal history has a bounded startup wait and may continue
-      // in the background; tasks with terminal reports must settle first.
-      await this.reconcilePendingOutboxTasks(outbox);
-      await this.flushStartupOutbox(outbox);
+      // Replay never holds startup waiting for a socket. The temporary HTTP
+      // recovery below is guarded against pending terminal reports instead.
+      outbox.pumpAll();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
       this.assertWorkspaceRootOwner();
       this.startGcLoop();
@@ -1261,7 +1297,7 @@ export class MultiremiDaemon {
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
-      await this.client.recoverOrphans(this.options.runtimeId!);
+      if (await this.canRecoverOrphans(outbox)) await this.client.recoverOrphans(this.options.runtimeId!);
       this.ready = true;
       this.onReadyChange(true);
       // A co-resident provider becoming ready is not enough to claim work.
@@ -1271,8 +1307,8 @@ export class MultiremiDaemon {
         await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
       }
 
-      if (!this.options.once) this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId!);
-      this.nextHeartbeatAt = Date.now();
+      this.protocolClient?.startLane(this.protocolLane);
+      this.nextPluginDesiredAt = Date.now();
       this.nextClaimAt = Date.now();
       while (!this.stopped) {
         try {
@@ -1281,55 +1317,22 @@ export class MultiremiDaemon {
             await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
             continue;
           }
-          // The concierge can be assigned or released at any time, so pick up a
-          // new cadence before testing the deadline.
-          this.refreshHeartbeatCadence();
-          if (this.options.once || Date.now() >= this.nextHeartbeatAt) {
-            const heartbeatIntervalMs = this.heartbeatIntervalMs();
-            this.appliedHeartbeatIntervalMs = heartbeatIntervalMs;
-            this.nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
-            const ack = await this.client.heartbeatRuntime(
-              this.options.runtimeId!,
-              this.sshMeshManager.getHeartbeatStatus(),
-              {
-                ackGeneration: this.appliedDrainGeneration,
-                activeTaskCount: this.activeTaskCount,
-              },
-              this.botMenuPublisher !== null,
-              this.feishuConcierge !== null,
-              this.pollAbort.signal,
-            );
-            const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
-            if (!skipClaim && !this.stopped) {
-              await this.reconcileRuntimeAgentPlugins(
-                this.options.runtimeId!,
-                ack.agent_plugins?.revision ?? null,
-                { force: this.options.once },
-              );
-            }
-            if (this.stopped) break;
-            if (skipClaim) {
-              // The Runtime vanished and could not be replaced yet, so there is
-              // nothing safe to claim. Push the claim deadline out before
-              // sleeping, or an already-due deadline would spin the loop.
-              if (this.options.once) return;
-              this.deferClaimLane();
-              await this.waitForNextTick();
-              continue;
-            }
+          if (Date.now() >= this.nextPluginDesiredAt) {
+            this.nextPluginDesiredAt = Date.now() + this.options.pluginDesiredRefreshMs;
+            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: this.options.once });
           }
 
           if (this.options.once) {
             // One-shot mode (tests, single runs) stays strictly serial:
             // claim one task, run it to completion, return.
-            if (this.claimsPaused || this.serverDrainActive) return;
+            if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) return;
             const task = await this.claimTask(this.options.runtimeId!);
             if (!task) return;
             await this.handleTask(task);
             return;
           }
 
-          if (this.claimsPaused || this.serverDrainActive) {
+          if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) {
             // A sibling can pause claims while it installs the shared CLI, or
             // the platform can be draining. Keep this lane ready and
             // heartbeating so a failed install can release the pause; only a
@@ -1356,10 +1359,10 @@ export class MultiremiDaemon {
           }
           if (this.stopped) break;
           if (this.options.once) throw err;
-          // A failed heartbeat/claim also delays the next attempt so a hard
+          // A failed claim or Plugin refresh delays the next attempt so a hard
           // outage cannot turn the poll loop into a tight retry spin.
-          const retryMs = Math.max(this.options.pollIntervalMs, this.heartbeatIntervalMs());
-          this.nextHeartbeatAt = Date.now() + retryMs;
+          const retryMs = Math.max(this.options.pollIntervalMs, DAEMON_HEARTBEAT_INTERVAL_MS);
+          this.nextPluginDesiredAt = Date.now() + retryMs;
           this.nextClaimAt = Date.now() + retryMs;
           log.warn(`daemon poll loop error, retrying in ${retryMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await this.waitForNextTick();
@@ -1384,6 +1387,7 @@ export class MultiremiDaemon {
       }
       throw error;
     } finally {
+      this.protocolClient?.stopLane(this.protocolLane);
       this.ready = false;
       this.onReadyChange(false);
       // Stop scheduling new sweeps before draining tasks. An existing sweep
@@ -1399,6 +1403,11 @@ export class MultiremiDaemon {
       for (const run of this.feishuOutboundRuns.values()) run.abort.abort();
       await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
+      await this.protocolClient?.drain();
+      if (this.traceTransport) {
+        this.traceTransport = null;
+        await releaseDaemonTrace(this.protocolClient);
+      }
       this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
       // Undelivered rows stay on disk and replay on the next start(). close()
@@ -1407,73 +1416,19 @@ export class MultiremiDaemon {
       const outbox = this.outbox;
       this.outbox = null;
       if (outbox) {
-        await outbox.close().catch((error) => {
+        await releaseDaemonOutbox(this.protocolClient).catch((error) => {
           log.warn(`outbox close failed: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
     }
   }
 
-  /**
-   * Heartbeat cadence. Only the Runtime the control plane actually assigned the
-   * concierge to runs the fast loop, because its ack is the only delivery path
-   * for proactive Feishu replies.
-   *
-   * Being *able* to host the bot is not the same thing: every long-running
-   * daemon is offered the host so the control plane may hand the bot to any of
-   * them, and treating that as "hosting" pinned the whole fleet to 3s.
-   * `this.options.heartbeatIntervalMs` (the MULTIREMI_HEARTBEAT_INTERVAL_MS
-   * override and the legacy pollIntervalMs) therefore applies to the normal
-   * cadence only — the assigned Runtime stays at 3s.
-   */
-  private heartbeatIntervalMs(): number {
-    if (this.conciergeIsAssigned()) return CONCIERGE_HEARTBEAT_INTERVAL_MS;
-    return this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  }
 
-  /**
-   * Whether the control plane currently has the concierge running here.
-   *
-   * `starting` and `failed` also count as assigned: both follow a directive that
-   * picked this Runtime, and the failed retry ladder depends on the fast
-   * heartbeat to re-read that directive. Only `stopped` means it is not ours.
-   */
-  private conciergeIsAssigned(): boolean {
-    return (this.feishuConcierge?.snapshot().state ?? "stopped") !== "stopped";
-  }
-
-  /**
-   * Re-apply the heartbeat interval after the assignment can have changed.
-   *
-   * Shortening it has to take effect within the new interval rather than after
-   * the remainder of the old one: a Runtime that just received the bot cannot
-   * sit out a pending 10s wait before its first 3s heartbeat. Lengthening it
-   * only affects the deadline the next heartbeat sets, which is what a handover
-   * away wants — losing the bot never provokes an extra heartbeat.
-   */
-  private refreshHeartbeatCadence(): void {
-    const interval = this.heartbeatIntervalMs();
-    if (interval === this.appliedHeartbeatIntervalMs) return;
-    const previous = this.appliedHeartbeatIntervalMs;
-    this.appliedHeartbeatIntervalMs = interval;
-    if (previous === 0 || interval >= previous) return;
-    this.nextHeartbeatAt = Math.min(this.nextHeartbeatAt, Date.now() + interval);
-    // The poll sleep is waiting on the old, longer deadline; wake it so it can
-    // recompute against the new one.
-    this.wakeClaim();
-  }
-
-  /**
-   * Sleep until the earlier of the next heartbeat and the next claim.
-   *
-   * Returns early when {@link wakeClaim} fires — either a `daemon:task_available`
-   * frame or a local reset event — so an idle backoff never delays a queued task.
-   */
+  /** Claim polling and the temporary plugin fallback own this sleep. */
   private async waitForNextTick(): Promise<void> {
     if (this.stopped) return;
-    const now = Date.now();
-    const delayMs = Math.max(0, Math.min(this.nextHeartbeatAt, this.nextClaimAt) - now);
-    await new Promise<void>((resolveWait) => {
+    const delayMs = Math.max(0, Math.min(this.nextPluginDesiredAt, this.nextClaimAt) - Date.now());
+    await new Promise<void>(resolveWait => {
       let settled = false;
       const finish = () => {
         if (settled) return;
@@ -1493,26 +1448,6 @@ export class MultiremiDaemon {
     this.waitWake?.();
   }
 
-  private ensureTaskWakeup(): DaemonWakeupTransport | null {
-    // `--once` runs claim a single task and return, so a wake-up channel would
-    // outlive the loop that consumes it. Also keeps single-run harnesses from
-    // dialing a socket merely to register.
-    if (this.options.once) return null;
-    if (this.taskWakeup || !this.options.taskWakeupEnabled) return this.taskWakeup;
-    this.taskWakeup = new DaemonWakeupSocket({
-      serverUrl: this.options.serverUrl,
-      token: this.options.token,
-      onTaskAvailable: () => {
-        // Queued work may have appeared: drop the idle backoff and interrupt the
-        // pending sleep instead of waiting out the remainder of the interval.
-        this.resetClaimBackoff();
-        this.wakeClaim();
-      },
-      ...(this.options.taskWakeupConnect ? { connect: this.options.taskWakeupConnect } : {}),
-      log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
-    });
-    return this.taskWakeup;
-  }
 
   /** Reset the idle claim backoff; every event that can add queued work calls this. */
   private resetClaimBackoff(): void {
@@ -1531,10 +1466,7 @@ export class MultiremiDaemon {
     // Wake for the next heartbeat rather than a short poll: while claims are
     // suppressed there is nothing to do in between, and the heartbeat is what
     // can lift the suppression (a drain directive or a released update pause).
-    this.nextClaimAt = Math.max(
-      this.nextHeartbeatAt,
-      Date.now() + this.options.pollIntervalMs,
-    );
+    this.nextClaimAt = Date.now() + DAEMON_HEARTBEAT_INTERVAL_MS;
   }
 
   /**
@@ -1549,41 +1481,8 @@ export class MultiremiDaemon {
     if (this.activeTaskCount < previous) this.resetClaimBackoff();
   }
 
-  /** Local `/health` view of the wake-up channel, so operators can see a blocked WS. */
-  taskWakeupStatus(): DaemonWakeupStatus | null {
-    return this.taskWakeup?.status() ?? null;
-  }
-
-  /**
-   * `claim_wake_ws` block of the daemon status JSON.
-   *
-   * A disconnected wake-up channel is not a failure — claims still happen on the
-   * idle backoff — but it raises task-start latency to the backoff ceiling, so it
-   * has to be visible without reading logs.
-   */
-  private claimWakeWsStatus(): Record<string, unknown> {
-    const status = this.taskWakeup?.status();
-    if (!status) {
-      return {
-        state: "disabled",
-        connected: false,
-        connected_since: null,
-        last_error: null,
-        reconnect_attempts: 0,
-        next_reconnect_at: null,
-        suspended: false,
-      };
-    }
-    return {
-      state: status.state,
-      connected: status.connected,
-      connected_since: status.connected_since,
-      last_error: status.last_error,
-      reconnect_attempts: status.reconnect_attempts,
-      next_reconnect_at: status.next_reconnect_at,
-      suspended: status.suspended,
-    };
-  }
+  /** The process connection is shared by every co-resident provider. */
+  daemonProtocolClient(): DaemonProtocolClient { return this.protocolClient; }
 
   /**
    * Bounded claim pump: keep claiming while there is spare capacity and run each
@@ -1593,8 +1492,8 @@ export class MultiremiDaemon {
    * handleTask, so the loop sees it grow.
    *
    * An empty claim backs the next attempt off exponentially up to
-   * `MULTIREMI_CLAIM_IDLE_MAX_MS`; claiming one task resets it, and the
-   * `daemon:task_available` socket wake-up short-circuits the wait entirely.
+   * `MULTIREMI_CLAIM_IDLE_MAX_MS`; claiming one task resets it.
+   * The temporary HTTP claim fallback remains until MUL-419 wires offers.
    */
   private async runClaimPump(): Promise<void> {
     let claimed = false;
@@ -1603,6 +1502,8 @@ export class MultiremiDaemon {
       && !this.stopped
       && !this.claimsPaused
       && !this.serverDrainActive
+      && !this.runtimeGoneInflight.size
+      && this.protocolClient?.allowsClaims() !== false
       && this.supervisorReady()
     ) {
       const task = await this.claimTask(this.options.runtimeId!);
@@ -1656,29 +1557,42 @@ export class MultiremiDaemon {
       this.applyWorkspaceRegistrationState(response);
       this.runtimeRegistrationGeneration++;
       this.clearDesiredAgentPlugins();
-      this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId);
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+      this.protocolClient.runtimesChanged();
+      this.startReportReplay();
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botMenuPublisher || this.feishuConcierge || (this.options.provider === "codex" || this.options.provider === "claude")) {
-      const ack = await this.client.heartbeatRuntime(
-        this.options.runtimeId,
-        undefined,
-        undefined,
-        this.botMenuPublisher !== null,
-        this.feishuConcierge !== null,
-      );
-      // A heartbeat also claims maintenance requests; process the entire ack
-      // so fetching the initial provider config cannot strand those requests.
-      await this.handleHeartbeatAck(this.options.runtimeId, ack);
-    }
     this.runtimeRegistrationGeneration++;
     this.clearDesiredAgentPlugins();
-    this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId);
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+    this.protocolClient.runtimesChanged();
+    this.startReportReplay();
     return this.options.runtimeId;
+  }
+
+  private startReportReplay(): void {
+    const outbox = this.ensureOutbox();
+    if (existsSync(this.legacyOutboxPath)) outbox.importLegacy(this.legacyOutboxPath, this.options.runtimeId ?? undefined);
+    this.protocolClient.startLane(this.protocolLane);
+    outbox.pumpAll();
+  }
+
+  private async canRecoverOrphans(outbox: MultiremiTaskReportOutbox): Promise<boolean> {
+    const pending = outbox.taskIdsWithPendingTerminal(this.options.runtimeId ?? undefined);
+    if (!pending.length) return true;
+    if (this.protocolClient.connectionState() === "connected") {
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), this.options.outboxStartupFlushTimeoutMs);
+      const stop = () => abort.abort();
+      this.pollAbort.signal.addEventListener("abort", stop, { once: true });
+      try { await Promise.all(pending.map(taskId => outbox.waitForTaskDrain(taskId, abort.signal))); }
+      finally { clearTimeout(timer); this.pollAbort.signal.removeEventListener("abort", stop); }
+      if (!outbox.taskIdsWithPendingTerminal(this.options.runtimeId ?? undefined).length) return true;
+    }
+    log.warn("skipping HTTP recoverOrphans: this runtime has undelivered terminal reports");
+    return false;
   }
 
   private applyWorkspaceRegistrationState(response: MultiremiDaemonRegisterResponse): void {
@@ -2040,11 +1954,6 @@ export class MultiremiDaemon {
       .then(() => supervisor.apply(directive))
       .catch((error) => {
         log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
-      })
-      .finally(() => {
-        // Applying a directive is what moves this Runtime into or out of the
-        // concierge lane, so the heartbeat cadence has to follow it.
-        this.refreshHeartbeatCadence();
       });
   }
 
@@ -2612,7 +2521,7 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupRetryWake?.();
     this.authorityProbeWake?.();
     this.waitWake?.();
-    this.taskWakeup?.close();
+    this.protocolClient?.stopLane(this.protocolLane);
     this.agentPluginReconcileAbort?.abort(this.pollAbort.signal.reason);
     this.cancelRuntimeModelRefresh();
     // Release any handleTask waiting on report delivery; undelivered rows are
@@ -2645,10 +2554,10 @@ export class MultiremiDaemon {
     this.claimsPaused = true;
     this.ready = false;
     this.terminalAuthorityMode = true;
-    // The control plane refuses this credential, so it refuses the wake-up
+    // The control plane refuses this credential, so it refuses the protocol
     // handshake too. Reconnecting every 30s until the probe restores us would
     // add noise to the outage without delivering a single frame.
-    this.taskWakeup?.setAuthoritySuspended(true);
+    this.protocolClient?.suspendAuthority();
     this.stopGcLoop();
     for (const abort of this.activeTaskAborts) abort.abort();
     this.agentPluginReconcileAbort?.abort();
@@ -3065,7 +2974,22 @@ export class MultiremiDaemon {
    * never unwinds the agent's provider session.
    */
   private enqueueTaskReport(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
-    this.ensureOutbox().enqueue(taskId, kind, payload);
+    const terminal = kind === "complete" || kind === "fail";
+    if (terminal && this.options.runtimeId) this.ensureTrace().track(taskId, this.options.runtimeId);
+    this.ensureOutbox().enqueue(taskId, kind, { ...payload, runtime_id: payload.runtime_id ?? this.options.runtimeId,
+      ...(terminal ? this.ensureTrace().completion(taskId) : {}) });
+    if (terminal) this.ensureTrace().close(taskId, kind === "complete" ? "completed" : "failed");
+  }
+
+  private ensureTrace(): DaemonTraceTransport {
+    return this.traceTransport ??= acquireDaemonTrace(this.protocolClient, undefined,
+      () => daemonOutboxHasPriority(this.protocolClient),
+      error => log.warn(`Trace transport failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  traceStore(): TraceStore { return daemonTraceStore(this.protocolClient); }
+  subscribeTrace(taskId: string, fromSeq: number, onEvents: DaemonTraceListener): Promise<() => Promise<void>> {
+    return this.ensureTrace().subscriptions.subscribeTrace(taskId, fromSeq, onEvents);
   }
 
   /**
@@ -3077,7 +3001,7 @@ export class MultiremiDaemon {
   private ensureOutbox(): MultiremiTaskReportOutbox {
     if (!this.outbox) {
       this.outboxAbort ??= new AbortController();
-      this.outbox = new MultiremiTaskReportOutbox({
+      this.outbox = acquireDaemonOutbox(this.protocolClient, {
         path: this.outboxPath ?? ":memory:",
         deliver: (record) => this.deliverOutboxRecord(record),
         ...(this.outboxBackoffMs ? { backoffScheduleMs: this.outboxBackoffMs } : {}),
@@ -3106,22 +3030,6 @@ export class MultiremiDaemon {
       if (result === "blocked") {
         log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
       } else if (result === "aborted" && timedOut) {
-        try {
-          const status = await this.client.getTaskStatus(taskId);
-          if (status === "completed" || status === "failed" || status === "cancelled") {
-            const purged = outbox.purgeTask(taskId);
-            log.warn(
-              `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms after reaching ${status}; `
-              + `discarded ${purged} stale report(s) instead of replaying them indefinitely`,
-            );
-            return "delivered";
-          }
-        } catch (error) {
-          log.warn(
-            `could not reconcile timed-out outbox reports for task ${taskId}; preserving them: `
-            + (error instanceof Error ? error.message : String(error)),
-          );
-        }
         log.warn(
           `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms; `
           + "continuing while the durable outbox retries in the background",
@@ -3136,140 +3044,12 @@ export class MultiremiDaemon {
     }
   }
 
-  private async reconcilePendingOutboxTasks(outbox: MultiremiTaskReportOutbox): Promise<void> {
-    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
-    const terminalSet = new Set(terminalTaskIds);
-    const taskIds = [
-      ...terminalTaskIds,
-      ...outbox.pendingTaskIds().filter((taskId) => !terminalSet.has(taskId)),
-    ];
-    let nextIndex = 0;
-    const reconcile = async () => {
-      while (nextIndex < taskIds.length) {
-        const taskId = taskIds[nextIndex++]!;
-        try {
-          const status = await this.client.getTaskStatus(taskId);
-          if (status === "completed" || status === "failed" || status === "cancelled") {
-            const purged = outbox.purgeTask(taskId);
-            log.debug(`purged ${purged} stale outbox report(s) for terminal task ${taskId} (${status})`);
-          }
-        } catch (error) {
-          if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-            const purged = outbox.purgeTask(taskId);
-            log.debug(`purged ${purged} stale outbox report(s) for missing task ${taskId}`);
-            continue;
-          }
-          // Status lookup and delivery use the same control-plane dependency.
-          // Preserve unknown tasks so a transient failure cannot lose reports.
-          log.warn(
-            `could not reconcile persisted outbox task ${taskId}; preserving its reports: `
-            + (error instanceof Error ? error.message : String(error)),
-          );
-        }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(OUTBOX_RECONCILE_CONCURRENCY, taskIds.length) }, () => reconcile()),
-    );
-  }
-
-  private async flushStartupOutbox(outbox: MultiremiTaskReportOutbox): Promise<void> {
-    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
-    const terminalTaskSet = new Set(terminalTaskIds);
-    const historicalTaskIds = outbox.pendingTaskIds().filter((taskId) => !terminalTaskSet.has(taskId));
-    const flushAbort = new AbortController();
-    const shutdownSignal = this.outboxAbort?.signal;
-    const onShutdown = () => flushAbort.abort();
-    if (shutdownSignal?.aborted) flushAbort.abort();
-    else shutdownSignal?.addEventListener("abort", onShutdown, { once: true });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      flushAbort.abort();
-    }, this.options.outboxStartupFlushTimeoutMs);
-    timer.unref?.();
-    try {
-      await Promise.all(historicalTaskIds.map((taskId) => outbox.waitForTaskDrain(taskId, flushAbort.signal)));
-    } finally {
-      clearTimeout(timer);
-      shutdownSignal?.removeEventListener("abort", onShutdown);
-    }
-    if (timedOut) {
-      log.warn(
-        `startup non-terminal outbox replay exceeded ${this.options.outboxStartupFlushTimeoutMs}ms; `
-        + "continuing those historical deliveries in the background",
-      );
-      outbox.pumpAll();
-    }
-
-    // Reconciliation removed tasks already terminal on the server. Every
-    // remaining local terminal row is therefore authoritative completion or
-    // failure evidence for an in-flight server task. Do not let orphan
-    // recovery overwrite it, even when ordinary history took too long.
-    const terminalResults = await Promise.all(terminalTaskIds.map(async (taskId) => ({
-      taskId,
-      result: await outbox.waitForTaskDrain(taskId, shutdownSignal),
-    })));
-    const unsettled = terminalResults.filter(({ result }) => result !== "delivered");
-    if (unsettled.length > 0) {
-      throw new Error(
-        `startup terminal outbox replay did not complete for ${unsettled
-          .map(({ taskId, result }) => `${taskId} (${result})`)
-          .join(", ")}`,
-      );
-    }
-  }
-
   /** Outbox → API dispatch. Each call is idempotent server-side (seq upsert / status guards). */
   private async deliverOutboxRecord(record: MultiremiOutboxRecord): Promise<void> {
-    const payload = record.payload as Record<string, any>;
-    switch (record.kind) {
-      case "start":
-        await this.client.startTask(record.taskId);
-        return;
-      case "prompt":
-        await this.client.reportTaskPrompt(record.taskId, {
-          mode: payload.mode === "delta" ? "delta" : "bootstrap",
-          prompt: String(payload.prompt ?? ""),
-          sha256: String(payload.sha256 ?? ""),
-        });
-        return;
-      case "session_pin":
-        await this.client.pinTaskSession(record.taskId, payload.sessionId ?? null, payload.workDir ?? null);
-        return;
-      case "progress":
-        await this.client.reportProgress(record.taskId, String(payload.summary ?? ""), payload.step, payload.total);
-        return;
-      case "messages":
-        await this.client.reportTaskMessages(record.taskId, Array.isArray(payload.messages) ? payload.messages : []);
-        return;
-      case "usage":
-        await this.client.reportTaskUsage(record.taskId, Array.isArray(payload.usage) ? payload.usage : []);
-        return;
-      case "workspace":
-        await this.client.reportIssueWorkspace(record.taskId, {
-          runtimeId: String(payload.runtimeId ?? ""),
-          rootPath: String(payload.rootPath ?? ""),
-          branchName: String(payload.branchName ?? ""),
-          status: payload.status,
-          repos: Array.isArray(payload.repos) ? payload.repos : [],
-        });
-        return;
-      case "complete":
-        await this.client.completeTask(record.taskId, String(payload.output ?? ""), payload.sessionId ?? null, payload.workDir ?? null);
-        return;
-      case "fail":
-        await this.client.failTask(
-          record.taskId,
-          String(payload.error ?? "Task failed"),
-          payload.sessionId ?? null,
-          payload.workDir ?? null,
-          payload.failureReason ?? null,
-        );
-        return;
-      default:
-        throw new Error(`unknown outbox record kind: ${String(record.kind)}`);
-    }
+    if (record.kind !== "messages") throw new Error("non-message reports use WS");
+    // Only v1 queues can contain these rows. New producers write straight to trace.
+    this.ensureTrace().append(record.taskId, String(record.payload.runtime_id ?? this.options.runtimeId),
+      Array.isArray(record.payload.messages) ? record.payload.messages : []);
   }
 
   /** Exposed on the local /health endpoint for observability. */
@@ -3309,6 +3089,7 @@ export class MultiremiDaemon {
     if (this.restartRequestedFlag) return;
     this.claimsPaused = false;
     this.resetClaimBackoff();
+    this.wakeClaim();
   }
 
   private requestRestartAfterUpdate(): void {
@@ -4174,7 +3955,7 @@ export class MultiremiDaemon {
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
     try {
-      this.enqueueTaskReport(taskId, "messages", { messages: [{ seq, type, content, input }] });
+      this.ensureTrace().append(taskId, this.options.runtimeId!, [{ type, content, input }]);
     } catch (err) {
       log.warn(`Failed to report ${type} message for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -4227,6 +4008,9 @@ export class MultiremiDaemon {
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",
         report: async (result, { final }) => {
+          // An in-flight periodic summary can finish after the terminal report was queued.
+          if (!final && (this.traceStore().head(task.id)?.closed
+            || this.ensureOutbox().taskIdsWithPendingTerminal().includes(task.id))) return;
           await this.client.reportProgress(task.id, result.summary, result.step, result.total, { final });
         },
       });
@@ -4375,9 +4159,8 @@ export class MultiremiDaemon {
     const toMessages = createEventMapper(createAdapter(config.agentType));
     messageBatcher = new TaskMessageBatcher({
       emit: (messages) => {
-        const sequenced = messages.map((message) => ({ ...message, seq: nextSeq() }));
-        this.enqueueTaskReport(task.id, "messages", { messages: sequenced });
-        progressSummarizer?.onMessages(sequenced);
+        const stored = this.ensureTrace().append(task.id, this.options.runtimeId!, messages);
+        progressSummarizer?.onMessages(stored);
       },
     });
 
@@ -4566,10 +4349,7 @@ export class MultiremiDaemon {
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
         }
         await this.client.pinTaskSession(task.id, finalSessionId, workDir);
-        // Flush the outbox before flipping the task terminal: a queued
-        // "progress" record delivered after completion would be rejected by
-        // the server's terminal-status guard and wedge the outbox.
-        await this.awaitTaskReportDrain(task.id);
+        // The single pump preserves this partition's order through completion.
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
         await this.client.reportTaskUsage(task.id, usage);
         try {
@@ -4790,8 +4570,8 @@ export class MultiremiDaemon {
         attempts: this.authorityProbeAttempts,
         next_probe_at: this.authorityProbeNextAt,
       },
-      claim_wake_ws: this.claimWakeWsStatus(),
-      heartbeat_interval_ms: this.heartbeatIntervalMs(),
+      protocol: this.protocolClient?.health(),
+      heartbeat_interval_ms: DAEMON_HEARTBEAT_INTERVAL_MS,
       // Null when no poll loop has started yet (health is served from startup).
       claim_idle_next_at: this.nextClaimAt > 0 ? new Date(this.nextClaimAt).toISOString() : null,
       pid: process.pid,
@@ -5080,10 +4860,6 @@ function optionalNumberEnv(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizeOptionalInterval(value: number | null | undefined): number | null {
-  return value === null || value === undefined ? null : Math.max(1, value);
-}
-
 /**
  * Resolve the runtime's task concurrency. An explicit value >= 1 wins;
  * anything else (0/unset) defaults to one fewer than the machine's CPU count
@@ -5234,5 +5010,6 @@ function sleep(ms: number): Promise<void> {
 
 /** completeTask refused because an unconsumed steer won the race (server steer barrier). */
 function isSteerPendingConflict(err: unknown): boolean {
-  return err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending";
+  return (err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending")
+    || (err instanceof DaemonProtocolRpcError && err.code === "steer_pending");
 }
