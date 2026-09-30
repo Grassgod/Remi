@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { ConversationLogRepo } from "@multiremi/store/repos/conversation-log-repo.js";
 import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
@@ -731,6 +732,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           const receipt = store.findTurnEntry(task.id)?.metadata.inbox;
           expect(receipt).toMatchObject({ delivered_from_seq: projection.from_seq,
             delivered_to_seq: projection.to_seq, task_id: task.id });
+          if (!receipt?.delivered_at) throw new Error("Claim receipt is missing delivered_at");
           expect(Number.isNaN(Date.parse(receipt!.delivered_at))).toBe(false);
           const sessionId = task.id === issueTask.id ? session.id : chat.id;
           expect(store.listConversationLogShown(sessionId).filter(entry => entry.task_id === task.id && entry.kind === "turn"))
@@ -820,6 +822,51 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           expect(store.findTurnEntry(task.id)).toBeNull();
           expect(store.listChatMessages(chat.id).filter(message => message.role === "assistant")).toHaveLength(0);
         }
+      });
+    }, 30_000);
+
+    test(`${backend}: reassignment keeps an issue_owner pending turn and delivered readback with the original recipient`, async () => {
+      await withStore(backend, async (store, db) => {
+        store.ensureLocalWorkspace();
+        const originalRuntime = store.registerRuntime({ name: "Original owner runtime", provider: "codex" });
+        const nextRuntime = store.registerRuntime({ name: "Next owner runtime", provider: "codex" });
+        const original = store.createAgent({ name: "Original owner", provider: "codex", runtimeId: originalRuntime.id });
+        const next = store.createAgent({ name: "Next owner", provider: "codex", runtimeId: nextRuntime.id });
+        const issue = store.createIssue({ title: "Frozen recipient", status: "in_progress",
+          assigneeType: "agent", assigneeId: original.id });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const first = store.createSessionTask(session.id, { agentId: original.id, prompt: "First round" });
+        expect(store.claimTask(originalRuntime.id)?.id).toBe(first.id);
+        daemonTaskClaimResponse(store, store.getTaskWithAgent(first.id)!);
+        store.startTask(first.id);
+        const [delivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+          to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "now",
+          body: "For the original owner", source: {},
+        }, [], createCommitEventQueue()))();
+        expect(delivery.entry.metadata.envelope?.recipient_agent_id).toBe(original.id);
+        const app = createMultiremiApp({ store });
+        const readDelivered = async () => {
+          const response = await app.request(`/api/sessions/${session.id}/log/entry?seq=${delivery.entry.seq}`);
+          expect(response.status).toBe(200);
+          return (await response.json()).delivered as boolean;
+        };
+        expect(await readDelivered()).toBe(false);
+        store.updateIssue(issue.id, { assigneeType: "agent", assigneeId: next.id });
+        expect(await readDelivered()).toBe(false);
+        store.completeTask(first.id, { output: "Done" });
+        const queued = store.listTasksForIssue(issue.id).filter(task => task.status === "queued" && task.agentId === original.id);
+        expect(queued).toHaveLength(1);
+        expect(queued[0]!.agentId).toBe(original.id);
+        expect(store.listIssueActivity(issue.id).filter(row => row.type === "re_ring").map(row => row.data))
+          .toEqual([expect.objectContaining({ action: "coalesced", task_id: queued[0]!.id })]);
+        expect(store.claimTask(originalRuntime.id)?.id).toBe(queued[0]!.id);
+        const projection = daemonTaskClaimResponse(store, store.getTaskWithAgent(queued[0]!.id)!)
+          .session_projection as { to_seq: number };
+        expect(projection.to_seq).toBeGreaterThanOrEqual(delivery.entry.seq);
+        expect(store.findTurnEntry(queued[0]!.id)?.metadata.inbox?.delivered_to_seq)
+          .toBeGreaterThanOrEqual(delivery.entry.seq);
+        expect(await readDelivered()).toBe(true);
+        expect(store.findTurnEntry(queued[0]!.id)?.task_id).toBe(queued[0]!.id);
       });
     }, 30_000);
 

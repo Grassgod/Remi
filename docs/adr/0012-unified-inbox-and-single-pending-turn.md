@@ -31,7 +31,9 @@ notification wakes to this decision.
    `dedupe_key`, `reply_to`, `grant_ref`, `priority`, `source`). For symbolic
    `issue_owner`, `parent_owner`, and `delegator` addresses, the writer also
    stores the resolved `recipient_agent_id` so later ownership changes do not
-   change delivery attribution. On Issue
+   change delivery attribution. Issue re-ring uses that same frozen recipient;
+   entries written before this field existed still resolve the current owner.
+   On Issue
    sessions the entry is a system comment (`kind = system`); on chat sessions it
    is a system message. Delegation reports and decision answers, which today live
    only in task prompts or `session_events`, become such entries.
@@ -75,7 +77,9 @@ notification wakes to this decision.
    A missing Chat reply has no receipt. The patch contains `delivered_from_seq`,
    `delivered_to_seq`, `delivered_at`, and `task_id`; failure is logged without
    undoing the claim or reply. "Delivered" for a single entry is derived from
-   the recipient lane cursor and turn coverage, never stored per entry.
+   the recipient lane cursor and turn coverage, never stored per entry. Coverage
+   uses the receipt boundary even when a queued turn predates an envelope that
+   later joins it.
 7. **The unread projection gets a table of contents and folding.** Entries are
    ranked human decision > failed/stuck > done > notice, from
    `envelopePriority(entry)`; bodies over the fold threshold are summarised

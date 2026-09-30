@@ -1667,11 +1667,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null);
     const delivered: boolean | null = agentId === null ? null : (
       store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
-      || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
-        if (turn.kind !== "turn" || turn.author_id !== agentId) return false;
+      || store.listConversationLogShown(sessionId).some((turn) => {
+        if (turn.kind !== "turn") return false;
         const receipt = turn.metadata.inbox;
-        return receipt !== null && typeof receipt === "object"
-          && Number((receipt as Record<string, unknown>).delivered_to_seq) >= entry.seq;
+        if (receipt === null || typeof receipt !== "object"
+          || !(Number((receipt as Record<string, unknown>).delivered_to_seq) >= entry.seq)) return false;
+        // A queued turn may predate a coalesced envelope. Match its receipt
+        // range, and use the task when a mirrored card has no author_id.
+        return turn.author_id === agentId
+          || (turn.task_id !== null && store.getTask(turn.task_id)?.agentId === agentId);
       })
     );
     return c.json({ ...entry, delivered });

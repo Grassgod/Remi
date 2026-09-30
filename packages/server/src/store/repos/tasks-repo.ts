@@ -6047,7 +6047,9 @@ ${placementAfter.sql}
          WHERE delegation_return_task_id = ?`,
         [now, current.id],
       );
-      if (cleared.changes > 0 && current.issueSessionId) {
+      // Redispatch creates the replacement below in this transaction; draining
+      // now would plant a competing queued return in the same lane.
+      if (cleared.changes > 0 && current.issueSessionId && !replacementPlanned) {
         redrain = this.drainDelegationReturnsWithinWorkspaceLock(
           current.issueSessionId, null, childStatusChanges, deferredEvents,
         );
@@ -6158,12 +6160,14 @@ ${placementAfter.sql}
     const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
     const addressed = entries.filter(entry => {
       if (entry.author_id === agentId || entry.metadata.envelope?.wake !== "now") return false;
-      const to = entry.metadata.envelope.to;
-      if (to.role === "agent") return to.issueSessionId === sessionId && to.agentId === agentId && executionScope === "";
+      const { to, recipient_agent_id: recipientAgentId } = entry.metadata.envelope;
+      if (recipientAgentId && recipientAgentId !== agentId) return false;
+      if (to.role === "agent") return to.issueSessionId === sessionId
+        && (recipientAgentId ?? to.agentId) === agentId && executionScope === "";
       if (to.role === "delegator") {
         const source = entry.metadata.envelope.source.taskId
           ? this.getTask(entry.metadata.envelope.source.taskId) : null;
-        if (!source || source.delegatedByAgentId !== agentId
+        if (!source || (!recipientAgentId && source.delegatedByAgentId !== agentId)
           || (source.delegatedFromIssueSessionId ?? source.issueSessionId) !== sessionId) return false;
         const parent = source.parentTaskId ? this.getTask(source.parentTaskId) : null;
         const scope = parent?.agentId === agentId && parent.issueSessionId === sessionId
@@ -6176,7 +6180,9 @@ ${placementAfter.sql}
             return child?.parentIssueId ? this.ctx.issues().getIssue(child.parentIssueId) : null;
           })() : null;
       if (!issue || this.ctx.issueSessions().getIssueSession(sessionId)?.issueId !== issue.id
-        || executionScope !== "" || !issue.assigneeType || !issue.assigneeId) return false;
+        || executionScope !== "") return false;
+      if (recipientAgentId) return true;
+      if (!issue.assigneeType || !issue.assigneeId) return false;
       return this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id === agentId;
     });
     return addressed.at(-1)?.seq ?? null;

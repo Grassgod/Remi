@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore } from "../multiremi/fixtures/conversation-log-store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import {
   BOOTSTRAP_COMPATIBILITY_PATHS,
@@ -34,6 +37,88 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  for (const backend of ["sqlite", "pg"] as const) {
+    it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
+      `${backend}: session log get reports Issue claim, Chat reply and symbolic recipient delivery`, async () => {
+        await withConversationLogStore(backend, async (store, db) => {
+          store.ensureLocalWorkspace();
+          const runtime = store.registerRuntime({ name: "Delivery CLI runtime", provider: "codex" });
+          const agent = store.createAgent({ name: "Delivery CLI owner", provider: "codex", runtimeId: runtime.id });
+          const issue = store.createIssue({ title: "Delivery CLI issue", status: "in_progress",
+            assigneeType: "agent", assigneeId: agent.id });
+          const session = store.getOrCreateDefaultIssueSession(issue.id);
+          const issueTask = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read issue" });
+          const [issueDelivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "now",
+            body: "Symbolic Issue request", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(issueDelivery.task?.id).toBe(issueTask.id);
+          expect(store.findTurnEntry(issueTask.id)!.seq).toBeLessThan(issueDelivery.entry.seq);
+          expect(issueDelivery.entry.metadata.envelope?.recipient_agent_id).toBe(agent.id);
+          const chat = store.createChatSession({ agentId: agent.id });
+          const [chatDelivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "chat", chatSessionId: chat.id, agentId: agent.id },
+            kind: "request", wake: "now", body: "Chat request", source: {},
+          }, [], createCommitEventQueue()))();
+          const legacy = store.appendConversationLog({ sessionId: session.id, kind: "message",
+            authorType: "member", authorId: "local", bodyMd: "Before recipient metadata" });
+          const app = createMultiremiApp({ store });
+          useCliEnv();
+          const get = specById("session.log.get");
+          globalThis.fetch = capabilityFetch(get.id, (request) => {
+            const url = new URL(request.url);
+            return app.request(`${url.pathname}${url.search}`, { method: request.method, headers: request.headers });
+          });
+          const registry = registryFor([get]);
+          const delivered = async (sessionId: string, seq: number) => {
+            const result = await capture(() => registry.execute([...get.path, sessionId, String(seq), "--output", "json"]));
+            return JSON.parse(result.stdout).delivered as boolean | null;
+          };
+          expect(await delivered(session.id, issueDelivery.entry.seq)).toBe(false);
+          expect(await delivered(chat.id, chatDelivery.entry.seq)).toBe(false);
+          expect(await delivered(session.id, legacy.seq)).toBeNull();
+
+          expect(store.claimTask(runtime.id)?.id).toBe(issueTask.id);
+          daemonTaskClaimResponse(store, store.getTaskWithAgent(issueTask.id)!);
+          expect(store.getSessionAgentLane(session.id, agent.id)?.cursorSeq ?? 0).toBeLessThan(issueDelivery.entry.seq);
+          expect(store.findTurnEntry(issueTask.id)?.metadata.inbox?.delivered_to_seq)
+            .toBeGreaterThanOrEqual(issueDelivery.entry.seq);
+          expect(await delivered(session.id, issueDelivery.entry.seq)).toBe(true);
+          store.startTask(issueTask.id);
+          store.completeTask(issueTask.id, { output: "Issue reply" });
+
+          const [cursorOnly] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+            body: "Covered only by cursor", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(false);
+          store.getOrCreateSessionAgentLane(session.id, agent.id, "");
+          db.run("UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+            [cursorOnly.entry.seq, session.id, agent.id, ""]);
+          expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(true);
+
+          const other = store.createAgent({ name: "Other receipt author", provider: "codex" });
+          const [uncovered] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+            to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+            body: "Not covered by recipient", source: {},
+          }, [], createCommitEventQueue()))();
+          expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
+          store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent", authorId: other.id,
+            metadata: { inbox: { delivered_to_seq: uncovered.entry.seq } } });
+          expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
+
+          expect(store.claimTask(runtime.id)?.id).toBe(chatDelivery.task?.id);
+          daemonTaskClaimResponse(store, store.getTaskWithAgent(chatDelivery.task!.id)!);
+          store.startTask(chatDelivery.task!.id);
+          store.completeTask(chatDelivery.task!.id, { output: "Chat reply" });
+          expect(store.findTurnEntry(chatDelivery.task!.id)?.metadata.inbox?.delivered_to_seq)
+            .toBeGreaterThanOrEqual(chatDelivery.entry.seq);
+          expect(await delivered(chat.id, chatDelivery.entry.seq)).toBe(true);
+        });
+      }, 30_000,
+    );
+  }
+
   it("expands Session entries by seq or id and forwards event sequence bounds", async () => {
     useCliEnv();
     const get = specById("session.log.get");
