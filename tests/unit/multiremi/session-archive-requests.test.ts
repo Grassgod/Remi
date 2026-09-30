@@ -218,6 +218,21 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
+    it("orders a retry after the latest subject request even when its timestamp is in the future", async () => {
+      await withWorld(backend, async (world) => {
+        const [first] = world.store.requestSessionArchives(world.runtimeId, [ISSUE], "usr_admin");
+        world.store.failSessionArchiveRequest(world.runtimeId, first!.id);
+        const future = new Date(Date.now() + 60_000).toISOString();
+        world.opened.db.run("UPDATE multiremi_session_archive_requests SET created_at = ? WHERE id = ?", [future, first!.id]);
+        const [retry] = world.store.requestSessionArchives(world.runtimeId, [ISSUE], "usr_admin");
+        expect(Date.parse(retry!.created_at)).toBe(Date.parse(future) + 1);
+        expect(world.store.listLatestSessionArchiveRequests([world.runtimeId]))
+          .toEqual([retry!]);
+        expect(retry!.status).toBe("pending");
+        expect(status(world, first!.id)).toBe("failed");
+      });
+    }, TIMEOUT);
+
     it("keeps a request whose daemon went offline before acknowledging at sent, with no lease", async () => {
       await withWorld(backend, async (world) => {
         const [request] = world.store.requestSessionArchives(world.runtimeId, [ISSUE], "usr_admin");

@@ -513,7 +513,7 @@ describe("Feishu bot control-plane delivery", () => {
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
   });
 
-  it("queues native inbound replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
+  it("queues legacy bundled native replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {
     const test = await scaffold();
     await report(test, "rt_a", { applied_revision: 1, state: "online" });
     const input = { revision: 1, externalSessionKey: "oc_native:thread:om_root", externalMessageId: "om_question",
@@ -524,6 +524,8 @@ describe("Feishu bot control-plane delivery", () => {
     expect(test.store.submitFeishuBotMessage("local", "rt_a", input)).toMatchObject({ duplicate: true, taskId: submitted.taskId });
     expect(db!.query("SELECT count(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?").get(submitted.taskId)).toEqual({ n: 1 });
     expect(test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, false, true)).toBeNull();
+    // An already bundled delivery stays bundled when it resumes through v2.
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET delivery_mode = 'legacy' WHERE task_id = ?", [submitted.taskId]);
     const next = async () => (await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION })).json()).pending_feishu_outbound;
     const delivery = await next();
     expect(delivery).toMatchObject({ task_id: submitted.taskId, chat_id: "oc_native", thread_id: "om_root",

@@ -4153,9 +4153,7 @@ ${placementAfter.sql}
    * tasks — there is no run left to steer.
    */
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
-    const message = this.ctx.db.transaction(() => this.createTaskSteerMessageWithinTransaction(input))();
-    this.publishTaskInputChanged(input.taskId);
-    return message;
+    return this.ctx.db.transaction(() => this.createTaskSteerMessageWithinTransaction(input))();
   }
 
   /** Caller owns the transaction. */

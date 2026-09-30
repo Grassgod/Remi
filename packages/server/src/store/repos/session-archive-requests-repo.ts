@@ -87,7 +87,13 @@ export class SessionArchiveRequestsRepo {
        ORDER BY created_at DESC, id DESC LIMIT 1`,
     ).get(runtimeId, subject.kind, subject.id, ...OPEN_STATUSES) as Row | null;
     if (open) return { request: hydrate(open), created: false };
-    const now = nowIso();
+    const latest = this.ctx.db.query(
+      `SELECT created_at FROM multiremi_session_archive_requests
+       WHERE runtime_id = ? AND subject_kind = ? AND subject_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+    ).get(runtimeId, subject.kind, subject.id) as Row | null;
+    // Retry order must not depend on random IDs when requests share a millisecond.
+    const now = new Date(Math.max(Date.parse(nowIso()), latest ? Date.parse(String(latest.created_at)) + 1 : 0)).toISOString();
     const row = this.ctx.db.query(
       `INSERT INTO multiremi_session_archive_requests
          (id, runtime_id, subject_kind, subject_id, status, created_by, created_at, updated_at)

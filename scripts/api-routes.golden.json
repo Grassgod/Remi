@@ -4314,14 +4314,6 @@
         "drain": {
           "mode": "normal",
           "generation": 0
-        },
-        "codex_profile": null,
-        "claude_profile": null,
-        "workspace_settings": {},
-        "relay": {
-          "claude": null,
-          "codex": null,
-          "model_discovery": false
         }
       }
     },

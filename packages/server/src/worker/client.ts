@@ -2147,6 +2147,11 @@ export function normalizeDaemonRuntimeInput(runtimeId: string, resp: Partial<Mul
         ...(typeof rawOutbound.kind === "string" ? {
           kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
         } : {}),
+        ...(typeof rawOutbound.receipt_state === "string" ? {
+          receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
+        } : {}),
+        ...(typeof rawOutbound.decision_id === "string" ? { decisionId: rawOutbound.decision_id } : {}),
+        ...(typeof rawOutbound.decision_issue_id === "string" ? { decisionIssueId: rawOutbound.decision_issue_id } : {}),
         ...(typeof rawOutbound.human_request_id === "string" ? {
           humanRequestId: rawOutbound.human_request_id,
           human_request_id: rawOutbound.human_request_id,
