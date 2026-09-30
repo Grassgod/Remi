@@ -117,6 +117,51 @@ describe("native collaboration CLI contracts", () => {
         });
       }, 30_000,
     );
+
+    for (const { author, expected, label } of [
+      { author: "other", expected: false, label: "explicit foreign author cannot deliver recipient task receipt" },
+      { author: "mirror", expected: true, label: "null author mirrored turn uses recipient task receipt" },
+    ] as const) {
+      it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
+        `${backend}: session log get ${label}`, async () => {
+          await withConversationLogStore(backend, async (store, db) => {
+            store.ensureLocalWorkspace();
+            const recipient = store.createAgent({ name: "Receipt recipient", provider: "codex" });
+            const other = store.createAgent({ name: "Other receipt author", provider: "codex" });
+            const issue = store.createIssue({ title: "Receipt attribution", status: "in_progress",
+              assigneeType: "agent", assigneeId: recipient.id });
+            const session = store.getOrCreateDefaultIssueSession(issue.id);
+            const task = store.createSessionTask(session.id, { agentId: recipient.id, prompt: "Read issue" });
+            const [delivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
+              to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
+              body: "Receipt attribution probe", source: {},
+            }, [], createCommitEventQueue()))();
+            const app = createMultiremiApp({ store });
+            useCliEnv();
+            const get = specById("session.log.get");
+            globalThis.fetch = capabilityFetch(get.id, (request) => {
+              const url = new URL(request.url);
+              return app.request(`${url.pathname}${url.search}`, { method: request.method, headers: request.headers });
+            });
+            const registry = registryFor([get]);
+            const delivered = async () => {
+              const result = await capture(() => registry.execute([
+                ...get.path, session.id, String(delivery.entry.seq), "--output", "json",
+              ]));
+              return JSON.parse(result.stdout).delivered as boolean;
+            };
+            expect(await delivered()).toBe(false);
+            const turn = store.appendConversationLog({ sessionId: session.id, kind: "turn",
+              authorType: author === "other" ? "agent" : "system",
+              authorId: author === "other" ? other.id : null, taskId: task.id,
+              metadata: { inbox: { delivered_to_seq: delivery.entry.seq } },
+            });
+            expect(turn.seq).toBeGreaterThan(delivery.entry.seq);
+            expect(await delivered()).toBe(expected);
+          });
+        }, 30_000,
+      );
+    }
   }
 
   it("expands Session entries by seq or id and forwards event sequence bounds", async () => {
