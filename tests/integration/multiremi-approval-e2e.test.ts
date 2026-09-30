@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ElicitationCreateParams, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -114,7 +115,7 @@ async function startHarness(options: {
   withElicitation?: boolean;
   approvalMode?: "ask" | "auto";
 } = {}): Promise<Harness> {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
   const agent = store.createAgent({ name: "Approval Agent", provider: "claude" });

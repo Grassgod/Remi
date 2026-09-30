@@ -57,6 +57,7 @@ export interface WsMinuteSummary {
   window_ms: number;
   frames: number;
   dropped: number;
+  offer_sweep_recovered: number;
   /**
    * Per-frame-type breakdown, ranked by `db_ms` then `count`.
    *
@@ -190,6 +191,7 @@ export interface WsWindowSummaryInput {
   dropped: number;
   topTypes: number;
   now?: Date;
+  offerSweepRecovered?: number;
 }
 
 /**
@@ -241,6 +243,7 @@ export function summarizeWsWindow(input: WsWindowSummaryInput): WsMinuteSummary 
     window_ms: Math.round(windowMs),
     frames: input.samples.length,
     dropped: Math.max(0, Math.trunc(input.dropped)),
+    offer_sweep_recovered: Math.max(0, Math.trunc(input.offerSweepRecovered ?? 0)),
     types: types.slice(0, top),
   };
 }
@@ -251,6 +254,7 @@ export interface WsFrameMetricsRuntime {
   stop(): void;
   /** Record one finished frame. A no-op when metrics are disabled. */
   record(sample: WsFrameSample): void;
+  recordOfferSweepRecovery(): void;
 }
 
 /**
@@ -292,10 +296,12 @@ export function startWsFrameMetricsSummary(
       flush: () => {},
       stop: () => {},
       record: () => {},
+      recordOfferSweepRecovery: () => {},
     };
   }
   const buffer = wsRingFor(options.bufferCapacity);
   let lastTickAt = performance.now();
+  let offerSweepRecovered = 0;
 
   const emit = (): void => {
     const { samples, dropped } = buffer.drain();
@@ -306,7 +312,9 @@ export function startWsFrameMetricsSummary(
       samples,
       dropped,
       topTypes: options.summaryTopTypes,
+      offerSweepRecovered,
     })));
+    offerSweepRecovered = 0;
   };
 
   const timer = setInterval(() => {
@@ -328,6 +336,7 @@ export function startWsFrameMetricsSummary(
     },
     stop: () => clearInterval(timer),
     record: (sample) => buffer.record(sample),
+    recordOfferSweepRecovery: () => { offerSweepRecovered++; },
   };
 }
 

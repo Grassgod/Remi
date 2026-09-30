@@ -22,8 +22,12 @@ import { reportFrame } from "../../fixtures/report-session.js";
 // `POST :id/complete`, which reads through the cache, writes, and then re-reads
 // to build its response body.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
+import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
+import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -71,8 +75,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return {
-    dialect: "sqlite" as const,
+  return markSqliteDialect<SqlDatabase>({
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -83,7 +86,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     exec: (sql) => { raw.exec(sql); },
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
-  };
+  });
 }
 
 interface Scaffold {
@@ -96,7 +99,7 @@ interface Scaffold {
 
 /** A running Task whose prompt is large enough that any payload read is visible. */
 async function scaffold(): Promise<Scaffold> {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   const probe: Probe = {
     statements: [],
@@ -169,9 +172,11 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds GET steer and never reads the task payload", async () => {
+  it("bounds the steer push snapshot and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "GET", `/api/daemon/tasks/${scaffolded.fixture.taskId}/steer`);
+    scaffolded.probe.reset();
+    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId, new Set([scaffolded.fixture.taskId]), () => {});
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.steer);
     expectNoTaskPayloadReads(sql);
   });
@@ -218,7 +223,7 @@ describe("MUL-474 daemon task-level polls", () => {
  */
 describe("MUL-474 daemon GET task status golden", () => {
   it("returns the same body the pre-change implementation returned", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -247,7 +252,7 @@ describe("MUL-474 daemon GET task status golden", () => {
   // The running case above has `result: null`. These cover the stored shapes a
   // projection's `result` / `session_id` / `work_dir` fallbacks have to survive.
   it("matches the pre-change body for every stored result shape", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -281,7 +286,7 @@ describe("MUL-474 daemon GET task status golden", () => {
  */
 describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () => {
   it("returns no task when the cancel lands while hydration is in flight", async () => {
-    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const probe: Probe = { statements: [], reset() { this.statements = []; } };
     const store = new MultiremiStore(countingDatabase(db, probe));
@@ -330,7 +335,7 @@ describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () 
     });
     const headers = { Authorization: `Bearer ${token.token}`, "content-type": "application/json" };
     const requests = [0, 1].map(() =>
-      app.request("/api/daemon/runtimes/rt_mul474_claim/tasks/claim", { method: "POST", headers }));
+      taskOfferResponse(store, "rt_mul474_claim", { headers, authToken: AUTH_TOKEN, projectKnowledge: projectKnowledge as never }));
     await entered;
     // The single-flight guard means only the first poll hydrates, and it is now
     // parked inside hydration with its pre-cancel read already done.
@@ -368,13 +373,21 @@ describe("MUL-474 daemon task authority matrix", () => {
     const foreign = { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" };
 
     expect((await app.request(`${taskPath}/status`, { headers: owner })).status).toBe(200);
-    expect((await app.request(`${taskPath}/steer`, { headers: owner })).status).toBe(200);
+    const steer = store.createTaskSteerMessage({ taskId: fixture.taskId, kind: "steer", content: "owner-only" });
+    const connection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.daemonToken), masterToken: false } });
+    try {
+      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer.id)).toEqual([steer.id]);
+    } finally { await connection.close(); }
+    const foreignConnection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.foreignDaemonToken), masterToken: false } });
+    try { expect(foreignConnection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0); }
+    finally { await foreignConnection.close(); }
 
     // A non-owner daemon keeps the exact refusal it had before the reorder. This
     // Task has no Feishu transport binding, so neither exception applies.
     for (const [method, path, body] of [
       ["GET", `${taskPath}/status`, undefined],
-      ["GET", `${taskPath}/steer`, undefined],
       ["GET", `${taskPath}/messages`, undefined],
       ["POST", `${taskPath}/messages`, JSON.stringify({ messages: [{ type: "text", content: "x" }] })],
       ["POST", `${taskPath}/complete`, JSON.stringify({ output: "x" })],
@@ -402,13 +415,10 @@ describe("MUL-474 daemon task authority matrix", () => {
 
   it("refuses a non-owner on the steer/consume write path too", async () => {
     const { scaffolded } = await authorityScaffold();
-    const { app, fixture } = scaffolded;
-    const response = await app.request(`/api/daemon/tasks/${fixture.taskId}/steer/consume`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ ids: [] }),
-    });
-    expect(response.status).toBe(403);
+    const { store, fixture } = scaffolded;
+    const response = await requestRuntimeRpc(store, fixture.foreignRuntimeId, "steer.consume",
+      { task_id: fixture.taskId, steer_ids: [] }, fixture.foreignDaemonToken, AUTH_TOKEN);
+    expect(response).toMatchObject({ ok: false, code: "authority_revoked" });
   });
 
   it("keeps the Feishu host exception working for a Chat task on another daemon", async () => {

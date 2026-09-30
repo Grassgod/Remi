@@ -371,6 +371,10 @@ export class ConversationLogRepo {
       fields.body_html = rendered.html;
       fields.render_version = rendered.render_version;
     }
+    if (fields.task_id !== undefined) {
+      sets.push("task_id = ?");
+      params.push(fields.task_id);
+    }
     if (fields.body_md !== undefined) {
       sets.push("body_md = ?");
       params.push(fields.body_md);

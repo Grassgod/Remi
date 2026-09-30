@@ -27,6 +27,25 @@ export const RuntimeProtocolStatusSchema = z.object({
   last_error: z.string().nullable(),
 });
 
+export const RuntimeDeleteResponseSchema = z.object({
+  status: z.literal("ok"),
+  issue_workspaces_abandoned: z.number().int().nonnegative(),
+});
+
+export const ArchiveAgentsAndDeleteRuntimeResponseSchema = RuntimeDeleteResponseSchema.extend({
+  agents_archived: z.number().int().nonnegative(),
+  tasks_cancelled: z.number().int().nonnegative(),
+});
+
+export const RuntimeActiveIssueWorkspacesConflictSchema = z.object({
+  code: z.literal("runtime_has_active_issue_workspaces"),
+  issues: z.array(z.object({
+    id: z.string().min(1), key: z.string().min(1), title: z.string(), status: z.string(),
+  })).min(1),
+});
+
+export type RuntimeIssueWorkspaceImpact = z.infer<typeof RuntimeActiveIssueWorkspacesConflictSchema>["issues"][number];
+
 export const AgentRuntimeSchema = z.object({
   id: z.string(),
   execution_group_id: z.string().nullable().optional(),

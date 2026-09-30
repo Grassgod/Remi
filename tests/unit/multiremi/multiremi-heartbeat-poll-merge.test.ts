@@ -1,3 +1,4 @@
+import { openRuntimeDownlinks, receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
 // MUL-389: the heartbeat's seven async-request polls are merged into one probe.
 //
 // The probe decides which families get claimed and which deadline sweeps are provably empty.
@@ -8,7 +9,8 @@
 //   4. a batch import claims ten rows in one write;
 //   5. the CLI-scope update drain branch still refuses to hand the update out.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
@@ -40,7 +42,7 @@ const FULL = {
 };
 
 describe("merged heartbeat poll", () => {
-  it("claims all seven families in one heartbeat", () => {
+  it("claims all seven families in one heartbeat", async () => {
     const { store, runtime } = fixture();
     const update = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" });
     const modelList = store.createRuntimeModelListRequest(runtime.id);
@@ -54,7 +56,7 @@ describe("merged heartbeat poll", () => {
     const scan = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp", maxDepth: 3, mode: "browse" });
     const skillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "bench-skill" });
 
-    const ack = store.heartbeatRuntime(runtime.id, FULL);
+    const ack = (await receiveRuntimeInputs(store, runtime.id));
 
     expect(ack.status).toBe("ok");
     expect(ack.pending_update).toEqual({ id: update.id, target_version: "9.9.9", scope: "cli" });
@@ -76,7 +78,7 @@ describe("merged heartbeat poll", () => {
     ]) expect(status).toBe("running");
   });
 
-  it("claims the oldest pending row of a family, not whichever the update returns first", () => {
+  it("claims the oldest pending row when that frame is acknowledged", async () => {
     const { store, runtime } = fixture();
     const first = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "first" });
     const second = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "second" });
@@ -86,12 +88,15 @@ describe("merged heartbeat poll", () => {
       second.id,
     ]);
 
-    const ack = store.heartbeatRuntime(runtime.id, { supportsBatchImport: false, supportsSkillDirectory: false });
-    expect(ack.pending_local_skill_import?.id).toBe(second.id);
+    const connection = await openRuntimeDownlinks(store, runtime.id);
+    const frame = connection.frames.find(frame => frame.t === "runtime.local_skill_import")!;
+    expect(frame.p.id).toBe(second.id);
+    await connection.ack(frame.seq);
+    await connection.close();
     expect(store.getRuntimeLocalSkillImportRequest(runtime.id, first.id)?.status).toBe("pending");
   });
 
-  it("claims a batch of ten imports in one write, oldest first", () => {
+  it("claims a batch of ten imports in one write, oldest first", async () => {
     const { store, runtime } = fixture();
     const created = Array.from({ length: 10 }, (_value, index) =>
       store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: `skill-${index}` }));
@@ -103,7 +108,7 @@ describe("merged heartbeat poll", () => {
       ]);
     }
 
-    const ack = store.heartbeatRuntime(runtime.id, FULL);
+    const ack = (await receiveRuntimeInputs(store, runtime.id));
     expect(ack.pending_local_skill_imports?.map((entry) => entry.skill_key)).toEqual([
       "skill-0", "skill-1", "skill-2", "skill-3", "skill-4",
       "skill-5", "skill-6", "skill-7", "skill-8", "skill-9",
@@ -113,7 +118,7 @@ describe("merged heartbeat poll", () => {
     }
   });
 
-  it("leaves a family alone when the daemon does not advertise its capability", () => {
+  it("leaves a family alone when the daemon does not advertise its capability", async () => {
     const { store, runtime } = fixture();
     const scan = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp" });
     const botMenu = store.createBotMenuPublishRequest(runtime.id, {
@@ -124,13 +129,13 @@ describe("merged heartbeat poll", () => {
 
     // Both rows exist, but this heartbeat does not advertise either capability.
     const ack = store.heartbeatRuntime(runtime.id, { supportsBatchImport: false });
-    expect(ack.pending_directory_scan).toBeUndefined();
-    expect(ack.pending_bot_menu).toBeUndefined();
+    expect(ack).not.toHaveProperty("pending_directory_scan");
+    expect(ack).not.toHaveProperty("pending_bot_menu");
     expect(store.getRuntimeDirectoryScanRequest(runtime.id, scan.id)?.status).toBe("pending");
     expect(store.getBotMenuPublishRequest(runtime.id, botMenu.id)?.status).toBe("pending");
 
     // The same rows are still claimable once the capability is advertised.
-    const next = store.heartbeatRuntime(runtime.id, { supportsDirectoryScan: true, supportsBotMenu: true });
+    const next = (await receiveRuntimeInputs(store, runtime.id));
     expect(next.pending_directory_scan?.id).toBe(scan.id);
     expect(next.pending_bot_menu?.id).toBe(botMenu.id);
   });
@@ -139,7 +144,10 @@ describe("merged heartbeat poll", () => {
     const { store, runtime } = fixture();
     const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/tmp/skills" });
     const ack = store.heartbeatRuntime(runtime.id, { supportsSkillDirectory: false, supportsBatchImport: false });
-    expect(ack.pending_local_skills).toBeUndefined();
+    expect(ack).not.toHaveProperty("pending_local_skills");
+    // The legacy queue API still rejects an unsupported custom directory;
+    // it is no longer a delivery lane on the compatibility heartbeat.
+    store.claimRuntimeLocalSkillListRequest(runtime.id, false);
     const failed = store.getRuntimeLocalSkillListRequest(runtime.id, scan.id);
     expect(failed?.status).toBe("failed");
     expect(failed?.error).toBe("custom skill directories are not supported; upgrade the runtime daemon");
@@ -203,7 +211,7 @@ describe("merged heartbeat poll", () => {
     expect(store.getRuntimeModelListRequest(runtime.id, request.id)?.status).toBe("pending");
   });
 
-  it("holds back a CLI-scope update while the daemon still has executing tasks", () => {
+  it("holds back a CLI-scope update while the daemon still has executing tasks", async () => {
     const { store, runtime } = fixture();
     const agent = store.createAgent({ name: "Drain agent", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
     const task = store.createTask({ agentId: agent.id, prompt: "drain", runtimeId: runtime.id });
@@ -211,7 +219,7 @@ describe("merged heartbeat poll", () => {
     store.startTask(task.id);
 
     const update = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" });
-    const ack = store.heartbeatRuntime(runtime.id, FULL);
+    const ack = (await receiveRuntimeInputs(store, runtime.id));
     expect(ack.pending_update).toBeUndefined();
     const stillPending = store.getRuntimeUpdateRequest(runtime.id, update.id);
     expect(stillPending?.status).toBe("pending");
@@ -220,11 +228,11 @@ describe("merged heartbeat poll", () => {
 
     // Once the task settles the drain fence lifts and the update is handed out.
     store.completeTask(task.id, { output: "done" });
-    const next = store.heartbeatRuntime(runtime.id, FULL);
+    const next = (await receiveRuntimeInputs(store, runtime.id));
     expect(next.pending_update?.id).toBe(update.id);
   });
 
-  it("scrubs raw command text off a terminal row on the next heartbeat", () => {
+  it("scrubs raw command text off a terminal row on the next downlink snapshot", async () => {
     const { store, runtime } = fixture();
     const request = store.createRuntimeCommandRequest(runtime.id, { command: "printf secret", args: ["arg"] });
     store.claimRuntimeCommandRequest(runtime.id);
@@ -232,7 +240,7 @@ describe("merged heartbeat poll", () => {
     // The report already wiped it; write raw text back to model an older daemon's row.
     db!.run("UPDATE multiremi_runtime_command_requests SET command = ?, args = ? WHERE id = ?", ["printf secret", '["arg"]', request.id]);
 
-    const ack = store.heartbeatRuntime(runtime.id, { supportsBatchImport: false });
+    const ack = await receiveRuntimeInputs(store, runtime.id);
     expect(ack.pending_command).toBeUndefined();
     expect(store.getRuntimeCommandRequest(runtime.id, request.id)?.command).toBe("");
     expect(store.getRuntimeCommandRequest(runtime.id, request.id)?.args).toEqual([]);
@@ -242,17 +250,17 @@ describe("merged heartbeat poll", () => {
 
   // The rows below are read straight from the table: the per-request getters sweep before they
   // read, which would hide whether the heartbeat itself did the sweep.
-  it("times out a stuck running update on the heartbeat even when nothing is pending", () => {
+  it("times out a stuck running update on the heartbeat even when nothing is pending", async () => {
     const { store, runtime } = fixture();
     const update = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" });
-    expect(store.heartbeatRuntime(runtime.id, FULL).pending_update?.id).toBe(update.id);
+    expect((await receiveRuntimeInputs(store, runtime.id)).pending_update?.id).toBe(update.id);
     // The daemon died mid-update: the row is `running` and past the 20-minute deadline.
     db!.run("UPDATE multiremi_runtime_update_requests SET run_started_at = ? WHERE id = ?", [
       new Date(Date.now() - 21 * 60 * 1_000).toISOString(),
       update.id,
     ]);
 
-    store.heartbeatRuntime(runtime.id, FULL);
+    (await receiveRuntimeInputs(store, runtime.id));
     const row = db!.query("SELECT status, error FROM multiremi_runtime_update_requests WHERE id = ?").get(update.id) as { status: string; error: string };
     expect(row).toEqual({ status: "timeout", error: "update did not complete within 20 minutes" });
     // `createRuntimeUpdateRequest` checks for an in-flight row without sweeping first, so a row
@@ -260,7 +268,7 @@ describe("merged heartbeat poll", () => {
     expect(() => store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.10" })).not.toThrow();
   });
 
-  it("times out an overdue pending row on the heartbeat even when nothing is claimable", () => {
+  it("times out an overdue pending row on the heartbeat even when nothing is claimable", async () => {
     const { store, runtime } = fixture();
     const request = store.createRuntimeModelListRequest(runtime.id);
     db!.run("UPDATE multiremi_runtime_model_list_requests SET created_at = ? WHERE id = ?", [
@@ -268,7 +276,7 @@ describe("merged heartbeat poll", () => {
       request.id,
     ]);
 
-    const ack = store.heartbeatRuntime(runtime.id, FULL);
+    const ack = (await receiveRuntimeInputs(store, runtime.id));
     expect(ack.pending_model_list).toBeUndefined();
     const row = db!.query("SELECT status, error FROM multiremi_runtime_model_list_requests WHERE id = ?").get(request.id) as { status: string; error: string };
     expect(row).toEqual({ status: "timeout", error: "daemon did not respond within 30 seconds" });
@@ -300,7 +308,7 @@ describe("idle heartbeat — pending-table statement count", () => {
     statements: string[];
   } {
     const statements: string[] = [];
-    const raw = new Database(":memory:");
+    const raw = openSqliteDatabase(":memory:");
     const proxy = new Proxy(raw, {
       get(target, key) {
         const value = Reflect.get(target, key, target);
@@ -341,45 +349,35 @@ describe("idle heartbeat — pending-table statement count", () => {
     return { store, runtime, statements };
   }
 
-  it("touches the seven pending tables in exactly one statement while the queues are empty", () => {
+  it("keeps the six non-upgrade pending tables out of an idle compatibility heartbeat", () => {
     const { store, runtime, statements } = recordingFixture();
     store.heartbeatRuntime(runtime.id, FULL);
 
     const touching = statements.filter((sql) => PENDING_TABLES.some((table) => sql.includes(table)));
-    // Exactly one statement — the `UNION ALL` probe — and it names every family it gated on.
-    expect(touching).toHaveLength(1);
-    expect(touching[0]).toContain("UNION ALL");
-    for (const table of PENDING_TABLES) expect(touching[0]).toContain(table);
+    expect(touching.some(sql => sql.includes(PENDING_TABLES[0]!))).toBe(true);
+    for (const table of PENDING_TABLES.slice(1)) expect(touching.some(sql => sql.includes(table))).toBe(false);
+    expect(touching.some(sql => sql.includes("UNION ALL"))).toBe(false);
   });
 
-  it("gates on every family once per heartbeat, whatever the queue state", () => {
+  it("gates on every family once per downlink snapshot, whatever the queue state", async () => {
     const { store, runtime, statements } = recordingFixture();
     store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "one" });
-    store.heartbeatRuntime(runtime.id, FULL);
+    const connection = await openRuntimeDownlinks(store, runtime.id);
 
     const probes = statements.filter((sql) => sql.includes("UNION ALL"));
     // One probe per heartbeat, never one per family.
     expect(probes).toHaveLength(1);
     for (const table of PENDING_TABLES) expect(probes[0]).toContain(table);
+    await connection.close();
   });
 
-  it("omits a family whose capability the daemon did not advertise", () => {
+  it("never claims non-upgrade families through a legacy heartbeat", () => {
     const { store, runtime, statements } = recordingFixture();
     // Bot menu and directory scan are capability-gated, so a daemon that does not advertise them
     // must not have those tables probed at all — the gate lives inside the probe itself.
-    store.heartbeatRuntime(runtime.id, {
-      supportsBatchImport: true,
-      supportsSkillDirectory: true,
-      agentPluginProtocol: 1,
-    });
+    store.heartbeatRuntime(runtime.id, { supportsBatchImport: true, supportsSkillDirectory: true, agentPluginProtocol: 1 });
 
-    const [probe] = statements.filter((sql) => sql.includes("UNION ALL"));
-    expect(probe).toBeDefined();
-    expect(probe).not.toContain("multiremi_bot_menu_publish_requests");
-    expect(probe).not.toContain("multiremi_runtime_directory_scan_requests");
-    // The five ungated families are still covered in the same statement.
-    for (const table of PENDING_TABLES.slice(0, 3).concat(PENDING_TABLES[4]!, PENDING_TABLES[6]!)) {
-      expect(probe).toContain(table);
-    }
+    expect(statements.filter(sql => sql.includes("UNION ALL"))).toHaveLength(0);
+    for (const table of PENDING_TABLES.slice(1)) expect(statements.some(sql => sql.includes(table))).toBe(false);
   });
 });

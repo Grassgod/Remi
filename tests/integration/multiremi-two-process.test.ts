@@ -76,15 +76,10 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     return collector;
   }
 
-  async function claim(runtimeId: string): Promise<string | null> {
-    const response = await fetch(`${pair[1].url}/api/daemon/runtimes/${runtimeId}/tasks/claim`, {
-      method: "POST", headers: { Authorization: `Bearer ${resources.authToken}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    expect(response.status).toBe(200);
-    // The response contains a task credential; keep it out of assertion output.
-    const body = await response.json() as { task: { id: string } | null };
-    return body.task?.id ?? null;
+  function acceptOffer(socket: SocketFrames, offer: Frame): void {
+    expect(offer.seq).toBeNumber();
+    socket.socket.send(JSON.stringify({ v: 2, t: "res", re: String(offer.seq), p: { ok: true } }));
+    socket.socket.send(JSON.stringify({ v: 2, t: "ack", ack: offer.seq, p: {} }));
   }
 
   if (configured) beforeAll(async () => {
@@ -162,36 +157,41 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     } finally { socket.close(); }
   }), 20_000);
 
-  it("3. claims a task enqueued on A from a v2 daemon session on B", () => timed(3, async () => {
+  it("3. offers a task enqueued on A to a daemon on B and accepts that exact task", () => timed(3, async () => {
     const queue = await pair[0].call<Queue>("queue");
     const socket = await daemon(queue.runtimeIds[0]);
     try {
       const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId, runtimeId: queue.runtimeIds[0] });
-      expect(await claim(queue.runtimeIds[0])).toBe(id);
+      const offer = await socket.wait("task.offer", (frame) => frame.p?.id === id);
+      expect(offer).toMatchObject({ rt: queue.runtimeIds[0], p: { id } });
+      acceptOffer(socket, offer!);
       expect(await pair[1].call<TaskState>("task", { id })).toEqual({ id, status: "dispatched", runtimeId: queue.runtimeIds[0] });
       await pair[0].call("complete", { id });
     } finally { socket.close(); }
   }), 20_000);
 
-  it("4. lets two v2 daemons on B race for the same queue 200 times without duplicate claims", () => timed(4, async () => {
+  it("4. lets two daemons on B race for the same queue 200 times without duplicate offers", () => timed(4, async () => {
     const queue = await pair[0].call<Queue>("queue");
     const daemons = await Promise.all(queue.runtimeIds.map((id) => daemon(id)));
     const delivered: string[] = [];
     try {
       for (let round = 0; round < 200; round += 1) {
         const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId });
-        const claimed = await Promise.all(queue.runtimeIds.map((runtimeId) => claim(runtimeId)));
-        const winners = claimed.filter((taskId): taskId is string => taskId !== null);
-        expect(winners).toEqual([id]);
-        const owner = queue.runtimeIds[claimed.indexOf(id)];
+        expect(await pollUntil(() => daemons.some(socket => socket.frames.some(frame => frame.t === "task.offer" && frame.p?.id === id)), 5000)).toBe(true);
+        const offered = daemons.flatMap((socket, index) => socket.frames
+          .filter(frame => frame.t === "task.offer" && frame.p?.id === id)
+          .map(frame => ({ socket, runtimeId: queue.runtimeIds[index], frame })));
+        expect(offered).toHaveLength(1);
+        const owner = offered[0]!.runtimeId;
+        acceptOffer(offered[0]!.socket, offered[0]!.frame);
         expect(await pair[1].call<TaskState>("task", { id })).toEqual({ id, status: "dispatched", runtimeId: owner });
-        delivered.push(...winners);
+        delivered.push(id);
         await pair[0].call("complete", { id });
       }
       expect(delivered).toHaveLength(200);
       expect(new Set(delivered).size).toBe(200);
     } finally { daemons.forEach((socket) => socket.close()); }
-  }), 60_000);
+  }), 120_000);
 
   it("5. rejects daemon heartbeat on ui A and browser issues on runtime B with 421", () => timed(5, async () => {
     const heartbeat = await fetch(`${pair[0].url}/api/daemon/heartbeat`, {

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -365,7 +366,7 @@ describe("MUL-409 QA round 5 task wakeups on SQLite", () => {
   let store: Store;
 
   beforeEach(() => {
-    database = new Database(":memory:");
+    database = openSqliteDatabase(":memory:");
     store = new MultiremiStore(database);
   });
 

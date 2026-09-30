@@ -10,12 +10,15 @@
  * otherwise the shared bun:sqlite database (core Remi's ~/.remi/remi.db) is used.
  */
 import { getDb } from "@shared/db/index.js";
+import { markSqliteDialect } from "./sqlite.js";
 import {
+  currentDbReplyPolicy,
   emitDbReplyRejected,
   emitLargeDbReply,
   recordDbParse,
   recordDbQuery,
-  resolveDbReplyMaxBytes,
+  resetDbReplyPolicyForTest,
+  type DbReplyPolicy,
 } from "../../observability/request-metrics.js";
 import {
   lockOrderSentinelNoteNumberLock,
@@ -122,7 +125,8 @@ export interface SqlDatabase {
  * Run `fn` while holding the cross-process mutex named `key`.
  *
  * SQLite has no cross-process advisory lock, and it does not need one: a writer
- * takes the database file lock for its whole transaction, so two processes
+ * takes the database file lock for its whole transaction (guaranteed by the
+ * outermost `BEGIN IMMEDIATE`), so two processes
  * cannot interleave the read-then-write these locks protect. It is therefore a
  * documented no-op there, and the same call site expresses "only one process may
  * be here at a time" for both backends with no dialect branch. Use it for work a
@@ -351,22 +355,19 @@ class PgBridgeFailure extends Error {
  * `process.env` lookups are not free on that path. Tests that change the limit
  * call `resetDbReplyLimitForTest`.
  */
-let cachedReplyMaxBytes: number | null = null;
-
-function dbReplyMaxBytes(): number {
-  if (cachedReplyMaxBytes === null) cachedReplyMaxBytes = resolveDbReplyMaxBytes();
-  return cachedReplyMaxBytes;
+function effectiveReplyMaxBytes(policy: DbReplyPolicy): number {
+  if (policy.exempt || !policy.enforced || policy.limitBytes === 0) return RESULT_BUFFER_BYTES;
+  return Math.min(policy.limitBytes, RESULT_BUFFER_BYTES);
 }
 
 /** The effective ceiling shared by the bridge and bounded-read callers. */
 export function postgresReplyMaxBytes(): number {
-  const limit = dbReplyMaxBytes();
-  return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
+  return effectiveReplyMaxBytes(currentDbReplyPolicy());
 }
 
 /** Test seam: drop the cached limit so the next query re-reads the environment. */
 export function resetDbReplyLimitForTest(): void {
-  cachedReplyMaxBytes = null;
+  resetDbReplyPolicyForTest();
 }
 
 class PgBridge {
@@ -411,12 +412,13 @@ class PgBridge {
       // TextDecoder + JSON.parse cost, and the warning line exists so the size is
       // visible in logs without turning the request into a failure.
       if (measured) {
-        const limit = dbReplyMaxBytes();
-        if (limit > 0 && len > limit) {
-          emitDbReplyRejected(len, limit);
+        const policy = currentDbReplyPolicy();
+        const limit = effectiveReplyMaxBytes(policy);
+        if (len > limit) {
+          if (policy.enforced) emitDbReplyRejected(len, limit);
           throw new PostgresReplyTooLargeError(len, limit);
         }
-        emitLargeDbReply(len);
+        emitLargeDbReply(len, policy);
       }
       const parseStartedAt = performance.now();
       try {
@@ -732,6 +734,5 @@ export function openMultiremiDatabase(): SqlDatabase {
   if (url && isPostgresConfigured()) return new PostgresSyncDatabase(url);
   // Bun's SQLite handle satisfies the interface structurally, so the marker is
   // attached here rather than by wrapping every statement.
-  const sqlite = getDb() as unknown as SqlDatabase;
-  return Object.assign(sqlite, { dialect: "sqlite" as const });
+  return markSqliteDialect(getDb()) as unknown as SqlDatabase;
 }

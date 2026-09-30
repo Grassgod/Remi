@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { resetLockOrderSentinelEnabledCache } from "@multiremi/store/lock-order-sentinel.js";
+import { DB_REPLY_TRANSITION_EXCEPTIONS } from "@multiremi/observability/request-metrics.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -41,6 +43,7 @@ async function runFirstComments(backend: "sqlite" | "pg", target: string, sessio
 function resetMigration(db: SqlDatabase): void {
   db.exec("DROP TABLE multiremi_conversation_log; DROP TABLE multiremi_conversation_heads;");
   db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [migrationId]);
+  db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260928_conversation_log_backfill"]);
 }
 
 function assertContiguous(db: SqlDatabase): void {
@@ -55,7 +58,7 @@ function assertContiguous(db: SqlDatabase): void {
 async function withSqlite(run: (db: Database, path: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mul426-sqlite-"));
   const path = join(dir, "test.sqlite");
-  const db = new Database(path);
+  const db = openSqliteDatabase(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 30000");
   new MultiremiStore(db);
   try { await run(db, path); } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
@@ -165,7 +168,11 @@ function verifyNestedTransactions(db: SqlDatabase): void {
 function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   db.exec("CREATE TABLE local_reply_case (n INTEGER PRIMARY KEY)");
   const previousLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
+  const replyExceptions = DB_REPLY_TRANSITION_EXCEPTIONS as Set<string>;
+  const wasBackgroundExempt = replyExceptions.delete("<background> <background>");
   process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "200";
+  process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
   resetDbReplyLimitForTest();
   try {
     db.transaction(() => {
@@ -193,6 +200,9 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   } finally {
     if (previousLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousLimit;
+    if (previousEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+    else process.env.MULTIREMI_PG_REPLY_ENFORCE = previousEnforce;
+    if (wasBackgroundExempt) replyExceptions.add("<background> <background>");
     resetDbReplyLimitForTest();
   }
 }
@@ -248,7 +258,12 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
   const previousReplyLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
+  const replyExceptions = DB_REPLY_TRANSITION_EXCEPTIONS as Set<string>;
+  const wasBackgroundExempt = backend === "pg" && replyExceptions.delete("<background> <background>");
   if (backend === "pg") {
+    process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
+    resetDbReplyLimitForTest();
     context.issueWorkspaceId = (id) => {
       // The limit is narrowed for this one statement and restored in `finally`,
       // so only the lookup overflows the bridge — the rest of the transaction
@@ -276,6 +291,9 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
     } finally {
       if (previousReplyLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
       else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousReplyLimit;
+      if (previousEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+      else process.env.MULTIREMI_PG_REPLY_ENFORCE = previousEnforce;
+      if (wasBackgroundExempt) replyExceptions.add("<background> <background>");
       resetDbReplyLimitForTest();
     }
     expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
@@ -441,7 +459,7 @@ function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "
     const rejected = completeRound("Rolled back answer");
     expect(store.getTask(rejected.id)?.status).toBe("completed");
     expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
-    // Comment log rows carry no task_id, so count the session's message rows.
+    // Count the session's message rows: a leaked reply shows up here whatever task_id its log row carries.
     expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message")
       .map((entry) => entry.id)).toEqual([reply.id]);
     expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();

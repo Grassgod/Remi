@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { MultiremiDaemonHttpError, MultiremiDaemonRequestTimeoutError } from "@multiremi/worker/client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
@@ -22,6 +24,8 @@ describe("daemon protocol v2 real connection", () => {
       const h = await fixture({ providers: ["claude", "codex"] });
       await h.startDaemon();
       await h.settleHeartbeat();
+      const token = h.store.listAccessTokens("local").find(value => value.daemonId === "dmn_fixture")!;
+      const lastUsedAt = h.store.getAccessToken(token.id)!.lastUsedAt;
       expect(h.sockets).toHaveLength(1);
       expect(h.daemons[1]!.daemonProtocolClient()).toBe(h.client);
       const hello = h.ledger.find(entry => entry.type === "hello")!.frame;
@@ -29,12 +33,67 @@ describe("daemon protocol v2 real connection", () => {
       expect(h.layer.registry.size).toBe(1);
       for (let round = 0; round < 3; round++) {
         h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+        await waitFor(() => h.ledger.filter(entry => entry.type === "hb").length === round + 2, "heartbeat ingress");
         await h.settleHeartbeat();
       }
       expect(h.ledger.filter(entry => entry.type === "hb")).toHaveLength(4);
+      expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
       expect(heartbeat).not.toHaveBeenCalled();
       expect((await h.health()).protocol).toMatchObject({ state: "ok", server_min: 2, self: 2, next_probe_at: null });
     } finally { heartbeat.mockRestore(); }
+  });
+
+  it("closes a retired daemon with 4410 on the next heartbeat", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const closeCode = new Promise<number>(resolve => h.sockets[0]!.native.addEventListener("close", event => resolve(event.code), { once: true }));
+    const plan = h.store.getDaemonRetirementPlan("local", "dmn_fixture");
+    expect(h.store.retireDaemon("local", "dmn_fixture", plan.snapshot, "local").status).toBe("retired");
+    h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+    expect(await closeCode).toBe(4410);
+    await waitFor(() => h.client.connectionState() === "terminal", "retired daemon terminal state");
+    expect(h.layer.registry.size).toBe(0);
+  });
+
+  it.each(["revoked", "expired"] as const)("closes a %s daemon credential with 4401 on the next heartbeat", async state => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const token = h.store.listAccessTokens("local").find(value => value.daemonId === "dmn_fixture")!;
+    const lastUsedAt = h.store.getAccessToken(token.id)!.lastUsedAt;
+    const closeCode = new Promise<number>(resolve => h.sockets[0]!.native.addEventListener("close", event => resolve(event.code), { once: true }));
+    h.db.run(`UPDATE multiremi_access_tokens SET ${state === "revoked" ? "revoked_at" : "expires_at"} = ? WHERE id = ?`,
+      [new Date(Date.now() - 1_000).toISOString(), token.id]);
+    h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+    expect(await closeCode).toBe(4401);
+    await waitFor(() => h.client.connectionState() === "terminal", "revoked credential terminal state");
+    expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
+  });
+
+  it("reads pending and settled human requests through a real v2 RPC", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "human request RPC", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "question" });
+    const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(true);
+    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toEqual(request);
+    expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "test" })).toBeTruthy();
+    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(false);
+    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes" } });
+    await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toBeInstanceOf(MultiremiDaemonHttpError);
+    await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toMatchObject({ status: 404 });
+    expect(h.ledger.filter(entry => entry.type === "human_request.get")).toHaveLength(6);
+  });
+
+  it("throws the HTTP-style timeout when human_request.get cannot reach the server", async () => {
+    const h = await fixture({ daemonOptions: { requestTimeoutMs: 50 } });
+    await h.startDaemon();
+    await h.disconnect();
+    await expect(h.daemon.getFeishuBotHumanRequest("tsk_unreachable", "hrq_unreachable"))
+      .rejects.toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
@@ -127,7 +186,7 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
     expect(h.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
     await h.startDaemon(); await h.settleHeartbeat();
-    const persisted = new Database(join(h.root, "server.db"), { readonly: true });
+    const persisted = openSqliteDatabase(join(h.root, "server.db"), { readonly: true });
     try {
       expect(persisted.query("SELECT id FROM multiremi_runtimes").all()).toEqual([
         { id: h.store.listRuntimes()[0]!.id },
@@ -191,30 +250,35 @@ describe("daemon protocol v2 real connection", () => {
 
   it("re-registers a runtime deleted before hello, reconnects with the new ID and receives an offer", async () => {
     const deletedId = "rt_deleted_previous_registration";
-    const recoverOrphans = MultiremiDaemonClient.prototype.recoverOrphans;
+    const helloSockets: WebSocket[] = [];
+    const registerRuntime = MultiremiDaemonClient.prototype.registerDaemonRuntime;
     let releaseRecovery!: () => void;
     const recovery = new Promise<void>(resolve => { releaseRecovery = resolve; });
     let recovering = false;
     let recoveries = 0;
-    const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans").mockImplementation(async function (this: MultiremiDaemonClient, runtimeId) {
+    const register = spyOn(MultiremiDaemonClient.prototype, "registerDaemonRuntime").mockImplementation(async function (this: MultiremiDaemonClient, input) {
       if (++recoveries === 2) { recovering = true; await recovery; }
-      return await recoverOrphans.call(this, runtimeId);
+      return await registerRuntime.call(this, input);
     });
+    const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans");
     const claim = spyOn(MultiremiDaemonClient.prototype, "claimTask");
     try {
-      const h = await fixture({ onReady: (daemon, h) => {
+      const h = await fixture({ beforeSend: (frame, socket) => {
+        if (frame.t === "hello") helloSockets.push(socket.native);
+      }, onReady: (daemon, h) => {
         // Simulate the stale cached ID of an older registration. Current register
         // deterministically returns a different canonical (daemon, provider) ID.
         h.store.registerRuntime({ id: deletedId, name: "previous", provider: "claude", workspaceId: "local", daemonId: "dmn_fixture" });
         expect(h.store.deleteRuntime(deletedId)).toBe(true);
         (daemon as unknown as { options: { runtimeId: string } }).options.runtimeId = deletedId;
       } });
+      const runtimesChanged = spyOn(h.client, "runtimesChanged");
       await h.startDaemon();
       await waitFor(() => recovering, "orphan recovery after runtime_gone");
-      // A-5 refreshes WS identity at registration, before replay/model reports.
-      // Claims still wait for the existing runtime recovery callback below.
-      await waitFor(() => h.ledger.filter(entry => entry.type === "hello").length === 2
-        && h.client.connectionState() === "connected", "registered identity before orphan recovery finishes");
+      // The new identity is registered, but the supervisor readiness barrier
+      // keeps its hello and any offer behind the in-flight recovery callback.
+      expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(1);
+      expect(h.received.filter(frame => frame.t === "task.offer")).toHaveLength(0);
       await Bun.sleep(50);
       const claims = claim.mock.calls.length;
       await Bun.sleep(50);
@@ -229,21 +293,33 @@ describe("daemon protocol v2 real connection", () => {
       expect(h.store.getRuntime(newId)?.daemonId).toBe("dmn_fixture");
       expect(h.layer.registry.sessionForRuntime(deletedId)).toBeNull();
       const session = h.layer.registry.sessionForRuntime(newId)! as typeof h.sessions[number];
-      expect(session.sendEvent({ t: "task.offer", rt: newId, p: { task_id: "offer-after-register" } }).ok).toBe(true);
-      await waitFor(() => h.received.some(frame => frame.t === "task.offer"), "new runtime offer");
-      expect(h.received.at(-1)).toMatchObject({ rt: newId, p: { task_id: "offer-after-register" } });
+      const agent = h.store.createAgent({ name: "offer after registration", provider: "claude", runtimeId: newId, workspaceId: "local" });
+      const task = h.store.createTask({ agentId: agent.id, prompt: "offer after registration" });
+      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.id === task.id), "new runtime offer");
+      expect(h.received.find(frame => frame.t === "task.offer")).toMatchObject({ rt: newId, p: { id: task.id } });
       h.clock.advance(100);
       await waitFor(() => session.unacknowledgedFrameCount === 0, "independent offer acknowledgement");
+      expect(register).toHaveBeenCalledTimes(2);
       expect(recover).toHaveBeenCalledTimes(2);
-    } finally { releaseRecovery(); recover.mockRestore(); claim.mockRestore(); }
+      expect(claim).not.toHaveBeenCalled();
+      await waitFor(() => h.store.getTask(task.id)?.status === "completed", "re-registered task completion");
+      await h.settleHeartbeat();
+      expect(runtimesChanged).toHaveBeenCalledTimes(2);
+      expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(2);
+      expect(h.sockets).toHaveLength(2);
+      expect(helloSockets).toEqual(h.sockets.map(socket => socket.native));
+    } finally { releaseRecovery(); register.mockRestore(); recover.mockRestore(); claim.mockRestore(); }
   });
 
   it("recovers registry contention only after runtime_gone, registration and a fresh hello", async () => {
     let heldHeartbeat: { text: string; socket: WebSocket } | null = null;
+    const helloSockets: WebSocket[] = [];
     let hold = true;
     const h = await fixture({ runtimeId: "rt_contended", beforeSend: (frame, socket) => {
+      if (frame.t === "hello") helloSockets.push(socket.native);
       if (frame.t === "hb" && hold) { heldHeartbeat = { text: JSON.stringify(frame), socket: socket.native }; return false; }
     } });
+    const runtimesChanged = spyOn(h.client, "runtimesChanged");
     h.store.registerRuntime({ id: "rt_contended", name: "contended", provider: "claude", workspaceId: "local" });
     const incumbent = new WebSocket(`${h.url.replace("http:", "ws:")}/api/daemon/ws?protocol=2`, { headers: { Authorization: "Bearer fixture-master" } } as never);
     try {
@@ -269,6 +345,11 @@ describe("daemon protocol v2 real connection", () => {
       expect(recovered.unavailableRuntimeIds).toEqual([]);
       expect(recovered.sendEvent({ t: "task.offer", rt: "rt_contended", p: { task_id: "offer-after-contention" } }).ok).toBe(true);
       await waitFor(() => h.received.some(frame => frame.p?.task_id === "offer-after-contention"), "contention recovery offer");
+      await h.settleHeartbeat();
+      expect(runtimesChanged).toHaveBeenCalledTimes(2);
+      expect(h.ledger.filter(entry => entry.type === "hello" && entry.frame.p.daemon_id === "dmn_fixture")).toHaveLength(2);
+      expect(h.sockets).toHaveLength(2);
+      expect(helloSockets).toEqual(h.sockets.map(socket => socket.native));
     } finally { incumbent.close(); }
   });
 

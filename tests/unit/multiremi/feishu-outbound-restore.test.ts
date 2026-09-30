@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -125,7 +126,7 @@ describe("C5 physical restore on SQLite", () => {
   beforeAll(async () => { sql = await renderedSql("sqlite"); });
 
   it("restores the old live key, projects split carriers, and retains the full archive", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       seed(db);
       const before = rows(db);
@@ -145,7 +146,7 @@ describe("C5 physical restore on SQLite", () => {
 
   it("reports each undrained condition without changing the live table", () => {
     for (const violation of ["missing-result", "nonterminal", "deferred"] as const) {
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       try {
         seed(db);
         if (violation === "missing-result") db.run(`DELETE FROM ${table} WHERE id = 'sent-result'`);
@@ -167,7 +168,7 @@ describe("C5 physical restore on SQLite", () => {
     const directory = mkdtempSync(join(tmpdir(), "m447-c5-sqlite-"));
     const path = join(directory, "restore.sqlite");
     try {
-      const db = new Database(path);
+      const db = openSqliteDatabase(path);
       seed(db);
       db.run(`UPDATE ${table} SET status = 'pending' WHERE id = 'sent-receipt'`);
       const before = rows(db);
@@ -178,7 +179,7 @@ describe("C5 physical restore on SQLite", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("c5_restore_requires_drained_rows");
 
-      const after = new Database(path);
+      const after = openSqliteDatabase(path);
       try {
         expect(rows(after)).toEqual(before);
         expect(after.query("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name").all())
@@ -186,12 +187,12 @@ describe("C5 physical restore on SQLite", () => {
         expect(after.query("SELECT name FROM sqlite_master WHERE name = ?").get(archive)).toBeNull();
       } finally { after.close(); }
 
-      const drained = new Database(path);
+      const drained = openSqliteDatabase(path);
       drained.run(`UPDATE ${table} SET status = 'sent' WHERE id = 'sent-receipt'`);
       drained.close();
       const success = spawnSync("sqlite3", [path], { input: sql, encoding: "utf8" });
       expect(success.status).toBe(0);
-      const restored = new Database(path);
+      const restored = openSqliteDatabase(path);
       try {
         expect(rows(restored)).toHaveLength(5);
         expect(rows(restored, archive)).toHaveLength(11);
@@ -200,7 +201,7 @@ describe("C5 physical restore on SQLite", () => {
   });
 
   it("rejects an occupied archive and a second restore without changing existing tables", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       seed(db);
       db.exec(`CREATE TABLE ${archive} (id TEXT)`);

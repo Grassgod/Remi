@@ -3,8 +3,10 @@
  *
  * Sweeps the daemon's workspaces root and removes per-task working directories
  * whose backing entity (issue / chat session / autopilot run / task) is
- * terminal and past TTL, or that are orphaned (no/unknown metadata) past the
- * orphan TTL. Local-directory tasks are never GC'd. The recursive remove is
+ * terminal and past TTL, or that are orphaned (no/unknown metadata, or a
+ * backing entity the server no longer knows) past the orphan TTL. When archives
+ * are required, Issue, Chat and one-shot Task directories additionally need a
+ * ready Session archive. Local-directory tasks are never GC'd. The recursive remove is
  * guarded by a containment check so it can never delete outside the root.
  * Extracted verbatim from src/multiremi/worker/daemon.ts in D6 (behavior
  * unchanged).
@@ -76,6 +78,17 @@ export interface RunWorkspaceGcOnceOptions {
   requireIssueSessionArchive?: boolean;
   ensureIssueSessionArchive?: (
     issueId: string,
+    workspaceDir: string,
+    forceFreshSnapshot: boolean,
+  ) => Promise<MultiremiIssueWorkspaceArchiveBinding | null>;
+  /**
+   * Chat and one-shot Task counterpart of the Issue barrier: a terminal subject
+   * past TTL is deleted only once its `.runtime/<id>` history has a ready
+   * archive, fresh-verified right before rm.
+   */
+  requireSessionArchive?: boolean;
+  ensureSessionArchive?: (
+    subject: { kind: "chat" | "task"; id: string },
     workspaceDir: string,
     forceFreshSnapshot: boolean,
   ) => Promise<MultiremiIssueWorkspaceArchiveBinding | null>;
@@ -644,7 +657,13 @@ async function getWorkspaceGcDecision(
   if (meta.kind === "issue") return getIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "discussion_issue") return getDiscussionIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "chat") return getChatGcDecision(meta, taskDir, options, now);
-  if (meta.kind === "autopilot_run") return getAutopilotRunGcDecision(meta, taskDir, options, now);
+  if (meta.kind === "autopilot_run") {
+    const run = await getAutopilotRunGcDecision(meta, taskDir, options, now);
+    // The run's one-shot task owns this directory's provider history, so the
+    // task's terminal/TTL/archive barrier applies on top of the run policy.
+    if (run.decision !== "clean" || !stringField(meta.task_id)) return run;
+    return getTaskGcDecision(meta, taskDir, options, now);
+  }
   return getTaskGcDecision(meta, taskDir, options, now);
 }
 
@@ -865,14 +884,20 @@ async function getChatGcDecision(
 ): Promise<MultiremiGcResolution> {
   const sessionId = stringField(meta.chat_session_id);
   if (!sessionId) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+  let status: WorkspaceGcStatus;
   try {
-    const status = await options.client.getChatSessionGcCheck(sessionId);
-    if (status.status === "archived" && isOlderThan(status.updated_at, options.ttlMs, now)) return gcResolution("clean");
-    return gcResolution("skip");
+    status = await options.client.getChatSessionGcCheck(sessionId);
   } catch (err) {
-    if (isNotFoundError(err)) return gcResolution("clean");
+    if (isNotFoundError(err)) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
     throw err;
   }
+  if (status.status !== "archived") return gcResolution("skip");
+  return getSubjectArchiveResolution(
+    { kind: "chat", id: sessionId },
+    taskDir,
+    options,
+    isOlderThan(status.updated_at, options.ttlMs, now),
+  );
 }
 
 async function getAutopilotRunGcDecision(
@@ -903,14 +928,42 @@ async function getTaskGcDecision(
 ): Promise<MultiremiGcResolution> {
   const taskId = stringField(meta.task_id);
   if (!taskId) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+  let status: WorkspaceGcStatus;
   try {
-    const status = await options.client.getTaskGcCheck(taskId);
-    if (isTerminalTaskStatus(status.status)) return gcResolution("clean");
-    return gcResolution("skip");
+    status = await options.client.getTaskGcCheck(taskId);
   } catch (err) {
     if (isNotFoundError(err)) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
     throw err;
   }
+  if (!isTerminalTaskStatus(status.status)) return gcResolution("skip");
+  return getSubjectArchiveResolution(
+    { kind: "task", id: taskId },
+    taskDir,
+    options,
+    isOlderThan(status.completed_at, options.ttlMs, now),
+  );
+}
+
+/**
+ * Terminal Chat / one-shot Task: delete only past TTL and, when archives are
+ * required, only against a ready archive verified right before rm. Only the
+ * subject status lookup may map a 404 to the orphan path; an archive failure
+ * (including a 404 from the archive routes) keeps the directory.
+ */
+async function getSubjectArchiveResolution(
+  subject: { kind: "chat" | "task"; id: string },
+  taskDir: string,
+  options: RunWorkspaceGcOnceOptions,
+  eligibleForDeletion: boolean,
+): Promise<MultiremiGcResolution> {
+  if (!eligibleForDeletion) return gcResolution("skip");
+  if (!options.requireSessionArchive) return gcResolution("clean");
+  if (!options.ensureSessionArchive) return gcResolution("skip");
+  options.assertRootOwner?.();
+  const archive = await options.ensureSessionArchive(subject, taskDir, true);
+  log.debug(`Workspace GC ${subject.kind} Session archive checked: ${taskDir} available=${Boolean(archive)}`);
+  // The binding is not carried on: it only feeds the Issue cleaned-state report.
+  return gcResolution(archive ? "clean" : "skip");
 }
 
 function staleDirDecision(taskDir: string, ttlMs: number, now: number): MultiremiGcDecision {

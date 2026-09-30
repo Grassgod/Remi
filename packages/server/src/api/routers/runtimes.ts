@@ -604,7 +604,20 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const activeAgents = store.listActiveAgentsByRuntime(loaded.runtime.id);
     if (activeAgents.length) return c.json(runtimeHasActiveAgentsResponse(activeAgents), 409);
-    const result = store.deleteRuntimeWithArchivedAgentCleanup(loaded.runtime.id);
+    const abandon = c.req.query("abandon_issue_workspaces");
+    if (abandon !== undefined && abandon !== "true" && abandon !== "false") {
+      return c.json({ error: "abandon_issue_workspaces must be true or false" }, 400);
+    }
+    const result = store.deleteRuntimeWithArchivedAgentCleanup(loaded.runtime.id, {
+      abandonIssueWorkspaces: abandon === "true",
+    });
+    if (result.status === "active_issue_workspaces") {
+      return c.json({
+        error: "cannot delete runtime while it has active issue workspaces; review and explicitly abandon them",
+        code: "runtime_has_active_issue_workspaces",
+        issues: result.issues,
+      }, 409);
+    }
     if (result.status === "active_agents") return c.json(runtimeHasActiveAgentsResponse(result.activeAgents), 409);
     if (result.status === "active_tasks") {
       return c.json({
@@ -620,16 +633,28 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       }, 409);
     }
     if (result.status === "not_found") return c.json({ error: "runtime not found" }, 404);
-    return c.json({ status: "ok" });
+    return c.json({ status: "ok", issue_workspaces_abandoned: result.issueWorkspacesAbandoned });
   });
   app.post("/api/runtimes/:id/archive-agents-and-delete", async (c) => {
-    const body = await readJsonStrict<{ expected_active_agent_ids?: string[] }>(c);
+    const body = await readJsonStrict<{ expected_active_agent_ids?: string[]; abandon_issue_workspaces?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "delete");
     if (loaded instanceof Response) return loaded;
     const expectedIds = parseExpectedActiveAgentIds(c, body.expected_active_agent_ids ?? []);
     if (expectedIds instanceof Response) return expectedIds;
-    const result = store.archiveAgentsAndDeleteRuntime(loaded.runtime.id, expectedIds);
+    if (body.abandon_issue_workspaces !== undefined && typeof body.abandon_issue_workspaces !== "boolean") {
+      return c.json({ error: "abandon_issue_workspaces must be a boolean" }, 400);
+    }
+    const result = store.archiveAgentsAndDeleteRuntime(loaded.runtime.id, expectedIds, {
+      abandonIssueWorkspaces: body.abandon_issue_workspaces === true,
+    });
+    if (result.status === "active_issue_workspaces") {
+      return c.json({
+        error: "cannot delete runtime while it has active issue workspaces; review and explicitly abandon them",
+        code: "runtime_has_active_issue_workspaces",
+        issues: result.issues,
+      }, 409);
+    }
     if (result.status === "daemon_last_runtime") {
       return c.json({
         error: "cannot delete the last runtime of a daemon; retire the machine instead",
@@ -648,6 +673,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       status: "ok",
       agents_archived: result.agentsArchived,
       tasks_cancelled: result.tasksCancelled,
+      issue_workspaces_abandoned: result.issueWorkspacesAbandoned,
     });
   });
   app.post("/api/multiremi/runtimes/:id/heartbeat", (c) => {

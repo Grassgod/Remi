@@ -110,9 +110,10 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     };
   }
 
+  // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
   function assignmentEvents(sessionId: string, taskId: string) {
     return store.listSessionEvents(sessionId)
-      .filter((event) => event.kind === "task_assigned" && event.taskId === taskId);
+      .filter((event) => event.kind === "turn" && event.taskId === taskId);
   }
 
   it("B1: a member's forged X-Agent-ID loses to the credential", async () => {

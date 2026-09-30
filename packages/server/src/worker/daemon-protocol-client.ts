@@ -51,6 +51,7 @@ export interface DaemonProtocolLane {
   probeUpgrade(): Promise<void>;
   onTerminal(code: number): Promise<void>;
   onStateChange?(): void;
+  onConnected?(): void;
   readyToConnect?(): boolean;
 }
 
@@ -74,9 +75,14 @@ export interface DaemonProtocolClientOptions {
 }
 
 export class DaemonProtocolRpcError extends Error {
+  readonly detail?: string;
+  readonly operationError?: DaemonGcErrorReply["operation_error"];
   constructor(readonly code: string, readonly retryable: boolean,
-    readonly operationError?: DaemonGcErrorReply["operation_error"]) {
+    detailOrOperationError?: string | DaemonGcErrorReply["operation_error"],
+    readonly httpStatus?: number, readonly httpCode?: string | null) {
     super(`daemon RPC failed: ${code}`);
+    this.detail = typeof detailOrOperationError === "string" ? detailOrOperationError : undefined;
+    this.operationError = typeof detailOrOperationError === "object" ? detailOrOperationError : undefined;
   }
 }
 
@@ -122,6 +128,7 @@ export class DaemonProtocolClient {
   private readonly background = new Set<Promise<unknown>>();
   private readonly laneWork = new Map<DaemonProtocolLane, Promise<void>>();
   private readonly pending = new Map<string, PendingRpc>();
+  private readonly frameHandlers = new Map<string, Set<(frame: DaemonParsedFrame) => void | Promise<void>>>();
   private readonly frameListeners = new Set<(frame: DaemonParsedFrame) => void | Promise<void>>();
   private readonly welcomeListeners = new Set<(welcome: DaemonWelcomePayload) => void>();
   private readonly timers = new Set<DaemonProtocolTimer>();
@@ -147,6 +154,12 @@ export class DaemonProtocolClient {
   }
 
   addLane(lane: DaemonProtocolLane): void { this.lanes.add(lane); }
+
+  registerFrameHandler(type: string, handler: (frame: DaemonParsedFrame) => void | Promise<void>): void {
+    let handlers = this.frameHandlers.get(type);
+    if (!handlers) this.frameHandlers.set(type, handlers = new Set());
+    handlers.add(handler);
+  }
 
   onFrame(listener: (frame: DaemonParsedFrame) => void | Promise<void>): () => void {
     this.frameListeners.add(listener);
@@ -353,6 +366,7 @@ export class DaemonProtocolClient {
       this.handshakeTimer = null;
       this.transition("connected");
       this.options.onWelcome?.(frame.payload as unknown as DaemonWelcomePayload);
+      for (const { lane } of this.advertised) lane.onConnected?.();
       for (const listener of this.welcomeListeners) listener(frame.payload as unknown as DaemonWelcomePayload);
       this.ackTick();
       this.heartbeatTick();
@@ -375,13 +389,19 @@ export class DaemonProtocolClient {
             && Number.isInteger(operation.status) && operation.status >= 400 && operation.status <= 599
             && (operation.code === null || typeof operation.code === "string") && typeof operation.message === "string"
             ? operation as DaemonGcErrorReply["operation_error"] : undefined;
-          pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true, operationError));
+          pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true,
+            operationError ?? (typeof frame.payload.message === "string" ? frame.payload.message : undefined),
+            typeof frame.payload.http_status === "number" ? frame.payload.http_status : undefined,
+            typeof frame.payload.http_code === "string" ? frame.payload.http_code : null));
         }
         else pending.resolve(frame.payload);
         return;
       }
     }
     if (this.options.onFrame) this.track(Promise.resolve().then(() => this.options.onFrame!(frame)).catch(error => this.report(error)));
+    for (const handler of this.frameHandlers.get(frame.type) ?? []) {
+      this.track(Promise.resolve().then(() => handler(frame)).catch(error => this.report(error)));
+    }
     for (const listener of this.frameListeners) this.track(Promise.resolve().then(() => listener(frame)).catch(error => this.report(error)));
   }
 
@@ -389,9 +409,11 @@ export class DaemonProtocolClient {
     if (this.state !== "connected") return;
     const advertised = [...this.advertised];
     const generation = this.generation;
-    const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 } };
-    for (const { lane } of advertised) {
+    const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 }, runtimes: [] };
+    for (const { lane, runtimeId } of advertised) {
       const current = lane.heartbeat();
+      const runtime = lane.runtime();
+      if (runtime?.runtime_id === runtimeId) payload.runtimes!.push({ runtime_id: runtimeId, capabilities: runtime.capabilities });
       payload.active_task_count += current.active_task_count;
       payload.outbox!.pending += current.outbox?.pending ?? 0;
       payload.outbox!.unacked += current.outbox?.unacked ?? 0;

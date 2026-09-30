@@ -62,9 +62,11 @@ export interface TaskStreamMeta {
   signal?: AbortSignal;
   isHumanRequestPending?: (requestId: string) => Promise<boolean>;
   getHumanRequest?: (requestId: string) => Promise<MultiremiTaskHumanRequest | null>;
+  prepareHumanRequestCard?: (requestId: string, recipientOpenId: string) => Promise<Record<string, unknown>>;
   respondHumanRequest: (
     requestId: string,
     response: Record<string, unknown>,
+    credential?: { token: string; operatorOpenId: string },
   ) => Promise<MultiremiTaskHumanRequest>;
 }
 

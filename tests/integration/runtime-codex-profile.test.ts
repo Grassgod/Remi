@@ -1,16 +1,16 @@
 import { expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {
   const root = mkdtempSync(join(tmpdir(), "remi-profile-daemon-"));
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const originalKey = process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY;
@@ -58,8 +58,6 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
       const saved = await fetch(`http://127.0.0.1:${server.port}/api/runtimes/${runtime.id}/codex-profile`, { method: "PUT", headers: { Authorization: "Bearer profile-test-master", "Content-Type": "application/json" }, body: JSON.stringify(config) });
       expect(saved.status).toBe(200);
       expect(await saved.text()).not.toContain(config.api_key);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.listRuntimeModels(runtime.id).some(model => model.id === config.profile.model && model.thinking?.supportedLevels.some(level => level.value === "high")));
       const task = store.sendChatMessage(chat.id, { body: `Run ${version}` }).task;
       await waitFor(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""));

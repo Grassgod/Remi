@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MUL-395 Archive Count Race Fix</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#202326;font:15px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:32px 24px}h1{font-size:27px;line-height:1.25;margin:0 0 16px}h2{font-size:19px;margin-top:28px}p{max-width:90ch}code,pre{font-family:ui-monospace,monospace;font-size:13px;overflow-wrap:anywhere}pre{padding:14px;background:#f2f4f5;white-space:pre-wrap}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #dce1e2;vertical-align:top}th{background:#f2f4f5}.table{overflow:auto}.pass{color:#08745b;font-weight:600}.fail{color:#b12b32;font-weight:600}.note{color:#535d63}a{color:#08745b}@media(max-width:600px){main{padding:20px 14px}h1{font-size:23px}table{min-width:610px}}
+</style></head><body><main>
+<h1>MUL-395: Archive Count Race Fix</h1>
+<p>The two grouped query functions now reject obsolete cross-key archive-count writes. The fix covers canceled requests, uncanceled responses arriving out of order, and newer optimistic count updates.</p>
+<p><strong>Before:</strong> <code>e13655427bce8d0cb0420757b3d4516abab5606b</code><br><strong>Tested product source:</strong> <code>b4954b18ffbd3a48be1648602459255d9d0b79ab</code><br><strong>Merged main:</strong> <code>01810898c7df0374d3784b8791a8f1ed72002b09</code>, without conflicts.</p>
+<h2>Publication Rules</h2>
+<p>A latest-request marker is shared per QueryClient/workspace, independent of list filter keys. Publication requires the latest marker, an un-aborted signal, and an unchanged count <code>dataUpdateCount</code>. No clock comparison is used. A failed newest request keeps the existing count and does not let an older response publish.</p>
+<p>The signal is read at publication time to preserve TanStack's initial-request sharing during temporary observer removal. List requests, grouping, pagination and the API-client 404 fallback keep their existing semantics.</p>
+<h2>Red / Green</h2>
+<p>Same final test file: <span class="fail">before 10 failed / 5 passed</span>; <span class="pass">after 15 passed / 0 failed</span>.</p>
+<div class="table"><table><thead><tr><th>Case</th><th>Before</th><th>After</th></tr></thead><tbody>
+<tr><td>Canceled old response after newer archive WS refetch</td><td>2 fail: expected 1, received 0</td><td class="pass">2 pass</td></tr>
+<tr><td>Uncanceled cross-key response ordering, four writer combinations</td><td>4 fail: expected 1, received 0</td><td class="pass">4 pass</td></tr>
+<tr><td>Cancellation without replacement</td><td>2 fail: expected 1, received 0</td><td class="pass">2 pass</td></tr>
+<tr><td>New optimistic count during old request</td><td>2 fail: expected 0, received 1</td><td class="pass">2 pass</td></tr>
+<tr><td>Normal opt-in count and archive/unarchive WS</td><td>2 pass</td><td class="pass">2 pass</td></tr>
+<tr><td>Temporary observer removal retains one request</td><td>2 pass</td><td class="pass">2 pass</td></tr>
+<tr><td>Workspace and QueryClient isolation</td><td>1 pass</td><td class="pass">1 pass</td></tr>
+</tbody></table></div>
+<h2>Actual Row Positions</h2>
+<p>Same local in-memory fixture and recorder, 1440x900, cold and warm each three rounds per version. Routes are compiled before sampling. Browser/request timeouts are 20000ms; observation is 3000ms. Every one of the 12 samples has <strong class="pass">0px actual row movement, 0px recorder jump, and zero disconnected frames</strong>.</p>
+<div class="table"><table><thead><tr><th>Issues</th><th>List requests before / after</th><th>Archive requests before / after</th><th>Final position p50 before / after</th></tr></thead><tbody>
+<tr><td>Cold, n=3 each</td><td>1 / 1</td><td>0 / 0</td><td>2694.4 / 2798.6 ms</td></tr>
+<tr><td>Warm, n=3 each</td><td>1 / 1</td><td>0 / 0</td><td>1594.4 / 1542.8 ms</td></tr>
+</tbody></table></div>
+<p class="note">Total first-screen API requests remain cold 8 / 8 and warm 2 / 2. This is a local regression check, not production latency or an improvement claim. Raw JSON retains all sampled row positions and request paths.</p>
+<h2>Validation</h2>
+<p>Root and frontend TypeScript pass. Issues core: 143 pass; issues page: 18 pass; required backend/CLI: 62 pass on SQLite; architecture: 108 pass; docs checker tests: 13 pass. Additional metrics/lock-order files bring the backend total to 88 pass with 13 PG-only skips. No local PG was started. Exact final-head CI links belong to the delivery comment.</p>
+<h2>Reproduction</h2>
+<pre>cd frontend/packages/core
+env -u MULTIREMI_TOKEN bun run test issues/archive-total-races.test.ts --testTimeout 20000
+
+# From the issue checkout, with a locked detached baseline worktree:
+env -u MULTIREMI_TOKEN -u MULTIREMI_TEST_POSTGRES_URL bun run tests/manual/mul395-archive-count-browser.ts /tmp/mul395-count-before</pre>
+<p>The baseline worktree is fixed at the before SHA and uses its own offline lockfile install. Required free ports: 18560, 18561, 18572. Authentication exists only in process memory; no saved browser state, trace or HAR. Only owned processes are stopped. See the matching Markdown report for complete setup and checks.</p>
+<p><a href="https://github.com/Grassgod/Remi/pull/331">Draft PR #331</a>. No merge, Ready transition, production access or release operation.</p>
+</main></body></html>

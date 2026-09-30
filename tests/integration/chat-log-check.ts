@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Production Next + real local API + temporary SQLite + Chromium.
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
@@ -39,7 +40,7 @@ async function waitHttp(url: string) {
   throw new Error("Local Next service did not start");
 }
 
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 const fixture = await seedZeroJumpFixture(store);
 const chat = store.createChatSession({ agentId: fixture.parentOwnerAgentId,

@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
@@ -32,7 +33,7 @@ for (const { name, input, surrounded } of cases) {
     process.env.MULTIREMI_SERVER_URL = "https://cli.example.test";
     process.env.MULTIREMI_WORKSPACE_ID = "local";
     process.env.MULTIREMI_TOKEN = "test-token";
-    const database = new Database(":memory:");
+    const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();

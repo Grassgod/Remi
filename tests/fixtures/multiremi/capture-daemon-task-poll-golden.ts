@@ -13,7 +13,8 @@
  * the body echoes (`started_at`, `completed_at`) and the receipt id are pinned so
  * the comparison is exact rather than a shape check.
  */
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -30,7 +31,7 @@ const PINNED_STARTED_AT = "2026-09-27T00:00:00.000Z";
 
 process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
 
-const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 store.ensureLocalWorkspace();
 const fixture = await seedDaemonTaskPollFixture(store, {

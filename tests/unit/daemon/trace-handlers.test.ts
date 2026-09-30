@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { DAEMON_TASK_POLL_APP_ID, seedDaemonTaskPollFixture } from "../../fixtures/multiremi/daemon-task-poll-fixture.js";
+import { FEISHU_CONCIERGE_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 
 let db: Database | undefined;
 let encryptionKey: string | undefined;
@@ -18,12 +20,14 @@ afterEach(() => {
 
 describe("trace RPC read authority", () => {
   it("keeps the owning daemon and concierge host reads without granting foreign execution writes", async () => {
-    db = new Database(":memory:"); const store = new MultiremiStore(db);
+    db = openSqliteDatabase(":memory:"); const store = new MultiremiStore(db);
     const f = await seedDaemonTaskPollFixture(store, { run: (sql, params) => { db!.run(sql, params as any[]); } });
-    const host = { runtimeId: f.foreignRuntimeId, headers: { Authorization: `Bearer ${f.foreignDaemonToken}` } };
+    const host = { runtimeId: f.foreignRuntimeId, headers: { Authorization: `Bearer ${f.foreignDaemonToken}` },
+      capabilities: { feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION } };
+    const owner = { runtimeId: f.runtimeId, headers: { Authorization: `Bearer ${f.daemonToken}` },
+      capabilities: { feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION } };
     expect(await reportFrame(store, "trace.head", { task_id: f.taskId }, host)).toMatchObject({ ok: false, code: "authority_revoked" });
-    expect(await reportFrame(store, "trace.head", { task_id: f.taskId },
-      { runtimeId: f.runtimeId, headers: { Authorization: `Bearer ${f.daemonToken}` } })).toMatchObject({ ok: true, head: 0 });
+    expect(await reportFrame(store, "trace.head", { task_id: f.taskId }, owner)).toMatchObject({ ok: true, head: 0 });
     store.upsertFeishuBotConfig("local", { agentId: f.agentId, runtimeId: f.foreignRuntimeId,
       appId: DAEMON_TASK_POLL_APP_ID, appSecretOp: "keep", enabled: true, domain: "feishu" });
     const submitted = store.submitFeishuBotMessage("local", f.foreignRuntimeId, {

@@ -10,6 +10,7 @@ import {
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import type { CancelTaskResult } from "./tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { conversationLogChatMessage } from "@multiremi/store/conversation-log-projection.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -574,7 +575,9 @@ export class ChatRepo {
       if (!session) return null;
       const agent = this.ctx.agents().getAgent(task.agentId);
       const currentLineageTaskIds = chatTaskLineageIds(this.ctx, task);
-      const messages = this.listChatMessages(session.id).filter((message) => {
+      const messages = this.ctx.conversationLog().listConversationLogEntries(session.id)
+        .filter((entry) => entry.kind !== "head" && entry.deleted_at === null)
+        .map(conversationLogChatMessage).filter((message) => {
         if (message.role !== "user" || !message.taskId || currentLineageTaskIds.has(message.taskId)) return true;
         const source = this.ctx.tasks().getTask(message.taskId);
         return source?.status !== "queued";
@@ -735,11 +738,9 @@ export class ChatRepo {
     limit = AGENT_ISSUE_UPDATE_PROMPT_LIMIT,
   ): PendingAgentIssueUpdateBatch {
     const safeLimit = Math.max(1, Math.floor(limit));
-    const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_chat_messages
-       WHERE chat_session_id = ? AND pending_agent_delivery = 1
-       ORDER BY sequence ASC, id ASC`,
-    ).all(chatSessionId) as Row[];
+    const rows = this.ctx.conversationLog().listConversationLogEntries(chatSessionId).filter((entry) =>
+      entry.kind === "message" && entry.author_type === "system" && entry.deleted_at === null
+      && entry.metadata.pending_agent_delivery === true);
     if (!rows.length) return { messages: [], omittedCount: 0 };
     this.ctx.db.run(
       `UPDATE multiremi_chat_messages
@@ -750,16 +751,15 @@ export class ChatRepo {
     this.patchPendingDeliveryLog(rows, true, taskId);
     const selected = rows.slice(-safeLimit);
     return {
-      messages: selected.map(toChatMessage),
+      messages: selected.map(conversationLogChatMessage),
       omittedCount: rows.length - selected.length,
     };
   }
 
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {
-    const rows = this.ctx.db.query(
-      `SELECT id FROM multiremi_chat_messages
-       WHERE chat_session_id = ? AND pending_agent_delivery = 1 AND agent_delivery_task_id = ?`,
-    ).all(chatSessionId, taskId) as Row[];
+    const rows = this.ctx.conversationLog().listConversationLogEntries(chatSessionId).filter((entry) =>
+      entry.kind === "message" && entry.author_type === "system" && entry.deleted_at === null
+      && entry.metadata.pending_agent_delivery === true && entry.metadata.agent_delivery_task_id === taskId);
     const changes = this.ctx.db.run(
       `UPDATE multiremi_chat_messages
        SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
@@ -771,10 +771,9 @@ export class ChatRepo {
   }
 
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number {
-    const rows = this.ctx.db.query(
-      `SELECT id FROM multiremi_chat_messages
-       WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
-    ).all(chatSessionId) as Row[];
+    const rows = this.ctx.conversationLog().listConversationLogEntries(chatSessionId).filter((entry) =>
+      entry.kind === "message" && entry.author_type === "system" && entry.deleted_at === null
+      && entry.metadata.pending_agent_delivery === true);
     const changes = this.ctx.db.run(
       `UPDATE multiremi_chat_messages
        SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
@@ -785,7 +784,7 @@ export class ChatRepo {
     return changes;
   }
 
-  private patchPendingDeliveryLog(rows: Row[], pending: boolean, taskId: string | null): void {
+  private patchPendingDeliveryLog(rows: Array<{ id: string }>, pending: boolean, taskId: string | null): void {
     for (const row of rows) {
       const entry = this.ctx.conversationLog().getConversationLogEntryById(String(row.id));
       if (!entry) continue; // Legacy messages are backfilled by MUL-427.
@@ -846,7 +845,7 @@ function chatMessagesAsSessionEvents(
         : message.role === "user"
           ? session.creatorId
           : null,
-      kind: message.role === "user" ? "task_assigned" : `chat_${message.role}`,
+      kind: message.role === "user" ? "turn" : `chat_${message.role}`,
       body: message.body,
       taskId: currentRequest ? currentTaskId : message.taskId,
       sourceCommentId: null,

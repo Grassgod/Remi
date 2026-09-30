@@ -120,6 +120,9 @@ export function notifyBrowserWorkspaceEvent(
   options: { store?: MultiremiStore | null } = {},
 ): void {
   if (event.type.startsWith("chat:") && !isChatRealtimeEvent(event.type)) return;
+  // Internal daemon wake-ups carry no browser state or private Chat audience.
+  if (["daemon:dispatch_conditions_changed", "daemon:pending_changed", "daemon:maintenance_changed",
+    "daemon:feishu_changed", "daemon:ssh_mesh_changed", "daemon:task_input"].includes(event.type)) return;
   const envelope = {
     type: event.type,
     payload: event.payload,

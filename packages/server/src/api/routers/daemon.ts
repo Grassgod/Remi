@@ -5,8 +5,43 @@ import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
 
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
-import { bindDaemonTokenIdentityOrDeny, buildDaemonInstallInstructions, callerCanReceiveRelay, compareDaemonPendingTasks, daemonRegisterOwnerContext, denyCurrentUserWorkspaceAccess, denyDaemonTokenIssueDecisionAccess, denyDaemonTokenRuntimeIdentity, denyDaemonTokenTaskRuntimeIdentity, denyDaemonTokenWorkspace, denyUnprivilegedOwnerlessDaemonClaim, deregisterDaemonRuntimes, isDaemonPendingTaskForRuntime, isJsonApiError, isTerminalTaskStatus, log, normalizeRuntimeIds, readJsonStrict, readJsonStrictAllowEmpty, registerDaemonRuntimes, promoteLegacyCliPatForDaemonHeartbeat, promoteLegacyCliPatForDaemonRegistration, localAttachmentFileResponse } from "../helpers.js";
-import { authenticatedRequestUserId, cleanString, currentAccessToken, currentRequestUserId, currentWorkspaceRoleStrict, daemonBotAgentResponse, daemonHeartbeatHttpResponse, daemonTaskClaimResponse, daemonTaskWireResponse, workspaceReposResponse } from "../wire/index.js";
+import {
+  bindDaemonTokenIdentityOrDeny,
+  buildDaemonInstallInstructions,
+  callerCanReceiveRelay,
+  compareDaemonPendingTasks,
+  daemonRegisterOwnerContext,
+  denyCurrentUserWorkspaceAccess,
+  denyDaemonTokenIssueDecisionAccess,
+  denyDaemonTokenRuntimeIdentity,
+  denyDaemonTokenTaskRuntimeIdentity,
+  denyDaemonTokenWorkspace,
+  denyUnprivilegedOwnerlessDaemonClaim,
+  deregisterDaemonRuntimes,
+  isDaemonPendingTaskForRuntime,
+  isJsonApiError,
+  isTerminalTaskStatus,
+  issueFromParam,
+  normalizeRuntimeIds,
+  readJsonStrict,
+  readJsonStrictAllowEmpty,
+  registerDaemonRuntimes,
+  promoteLegacyCliPatForDaemonHeartbeat,
+  promoteLegacyCliPatForDaemonRegistration,
+  localAttachmentFileResponse,
+} from "../helpers.js";
+import {
+  authenticatedRequestUserId,
+  cleanString,
+  currentAccessToken,
+  currentRequestUserId,
+  currentWorkspaceRoleStrict,
+  daemonBotAgentResponse,
+  daemonHeartbeatHttpResponse,
+  daemonTaskClaimResponse,
+  daemonTaskWireResponse,
+  workspaceReposResponse,
+} from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
@@ -22,12 +57,23 @@ import {
 } from "@multiremi/contracts/types.js";
 import { degradeMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
-
-
-import type { FeishuBotTaskSnapshot, MultiremiDaemonSshMeshStatus, MultiremiFeishuBotDaemonPayload, MultiremiTask, SubmitFeishuBotMessageInput } from "@multiremi/contracts/types.js";
-import { BinarySkillFilesUnsupportedError } from "@multiremi/store/repos/tasks-repo.js";
+import { isFeishuOpenId } from "@shared/feishu-mention.js";
+import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
+import type {
+  FeishuBotTaskSnapshot,
+  MultiremiDaemonSshMeshStatus,
+  MultiremiFeishuBotDaemonPayload,
+  ReportBotMenuPublishInput,
+  MultiremiIssueWorkspaceRepo,
+  MultiremiIssueWorkspaceStatus,
+  MultiremiTask,
+  SubmitFeishuBotMessageInput,
+} from "@multiremi/contracts/types.js";
+import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { QuestionCardTokenError } from "@multiremi/store/question-card-token.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
@@ -108,7 +154,6 @@ function validateDaemonInstallRequestBody(
 
 export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
-  const preparingClaims = new Map<string, Promise<Record<string, unknown> | null>>();
 
   app.post("/api/daemon/scm/git-credentials", async (c) => {
     const body = await readJsonStrict<{
@@ -387,7 +432,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (reportsSshMeshProtocol) {
       const protocol = normalizeDaemonProtocolVersion(body.ssh_mesh_protocol);
       const meshAck = store.recordSshMeshHeartbeat(runtimeId, protocol, body.ssh_mesh_status);
-      if (meshAck) ack.ssh_mesh = meshAck;
+      void meshAck;
     } else {
       store.recordSshMeshHeartbeat(runtimeId, 0);
     }
@@ -550,40 +595,30 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const issueId = c.req.param("issueId");
     const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
     if (denied) return denied;
-    const body = await readJsonStrict<{ answer?: unknown; operator_open_id?: unknown }>(c);
+    const body = await readJsonStrict<{ answer?: unknown; token?: unknown; operator_open_id?: unknown }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const decisionId = c.req.param("decisionId");
     const context = store.getFeishuIssueDecisionCardContext(
       store.getIssue(issueId)?.workspaceId ?? "local", decisionId);
     if (!context || context.issue.id !== issueId) return c.json({ error: "decision not found" }, 404);
     const operatorOpenId = cleanString(typeof body.operator_open_id === "string" ? body.operator_open_id : null);
-    if (!operatorOpenId || operatorOpenId !== context.recipientOpenId) {
-      return c.json({ error: "please answer from the card addressed to you", code: "decision_operator_mismatch" }, 403);
-    }
-    const operator = store.resolveFeishuDecisionOperatorMember(context.issue.workspaceId, context.appId, operatorOpenId);
-    if (operator.status === "unmapped") {
-      return c.json({ error: "operator is not a workspace member", code: "decision_member_unmapped" }, 403);
-    }
-    if (operator.status === "ambiguous") {
-      return c.json({ error: "operator maps to multiple workspace members", code: "decision_member_ambiguous" }, 403);
-    }
-    const member = operator.member;
-    if (context.decision.status !== "escalated") {
-      // Idempotent: a replayed callback (or a second tap) returns the settled
-      // row so the host re-renders the terminal card instead of erroring.
-      return c.json({ decision: context.decision });
-    }
     const answer = cleanString(typeof body.answer === "string" ? body.answer : null);
     if (!answer) return c.json({ error: "answer is required" }, 400);
     try {
       const decision = store.answerIssueDecision(issueId, decisionId, {
         answer, reason: "Answered from the Feishu decision card", overturn: null,
-      }, { type: "member", id: member.id, taskId: null }, { idempotent: true });
+      }, { type: "member", id: operatorOpenId ?? "", taskId: null }, {
+        cardCredential: { token: typeof body.token === "string" ? body.token : "", operatorOpenId: operatorOpenId ?? "" },
+      });
       return c.json({ decision });
     } catch (error) {
       // The write may have raced a withdrawal or another terminal transition.
       // Only the canonical row can prove that the decision ended; an HTTP
       // status alone cannot distinguish that from a rolled-back write.
+      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
+      if (error instanceof IssueDecisionError && error.status === 403) {
+        return c.json({ error: error.message, code: (error as IssueDecisionError & { code?: string }).code }, 403);
+      }
       const decision = store.getIssueDecision(issueId, decisionId);
       if (decision && decision.status !== "escalated") return c.json({ decision });
       if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
@@ -879,85 +914,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     c.header("Cache-Control", "no-store");
     return c.json({ allowed });
   });
-  // Multiremi daemon-compatible endpoints.
-  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    const body = await readJsonStrictAllowEmpty<{ supports_binary_skill_files?: unknown }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (!body || typeof body !== "object" || Array.isArray(body)
-      || (body.supports_binary_skill_files !== undefined && typeof body.supports_binary_skill_files !== "boolean")) {
-      return c.json({ error: "supports_binary_skill_files must be a boolean" }, 400);
-    }
-    let preparing = preparingClaims.get(runtimeId);
-    // A duplicate poll must not deliver the same Task twice while its first claim is preparing.
-    if (preparing) return c.json({ task: null });
-    if (!preparing) {
-      preparing = (async () => {
-        const task = store.claimTask(runtimeId, { supportsBinarySkillFiles: body.supports_binary_skill_files === true });
-        if (!task) return null;
-        // Checkout scope is server-owned metadata, independent of Wiki body availability.
-        const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
-        for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {
-          if (!remotes.has(canonicalRepositoryRemote(repo.url))) {
-            task.repos.push({ url: repo.url });
-            remotes.add(canonicalRepositoryRemote(repo.url));
-          }
-        }
-        const hydratedTask = await hydrateClaimKnowledge(task, deps.projectKnowledge, deps.repositoryWiki);
-        // The hydration above awaits work outside the store, so nothing this request wrote can
-        // have invalidated the cached Task row: another request may have cancelled the Task while
-        // it ran, and a cached row would still say `dispatched`. Drop the request cache so the
-        // re-check below reads committed state — that check is the whole reason a cancelled Task
-        // is not delivered.
-        invalidateRequestReadCache();
-        const current = store.getTask(task.id);
-        if (current?.status !== "dispatched" || current.runtimeId !== runtimeId) return null;
-        const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
-        const runtime = store.getRuntime(runtimeId);
-        // Every claim gets a task capability, including ownerless runtimes left by
-        // older releases. The task/agent/workspace bindings enforce authorization.
-        const ownerId = cleanString(runtime?.ownerId) ?? "local";
-        const token = await store.createTaskAccessToken(task, ownerId);
-        response.auth_token = token.token;
-        return response;
-      })().finally(() => preparingClaims.delete(runtimeId));
-      preparingClaims.set(runtimeId, preparing);
-    }
-    try {
-      return c.json({ task: await preparing });
-    } catch (error) {
-      if (error instanceof BinarySkillFilesUnsupportedError) {
-        return c.json({ error: error.message, code: "binary_skill_files_unsupported" }, 409);
-      }
-      throw error;
-    }
-  });
-  app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
-    const runtime = store.getRuntime(c.req.param("runtimeId"));
-    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    // MUL-386 C.1: was `store.listTasks()` (every task in the deployment, full
-    // rows) filtered down to this runtime's queued/dispatched work. `/tasks/pending`
-    // is polled by daemons, so the unbounded read turned into an 8 MB+ bridge reply
-    // that the bridge hard limit now refuses. Filter in SQL instead.
-    const tasks = store.listTasksForRuntimeStatuses(runtime.id, DAEMON_PENDING_TASK_STATUSES)
-      .sort(compareDaemonPendingTasks)
-      .map((task) => daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-    return c.json(tasks);
-  });
+  // Temporary HTTP orphan recovery remains until the v2 startup path is retired.
   app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
     const runtimeId = c.req.param("runtimeId");
     if (!store.getRuntime(runtimeId)) return c.json({ error: "runtime not found" }, 404);
     return c.json(store.recoverOrphans(runtimeId));
   });
 
-  app.post("/api/daemon/tasks/:taskId/dispatch-lease", (c) => {
+  app.post("/api/daemon/tasks/:taskId/start", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
     const existing = store.getTask(taskId);
     if (!existing) return c.json({ error: "task not found" }, 404);
-    const task = store.renewTaskDispatchLease(taskId);
-    return c.json({ status: task.status });
+    if (existing.status !== "dispatched" && existing.status !== "waiting_local_directory") {
+      return c.json({ error: "start task: no rows in result set" }, 400);
+    }
+    const task = store.startTask(taskId);
+    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
   app.post("/api/daemon/tasks/:taskId/wait-local-directory", async (c) => {
     const taskId = c.req.param("taskId");
@@ -1016,20 +990,40 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     // Lost the race to a human response: return the current row so the worker honors it.
     return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
+  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/card", async (c) => {
+    const taskId = c.req.param("taskId");
+    const denied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (denied) return denied;
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
+    const body = await readJsonStrict<{ recipient_open_id?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const card = store.prepareTaskStreamQuestionCard(request.id, typeof body.recipient_open_id === "string" ? body.recipient_open_id : "");
+    if (!card) return c.json({ error: "card recipient or request is invalid" }, 409);
+    c.header("Cache-Control", "no-store");
+    return c.json({ card });
+  });
   app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/respond", async (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const body = await readJsonStrict<{ response?: Record<string, unknown>; responded_by?: unknown }>(c);
+    const body = await readJsonStrict<{ response?: Record<string, unknown>; token?: unknown; operator_open_id?: unknown }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const request = store.getTaskHumanRequest(c.req.param("requestId"));
     if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    const responded = store.respondTaskHumanRequest(request.id, {
-      response: body.response ?? {},
-      respondedBy: cleanString(typeof body.responded_by === "string" ? body.responded_by : null) ?? "feishu",
-    });
-    if (!responded) return c.json({ error: "request is no longer pending" }, 409);
-    return c.json({ request: responded });
+    try {
+      const responded = store.respondTaskHumanRequest(request.id, {
+        response: body.response ?? {},
+        cardCredential: {
+          token: typeof body.token === "string" ? body.token : "",
+          operatorOpenId: typeof body.operator_open_id === "string" ? body.operator_open_id : "",
+        },
+      });
+      return c.json({ request: responded });
+    } catch (error) {
+      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
+      throw error;
+    }
   });
 
   app.get("/api/daemon/tasks/:taskId/status", (c) => {
@@ -1065,27 +1059,108 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       receipt_message_ids: store.listFeishuBotTaskReceiptMessageIds(task.workspaceId, task.id),
     });
   });
-  app.get("/api/daemon/tasks/:taskId/steer", (c) => {
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    // MUL-474: the poll only needs to know the Task exists; the guard already
-    // resolved the row it is re-reading.
-    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
-    return c.json({ messages: store.listPendingTaskSteerMessages(taskId) });
+  app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
+    const issue = issueFromParam(store, c, "issueId");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const hasActiveTask = store.listTasksForIssue(issue.id).some(
+      (task) => !["completed", "failed", "cancelled"].includes(task.status),
+    );
+    if (hasActiveTask) return c.json({ status: "active", updated_at: issue.updatedAt });
+    return c.json({ status: issue.status, updated_at: issue.updatedAt });
   });
-  app.post("/api/daemon/tasks/:taskId/steer/consume", async (c) => {
-    const body = await readJsonStrict<{ ids?: string[] }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
-    const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
-    return c.json({ consumed: store.consumeTaskSteerMessages(taskId, ids) });
+  app.post("/api/daemon/issues/:issueId/workspace/cleaned", async (c) => {
+    const body = await readJsonStrict<{
+      runtime_id?: string;
+      archive_id?: string;
+      source_revision?: string;
+      sha256?: string;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const runtimeId = body.runtime_id?.trim() ?? "";
+    if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    const archiveId = body.archive_id?.trim() ?? "";
+    const sourceRevision = body.source_revision?.trim() ?? "";
+    const sha256 = body.sha256?.trim().toLowerCase() ?? "";
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    if (!archiveId || !sourceRevision || !/^[a-f0-9]{64}$/.test(sha256)) {
+      return c.json({
+        error: "archive_id, source_revision and a 64-character sha256 are required",
+      }, 400);
+    }
+    const issueId = c.req.param("issueId");
+    if (!store.getIssue(issueId)) {
+      return c.json({ error: "issue not found", code: "issue_not_found" }, 404);
+    }
+    const current = store.getIssueWorkspace(issueId);
+    if (!current) {
+      return c.json({
+        error: "issue workspace not found",
+        code: "issue_workspace_not_found",
+      }, 404);
+    }
+    if (current.runtimeId !== runtimeId) {
+      return c.json({
+        error: "runtime does not own issue workspace",
+        code: "issue_workspace_runtime_mismatch",
+      }, 404);
+    }
+    try {
+      const verified = await deps.sessionArchives.verify(archiveId);
+      if (
+        !verified.valid
+        || verified.archive.issueId !== issueId
+        || verified.archive.sourceRevision !== sourceRevision
+        || verified.archive.sha256 !== sha256
+      ) {
+        return c.json({
+          error: "workspace cleanup archive is missing, corrupt, or does not match the exact snapshot",
+          code: "issue_workspace_archive_invalid",
+        }, 409);
+      }
+      const workspace = store.markIssueWorkspaceCleaned({
+        issueId,
+        runtimeId,
+        archiveId,
+        sourceRevision,
+        sha256,
+      });
+      return c.json({
+        issue_id: workspace.issueId,
+        status: workspace.status,
+        cleaned_at: workspace.cleanedAt,
+        archive_id: workspace.cleanedArchiveId,
+        source_revision: workspace.cleanedArchiveSourceRevision,
+        sha256: workspace.cleanedArchiveSha256,
+      });
+    } catch (err) {
+      if (err instanceof SessionArchiveError) {
+        return c.json({ error: err.message, code: err.code }, err.status as 400);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, message.includes("exact ready") ? 409 : 400);
+    }
   });
-
-
+  app.get("/api/daemon/chat-sessions/:sessionId/gc-check", (c) => {
+    const session = store.getChatSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "chat session not found" }, 404);
+    return c.json({ status: session.status, updated_at: session.updatedAt });
+  });
+  app.get("/api/daemon/autopilot-runs/:runId/gc-check", (c) => {
+    const run = store.getAutopilotRun(c.req.param("runId"));
+    if (!run) return c.json({ error: "autopilot run not found" }, 404);
+    return c.json({ status: run.status, completed_at: run.completedAt });
+  });
+  app.get("/api/daemon/tasks/:taskId/gc-check", (c) => {
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId, {
+      hideForbiddenAsNotFound: true,
+    });
+    if (identityDenied) return identityDenied;
+    const task = store.getTask(taskId);
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ status: task.status, completed_at: task.completedAt });
+  });
 }
 
 function normalizeDaemonProtocolVersion(value: unknown): number {

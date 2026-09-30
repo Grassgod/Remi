@@ -1,0 +1,621 @@
+{
+  "meta": {
+    "schema": 3,
+    "issue": "MUL-383",
+    "task": "MUL-384",
+    "generatedAt": "2026-09-28T13:54:49.441Z",
+    "beijingTime": "2026/9/28 21:54:49",
+    "window": "offpeak",
+    "baseUrl": "http://localhost:18571",
+    "workspaceSlug": "local",
+    "workspaceName": "Local Workspace",
+    "memberName": "Local User",
+    "rounds": 1,
+    "runner": "n37-066-008 (linux 5.15.120.bsk.3-amd64 x64, 64 vCPU, 248 GiB RAM)",
+    "mode": "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
+    "viewport": "1440x900",
+    "readingRule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+    "selectorMode": "auto",
+    "hoverLeadMs": 150,
+    "quietMs": 500,
+    "entryQuietMs": 500,
+    "entryQuietCapMs": 5000,
+    "entryQuietNote": "warm 轮点击前等入口页在阈值内没有新的 /api 请求开始；超过上限照点并记 entrySettled=false。0/关闭时 entryQuietMs 为 null。",
+    "timeBase": "cold 从文档 origin 起算；warm 从页面内记录的 click（navStartMs）起算。帧、跳动、首屏集合都先减 navStartMs，首屏集合另有 startMs >= navStartMs 下界。",
+    "roundTimeoutMs": 20000,
+    "byteAccounting": "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
+    "lcpNote": "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
+    "writeGuardSelfTest": {
+      "blocked": true,
+      "target": "/api/inbox/unread-count",
+      "detail": "deliberate POST /api/inbox/unread-count was aborted by the guard",
+      "allowedWrites": [
+        "POST /api/inbox/:id/read"
+      ]
+    },
+    "stubbedWriteAllowList": [
+      {
+        "method": "POST",
+        "label": "POST /api/inbox/:id/read",
+        "reason": "auto mark-read is unavoidable on any selection and its abort loop delays the URL commit past the assertion window"
+      }
+    ],
+    "inboxResponseRewrites": [
+      "target-injection",
+      "read-state"
+    ],
+    "ambientLatency": {
+      "before": {
+        "path": "/api/config",
+        "samplesMs": [
+          3.7,
+          3.2,
+          2.6,
+          2.1,
+          2.6,
+          2.3,
+          2.9
+        ],
+        "minMs": 2.1,
+        "medianMs": 2.6,
+        "maxMs": 3.7
+      },
+      "after": {
+        "path": "/api/config",
+        "samplesMs": [
+          4.4,
+          2.8,
+          2.9,
+          2.4,
+          2.7,
+          2.1,
+          2.9
+        ],
+        "minMs": 2.1,
+        "medianMs": 2.8,
+        "maxMs": 4.4
+      }
+    },
+    "ambientNote": "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+    "apiVersion": null,
+    "apiRef": null,
+    "apiPublishedAt": null,
+    "apiImageDigest": null,
+    "webImageDigest": null
+  },
+  "scenarios": [
+    {
+      "key": "page-inbox",
+      "mode": "cold",
+      "target": {
+        "identifier": "inbox"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": null,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2560.7999992370605,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2560.7999992370605,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 6,
+          "serialChain": [
+            "/api/config",
+            "/api/me",
+            "/api/runtimes",
+            "/api/chat/pending-tasks",
+            "/api/projects",
+            "/api/inbox/page"
+          ],
+          "apiCallsTotal": 19,
+          "apiFirstScreen": 11,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1211.8,
+              "responseEndMs": 1220.9,
+              "durationMs": 9.1,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1212.9,
+              "responseEndMs": 1222.8,
+              "durationMs": 9.9,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1213.8,
+              "responseEndMs": 1224,
+              "durationMs": 10.2,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 3,
+              "after": 1,
+              "startMs": 1937.6,
+              "responseEndMs": 1950.7,
+              "durationMs": 13.1,
+              "encodedBytes": 513,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.6
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 1,
+              "startMs": 1941.7,
+              "responseEndMs": 1952,
+              "durationMs": 10.3,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 4,
+              "after": 3,
+              "startMs": 1944.7,
+              "responseEndMs": 1957.7,
+              "durationMs": 13,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.4
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 4,
+              "after": 3,
+              "startMs": 1947.4,
+              "responseEndMs": 1958.1,
+              "durationMs": 10.7,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.6
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 5,
+              "after": 5,
+              "startMs": 1949.7,
+              "responseEndMs": 2218.2,
+              "durationMs": 268.5,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 268.2
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 5,
+              "after": 5,
+              "startMs": 2207.8,
+              "responseEndMs": 2219.4,
+              "durationMs": 11.6,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 5,
+              "after": 5,
+              "startMs": 2210.1,
+              "responseEndMs": 2220.8,
+              "durationMs": 10.7,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.2
+            },
+            {
+              "path": "/api/inbox/page",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 2512.7,
+              "responseEndMs": 2536.5,
+              "durationMs": 23.8,
+              "encodedBytes": 590,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 23.1
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 24226259,
+          "lcpMs": 2780,
+          "slowestServerTotalMs": 0.7,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 1,
+        "timeouts": 0,
+        "readyP50": 2560.8,
+        "readyP75": 2560.8,
+        "readyP95": 2560.8,
+        "readyMax": 2560.8,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 6,
+        "apiFirstScreenP50": 11,
+        "slowestServerTotalP50": 0.7,
+        "apiByPath": [
+          {
+            "path": "/api/inbox/page",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.7,
+            "totalP95": 0.7,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 23.1
+          },
+          {
+            "path": "/api/chat/pending-tasks",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.6,
+            "totalP95": 0.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 12.4
+          },
+          {
+            "path": "/api/agents",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.5,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.1
+          },
+          {
+            "path": "/api/chat/sessions",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.5,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.2
+          },
+          {
+            "path": "/api/runtimes",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.5,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 12.6
+          },
+          {
+            "path": "/api/projects",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.3,
+            "totalP95": 0.3,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 268.2
+          },
+          {
+            "path": "/api/workspaces/:id/members",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.3,
+            "totalP95": 0.3,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10
+          },
+          {
+            "path": "/api/me",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.2,
+            "totalP95": 0.2,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9.7
+          },
+          {
+            "path": "/api/config",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.1,
+            "totalP95": 0.1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9
+          },
+          {
+            "path": "/api/runtime-workspaces",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.1,
+            "totalP95": 0.1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.6
+          },
+          {
+            "path": "/api/workspaces",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.1,
+            "totalP95": 0.1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.1
+          }
+        ]
+      }
+    },
+    {
+      "key": "page-inbox",
+      "mode": "warm",
+      "target": {
+        "identifier": "inbox"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": 150,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 4115,
+          "clickT": 4115,
+          "readyMs": 1428.400001525879,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 21.60000228881836,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 1,
+          "serialChain": [
+            "/api/inbox/page"
+          ],
+          "apiCallsTotal": 1,
+          "apiFirstScreen": 1,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/inbox/page",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5501.8,
+              "responseEndMs": 5522.4,
+              "durationMs": 20.6,
+              "encodedBytes": 590,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 19.8
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8350296,
+          "lcpMs": 2908,
+          "slowestServerTotalMs": 0.8,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2930,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "Inbox",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 1,
+        "timeouts": 0,
+        "readyP50": 1428.4,
+        "readyP75": 1428.4,
+        "readyP95": 1428.4,
+        "readyMax": 1428.4,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 1,
+        "apiFirstScreenP50": 1,
+        "slowestServerTotalP50": 0.8,
+        "apiByPath": [
+          {
+            "path": "/api/inbox/page",
+            "method": "GET",
+            "count": 1,
+            "rounds": 1,
+            "totalP50": 0.8,
+            "totalP95": 0.8,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 19.8
+          }
+        ]
+      }
+    }
+  ],
+  "blockedWrites": [],
+  "stubbedWrites": []
+}

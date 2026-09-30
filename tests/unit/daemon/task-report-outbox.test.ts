@@ -2,7 +2,8 @@
 // durable restart recovery, permanent-error blocking, droppable-kind
 // tolerance, and safe compaction of overwritten rows at the soft size cap.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -612,7 +613,7 @@ describe("MultiremiTaskReportOutbox", () => {
     await old.close();
     const path = tempPath();
     const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
-    const db = new Database(path);
+    const db = openSqliteDatabase(path);
     db.exec("CREATE TRIGGER crash_import BEFORE INSERT ON outbox_events WHEN NEW.kind = 'complete' BEGIN SELECT RAISE(ABORT, 'injected crash'); END");
     expect(() => first.importLegacy(sourcePath, "runtime")).toThrow("injected crash");
     expect(first.stats().pending).toBe(0);
@@ -652,7 +653,7 @@ describe("MultiremiTaskReportOutbox", () => {
     const backupPath = `${sourcePath}.migrated-v2`;
     expect(existsSync(`${backupPath}-wal`)).toBe(true);
     expect(existsSync(`${sourcePath}-wal`)).toBe(false);
-    const backup = new Database(backupPath, { readonly: true });
+    const backup = openSqliteDatabase(backupPath, { readonly: true });
     try {
       expect(backup.query("SELECT kind FROM outbox_events ORDER BY id").all()).toEqual([
         { kind: "progress" }, { kind: "complete" },

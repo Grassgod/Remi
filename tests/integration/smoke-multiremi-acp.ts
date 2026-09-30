@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   AcpProvider,
   resolveAcpExecutableForAgent,
@@ -110,7 +110,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
     };
   }
 
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   const workDir = mkdtempSync(join(tmpdir(), `multiremi-acp-${provider}-`));
   const rootToken = `root-${provider}-smoke`;
   const store = new MultiremiStore(db);

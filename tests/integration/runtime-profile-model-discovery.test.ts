@@ -1,18 +1,18 @@
 import { expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 
 for (const provider of ["codex", "claude"] as const) {
   it(`discovers custom ${provider} models, caches refreshes and executes the selected model`, async () => {
     const root = mkdtempSync(join(tmpdir(), "remi-profile-catalog-"));
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     const envKey = provider === "codex" ? "REMI_CODEX_CATALOG_TEST_KEY" : "REMI_CLAUDE_CATALOG_TEST_KEY";
@@ -77,8 +77,6 @@ for (const provider of ["codex", "claude"] as const) {
         },
       }),
     });
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const run = daemon.start();
     const waitFor = async (predicate: () => boolean) => {
       const deadline = Date.now() + 10_000;
@@ -94,8 +92,6 @@ for (const provider of ["codex", "claude"] as const) {
       expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual(["astra", "sol"]);
       expect(store.listRuntimeModels(runtime.id).find(model => model.id === "sol")?.thinking?.supportedLevels).toEqual([{ value: "high", label: "High" }]);
       const refreshed = store.createRuntimeModelListRequest(runtime.id);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, refreshed.id)?.status === "completed");
       expect(store.getRuntimeModelListRequest(runtime.id, refreshed.id)?.models.map(model => model.id)).toEqual(["astra", "sol"]);
       expect(probes).toBe(2);
@@ -109,8 +105,6 @@ for (const provider of ["codex", "claude"] as const) {
       failProbe = true;
       revokeThinking = true;
       const capabilityRefresh = store.createRuntimeModelListRequest(runtime.id);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, capabilityRefresh.id)?.status === "completed");
       const retained = store.getRuntimeModelListRequest(runtime.id, capabilityRefresh.id)!.models;
       expect(retained.map(model => model.id)).toEqual(["astra", "sol"]);
@@ -118,8 +112,6 @@ for (const provider of ["codex", "claude"] as const) {
       expect(store.listRuntimeModels(runtime.id).find(model => model.id === "sol")?.thinking).toBeUndefined();
       failAcp = true;
       const refresh = store.createRuntimeModelListRequest(runtime.id);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, refresh.id)?.status === "failed");
       expect(store.getRuntimeModelListRequest(runtime.id, refresh.id)?.error).toContain("HTTP 503");
       expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual(["astra", "sol"]);

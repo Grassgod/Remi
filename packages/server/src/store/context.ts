@@ -17,7 +17,11 @@ import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
-import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type {
+  TaskTraceArchivePointer,
+  TaskTracePointerSource,
+  TaskTracePointerWriteResult,
+} from "@multiremi/store/repos/task-traces-repo.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
@@ -319,6 +323,7 @@ export interface IssuesSurface {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   };
   /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
   runIssueUpdatePostCommit(
@@ -327,6 +332,7 @@ export interface IssuesSurface {
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -360,6 +366,7 @@ export interface IssuesSurface {
   ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void;
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -390,6 +397,7 @@ export interface IssuesSurface {
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      dependencyCheckEventId?: string | null;
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
     },
@@ -549,7 +557,7 @@ export interface AutopilotsSurface {
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null;
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null };
 }
 
 export interface AccessTokensSurface {
@@ -574,6 +582,8 @@ export interface TasksSurface {
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
   /** Caller owns the transaction and post-commit notifications; emits no events. */
   createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
+  /** Kicks the task's daemon downlink; call after the steer's transaction commits. */
+  publishTaskInputChanged(taskId: string): void;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
@@ -677,6 +687,10 @@ export interface ChatSurface {
 }
 
 export interface ConversationLogSurface {
+  recordTurnCardCompletionFieldsWithinTransaction(
+    taskId: string,
+    fields: import("@multiremi/contracts/daemon-protocol.js").DaemonTaskCompletionFields | null,
+  ): boolean;
   /** Allocates the next seq for a session; the caller owns the transaction. */
   nextSeqWithinTransaction(sessionId: string): number;
   /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */
@@ -865,6 +879,7 @@ export interface FeishuBotSurface {
   getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
     decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
     issue: MultiremiIssue;
+    appId: string;
     chatId: string;
     messageId: string | null;
     recipientOpenId: string;
@@ -924,7 +939,10 @@ export interface TaskTracesSurface {
   markTaskTraceNone(taskId: string): void;
   markTaskTraceLost(taskId: string): void;
   /** Must be called inside the caller's transaction. */
-  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
+  writeTaskTraceArchivePointers(
+    pointers: readonly TaskTraceArchivePointer[],
+    source: TaskTracePointerSource,
+  ): TaskTracePointerWriteResult;
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
@@ -1483,10 +1501,20 @@ export class StoreContext {
     return assignment?.daemon ?? null;
   }
 
-  // Cross-domain: the un-hydrated comment row. Read by the issues band and by the tasks band
-  // (createTask / getTaskTriggerMetadata / getThreadRootCommentId), so it lives here.
+  // Legacy comment rows remain the mutation source until the legacy tables retire.
   getRawIssueComment(id: string): MultiremiIssueComment | null {
     const row = this.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueComment(row) : null;
+  }
+
+  // Wake-up and task trigger readers use the current, non-deleted log comment.
+  getLogIssueComment(id: string): MultiremiIssueComment | null {
+    if (!id.startsWith("cmt_")) return null;
+    const row = this.db.query(`SELECT log.*, s.issue_id, log.session_id AS issue_session_id,
+      log.body_md AS body, CASE WHEN log.kind = 'system' THEN 'system' ELSE 'comment' END AS type
+      FROM multiremi_conversation_log log
+      JOIN multiremi_issue_sessions s ON s.id = log.session_id
+      WHERE log.id = ? AND log.kind IN ('message', 'system') AND log.deleted_at IS NULL`).get(id) as Row | null;
     return row ? toIssueComment(row) : null;
   }
 

@@ -11,7 +11,8 @@
  * DATABASE.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   createReadPool,
   isReadOnlySelect,
@@ -192,7 +193,7 @@ describe("read pool: the SELECT gate", () => {
   });
 
   it("rejects a write before it ever reaches a connection", async () => {
-    const sqlite = new SqliteReadPool(new Database(":memory:") as unknown as SqlDatabase);
+    const sqlite = new SqliteReadPool(openSqliteDatabase(":memory:") as unknown as SqlDatabase);
     await expect(sqlite.query("DELETE FROM multiremi_tasks")).rejects.toBeInstanceOf(
       ReadPoolNotSelectError,
     );
@@ -496,7 +497,7 @@ describe("read pool: error → status mapping", () => {
 
 describe("read pool: SQLite degradation", () => {
   it("reads through the synchronous handle and reports itself as non-Postgres", async () => {
-    const db = new Database(":memory:") as unknown as SqlDatabase;
+    const db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
     db.exec("CREATE TABLE probe (id INTEGER NOT NULL, name TEXT)");
     db.run("INSERT INTO probe (id, name) VALUES (?, ?)", 1, "one");
     db.run("INSERT INTO probe (id, name) VALUES (?, ?)", 2, "two");
@@ -525,7 +526,7 @@ describe("read pool: SQLite degradation", () => {
   });
 
   it("still refuses writes", async () => {
-    const db = new Database(":memory:") as unknown as SqlDatabase;
+    const db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
     db.exec("CREATE TABLE probe (id INTEGER NOT NULL)");
     const pool = createReadPool({ databaseUrl: "", sqliteDb: db });
     await expect(pool.query("INSERT INTO probe (id) VALUES (1)")).rejects.toBeInstanceOf(

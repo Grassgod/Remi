@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { startMultiremiServer as startServer } from "@multiremi/api.js";
+import { startMultiremiServer as startServer } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import { TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -51,7 +52,7 @@ describe("Project-bound Chat daemon startup", () => {
       : "starts Project Chat with a diagnostic when automatic repository sync fails", async () => {
       const root = mkdtempSync(join(tmpdir(), "multiremi-bound-project-chat-"));
       roots.push(root);
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
@@ -153,7 +154,7 @@ describe("Project-bound Chat daemon startup", () => {
   it("checks out explicit Project repos once and reuses the stable Chat branch after a daemon restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-chat-repo-reuse-"));
     roots.push(root);
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -276,7 +277,7 @@ describe("Project-bound Chat daemon startup", () => {
       it(`cold-starts once after a completed ${localDirectory ? "local-directory" : "managed"} Chat's Project is ${unavailable}, preserving its files`, async () => {
         const root = mkdtempSync(join(tmpdir(), "multiremi-chat-unavailable-project-"));
         roots.push(root);
-        const db = new Database(":memory:");
+        const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
         store.ensureLocalWorkspace();
@@ -402,7 +403,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
   it("retires an existing Chat's selected directory when only resource position changes, while new Chats adopt the new first directory", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-chat-directory-order-"));
     roots.push(root);
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -525,7 +526,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       it(`cold-starts once in its managed directory after local-directory ${mutation}, preserving the user directory ${insideWorkspacesRoot ? "inside" : "outside"} the workspaces root`, async () => {
         const root = mkdtempSync(join(tmpdir(), "multiremi-chat-directory-transition-"));
         roots.push(root);
-        const db = new Database(":memory:");
+        const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
         store.ensureLocalWorkspace();
@@ -636,7 +637,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
     it(`retries a delta as a full bootstrap before any provider or user-directory write for an ${inheritedPathKind}`, async () => {
       const root = mkdtempSync(join(tmpdir(), "multiremi-chat-unsafe-delta-"));
       roots.push(root);
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
@@ -660,11 +661,29 @@ describe("Daemon-only inherited Chat path rejection", () => {
       const server = startMultiremiServer({ store, scheduler: null, authToken: "unsafe-delta-test", hostname: "127.0.0.1", port: 0 });
       const seen: Array<{ cwd: string; sessionId: string | null; prompt: string }> = [];
       let providerCreations = 0;
+      const realNow = Date.now;
+      let clockOffset = 0;
+      const clock = spyOn(Date, "now").mockImplementation(() => realNow() + clockOffset);
       const runDaemon = async (run: number, rejectInheritedPath = false) => {
         const daemon = new MultiremiDaemon({
           serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
           daemonId, runtimeId, runtimeName: "Unsafe delta runtime", provider: "claude", workspaceId: "local",
           once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
+          protocolClientOptions: { onFrame: frame => {
+            if (frame.type !== "task.offer") return;
+            const task = frame.payload;
+            if (rejectInheritedPath) {
+              expect((task.session_projection as any)?.mode).toBe("delta");
+              expect(task.session_id).toBe("safe-original-provider");
+              expect(task.work_dir).toBe(chatPath);
+              task.work_dir = inheritedPathKind === "external directory" ? userPath : join(workspacesRoot, "inherited-alias");
+            }
+            if (run === 2) {
+              expect((task.session_projection as any)?.mode).toBe("bootstrap");
+              expect(task.session_id ?? null).toBeNull();
+              expect(task.work_dir ?? null).toBeNull();
+            }
+          } },
           providerFactory: (options) => {
             providerCreations++;
             return {
@@ -676,33 +695,12 @@ describe("Daemon-only inherited Chat path rejection", () => {
             };
           },
         });
-        const client = (daemon as any).client;
-        const originalClaim = client.claimTask.bind(client);
-        const claim = spyOn(client, "claimTask").mockImplementation(async (runtime: string) => {
-          const task = await originalClaim(runtime);
-          expect(task).not.toBeNull();
-          if (rejectInheritedPath) {
-            // The server's resources and persisted lineage remain unchanged.
-            // Only this host sees an inherited path that no longer belongs to it.
-            expect(task.sessionProjection?.mode).toBe("delta");
-            expect(task.sessionId).toBe("safe-original-provider");
-            expect(task.workDir).toBe(chatPath);
-            return { ...task, workDir: inheritedPathKind === "external directory" ? userPath : join(workspacesRoot, "inherited-alias") };
-          }
-          if (run === 2) {
-            expect(task.sessionProjection?.mode).toBe("bootstrap");
-            expect(task.sessionId).toBeNull();
-            expect(task.workDir).toBeNull();
-          }
-          return task;
-        });
         const prepare = spyOn(daemon as any, "prepareTaskWorkspace");
         try {
           await daemon.start();
           if (rejectInheritedPath) expect(prepare).not.toHaveBeenCalled();
         } finally {
           await daemon.stopAndDrainTestWork();
-          claim.mockRestore();
           prepare.mockRestore();
         }
       };
@@ -724,6 +722,9 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(retries).toHaveLength(1);
         expect(retries[0]).toMatchObject({ attempt: 2, sessionId: null, workDir: null });
 
+        // The first --once daemon rejects its newly queued retry as draining.
+        // Advance the mandated runtime cooldown without extending the test deadline.
+        clockOffset += 30_000;
         await runDaemon(2);
         expect(store.getTask(retries[0]!.id)?.status).toBe("completed");
         expect(seen).toHaveLength(2);
@@ -748,6 +749,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
       } finally {
         await stopDaemons();
         server.stop(true);
+        clock.mockRestore();
       }
     });
   }

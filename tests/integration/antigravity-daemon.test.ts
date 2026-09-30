@@ -1,17 +1,17 @@
 import { expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as os from "node:os";
 import { join, resolve } from "node:path";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { isolateProcessTmp, PrivateTmpIsolationUnavailableError } from "@acp/index.js";
 
 it("runs native Antigravity through API, daemon, Chat resume and an Issue in a retained directory", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "remi-agy-daemon-")));
-  const database = new Database(":memory:");
+  const database = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(database);
   store.ensureLocalWorkspace();
   const local = join(root, "user-project");

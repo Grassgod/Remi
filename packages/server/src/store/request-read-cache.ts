@@ -215,7 +215,11 @@ export function invalidatingDatabase<T extends object>(database: T): T {
       }
       if (key === "transaction" && typeof value === "function") {
         return (fn: (...args: unknown[]) => unknown) => {
-          const runTransaction = value.apply(target, [fn]) as (...args: unknown[]) => unknown;
+          type TxFn = (...args: unknown[]) => unknown;
+          const built = value.apply(target, [fn]) as TxFn & { immediate?: TxFn };
+          // bun:sqlite offers an IMMEDIATE outer BEGIN and keeps nested calls as SAVEPOINTs.
+          // The Postgres transaction function has no variant, so it stays unchanged.
+          const runTransaction = typeof built.immediate === "function" ? built.immediate : built;
           return (...args: unknown[]) => withinTransaction(() => {
             const outermost = sentinelTransactionDepth === 0;
             sentinelTransactionDepth += 1;

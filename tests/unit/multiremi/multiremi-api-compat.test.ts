@@ -1,3 +1,5 @@
+import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { daemonTaskWireResponse } from "@multiremi/api/wire/index.js";
 // The compatibility surface the upstream (Go) clients still call: register/deregister,
@@ -308,7 +310,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const legacyRuntimeId = legacyRegisteredBody.runtimes[0].id;
     const legacyAgent = store.createAgent({ name: "Legacy Codex", provider: "codex", runtimeId: legacyRuntimeId });
     const legacyTask = store.createTask({ agentId: legacyAgent.id, prompt: "legacy runtime task" });
-    const legacyClaim = await app.request(`/api/daemon/runtimes/${legacyRuntimeId}/tasks/claim`, { method: "POST" });
+    const legacyClaim = await taskOfferResponse(store, legacyRuntimeId);
     expect(legacyClaim.status).toBe(200);
     expect((await legacyClaim.json()).task.id).toBe(legacyTask.id);
     expect(store.getTask(legacyTask.id)?.runtimeId).toBe(legacyRuntimeId);
@@ -663,7 +665,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect((await app.request(`/api/runtimes/${runtime.id}/activity`)).status).toBe(200);
     const deletedRuntime = await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" });
     expect(deletedRuntime.status).toBe(200);
-    expect(await deletedRuntime.json()).toEqual({ status: "ok" });
+    expect(await deletedRuntime.json()).toEqual({ status: "ok", issue_workspaces_abandoned: 0 });
 
     const removable = store.createWorkspace({ name: "Removable Team", slug: "removable-team" });
     expect((await app.request(`/api/workspaces/${removable.id}`, { method: "DELETE" })).status).toBe(204);
@@ -1026,10 +1028,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local", metadata: { cli_version: DAEMON_MIN_CLI_VERSION, parallel_agent_execution: 1 } });
     const app = createMultiremiApp({ store });
 
-    // An upstream daemon build predates Agent Plugins entirely: it sends no
-    // `agent_plugin_protocol`, so the ack must stay byte-compatible with the
-    // shape it has always received. `agent_plugins` is additive and only ever
-    // appears for a daemon that asked for the Plugin protocol.
+    // v1 retains only the upgrade channel; business configuration arrives as v2 events.
     const legacyHeartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1039,13 +1038,14 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const legacyHeartbeatBody = await legacyHeartbeat.json();
     expect(legacyHeartbeatBody.agent_plugins).toBeUndefined();
     expect(Object.keys(legacyHeartbeatBody).sort()).toEqual([
-      "claude_profile",
-      "codex_profile",
       "drain",
-      "relay",
       "status",
-      "workspace_settings",
     ]);
+    const pushed = await receiveRuntimeInputs(store, runtime.id);
+    expect(pushed).toHaveProperty("codex_profile");
+    expect(pushed).toHaveProperty("claude_profile");
+    expect(pushed).toHaveProperty("relay");
+    expect(pushed).toHaveProperty("workspace_settings");
 
     expect((await app.request("/readyz")).status).toBe(200);
     expect((await app.request("/healthz")).status).toBe(200);
@@ -1134,14 +1134,12 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     });
     expect(await unsubscribe.json()).toEqual({ subscribed: false });
 
-    const pendingBeforeClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    expect((await pendingBeforeClaim.json()).some((item: any) => item.id === task.id)).toBe(false);
+    expect(pendingTaskWireSnapshot(store, runtime.id).some((item: any) => item.id === task.id)).toBe(false);
 
-    const claimed = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claimed = await taskOfferResponse(store, runtime.id);
     const claimedBody = await claimed.json();
     expect(claimedBody.task.id).toBe(task.id);
-    const pendingAfterClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    expect((await pendingAfterClaim.json()).some((item: any) =>
+    expect(pendingTaskWireSnapshot(store, runtime.id).some((item: any) =>
       item.id === task.id && item.workspace_id === "local" && item.status === "dispatched"
     )).toBe(true);
     const waiting = await app.request(`/api/daemon/tasks/${task.id}/wait-local-directory`, {
@@ -1324,7 +1322,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       body: JSON.stringify({ expected_active_agent_ids: [agent.id] }),
     });
     const cascadeBody = await cascade.json();
-    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2 });
+    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2, issue_workspaces_abandoned: 0 });
     expect(store.getRuntime(runtime.id)).toBeNull();
     expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
     expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();
@@ -1483,7 +1481,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(autopilotDetailBody.autopilot.id).toBe(autopilot.id);
     expect(autopilotDetailBody.autopilot.projectId).toBeUndefined();
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect((await claim.json()).task.id).toBe(task.id);
     await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 

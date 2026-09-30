@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +16,13 @@ import { buildArchiveFixture } from "../multiremi/session-archive-fixtures.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
+// Each parity case migrates a fresh SQLite store and awaits both HTTP and v2 RPC.
+// Match the archive test budget so CI load cannot close the DB mid-request on timeout.
+const GC_RPC_CASE_TIMEOUT_MS = 30_000;
 
 async function fixture(code: string) {
   const root = mkdtempSync(join(tmpdir(), "mul421-gc-rpc-"));
-  const db = new Database(join(root, "store.db"));
+  const db = openSqliteDatabase(join(root, "store.db"));
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "runtime", name: "GC", provider: "codex", daemonId: "daemon-gc" });
@@ -39,7 +43,7 @@ async function fixture(code: string) {
     const claimed = await archives.claimUploadAttempt(runtime.id, issue.id, initialized.id);
     await archives.upload(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!, new Response(fixture.bytes).body);
     await archives.complete(runtime.id, issue.id, initialized.id, claimed.uploadAttempt!);
-    archive = { archiveId: initialized.id, sourceRevision: "physical", sha256: "b".repeat(64) };
+    archive = { archiveId: initialized.id, sourceRevision: fixture.sourceRevision, sha256: "b".repeat(64) };
   }
   const issueId = code === "issue_not_found" ? "deleted-issue" : issue.id;
   const httpApp = legacyGcHttp(store, archives);
@@ -105,7 +109,7 @@ describe("GC RPC preserves HTTP operation errors without report partition handli
       expect(decisions[1]).toEqual({ retained: code !== "issue_not_found", errors: code === "issue_not_found" ? 0 : 1 });
       expect(f.box.stats()).toMatchObject({ pending: 1, blocked: 0 });
       expect(f.box.pendingTaskIds()).toContain(f.issueId);
-    });
+    }, GC_RPC_CASE_TIMEOUT_MS);
   }
 
   it("takes the existing generic status failure path when operation_error is absent", async () => {

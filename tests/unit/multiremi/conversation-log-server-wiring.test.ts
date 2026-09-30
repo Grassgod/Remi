@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { createHub } from "@multiremi/api/hub/hub-core.js";
@@ -73,7 +74,7 @@ describe("conversation log server Hub wiring", () => {
   });
 
   it("warms a cold SQLite log with the same entries as the store read", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     const sessionId = "ises_cold_fill";
     for (let i = 1; i <= 3; i++) {
@@ -200,7 +201,7 @@ describe("conversation log server Hub wiring", () => {
   }, 30_000);
 
   it("leaves a caller's listener alone when the Hub is injected", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     const hub = createHub({ transport: createLocalHubTransport(), role: "all" });
     const received: string[] = [];
@@ -222,7 +223,7 @@ describe("conversation log server Hub wiring", () => {
   });
 
   it("registers an app-owned Hub and detaches only the server-owned Hub", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     const received: number[] = [];
     store.subscribeConversationLog({ onEntry: (_sessionId, row) => {

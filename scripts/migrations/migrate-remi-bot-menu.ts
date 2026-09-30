@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,7 @@ const backupOption = optionValue("--backup");
 const sourceDbPath = backupOption === null
   ? dbPath
   : backupOption || `${dbPath}.pre-remi-config-purge-v2.bak`;
-const db = new Database(sourceDbPath, { readonly: true });
+const db = openSqliteDatabase(sourceDbPath, { readonly: true });
 
 try {
   const row = db.query(

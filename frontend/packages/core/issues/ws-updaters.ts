@@ -81,9 +81,8 @@ export function onIssueUpdated(
   }
   if (issue.archived_at !== undefined) {
     qc.invalidateQueries({ queryKey: issueKeys.archivedAll(wsId) });
-    if (issue.archived_at === null) {
-      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
-    }
+    // The workspace list owns the archive count as well as the status pages.
+    qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
   }
   if (issue.position !== undefined) {
     qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });

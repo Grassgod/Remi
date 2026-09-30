@@ -1,4 +1,4 @@
-import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAccessToken } from "@multiremi/contracts/types.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -51,7 +51,8 @@ export async function reportFrame(
   store: MultiremiStore, type: string, payload: Record<string, unknown> = {},
   options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
     headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void;
-    onRoundCard?: Parameters<typeof registerDaemonReportHandlers>[3];
+    capabilities?: DaemonRuntimeCapabilities;
+    onRoundCard?: (taskId: string, fields: import("@multiremi/contracts/daemon-protocol.js").DaemonTaskCompletionFields | null) => void;
     onTraceClosed?: Parameters<typeof registerDaemonReportHandlers>[2] } = {},
 ): Promise<Record<string, any>> {
   const layer = new DaemonProtocolLayer({ store });
@@ -68,11 +69,16 @@ export async function reportFrame(
     ?? runtimes.find(runtime => !token || (runtime.daemonId === token.daemonId && runtime.workspaceId === token.workspaceId))?.id;
   const runtime = runtimeId ? store.getRuntimeLite(runtimeId) : null;
   const daemonId = token?.daemonId ?? runtime?.daemonId ?? "fixture-reports";
+  const recordCard = store.recordTurnCardCompletionFieldsWithinTransaction;
+  if (options.onRoundCard) store.recordTurnCardCompletionFieldsWithinTransaction = (taskId, fields) => {
+    options.onRoundCard?.(taskId, fields);
+    return recordCard.call(store, taskId, fields);
+  };
   const trace = registerDaemonTraceHandlers(layer, store, reportTraceSink(store));
   registerDaemonReportHandlers(layer, store, (taskId, head, rt) => {
     options.onTraceClosed?.(taskId, head, rt);
     trace.close(taskId, head, rt);
-  }, options.onRoundCard);
+  });
   registerDaemonMaintenanceHandlers(layer, store, options.archives ?? new SessionArchiveService(store));
   const frames: Array<Record<string, any>> = [];
   let closed: number | undefined;
@@ -84,7 +90,8 @@ export async function reportFrame(
   try {
     await session.handleMessage(JSON.stringify({ v: 2, t: "hello", p: {
       protocol: 2, cli_version: DAEMON_MIN_CLI_VERSION, daemon_id: daemonId,
-      runtimes: runtimeId ? [{ runtime_id: runtimeId, provider: runtime?.provider ?? "claude", max_concurrency: 1, active_task_ids: [] }] : [],
+      runtimes: runtimeId ? [{ runtime_id: runtimeId, provider: runtime?.provider ?? "claude", max_concurrency: 1,
+        active_task_ids: [], capabilities: options.capabilities }] : [],
     } }));
     const seq = options.seq ?? 1;
     const category = daemonFrameCategory(type);
@@ -100,6 +107,7 @@ export async function reportFrame(
     if (!reply) throw new Error(`No res for ${type}: ${JSON.stringify(frames)}`);
     return reply.p;
   } finally {
+    if (options.onRoundCard) store.recordTurnCardCompletionFieldsWithinTransaction = recordCard;
     session.handleSocketClose();
     layer.stop();
   }

@@ -39,6 +39,7 @@ import {
   DAEMON_UPLINK_WINDOW_FRAMES,
   daemonFrameCategory,
   type DaemonProtocolCap,
+  type DaemonRuntimeCapabilities,
   type DaemonWelcomePayload,
 } from "@multiremi/contracts/daemon-protocol.js";
 import {
@@ -142,6 +143,7 @@ export interface DaemonSessionHello {
     provider: string;
     maxConcurrency: number;
     activeTaskIds: string[];
+    capabilities?: DaemonRuntimeCapabilities;
   }>;
   caps: DaemonProtocolCap[];
 }
@@ -207,6 +209,7 @@ export interface DaemonSessionOptions {
   onFrame?(sample: WsFrameSample): void;
   /** Connection ended, for any reason. Called at most once. */
   onClose?(): void;
+  onDrain?(): void;
   /** Time seam. Defaults to the real clock; tests install a manual one. */
   clock?: DaemonProtocolClock;
 }
@@ -330,6 +333,7 @@ export class DaemonProtocolSession {
   handleDrain(): void {
     if (this.closed) return;
     this.paused = false;
+    this.options.onDrain?.();
   }
 
   /** Socket-level close: the peer disconnected. Nothing to send back. */
@@ -746,6 +750,7 @@ export class DaemonProtocolSession {
         provider: runtime.provider,
         maxConcurrency: runtime.max_concurrency,
         activeTaskIds: runtime.active_task_ids,
+        capabilities: runtime.capabilities,
       })),
       caps: parsed.hello.caps,
     });

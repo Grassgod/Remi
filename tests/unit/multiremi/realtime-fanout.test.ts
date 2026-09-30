@@ -9,13 +9,14 @@
  * PR-C (MUL-464) scales the same topology out to real child processes.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { createPeerChannel, PEER_REALTIME_TOPIC, type PeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
@@ -71,7 +72,7 @@ function registriesFor(workspaceId = "local") {
 }
 
 describe("realtime fanout — role routing", () => {
-  it("delivers browser events without using the retired daemon v1 registry", () => {
+  it("delivers browser events and wakes the v2 offer hook in an all-role process", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Fanout agent", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
@@ -81,16 +82,16 @@ describe("realtime fanout — role routing", () => {
     try {
       const task = store.createTask({ agentId: agent.id, prompt: "fanout", runtimeId: runtime.id });
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:queued", payload: { task_id: task.id } });
-      expect(daemonEvents).toEqual([]);
+      expect(daemonEvents).toEqual([{ type: "task:queued", task }]);
     } finally {
       fanout.close();
     }
   });
 
-  it("keeps a `runtime` process off browser delivery and both roles off daemon v1", () => {
+  it("keeps a `runtime` process off browser delivery and a `ui` process off the daemon hook", () => {
     for (const [role, expectBrowser, expectDaemon] of [
       ["ui", 1, 0],
-      ["runtime", 0, 0],
+      ["runtime", 0, 1],
     ] as Array<[LocalRealtimeRole, number, number]>) {
       const store = createStore();
       const agent = store.createAgent({ name: `Fanout ${role}`, provider: "codex" });
@@ -108,7 +109,7 @@ describe("realtime fanout — role routing", () => {
     }
   });
 
-  it("does not revive daemon v1 for a peer-delivered task_enqueued", () => {
+  it("routes a peer-delivered task_enqueued to the runtime daemon hook", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Fanout remote", provider: "codex" });
     const runtime = store.registerRuntime({ id: "rt_fanout", name: "Fanout runtime", provider: "codex" });
@@ -117,7 +118,7 @@ describe("realtime fanout — role routing", () => {
     const fanout = createRealtimeFanout({ role: "runtime", store, registries, onDaemonTask });
 
     try {
-      // Daemon v2 obtains pending tasks through its own protocol, not this registry.
+      // The hook wakes the v2 offer service; it does not send a v1 socket frame.
       fanout.deliverRemote({
         v: 1,
         origin: "process-ui",
@@ -125,7 +126,7 @@ describe("realtime fanout — role routing", () => {
         payload: { task, task_id: task.id },
       });
       expect(browserFrames).toHaveLength(0);
-      expect(daemonEvents).toEqual([]);
+      expect(daemonEvents).toEqual([{ type: "task:queued", task }]);
     } finally {
       fanout.close();
     }
@@ -219,8 +220,8 @@ describe("realtime fanout — two servers over one database", () => {
   } = {}): Promise<TwoServers> {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-two-"));
     const databasePath = join(directory, "shared.sqlite");
-    const dbA = new Database(databasePath, { create: true });
-    const dbB = new Database(databasePath, { create: true });
+    const dbA = openSqliteDatabase(databasePath, { create: true });
+    const dbB = openSqliteDatabase(databasePath, { create: true });
     const storeA = new MultiremiStore(dbA);
     const storeB = new MultiremiStore(dbB);
     storeA.ensureLocalWorkspace();
@@ -502,6 +503,8 @@ describe("realtime fanout — two servers over one database", () => {
         expect(two.postCounts.b).toBe(postsBeforeCreate.b);
 
         const card = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+        const cardCredential = questionCardAction(decodeDecisionCardBody(card.body)!.card);
+        expect(typeof cardCredential?.t).toBe("string");
         storeA.reportFeishuBotOutbound("local", "rt_peer_decision", card.id, {
           claimToken: card.claimToken,
           status: "sent",
@@ -521,6 +524,7 @@ describe("realtime fanout — two servers over one database", () => {
         const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
           answer: "yes",
           operatorOpenId: "ou_peer_decision",
+          token: cardCredential!.t as string,
         });
         expect(answered.status).toBe("answered");
         const answerDeadline = Date.now() + WS_TIMEOUT_MS;
@@ -636,7 +640,7 @@ describe("realtime fanout — two servers over one database", () => {
     // Acceptance item 1: with no peer URL there is no sender and no subscriber,
     // the health route says so, and a local write still reaches a local socket.
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-off-"));
-    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
     const server = startMultiremiServer({
@@ -689,6 +693,61 @@ describe("realtime fanout — two servers over one database", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("delivers each queued task once through the real server fanout, across 20 workspace-event barriers", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-fanout-once-"));
+    const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
+    const store = new MultiremiStore(database);
+    store.ensureLocalWorkspace();
+    const server = startMultiremiServer({ store, scheduler: null, backgroundJobs: false, port: 0, hostname: "127.0.0.1" });
+    let socket: WebSocket | null = null;
+    try {
+      const agent = store.createAgent({ name: "Single-delivery agent", provider: "codex" });
+      const runtime = store.registerRuntime({ id: "rt_single_delivery", name: "Single-delivery runtime", provider: "codex" });
+      const token = await store.createAccessToken({ name: "Single-delivery browser", type: "pat", workspaceId: "local" });
+      socket = openBrowserSocket(server.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
+
+      const durations: number[] = [];
+      for (let round = 0; round < 20; round++) {
+        const received: Record<string, any>[] = [];
+        let taskId = "";
+        let acknowledge!: () => void;
+        const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+        const onMessage = (event: MessageEvent) => {
+          const frame = JSON.parse(String(event.data)) as Record<string, any>;
+          received.push(frame);
+          if (frame.type === "issue:updated" && frame.payload?.seq === round) {
+            acknowledge();
+          }
+        };
+        socket.addEventListener("message", onMessage);
+        const startedAt = performance.now();
+        try {
+          const task = store.createTask({ agentId: agent.id, prompt: `single delivery ${round}`, runtimeId: runtime.id });
+          taskId = task.id;
+          store.emitWorkspaceEvent({ type: "issue:updated", workspaceId: "local", payload: { seq: round } });
+          await ack;
+          expect(received.filter(frame => frame.type === "task:queued" && frame.payload?.task_id === taskId), `round ${round}`)
+            .toHaveLength(1);
+          durations.push(performance.now() - startedAt);
+        } finally {
+          socket.removeEventListener("message", onMessage);
+        }
+      }
+      const sorted = durations.toSorted((a, b) => a - b);
+      console.info(`[fanout-once] rounds=20 min=${sorted[0]!.toFixed(1)}ms p50=${sorted[9]!.toFixed(1)}ms p95=${sorted[18]!.toFixed(1)}ms max=${sorted[19]!.toFixed(1)}ms`);
+    } finally {
+      if (socket) {
+        const closing = new Promise<void>(resolve => socket!.addEventListener("close", () => resolve(), { once: true }));
+        socket.close();
+        await closing;
+      }
+      server.stop(true);
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("keeps the main flow moving while the peer is unreachable, drops the oldest, and catches up", async () => {
     // A tiny queue so overflow is reachable here; the accounting is the same one

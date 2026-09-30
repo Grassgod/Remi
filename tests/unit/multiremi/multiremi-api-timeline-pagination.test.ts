@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -12,7 +13,7 @@ afterEach(() => {
 });
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }
@@ -211,14 +212,10 @@ describe("issue timeline reverse pagination", () => {
 
 describe("issue timeline hydration query count", () => {
   it("stays constant as the page fills", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     let queryCount = 0;
-    const countingDb: SqlDatabase = {
-      // Forward the backend: the store migrates on construction, so an
-      // inherited MULTIREMI_DATABASE_URL must not send this SQLite fixture down
-      // the Postgres branch (MUL-407).
-      dialect: "sqlite" as const,
+    const countingDb = markSqliteDialect<SqlDatabase>({
       query(sql) {
         queryCount += 1;
         return db.query(sql);
@@ -233,7 +230,7 @@ describe("issue timeline hydration query count", () => {
       exec: (sql) => db.exec(sql),
       transaction: (fn) => db.transaction(fn),
       close: () => db.close(),
-    };
+    });
     const store = new MultiremiStore(countingDb);
     const issue = store.createIssue({ title: "Constant SQL", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
