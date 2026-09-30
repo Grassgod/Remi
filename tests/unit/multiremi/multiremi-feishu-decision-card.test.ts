@@ -806,30 +806,43 @@ describe("Feishu decision cards for Issue human requests", () => {
     const taskId = sourceTask(store, agentId, issue.id);
     const storeDb = (store as unknown as { db: SqlDatabase }).db;
     const events: string[] = [];
+    const taskEvents: Array<{ type: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent(event => {
       if (event.type === "daemon:task_input" && event.payload.task_id === taskId) events.push(event.type);
+    });
+    const unsubscribeTask = store.onTaskEvent(event => {
+      if (event.type === "task:running" && event.task.id === taskId) {
+        taskEvents.push({ type: event.type, inTransaction: storeDb.inTransaction === true });
+      }
     });
     try {
       for (const status of ["responded", "timeout", "cancelled"] as const) {
         const request = askQuestion(store, taskId);
+        db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
         events.length = 0;
+        taskEvents.length = 0;
         storeDb.transaction(() => {
           if (status === "responded") store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
           else store.expireTaskHumanRequest(request.id, status);
           expect(events).toEqual([]);
+          expect(taskEvents).toEqual([]);
         })();
         expect(events).toEqual(["daemon:task_input"]);
+        expect(taskEvents).toEqual([{ type: "task:running", inTransaction: false }]);
         expect(store.getTaskHumanRequest(request.id)?.status).toBe(status);
       }
       const rolledBack = askQuestion(store, taskId);
+      db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
       events.length = 0;
+      taskEvents.length = 0;
       expect(() => storeDb.transaction(() => {
         store.respondTaskHumanRequest(rolledBack.id, { response: { answer: "rollback" } });
         throw new Error("rollback outer transaction");
       })()).toThrow("rollback outer transaction");
       expect(events).toEqual([]);
+      expect(taskEvents).toEqual([]);
       expect(store.getTaskHumanRequest(rolledBack.id)?.status).toBe("pending");
-    } finally { unsubscribe(); }
+    } finally { unsubscribe(); unsubscribeTask(); }
   });
 
   it("recovers a live card through the real route and the real daemon client", async () => {

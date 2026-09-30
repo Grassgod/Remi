@@ -26,6 +26,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import { afterCommit } from "@multiremi/store/db/postgres.js";
 import { taskMessagePageRows } from "@multiremi/store/task-message-pagination.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
@@ -4065,7 +4066,8 @@ ${placementAfter.sql}
       resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
       return responded;
     })();
-    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    const taskToResume = resumedTask;
+    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     if (request) this.publishTaskInputChanged(request.taskId);
@@ -4089,7 +4091,8 @@ ${placementAfter.sql}
       resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(expired.taskId, childStatusChanges, deferredEvents);
       return expired;
     })();
-    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    const taskToResume = resumedTask;
+    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     if (request) this.publishTaskInputChanged(request.taskId);
