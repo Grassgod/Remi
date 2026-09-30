@@ -2311,6 +2311,8 @@ export class FeishuBotRepo {
         AND (
           EXISTS (
             SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries o
+            JOIN multiremi_feishu_bot_chat_bindings b
+              ON b.id = o.binding_id AND b.workspace_id = c.workspace_id AND b.app_id = c.app_id
             WHERE o.workspace_id = c.workspace_id AND o.human_request_id = request.id
               AND o.human_request_task_id = request.task_id AND o.kind = 'decision_card'
               AND o.status = 'sent' AND o.degraded IS NULL AND o.external_message_id IS NOT NULL

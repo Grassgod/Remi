@@ -299,7 +299,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 `task.human_request.settled` 的载荷固定为 `{task_id, request}`，`pending` 不发。
 服务端从已提交的请求状态推导快照，同时发给任务执行 runtime 和该 workspace 的飞书 bot host
-`config.runtimeId`；两者相同只发一次。bot host 候选来自当前配置名下已送达的决策卡
+`config.runtimeId`；两者相同只发一次。bot host 候选来自当前应用绑定下已送达的决策卡
 （终态卡片补丁尚未报告 `sent`），或近 24 小时已结束的 Chat 绑定请求；任一终态补丁
 报告 `sent`、Chat 请求超过 24 小时后退出相应候选来源。按结束时间取最近 1024 条，
 避免重连推送无限历史；超过上限的较旧请求依赖卡片补丁出站队列或按需

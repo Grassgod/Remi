@@ -725,6 +725,24 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
   });
 
+  it("does not replay a card sent by a previous bot app after the configured app changes", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_previous_app",
+      interactionOpenId: "ou_the_person",
+    });
+    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
+      .toContainEqual({ requestId: request.id, taskId });
+    store.upsertFeishuBotConfig("local", { agentId, runtimeId: "rt_bot", appId: "cli_replacement_app",
+      appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true });
+    expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
+  });
+
   for (const status of ["timeout", "cancelled"] as const) {
     it(`fans out ${status} decision snapshots to both authorized runtimes`, () => {
       const { store, agentId } = scaffold();
