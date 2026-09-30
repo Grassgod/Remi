@@ -42,6 +42,11 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
     expect(queued[0]!.prompt).toContain(f.session.id);
     expect(queued[0]!.prompt).not.toContain(delivery.entry.body_md);
     expect(f.store.getConversationLogEntryById(delivery.entry.id)!.body_md).toBe(delivery.entry.body_md);
+    const rings = f.store.listIssueActivity(f.issue.id).filter(row => row.type === "re_ring");
+    expect(rings).toHaveLength(1);
+    expect(rings[0]!.data).toMatchObject({ action: "created", task_id: queued[0]!.id });
+    expect(f.store.listIssueActivity(f.issue.id).filter(row => row.type === "pending_turn_created"
+      && (row.data as { reason?: string }).reason === "re_ring")).toHaveLength(1);
   });
 
   it("T6: deleting the triggering comment re-rings a later merged report", () => {
@@ -74,6 +79,20 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
     expect(f.store.listTasksForIssue(f.issue.id).map(task => task.id)).toEqual([f.task.id]);
   });
 
+  it("T6: deleting the triggering comment preserves its merged report in one re-ring turn", () => {
+    const f = setup();
+    const delivery = f.send();
+    expect(delivery.action).toBe("coalesced");
+    f.store.deleteIssueComment(f.comment.id);
+    expect(f.store.getTask(f.task.id)!.status).toBe("cancelled");
+    const queued = f.store.listTasksForIssue(f.issue.id).filter(task => task.status === "queued");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ wakeSource: "re_ring", triggerCommentId: null });
+    expect(inboxWakeSeq(f.db, queued[0]!.id)).toBe(delivery.entry.seq);
+    expect(f.store.getConversationLogEntryById(delivery.entry.id)!.body_md).toBe(delivery.entry.body_md);
+    expect(f.store.listIssueActivity(f.issue.id).filter(row => row.type === "re_ring")).toHaveLength(1);
+  });
+
   it("T6: without merged work, editing only cancels and does not create a system turn", () => {
     const f = setup();
     expect(inboxWakeSeq(f.db, f.task.id)).toBe(f.store.getConversationLogEntryById(f.comment.id)!.seq);
@@ -98,4 +117,41 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
     expect(f.store.listTasksForIssue(f.issue.id)).toHaveLength(1);
     expect(f.store.getConversationLogEntryById(delivery.entry.id)).not.toBeNull();
   });
+
+  for (const order of ["edit_first", "finish_first"] as const) {
+    it(`D2: ${order} joins comment cancellation and terminal re-ring without duplicating a turn`, () => {
+      const { db, store } = fixture();
+      const agent = store.createAgent({ name: "Round owner", provider: "codex" });
+      const runtime = store.registerRuntime({ name: "Round runtime", provider: "codex" });
+      const member = store.findWorkspaceMemberForUser("local", "local")!;
+      const issue = store.createIssue({ title: "Dual re-ring", assigneeType: "agent", assigneeId: agent.id });
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const running = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Original round" });
+      expect(store.claimTask(runtime.id)?.id).toBe(running.id);
+      store.buildTaskSessionProjection(running.id);
+      store.startTask(running.id);
+      const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: member.id,
+        body: `Original [@${agent.name}](mention://agent/${agent.id})` });
+      const queued = store.listTasksForIssue(issue.id).find(task => task.status === "queued")!;
+      const send = (wake: "now" | "next_turn", body: string) => db.transaction(() =>
+        store.sendEnvelopeWithinTransaction({ to: { role: "issue_owner", issueId: issue.id },
+          kind: "report", wake, body, source: {} }, [], createCommitEventQueue())[0]!)();
+      const next = send("next_turn", "Deferred update");
+      expect(next.task?.id).toBe(queued.id);
+      const now = send("now", "New work after the trigger");
+      expect(now.task?.id).toBe(queued.id);
+      const edit = () => store.updateIssueComment(comment.id, { body: "Edited without mention" });
+      const finish = () => store.completeTask(running.id, { output: "Task completed.", sessionId: "round_provider" });
+      if (order === "edit_first") { edit(); finish(); } else { finish(); edit(); }
+      expect(store.getTask(queued.id)?.status).toBe("cancelled");
+      const replacements = store.listTasksForIssue(issue.id).filter(task => task.status === "queued");
+      expect(replacements).toHaveLength(1);
+      expect(replacements[0]).toMatchObject({ wakeSource: "re_ring", triggerCommentId: null });
+      expect(inboxWakeSeq(db, replacements[0]!.id)).toBe(now.entry.seq);
+      expect(store.getConversationLogEntryById(now.entry.id)?.body_md).toBe(now.entry.body_md);
+      const rings = store.listIssueActivity(issue.id).filter(row => row.type === "re_ring");
+      expect(rings.map(row => (row.data as { action: string }).action)).toContain("created");
+      expect(rings).toHaveLength(2);
+    });
+  }
 });

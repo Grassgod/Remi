@@ -473,6 +473,11 @@ export function daemonTaskClaimResponse(
   if (task.issueSessionId || task.chatSessionId) {
     const projection = store.buildTaskSessionProjection(task.id);
     if (projection) {
+      try {
+        store.recordTaskInboxDelivery(task.id, projection.fromSeq, projection.toSeq);
+      } catch (error) {
+        log.warn(`inbox delivery receipt failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       projectionMode = projection.mode === "delta" ? "delta" : "bootstrap";
       response.session_projection = {
         session_id: projection.sessionId,

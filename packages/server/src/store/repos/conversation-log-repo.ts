@@ -546,6 +546,7 @@ export class ConversationLogRepo {
       model?: unknown | null;
       elapsedMs?: number | null;
       failureReason?: string | null;
+      inbox?: { delivered_from_seq: number; delivered_to_seq: number; delivered_at: string; task_id: string };
     },
   ): ConversationLogEntry | null {
     const current = this.findTurnEntry(taskId);
@@ -562,7 +563,17 @@ export class ConversationLogRepo {
     if (fields.model !== undefined) metadata.model = fields.model;
     if (fields.elapsedMs !== undefined) metadata.elapsed_ms = fields.elapsedMs;
     if (fields.failureReason !== undefined) metadata.failure_reason = fields.failureReason;
+    if (fields.inbox !== undefined) metadata.inbox = fields.inbox;
     return this.updateWithinTransaction(current.session_id, current.seq, { fields: { metadata } });
+  }
+
+  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
+    return this.updateTurnCardWithinTransaction(taskId, { inbox: {
+      delivered_from_seq: fromSeq,
+      delivered_to_seq: toSeq,
+      delivered_at: new Date().toISOString(),
+      task_id: taskId,
+    } });
   }
 
   /** Shown rows in the inclusive seq range, oldest first. */

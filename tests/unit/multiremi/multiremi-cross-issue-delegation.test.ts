@@ -279,6 +279,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
         reason: "wake source probe",
       }).replacementTask!;
       expect(replacement.wakeSource).toBe("child_status");
+      expect(store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.agentId === f.leader.id && task.status === "queued")
+        .map((task) => task.id)).toEqual([replacement.id]);
       store.cancelTask(childTask.id);
       expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(replacement.id);
       expect(activities(store, f.parent.id, "pending_turn_coalesced")
@@ -343,7 +346,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(withoutComment.id);
       store.buildTaskSessionProjection(withoutComment.id);
       store.startTask(withoutComment.id);
-      store.completeTask(withoutComment.id, { output: "Reviewed the first report." });
+      store.completeTask(withoutComment.id, { output: "Reviewed the first report.", sessionId: "reviewed_first_report" });
       const secondLeaderTask = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
         issueSessionId: f.leaderSession.id, prompt: "Coordinate again." });
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(secondLeaderTask.id);

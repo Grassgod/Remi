@@ -31,7 +31,9 @@ notification wakes to this decision.
    `dedupe_key`, `reply_to`, `grant_ref`, `priority`, `source`). For symbolic
    `issue_owner`, `parent_owner`, and `delegator` addresses, the writer also
    stores the resolved `recipient_agent_id` so later ownership changes do not
-   change delivery attribution. On Issue
+   change delivery attribution. Issue re-ring uses that same frozen recipient;
+   entries written before this field existed still resolve the current owner.
+   On Issue
    sessions the entry is a system comment (`kind = system`); on chat sessions it
    is a system message. Delegation reports and decision answers, which today live
    only in task prompts or `session_events`, become such entries.
@@ -67,11 +69,17 @@ notification wakes to this decision.
    On a Chat lane there is no cursor and no re-ring: `now` rides a queued
    task, steers a running one in the same transaction, or creates a
    `wake_source = 'relay'` row; `next_turn` never creates.
-6. **Receipts are best effort and coarse.** At claim time the turn card receives
-   `metadata.inbox.delivered_to_seq`, written after the claim commit; failure
-   is logged and does not affect the message. "Delivered" for a single entry is
-   derived from the recipient lane cursor and turn coverage, never stored per
-   entry.
+6. **Receipts are best effort and coarse.** The claim response persists its
+   projection boundaries on the task. An Issue turn card already exists, so a
+   separate transaction patches its `metadata.inbox` after claim. A Chat turn
+   card is the assistant reply itself (same id and seq); it is created only when
+   that reply lands, then a separate transaction patches the saved boundaries.
+   A missing Chat reply has no receipt. The patch contains `delivered_from_seq`,
+   `delivered_to_seq`, `delivered_at`, and `task_id`; failure is logged without
+   undoing the claim or reply. "Delivered" for a single entry is derived from
+   the recipient lane cursor and turn coverage, never stored per entry. Coverage
+   uses the receipt boundary even when a queued turn predates an envelope that
+   later joins it.
 7. **The unread projection gets a table of contents and folding.** Entries are
    ranked human decision > failed/stuck > done > notice, from
    `envelopePriority(entry)`; bodies over the fold threshold are summarised
@@ -92,6 +100,13 @@ notification wakes to this decision.
 - A continuation task inherits `wake_source` from the task it continues and is
   excluded from the indexes by `continued_from_task_id IS NULL`; two queued
   continuations on one lane remain legal, as today.
+- After an Issue turn completes or is cancelled, unread external `now` entries
+  create or coalesce a `re_ring` task in the same terminal transaction. Chat
+  has no cursor and uses steering instead. At claim time, a queued Issue task
+  with non-null `wake_source` is cancelled as `already_covered` only when its
+  lane cursor covers `wake_seq` and no unread `now` entry remains. Rows with
+  null `wake_source` are always claimable. Requeued tasks clear their projection
+  range and mode so the next claim projects newly arrived entries.
 - Delegation reports and decision answers become visible system comments in the
   recipient session.
 - The migration collapses existing duplicate queued rows (keeps the oldest,

@@ -3710,7 +3710,14 @@ ${routing.sql}
       const now = nowIso();
       const repool = () =>
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          `UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL,
+             work_dir = NULL, dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
+             projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
+             inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
+             inherited_projection_from_seq = NULL, inherited_projection_to_seq = NULL,
+             inherited_projection_token_budget = NULL, inherited_projection_recorded_at = NULL,
+             updated_at = ? WHERE id = ?`,
           [now, String(row.id)],
         );
       // local_directory is checked FIRST, before archived/agent-missing — the
@@ -3723,7 +3730,14 @@ ${routing.sql}
         const rt = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          `UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL,
+             dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
+             projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
+             inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
+             inherited_projection_from_seq = NULL, inherited_projection_to_seq = NULL,
+             inherited_projection_token_budget = NULL, inherited_projection_recorded_at = NULL,
+             updated_at = ? WHERE id = ?`,
           [newRuntimeId, now, String(row.id)],
         );
       } else if (!task.agent || task.agent.archivedAt || !runtime) {
@@ -3912,7 +3926,7 @@ ${routing.sql}
     // lets any member stamp an arbitrary agent+runtime (a stamp is not proof
     // of authorization). Kept as a JS comment, not inline SQL: an apostrophe
     // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
-    const row = this.ctx.db.query(
+    const claimOne = (): Row | null => this.ctx.db.query(
       `UPDATE multiremi_tasks
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
@@ -4007,12 +4021,35 @@ ${placementAfter.sql}
        AND status = 'queued'
        RETURNING *`,
     ).get(...params) as Row | null;
-    if (!row) return null;
+    for (;;) {
+      const row = claimOne();
+      if (!row) return null;
 
-    // The caller hydrates the selected task exactly once and threads that object through the
-    // snapshot and the response. Hydrating here as well would read the Agent's Skills, files,
-    // project and wiki context a second time for the same task.
-    return this.getTask(String(row.id));
+      const task = this.getTask(String(row.id))!;
+      if (task.issueSessionId && task.wakeSource !== null) {
+        const cursorSeq = this.ctx.issueSessions().getSessionAgentLane(
+          task.issueSessionId, task.agentId, taskExecutionScope(task),
+        )?.cursorSeq ?? 0;
+        const wakeSeq = Number(row.wake_seq ?? 0);
+        if (wakeSeq > 0 && cursorSeq >= wakeSeq
+          && this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, taskExecutionScope(task), cursorSeq) === null) {
+          const cancelledAt = nowIso();
+          this.ctx.db.run(`UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?,
+            updated_at = ? WHERE id = ? AND status = 'dispatched'`, [cancelledAt, cancelledAt, task.id]);
+          this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { status: "cancelled" });
+          appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_skipped", {
+            reason: "already_covered", wake_source: task.wakeSource,
+            wake_seq: wakeSeq, cursor_seq: cursorSeq,
+          });
+          continue;
+        }
+      }
+
+      // The caller hydrates the selected task exactly once and threads that object through the
+      // snapshot and the response. Hydrating here as well would read the Agent's Skills, files,
+      // project and wiki context a second time for the same task.
+      return task;
+    }
   }
 
   startTask(taskId: string): MultiremiTask {
@@ -4538,6 +4575,19 @@ ${placementAfter.sql}
     if (reportedEventCount === 0) this.ctx.taskTraces().markTaskTraceNone(taskId);
   }
 
+  private recordChatInboxDeliveryAfterReply(task: MultiremiTask): void {
+    if (!task.chatSessionId || task.projectionFromSeq == null || task.projectionToSeq == null) return;
+    try {
+      this.ctx.db.transaction(() => {
+        this.ctx.conversationLog().recordTurnInboxDeliveryWithinTransaction(
+          task.id, task.projectionFromSeq!, task.projectionToSeq!,
+        );
+      })();
+    } catch (error) {
+      log.warn(`inbox delivery receipt failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   completeTask(taskId: string, input: {
     output: string;
     traceEventCount?: number;
@@ -4589,6 +4639,9 @@ ${placementAfter.sql}
       return { task: completed, followUps };
     })();
     const task = terminal.task;
+    // Chat's turn card is the assistant reply, so it exists only after the
+    // terminal transaction. Issue turn cards already receive their receipt at claim.
+    this.recordChatInboxDeliveryAfterReply(task);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     this.postAgentReplyComment(task, input.output);
@@ -5032,7 +5085,8 @@ ${placementAfter.sql}
       && parent.executionFingerprint !== CHAT_ISSUE_DECOUPLED_FINGERPRINT
       && parentAgent != null && parent.provider === parentAgent.provider
       && (invalidatedChatWorkspace || !hasRuntimeProfile || parentRuntimeUsable);
-    if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
+    const promoted = resumeSafe && parent.issueSessionId
+      ? this.promoteSessionAgentLane(parent) : false;
     const retryInput: CreateTaskInput = {
       agentId: parent.agentId,
       taskKind: parent.taskKind,
@@ -5092,6 +5146,7 @@ ${placementAfter.sql}
     const retry = workspaceLockHeld
       ? this.createTaskWithinWorkspaceLock(retryInput, childStatusChanges, deferredEvents)
       : this.createTask(retryInput);
+    if (promoted) this.reRingUnreadIssueLane(parent, childStatusChanges, deferredEvents);
     if (retry.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -5749,12 +5804,23 @@ ${placementAfter.sql}
         // is still caught by laneResumable() at claim time, and a genuinely unresumable
         // transcript surfaces next run as stale_session / api_invalid_request — both
         // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
-        if (status === "completed") this.promoteSessionAgentLane(task);
-        else if (!retry && status !== "cancelled")
-          this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
-            reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
-            taskId: task.id,
-          }, deferredEvents);
+        if (status === "completed") {
+          this.promoteSessionAgentLane(task);
+          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+        } else if (status === "cancelled") {
+          // Redispatch creates a replacement in this transaction that covers the unread lane.
+          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+        } else if (status === "failed" && !retry) {
+          if (!RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
+            && this.promoteSessionAgentLane(task)) {
+            this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          } else {
+            this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
+              reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
+              taskId: task.id,
+            }, deferredEvents);
+          }
+        }
         // A pending recovery retry already suppresses this wakeup for its own
         // source: the drain below skips any delegation source that has a
         // successor attempt with the same lineage. The retry carries that
@@ -5973,20 +6039,30 @@ ${placementAfter.sql}
       [now, now, now, current.id],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${current.id}`);
+    let redrain: DelegationReturnDrainResult | null = null;
     if (current.projectionToSeq == null) {
-      this.ctx.db.run(
+      const cleared = this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET delegation_return_task_id = NULL, updated_at = ?
          WHERE delegation_return_task_id = ?`,
         [now, current.id],
       );
+      // Redispatch creates the replacement below in this transaction; draining
+      // now would plant a competing queued return in the same lane.
+      if (cleared.changes > 0 && current.issueSessionId && !replacementPlanned) {
+        redrain = this.drainDelegationReturnsWithinWorkspaceLock(
+          current.issueSessionId, null, childStatusChanges, deferredEvents,
+        );
+      }
     }
     const cancelled = this.getTask(current.id)!;
+    const followUps = this.afterTaskTerminal(
+      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
+    );
+    if (redrain) followUps.delegationReturns.push(...redrain.createdTasks);
     return {
       task: cancelled,
-      followUps: this.afterTaskTerminal(
-        cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
-      ),
+      followUps,
     };
   }
 
@@ -6025,8 +6101,8 @@ ${placementAfter.sql}
     }
   }
 
-  private promoteSessionAgentLane(task: MultiremiTask): void {
-    if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return;
+  private promoteSessionAgentLane(task: MultiremiTask): boolean {
+    if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return false;
     const cursorSeq = Math.max(0, task.projectionToSeq ?? 0);
     const now = nowIso();
     const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
@@ -6071,14 +6147,79 @@ ${placementAfter.sql}
     ];
     // Keep the NULL comparison out of a placeholder expression: SQLite accepts
     // `? IS NULL`, while Postgres cannot infer that placeholder's data type.
-    if (expectedProviderSessionId == null) {
-      this.ctx.db.run(`${update} AND provider_session_id IS NULL`, params);
-    } else {
-      this.ctx.db.run(`${update} AND provider_session_id = ?`, [...params, expectedProviderSessionId]);
-    }
+    const updated = expectedProviderSessionId == null
+      ? this.ctx.db.run(`${update} AND provider_session_id IS NULL`, params)
+      : this.ctx.db.run(`${update} AND provider_session_id = ?`, [...params, expectedProviderSessionId]);
     // Keep the lane row created above even when the guarded update intentionally
     // loses a race; callers can inspect it to diagnose lineage replacement.
     void lane;
+    return updated.changes === 1;
+  }
+
+  private unreadNowEnvelopeSeq(sessionId: string, agentId: string, executionScope: string, cursorSeq: number): number | null {
+    const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
+    const addressed = entries.filter(entry => {
+      if (entry.author_id === agentId || entry.metadata.envelope?.wake !== "now") return false;
+      const { to, recipient_agent_id: recipientAgentId } = entry.metadata.envelope;
+      if (recipientAgentId && recipientAgentId !== agentId) return false;
+      if (to.role === "agent") return to.issueSessionId === sessionId
+        && (recipientAgentId ?? to.agentId) === agentId && executionScope === "";
+      if (to.role === "delegator") {
+        const source = entry.metadata.envelope.source.taskId
+          ? this.getTask(entry.metadata.envelope.source.taskId) : null;
+        if (!source || (!recipientAgentId && source.delegatedByAgentId !== agentId)
+          || (source.delegatedFromIssueSessionId ?? source.issueSessionId) !== sessionId) return false;
+        const parent = source.parentTaskId ? this.getTask(source.parentTaskId) : null;
+        const scope = parent?.agentId === agentId && parent.issueSessionId === sessionId
+          ? taskExecutionScope(parent) : "";
+        return scope === executionScope;
+      }
+      const issue = to.role === "issue_owner" ? this.ctx.issues().getIssue(to.issueId)
+        : to.role === "parent_owner" ? (() => {
+            const child = this.ctx.issues().getIssue(to.childIssueId);
+            return child?.parentIssueId ? this.ctx.issues().getIssue(child.parentIssueId) : null;
+          })() : null;
+      if (!issue || this.ctx.issueSessions().getIssueSession(sessionId)?.issueId !== issue.id
+        || executionScope !== "") return false;
+      if (recipientAgentId) return true;
+      if (!issue.assigneeType || !issue.assigneeId) return false;
+      return this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id === agentId;
+    });
+    return addressed.at(-1)?.seq ?? null;
+  }
+
+  private reRingUnreadIssueLane(
+    task: MultiremiTask,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    if (!task.issueSessionId || !task.issueId || task.chatSessionId) return;
+    const executionScope = taskExecutionScope(task);
+    const lane = this.ctx.issueSessions().getSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
+    let cursorSeq = lane?.cursorSeq ?? 0;
+    if (task.status === "completed") {
+      const row = this.ctx.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(task.id) as { wake_seq: number } | null;
+      cursorSeq = Math.max(cursorSeq, task.projectionToSeq ?? 0, Number(row?.wake_seq ?? 0));
+    }
+    const seq = this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, executionScope, cursorSeq);
+    if (seq === null) return;
+    const result = this.ensurePendingTurnWithinTransaction({
+      lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId, executionScope },
+      wake: { reason: "re_ring", seq },
+      create: () => this.createTaskWithinWorkspaceLock({
+        agentId: task.agentId,
+        issueId: task.issueId!,
+        issueSessionId: task.issueSessionId!,
+        prompt: `读收件箱。Session ${task.issueSessionId}，从 seq ${cursorSeq + 1} 读取。`,
+        wakeSource: "re_ring",
+        triggerCommentId: null,
+      }, childStatusChanges, deferredEvents, null, executionScope),
+    });
+    if (!result.task) return;
+    if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task);
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
+      action: result.action, wake_source: "re_ring", seq,
+    });
   }
 
   // Post the agent's final reply as an issue comment so the outcome is visible

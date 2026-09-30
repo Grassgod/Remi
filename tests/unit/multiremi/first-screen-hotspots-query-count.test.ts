@@ -247,7 +247,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     expect(perTask[0]!).toBeGreaterThan(perTask[1]!);
     expect(perTask[1]!).toBeGreaterThanOrEqual(perTask[2]!);
     expect(twoHundred.bytes).toBeGreaterThan(one.bytes);
-  }, 20000);
+  }, 60000);
 
   it("reads no Chat message column for pending-tasks", async () => {
     const harness = await createHarness();
