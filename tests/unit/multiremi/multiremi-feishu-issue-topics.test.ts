@@ -415,9 +415,10 @@ describe("Feishu Issue topics", () => {
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
         expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
+        expect(events.filter(event => event.type === "daemon:task_input")).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
         expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
-        expect(events[0].type).toBe("chat:message");
-        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+        const chatIndex = events.findIndex(event => event.type === "chat:message");
+        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(chatIndex);
       }
     });
   }
