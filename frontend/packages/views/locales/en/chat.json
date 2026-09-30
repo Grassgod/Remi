@@ -28,7 +28,14 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
-    "loading_older": "Loading older messages…"
+    "loading_older": "Loading older messages…",
+    "expand_older": "Show 30 earlier messages",
+    "earliest": "Start of chat",
+    "sending": "Sending…",
+    "sent": "Sent",
+    "send_failed": "Failed to send ·",
+    "retry": "Retry",
+    "retry_send": "Retry sending this message"
   },
   "session_history": {
     "untitled": "Untitled",

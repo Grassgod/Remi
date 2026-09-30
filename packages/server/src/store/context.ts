@@ -10,12 +10,14 @@
 // facade's constructor and resolved at call time.
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
@@ -162,6 +164,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "provider_auth",
   "provider_error",
   "queued_expired",
+  "queued_model_unavailable",
   "registration_failed",
   "runtime_offline",
   "runtime_recovery",
@@ -219,6 +222,16 @@ export interface HumanRequestTransition {
 
 export type HumanRequestListener = (transition: HumanRequestTransition) => void;
 
+/** What the write half of an Issue comment committed, for its post-COMMIT half. */
+export interface CreatedIssueComment {
+  issue: MultiremiIssue;
+  comment: MultiremiIssueComment;
+  body: string;
+  authorType: string;
+  issueSessionId: string;
+  sessionEventSeq: number;
+}
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (
@@ -260,6 +273,18 @@ export interface IssuesSurface {
     input: CreateIssueCommentInput,
     options?: CreateIssueCommentOptions,
   ): MultiremiIssueComment;
+  /**
+   * The comment, its Session event and its log row, inside the caller's
+   * transaction. After COMMIT the caller flushes `deferredEvents`, then runs
+   * {@link runIssueCommentPostCommit}.
+   */
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue },
+  ): CreatedIssueComment;
+  /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
+  runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,
@@ -537,8 +562,9 @@ export interface TasksSurface {
    * Internal primitive for a caller that already owns a database transaction.
    * `childStatusChanges` collects the Issue transitions this write produces; the
    * caller replays them through {@link runCollectedChildStatusChanges} after its
-   * COMMIT. It is required on purpose: a nested `transaction()` would commit the
-   * caller's transaction early on Postgres, which has no savepoints.
+   * COMMIT. It is required on purpose: a nested `transaction()` is only a
+   * SAVEPOINT (B1, MUL-426), so a wrapper that replays after its own transaction
+   * would do so before the caller's COMMIT.
    */
   createTaskWithinTransaction(
     input: CreateTaskInput,
@@ -650,9 +676,89 @@ export interface ChatSurface {
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
 }
 
+export interface ConversationLogSurface {
+  /** Allocates the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number;
+  /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */
+  appendWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** In-place update with `revision++` and the write hook; caller owns the transaction. */
+  updateWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void;
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input?: { bodyMd: string; title?: string | null; metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata; createdAt?: string },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync the `head` row to the Issue title and description, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** The `turn` card of a task, updated in place through its lifecycle. */
+  findTurnEntry(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: {
+      status?: string | null;
+      finalReplyMd?: string | null;
+      finalEntryId?: string | null;
+      summary?: string | null;
+      toolCallCount?: number | null;
+      eventCount?: number | null;
+      typeHistogram?: unknown[] | null;
+      usage?: unknown[] | null;
+      model?: unknown | null;
+      elapsedMs?: number | null;
+      failureReason?: string | null;
+    },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  appendConversationLog(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  appendConversationLogWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  updateConversationLogWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntry(sessionId: string, seq: number, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntryById(id: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogHead(sessionId: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): { sessionId: string; headSeq: number; logVersion: number; updatedAt: string } | null;
+  conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
+  locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
+  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
+  subscribeConversationLog(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener): () => void;
+  ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogIssueHead(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogChatHead(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+}
+
 export interface IssueSessionsSurface {
   getIssueSession(id: string): MultiremiIssueSession | null;
   getOrCreateDefaultIssueSession(issueId: string, createdById?: string | null): MultiremiIssueSession;
+  /** For callers that already own the transaction: never opens a nested frame. */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById?: string | null): MultiremiIssueSession;
   createIssueSessionWithinTransaction(issueId: string, input?: CreateIssueSessionInput): MultiremiIssueSession;
   getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null;
   addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant;
@@ -811,7 +917,18 @@ export interface KnowledgeSurface {
   } | null;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+/** Trace pointer reads and writes, exposed by the store facade. */
+export interface TaskTracesSurface {
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null;
+  markTaskTraceDaemon(taskId: string, runtimeId: string): void;
+  markTaskTraceNone(taskId: string): void;
+  markTaskTraceLost(taskId: string): void;
+  /** Must be called inside the caller's transaction. */
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
+  clearTaskTraceArchivePointers(archiveId: string): number;
+}
+
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -947,7 +1064,19 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  /**
+   * Task trace pointers. Resolved through `resolveHost` like the other carved
+   * repos, since the archive repo needs them inside its own transaction.
+   */
+  taskTraces(): TaskTracesSurface {
+    return this.resolveHost();
+  }
+
   issueSessions(): IssueSessionsSurface {
+    return this.resolveHost();
+  }
+
+  conversationLog(): ConversationLogSurface {
     return this.resolveHost();
   }
 
@@ -955,36 +1084,70 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  /**
+   * Publish one realtime event.
+   *
+   * Routed through the database's after-commit hook (MUL-405 QA round 2): while
+   * any transaction is open the event waits for the OUTERMOST COMMIT, and a
+   * rollback drops it. A nested writer cannot tell whether its caller commits,
+   * so without this an outer ROLLBACK could leave a pushed row that never
+   * existed. With no transaction open the hook runs the publish immediately, so
+   * autocommit callers behave exactly as before.
+   */
   emitWorkspaceEvent(event: WorkspaceEvent): void {
-    for (const listener of [...this.workspaceEventListeners]) {
-      try {
-        listener(event);
-      } catch {
-        // Realtime listeners are best-effort and must not roll back mutations.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.workspaceEventListeners]) {
+        try {
+          listener(event);
+        } catch {
+          // Realtime listeners are best-effort and must not roll back mutations.
+        }
+
       }
-    }
+    });
   }
 
   /**
-   * Publish a caller-owned transaction's deferred events, now that it committed.
-   * Callers drain this after their COMMIT; on rollback they drop the queue.
+   * Publish a caller-owned transaction's deferred events once the OUTERMOST
+   * transaction commits (MUL-405 QA round 2).
+   *
+   * Callers drain this right after their own \`transaction()\` returns, but that
+   * is not necessarily a commit: a nested call on Postgres only released a
+   * SAVEPOINT, and the caller above it can still roll back. Publishing there
+   * would push a row the ROLLBACK then erases. So the queue is handed to the
+   * database's after-commit hook, which runs it only after the real COMMIT and
+   * drops it on rollback. With no transaction open the hook runs it
+   * immediately, so autocommit callers are unchanged.
+   *
+   * Ordering is preserved: one call to this method enqueues one callback, and
+   * the hook runs callbacks in the order they were queued.
    */
   emitCommitEvents(queue: CommitEventQueue): void {
-    for (const activity of queue.issueActivities) {
-      try {
-        this.appendIssueActivity(activity.issueId, {
-          actorType: "system",
-          actorId: null,
-          type: activity.type,
-          body: activity.body,
-          data: activity.data,
-        });
-      } catch (error) {
-        log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+    if (
+      queue.workspace.length === 0
+      && queue.enqueuedTasks.length === 0
+      && queue.issueActivities.length === 0
+    ) return;
+    afterCommit(this.db, () => {
+      // MUL-409's post-COMMIT activity writer and MUL-405's realtime pushes both
+      // ride the outermost commit: the queue is drained by the database's
+      // after-commit hook, so a nested caller's rollback drops the whole set.
+      for (const activity of queue.issueActivities) {
+        try {
+          this.appendIssueActivity(activity.issueId, {
+            actorType: "system",
+            actorId: null,
+            type: activity.type,
+            body: activity.body,
+            data: activity.data,
+          });
+        } catch (error) {
+          log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
-    }
-    for (const event of queue.workspace) this.emitWorkspaceEvent(event);
-    for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
+      for (const event of queue.workspace) this.emitWorkspaceEvent(event);
+      for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
+    });
   }
 
   emitChatEvent(
@@ -1006,14 +1169,21 @@ export class StoreContext {
     });
   }
 
+  /**
+   * Wake listeners for a newly enqueued task, after the outermost COMMIT for the
+   * same reason as {@link emitWorkspaceEvent}: a phantom wakeup for a task a
+   * ROLLBACK erased makes a daemon claim work that does not exist.
+   */
   notifyTaskEnqueued(task: MultiremiTask): void {
-    for (const listener of [...this.taskEnqueuedListeners]) {
-      try {
-        listener(task);
-      } catch {
-        // Wakeup listeners are best-effort and must not roll back task enqueue.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.taskEnqueuedListeners]) {
+        try {
+          listener(task);
+        } catch {
+          // Wakeup listeners are best-effort and must not roll back task enqueue.
+        }
       }
-    }
+    });
   }
 
   notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
@@ -1187,20 +1357,28 @@ export class StoreContext {
         now,
       ],
     );
-    try {
-      this.host.queueAgentIssueUpdate({
-        activityId: id,
-        issueId,
-        actorType: input.actorType,
-        actorId: input.actorId ?? null,
-        type: input.type,
-        body: input.body ?? null,
-        data: input.data ?? null,
-        createdAt: now,
-      });
-    } catch (err) {
-      log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    // Best-effort side effect, so it must not ride the caller's transaction:
+    // a SAVEPOINT here would add two extra bridge round-trips per activity on
+    // the hottest parent-status path and would still be rolled back by an
+    // outer ROLLBACK. `afterCommit` runs it after the outermost COMMIT (or
+    // immediately outside a transaction) and keeps the warn-and-continue
+    // contract. Basis: Senior ruling cmt_96e1yqxgifms §2.
+    afterCommit(this.db, () => {
+      try {
+        this.host.queueAgentIssueUpdate({
+          activityId: id,
+          issueId,
+          actorType: input.actorType,
+          actorId: input.actorId ?? null,
+          type: input.type,
+          body: input.body ?? null,
+          data: input.data ?? null,
+          createdAt: now,
+        });
+      } catch (err) {
+        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity
@@ -1208,6 +1386,11 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
+      // Plain read, no savepoint. After MUL-402 ports B1's bridge-failure
+      // classification a failed bridge reply no longer poisons the
+      // transaction, so the only remaining failure is a real SQL error, and a
+      // broken schema must fail the write rather than be swallowed.
+      // Basis: Senior ruling cmt_96e1yqxgifms §2.
       const workspaceId = this.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       const event: WorkspaceEvent = {

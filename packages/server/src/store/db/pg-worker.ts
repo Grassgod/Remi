@@ -47,11 +47,30 @@ workerSelf.onmessage = async (event: MessageEvent) => {
   const buf = new Uint8Array(data);
 
   const respond = (status: number, payload: string): void => {
-    let bytes = new TextEncoder().encode(payload);
+    const encoder = new TextEncoder();
+    let bytes = encoder.encode(payload);
     if (bytes.length > buf.length) {
-      bytes = new TextEncoder().encode(
-        JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)` }),
-      );
+      if (status === STATUS_ERROR) {
+        let original: { error?: unknown; source?: unknown } = {};
+        try { original = JSON.parse(payload); } catch { /* Unknown error replies fail closed. */ }
+        const error = typeof original.error === "string" ? original.error : "postgres bridge error result too large";
+        const source = typeof original.source === "string" ? original.source : "unknown";
+        const suffix = `…(truncated, ${encoder.encode(error).length} bytes)`;
+        let low = 0;
+        let high = error.length;
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          const candidate = encoder.encode(JSON.stringify({ error: error.slice(0, mid) + suffix, source }));
+          if (candidate.length <= buf.length) low = mid;
+          else high = mid - 1;
+        }
+        bytes = encoder.encode(JSON.stringify({ error: error.slice(0, low) + suffix, source }));
+        if (bytes.length > buf.length) bytes = encoder.encode(JSON.stringify({ error: "postgres bridge error too large", source }));
+      } else {
+        bytes = encoder.encode(
+          JSON.stringify({ error: `postgres bridge result too large (${bytes.length} > ${buf.length} bytes)`, source: "reply" }),
+        );
+      }
       status = STATUS_ERROR;
     }
     buf.set(bytes, 0);
@@ -61,6 +80,7 @@ workerSelf.onmessage = async (event: MessageEvent) => {
   };
 
   const verb = transactionVerb(query);
+  let queryCompleted = false;
   try {
     if (init) {
       sql = new Bun.SQL(init, {
@@ -83,24 +103,26 @@ workerSelf.onmessage = async (event: MessageEvent) => {
       if (verb === "ROLLBACK") {
         respond(STATUS_DONE, JSON.stringify({ rows: [], count: 0 }));
       } else {
-        respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST }));
+        respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST, source: "connection" }));
       }
       return;
     }
     const res = await sql.unsafe(query, params ?? []);
+    queryCompleted = true;
     if (verb === "BEGIN") {
       transactionGeneration = connectionGeneration;
     } else if (transactionGeneration !== null && transactionGeneration !== connectionGeneration) {
       // Reconnected while this statement ran: it executed outside the transaction.
       transactionConnectionLost = true;
-      respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST }));
+      respond(STATUS_ERROR, JSON.stringify({ error: TRANSACTION_CONNECTION_LOST, source: "connection" }));
       return;
     }
     const rows = Array.isArray(res) ? res : Array.from(res ?? []);
     const count = res && typeof (res as any).count === "number" ? (res as any).count : rows.length;
-    respond(STATUS_DONE, JSON.stringify({ rows, count }));
+    const command = typeof (res as any)?.command === "string" ? (res as any).command : undefined;
+    respond(STATUS_DONE, JSON.stringify({ rows, count, command }));
   } catch (err: any) {
-    respond(STATUS_ERROR, JSON.stringify({ error: String(err?.message ?? err) }));
+    respond(STATUS_ERROR, JSON.stringify({ error: String(err?.message ?? err), source: queryCompleted ? "reply" : "query" }));
   } finally {
     if (verb === "COMMIT" || verb === "ROLLBACK") {
       transactionGeneration = null;

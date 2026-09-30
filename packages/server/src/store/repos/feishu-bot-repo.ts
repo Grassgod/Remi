@@ -25,6 +25,8 @@ import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import {
   decryptFeishuBotSecret,
   encryptFeishuBotSecret,
@@ -288,7 +290,11 @@ export class FeishuBotRepo {
 
   setSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null): FeishuBotSender | null {
     return this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N before the sender row UPDATE and
+      // the audit row it writes. The audit seq is allocated under the number
+      // lock, so taking it here keeps D after both.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const config = this.getConfig(workspaceId);
       if (!config) return null;
       const row = this.ctx.db.query(
@@ -827,7 +833,14 @@ export class FeishuBotRepo {
     const submitEvents = createCommitEventQueue();
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
+      // Global lock order (MUL-405): W then N, before any domain row lock.
+      // Whether this message auto-creates an Issue is only known after the
+      // sender is resolved, and resolving it writes the sender row (D). The
+      // number lock is therefore taken unconditionally — it is per workspace
+      // and held for the rest of this transaction, which is what keeps the
+      // order the same on every path instead of depending on the payload.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
       const sender = this.resolveSender(workspaceId, config.appId, input, config.senderAccessPolicy);
       let binding = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
@@ -2707,6 +2720,15 @@ export class FeishuBotRepo {
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
       const nowIsoValue = now.toISOString();
+      const exhaustedCandidates = this.ctx.db.query(`SELECT id, kind FROM multiremi_feishu_bot_outbound_deliveries
+        WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
+          AND ((status = 'pending' AND available_at <= ?)
+            OR (status = 'sending' AND leased_until <= ?))`
+      ).all(workspaceId, nowIsoValue, nowIsoValue) as Row[];
+      if (exhaustedCandidates.some((row) => row.kind === 'receipt')) {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       // The reminder lane is materialized here rather than at request creation:
       // a request answered before its window closes must never produce one, and
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
@@ -2714,13 +2736,9 @@ export class FeishuBotRepo {
       this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
       this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
       this.reconcileTaskDeliveriesWithinTransaction(workspaceId);
-      const exhausted = this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
-        SET status = 'failed', claim_token = NULL, leased_until = NULL,
-          last_error = 'Delivery lease exhausted after six attempts', updated_at = ?
-        WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
-          AND ((status = 'pending' AND available_at <= ?)
-            OR (status = 'sending' AND leased_until <= ?))
-        RETURNING id, kind, attempt_count`).all(nowIsoValue, workspaceId, nowIsoValue, nowIsoValue) as Row[];
+      const exhausted = this.sweepExhaustedWithinTransaction(
+        workspaceId, exhaustedCandidates.map((row) => String(row.id)), nowIsoValue,
+      );
       for (const failed of exhausted) {
         if (failed.kind === 'receipt') this.recordReceiptFailure(workspaceId, runtimeId, String(failed.id), Number(failed.attempt_count));
       }
@@ -2862,6 +2880,19 @@ export class FeishuBotRepo {
     })();
     this.ctx.emitCommitEvents(deferredEvents);
     return claimed;
+  }
+
+  private sweepExhaustedWithinTransaction(workspaceId: string, ids: string[], nowIsoValue: string): Row[] {
+    if (ids.length === 0) return [];
+    return this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
+      SET status = 'failed', claim_token = NULL, leased_until = NULL,
+        last_error = 'Delivery lease exhausted after six attempts', updated_at = ?
+      WHERE workspace_id = ? AND id IN (${ids.map(() => '?').join(', ')})
+        AND delivery_mode = 'split' AND attempt_count >= 6
+        AND ((status = 'pending' AND available_at <= ?)
+          OR (status = 'sending' AND leased_until <= ?))
+      RETURNING id, kind, attempt_count`
+    ).all(nowIsoValue, workspaceId, ...ids, nowIsoValue, nowIsoValue) as Row[];
   }
 
   /** Checkpoint before the first send, under the existing delivery lease. */
@@ -3054,6 +3085,10 @@ export class FeishuBotRepo {
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
       const error = cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed";
+      if (terminal && row.kind === 'receipt') {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       const updated = this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = ?, claim_token = NULL, leased_until = NULL,
@@ -3097,7 +3132,7 @@ export class FeishuBotRepo {
   }
 
   private recordReceiptFailure(workspaceId: string, runtimeId: string, deliveryId: string, attempts: number): void {
-    this.recordAudit(workspaceId, 'receipt_failed', { actorType: 'daemon', actorId: runtimeId,
+    this.recordAuditWithinTransaction(workspaceId, 'receipt_failed', { actorType: 'daemon', actorId: runtimeId,
       details: { delivery_id: deliveryId, attempts } });
     log.warn(`Feishu receipt delivery ${deliveryId} failed after ${attempts} attempt(s)`);
   }
@@ -3465,11 +3500,32 @@ export class FeishuBotRepo {
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
   }
 
+  /**
+   * `seq` is read as `MAX(seq) + 1` and the audit trail is ordered by it
+   * (MUL-405), so concurrent writers must not read the same maximum. The read
+   * and the insert share one transaction that first takes the per-workspace
+   * number lock; callers already inside a transaction (sender allow/revoke, the
+   * disable paths) join it and keep their own commit boundary.
+   */
   recordAudit(
     workspaceId: string,
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> } = {},
   ): MultiremiFeishuBotAuditEntry {
+    return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
+  }
+
+  /** Transactional callers take W then N before domain writes; re-taking them here is free. */
+  recordAuditWithinTransaction(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
+  ): MultiremiFeishuBotAuditEntry {
+    // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+    // lifecycle row lock precedes the number lock. Callers that already hold it
+    // (sender allow/revoke, the disable paths) re-lock the same row for free.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
     const id = createId("fba");
     const createdAt = nowIso();
     const details = input.details ?? {};

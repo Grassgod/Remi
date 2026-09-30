@@ -305,13 +305,19 @@ export function enhanceEntryHtml(
 
     // The wrapper is the positioning context for the button and adds no box of
     // its own, so wrapping a block leaves its height exactly as measured.
+    const originalStyle = block.getAttribute("style");
+    const heightPx = block.getBoundingClientRect().height;
+    const margin = document.defaultView?.getComputedStyle(block).margin ?? "0";
     const wrapper = document.createElement("div");
     wrapper.setAttribute(CODE_BLOCK_ATTR, "");
-    wrapper.style.cssText = "position:relative;margin:0;padding:0;border:0";
+    wrapper.style.cssText = `position:relative;display:flow-root;margin:${margin};padding:0;border:0`;
     block.replaceWith(wrapper);
     wrapper.appendChild(block);
+    block.style.margin = "0";
     disposers.push(() => {
       wrapper.replaceWith(block);
+      if (originalStyle === null) block.removeAttribute("style");
+      else block.setAttribute("style", originalStyle);
     });
 
     if (kind === null) {
@@ -321,12 +327,11 @@ export function enhanceEntryHtml(
 
     // A preview: swap the block for a slot of exactly the height the block had,
     // so the swap cannot move a pixel. The caller portals the real component in.
-    const heightPx = Math.max(0, Math.round(block.getBoundingClientRect().height));
     const slot = document.createElement("div");
     slot.setAttribute(PREVIEW_SLOT_ATTR, kind);
     slot.style.cssText = [
       "position:relative",
-      `height:${heightPx}px`,
+      `height:${Math.max(0, heightPx)}px`,
       "overflow:auto",
       "margin:0",
     ].join(";");

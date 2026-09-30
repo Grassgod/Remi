@@ -42,6 +42,7 @@ import { quotePreview } from "../utils/quote-preview";
 import type { TimelineEntry, Attachment } from "@multiremi/core/types";
 import { useCommentDraftStore } from "@multiremi/core/issues/stores";
 import { useT } from "../../i18n";
+import { EntryHtml } from "../../common/session-log/entry-html";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +64,7 @@ interface CommentParentRef {
 interface CommentCardProps {
   issueId: string;
   entry: TimelineEntry;
+  bodyHtml?: string | null;
   /**
    * Set when this comment has a `parent_id` that resolves inside the loaded
    * timeline. Renders the reference chip; absent for a comment that starts
@@ -379,6 +381,7 @@ function ParentQuoteLine({
 function CommentCardImpl({
   issueId,
   entry,
+  bodyHtml,
   parentRef,
   onNavigateToParent,
   hasReplies,
@@ -510,7 +513,8 @@ function CommentCardImpl({
         ) : (
           <>
             <div className="text-sm leading-relaxed text-foreground/85">
-              <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+              <EntryHtml html={bodyHtml ?? null} markdown={entry.content ?? ""}
+                fallback={<ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />} />
             </div>
             <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5" />
             <ReactionBar

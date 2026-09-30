@@ -5,6 +5,11 @@ import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
+import {
+  sessionEventToConversationLog,
+  targetSeqForMarker,
+  type MirrorSessionEvent,
+} from "@multiremi/store/conversation-log-mirror.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveFollowDeltaRatio, resolveFollowTokenLimit, resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLogger } from "@shared/logger.js";
@@ -46,7 +51,23 @@ type AppendSessionEventInput = {
 export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
 
+  /**
+   * Open (or find) the default session for an issue.
+   *
+   * The public entry point owns a transaction only when it is called from
+   * outside one — the default session row and its conversation head must be
+   * atomic for autocommit callers. When a caller that already owns the
+   * transaction needs this, it calls
+   * {@link getOrCreateDefaultIssueSessionWithinTransaction} directly instead,
+   * so the guard-listed paths stay at depth 1 (Senior ruling
+   * cmt_96e1yqxgifms §2; the same shape as `createIssue` on main).
+   */
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    const withinTx = () => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
+    return this.ctx.db.inTransaction ? withinTx() : this.ctx.db.transaction(withinTx)();
+  }
+
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const existing = this.ctx.db.query(
@@ -68,6 +89,12 @@ export class IssueSessionsRepo {
       `${SESSION_SELECT} WHERE issue_id = ? AND is_default = 1 LIMIT 1`,
     ).get(issueId) as Row | null;
     if (!row) throw new Error(`Failed to create default session for issue: ${issueId}`);
+    if (String(row.id) === id) {
+      this.ctx.conversationLog().syncIssueHeadWithinTransaction(id, {
+        title: issue.title,
+        description: issue.description,
+      }, now);
+    }
     return toIssueSession(row);
   }
 
@@ -151,6 +178,13 @@ export class IssueSessionsRepo {
     for (const agentId of participantAgentIds) {
       this.addSessionParticipant(id, { participantType: "agent", participantId: agentId });
     }
+    // The head row mirrors the Issue title and description; every session of one
+    // Issue carries its own copy, so the seq axis starts with the same text the
+    // timeline shows at the top.
+    this.ctx.conversationLog().syncIssueHeadWithinTransaction(id, {
+      title: issue.title,
+      description: issue.description,
+    }, now);
     this.appendSessionEventWithinTransaction(id, {
       authorType: "system",
       authorId: null,
@@ -376,12 +410,12 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
-    // Row self-write serializes sequence allocation across server processes.
-    this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
-    const max = this.ctx.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
-    ).get(sessionId) as { seq: number } | null;
-    const seq = Number(max?.seq ?? 0) + 1;
+    // One allocator for both tables (MUL-426): the heads row hands out the next
+    // seq with an atomic `head_seq = head_seq + 1 … RETURNING`, so two server
+    // processes cannot take the same number and the log stays on
+    // `session_events.seq` one for one. This replaces the row lock plus
+    // `MAX(seq) + 1`, which read the whole session to allocate one number.
+    const seq = this.ctx.conversationLog().nextSeqWithinTransaction(sessionId);
     const id = createId("sevt");
     const now = input.createdAt ?? nowIso();
     this.ctx.db.run(
@@ -404,7 +438,60 @@ export class IssueSessionsRepo {
       ],
     );
     this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?", [now, sessionId]);
+    this.mirrorSessionEventWithinTransaction(id);
     return toSessionEvent(this.ctx.db.query("SELECT * FROM multiremi_session_events WHERE id = ?").get(id) as Row);
+  }
+
+  /**
+   * Copy one freshly written `session_events` row into the conversation log at
+   * the same seq (MUL-426 B1). The user-facing reads move to the log now; the
+   * wake-up and projection readers stay on the legacy table until B2, so both
+   * are written from this one transaction. Resolve and unresolve update the
+   * comment row in place and also append hidden markers on this same seq axis.
+   */
+  private mirrorSessionEventWithinTransaction(eventId: string): void {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_session_events WHERE id = ?",
+    ).get(eventId) as Row | null;
+    if (!row) return;
+    const mapped = sessionEventToConversationLog(row as unknown as MirrorSessionEvent);
+    if (!mapped) return;
+    // A marker points at the row it describes: resolve the target's seq on the
+    // same axis, which is what W4's coverage check reads.
+    if (mapped.kind === "message_edited" || mapped.kind === "message_deleted"
+      || mapped.kind === "thread_resolved" || mapped.kind === "thread_unresolved") {
+      const target = targetSeqForMarker(
+        (commentId) => {
+          const found = this.ctx.db.query(
+            "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ?",
+          ).get(mapped.sessionId, commentId) as { seq?: number } | null;
+          return found?.seq == null ? null : Number(found.seq);
+        },
+        { ...mapped.metadata, comment_id: mapped.metadata.comment_id as string | undefined },
+      );
+      if (target != null) mapped.metadata.target_seq = target;
+    }
+    if (mapped.kind === "task_completed" || mapped.kind === "task_failed" || mapped.kind === "task_cancelled" || mapped.kind === "task_steer") {
+      const target = mapped.taskId
+        ? this.ctx.db.query(
+          "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
+        ).get(mapped.sessionId, mapped.taskId) as { seq?: number } | null
+        : null;
+      if (target?.seq != null) mapped.metadata.target_seq = Number(target.seq);
+    }
+    this.ctx.conversationLog().appendWithinTransaction({
+      sessionId: mapped.sessionId,
+      seq: mapped.seq,
+      id: mapped.id,
+      kind: mapped.kind,
+      authorType: mapped.authorType,
+      authorId: mapped.authorId,
+      taskId: mapped.taskId,
+      bodyMd: mapped.bodyMd,
+      parentId: mapped.parentId,
+      metadata: mapped.metadata,
+      createdAt: mapped.createdAt,
+    });
   }
 
   listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
@@ -632,6 +719,11 @@ export class IssueSessionsRepo {
     let task: MultiremiTask;
     try {
       task = this.ctx.db.transaction(() => {
+        // Global lock order (MUL-405): W before this transaction's first domain
+        // write. `addSessionParticipant` inserts a participant row (D) and the
+        // Task writer below takes W again for free; taking W here is what keeps
+        // the order W -> D instead of the D -> W the sentinel caught.
+        this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
         this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
         return this.ctx.tasks().createTaskWithinTransaction({
           agentId,

@@ -1,12 +1,126 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
+import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+
+import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
+import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES, traceFiniteEventBytes } from "./trace-budget-fixtures.js";
 
 afterEach(resetMultiremiTestEnv);
 
 const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 
 describe("Multiremi API - issue sharing", () => {
+  for (const endpoint of ["page", "share"] as const) {
+    for (const { name, input } of oversizedTraceCases) {
+      it(`${endpoint} trace returns ${name} byte-for-byte alone and keeps pagination`, async () => {
+        const store = createStore();
+        store.ensureLocalWorkspace();
+        const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+        const runtime = store.registerRuntime({ id: "rt_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
+        const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Budget issue", workspaceId: "local" });
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+        store.markTaskTraceDaemon(task.id, runtime.id);
+        if (name === "contract-limit event" || input.type === "x") {
+          expect(sanitizeStoredEvent(input, input.ts ?? TRACE_BUDGET_FIXTURE_TS)).toEqual({ ts: TRACE_BUDGET_FIXTURE_TS, ...input });
+        }
+        const original = trace.append(task.id, [input, { type: "text", content: "last" }]).events;
+        const eventBytes = Buffer.byteLength(JSON.stringify(original[0]));
+        expect(eventBytes).toBeGreaterThan(TRACE_READ_MAX_BYTES);
+        expect(isTraceFileEvent(original[0])).toBe(true);
+        expect(original[0]!.ts).toBe(input.ts ?? TRACE_BUDGET_FIXTURE_TS);
+        expect(traceFiniteEventBytes(original[0]!)).toBeLessThanOrEqual(TRACE_SANITIZED_EVENT_MAX_BYTES);
+        const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
+        const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+        expect(shared.status).toBe(201);
+        const token = (await shared.json()).share.token;
+        const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+        const response = await app.request(path, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        const page = JSON.parse(text);
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(eventBytes + 512);
+        expect(page).toMatchObject({ state: "ok", head: 2, next_after_seq: original[0]!.seq, eof: false });
+        expect(page.events).toHaveLength(1);
+        expect(JSON.stringify(page.events[0])).toBe(JSON.stringify(original[0]));
+        const next = await app.request(`${path}?after_seq=${page.next_after_seq}`, { headers: { "X-Remi-Share": token } });
+        expect(next.status).toBe(200);
+        const last = await next.json();
+        expect(last).toMatchObject({ state: "ok", head: 2, next_after_seq: original[1]!.seq, eof: true });
+        expect(JSON.stringify(last.events)).toBe(JSON.stringify([original[1]!]));
+        console.log(`B5 r9 ${name} HTTP ${endpoint}: event=${eventBytes}, finite=${traceFiniteEventBytes(original[0]!)}, events=${Buffer.byteLength(JSON.stringify(page.events))}, body=${Buffer.byteLength(text)}`);
+      });
+    }
+
+    it(`${endpoint} trace returns normal, oversized, normal events on exact successive pages`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+      const agent = store.createAgent({ name: "Mixed trace agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Mixed trace", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Mixed trace" });
+      const original = trace.append(task.id, [
+        { type: "text", content: "first" },
+        { type: "text", content: "\u0001".repeat(180_000) },
+        { type: "text", content: "last" },
+      ]).events;
+      store.markTaskTraceDaemon(task.id, "rt_budget");
+      const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
+      const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+      expect(shared.status).toBe(201);
+      const token = (await shared.json()).share.token;
+      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      let afterSeq = 0;
+      for (const event of original) {
+        const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        const page = JSON.parse(text);
+        expect(page).toMatchObject({ state: "ok", head: 3, next_after_seq: event.seq, eof: event.seq === 3 });
+        expect(JSON.stringify(page.events)).toBe(JSON.stringify([event]));
+        if (event.seq !== 2) {
+          expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES);
+          expect(Buffer.byteLength(text)).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+        }
+        afterSeq = page.next_after_seq;
+      }
+    });
+
+    it(`${endpoint} trace keeps two 600KiB events on separate bounded pages`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Multi-event budget", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+      const original = trace.append(task.id, [
+        { type: "text", content: "\u0001".repeat(100_000) }, { type: "text", content: "\u0001".repeat(100_000) },
+      ]).events;
+      expect(Buffer.byteLength(JSON.stringify(original[0]))).toBeGreaterThan(600_000);
+      const daemon = new InMemoryDaemonTraceReader(() => trace);
+      // This source intentionally ignores the byte budget, exercising B5 itself.
+      daemon.read = async () => ({ ok: true, events: original, next_after_seq: 2, head: 2, eof: true, closed: true });
+      store.markTaskTraceDaemon(task.id, "rt_budget");
+      const app = createMultiremiApp({ store, daemonTraceReader: daemon, shareSecret: "test-share-secret" });
+      const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+      const token = (await shared.json()).share.token;
+      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      for (const afterSeq of [0, 1]) {
+        daemon.read = async () => ({ ok: true, events: original.slice(afterSeq), next_after_seq: 2, head: 2, eof: true, closed: true });
+        const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+        const page = JSON.parse(text);
+        expect(page).toMatchObject({ next_after_seq: afterSeq + 1, eof: afterSeq === 1 });
+        expect(JSON.stringify(page.events)).toBe(JSON.stringify([original[afterSeq]!]));
+      }
+    });
+  }
+
   it("hard-denies task credentials from minting, reading, extending, or revoking share capabilities", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -44,10 +158,12 @@ describe("Multiremi API - issue sharing", () => {
   it("grants a signed, revocable, issue-only read view to a logged-in non-member", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
+    const traceStore = new InMemoryTraceStore();
     const app = createMultiremiApp({
       store,
       authToken: "root-secret",
       shareSecret: "test-share-secret",
+      daemonTraceReader: new InMemoryDaemonTraceReader(() => traceStore),
     });
     const owner = await store.createAccessToken({
       name: "Owner session",
@@ -120,7 +236,7 @@ describe("Multiremi API - issue sharing", () => {
       kind: "message",
       body: "A visible session event",
     });
-    const agent = store.createAgent({ name: "Delivery Agent", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Delivery Agent", provider: "claude", workspaceId: "local", visibility: "private", ownerId: "local" });
     const task = store.createTask({
       agentId: agent.id,
       issueId: issue.id,
@@ -129,6 +245,8 @@ describe("Multiremi API - issue sharing", () => {
       prompt: "Deliver the plan",
     });
     store.appendTaskMessages(task.id, [{ type: "assistant", content: "A visible task message" }]);
+    traceStore.append(task.id, [{ type: "text", content: "A visible task message" }]);
+    store.markTaskTraceDaemon(task.id, runtime.id);
     store.publishSessionResult(session.id, {
       title: "Release result",
       body: "A visible published result",
@@ -196,7 +314,42 @@ describe("Multiremi API - issue sharing", () => {
     expect(bundle.sessions.some((item: { events: Array<{ body?: string }> }) => (
       item.events.some((event) => event.body === "A visible session event")
     ))).toBe(true);
-    expect(JSON.stringify(bundle.sessions)).toContain("A visible task message");
+    expect(bundle.sessions[0].tasks[0]).not.toHaveProperty("messages");
+    expect(JSON.stringify(bundle)).not.toContain("A visible task message");
+    const tracePath = `/api/shares/${encodeURIComponent(share.token)}/tasks/${task.id}/trace`;
+    const sharedTrace = await app.request(tracePath, bearer(viewer.token));
+    expect(sharedTrace.status).toBe(200);
+    expect(await sharedTrace.json()).toMatchObject({ state: "ok", source: "daemon", events: [{ content: "A visible task message" }] });
+    traceStore.append(task.id, [
+      { type: "text", content: "a".repeat(600_000) },
+      { type: "text", content: "b".repeat(600_000) },
+    ]);
+    for (const [path, credential] of [
+      [tracePath, viewer.token],
+      [`/api/tasks/${task.id}/trace`, owner.token],
+    ]) {
+      const response = await app.request(path, bearer(credential));
+      expect(response.status).toBe(200);
+      expect(Buffer.byteLength(await response.text())).toBeLessThanOrEqual(1024 * 1024 + 512);
+    }
+    // The share deliberately preserves today's private-agent bypass.
+    expect((await app.request(`/api/tasks/${task.id}/trace`, bearer(viewer.token))).status).toBe(404);
+    expect((await app.request(tracePath)).status).toBe(401);
+    expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/tsk_unknown/trace`, bearer(viewer.token))).status).toBe(404);
+    const foreignTask = store.createTask({ agentId: agent.id, issueId: otherIssue.id, workspaceId: "local", prompt: "foreign" });
+    expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${foreignTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
+    const unscopedTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "unscoped" });
+    expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${unscopedTask.id}/trace`, bearer(viewer.token))).status).toBe(200);
+    db!.run("UPDATE multiremi_tasks SET chat_session_id = 'chat_share_excluded' WHERE id = ?", [unscopedTask.id]);
+    expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${unscopedTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
+    const foreignSession = store.createIssueSession(otherIssue.id, { title: "Foreign session" });
+    const wrongSessionTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "wrong session" });
+    db!.run("UPDATE multiremi_tasks SET issue_session_id = ? WHERE id = ?", [foreignSession.id, wrongSessionTask.id]);
+    expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${wrongSessionTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
+    const shareId = store.getActiveIssueShare(issue.id)!.id;
+    db!.run("UPDATE multiremi_issue_shares SET expires_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", shareId]);
+    expect((await app.request(tracePath, bearer(viewer.token))).status).toBe(404);
+    db!.run("UPDATE multiremi_issue_shares SET expires_at = ? WHERE id = ?", [share.expires_at, shareId]);
     expect(bundle.session_results[0].body).toBe("A visible published result");
     expect(bundle.issue_workspace).toMatchObject({
       runtime_id: runtime.id,
@@ -220,6 +373,7 @@ describe("Multiremi API - issue sharing", () => {
 
     const tampered = share.token.slice(0, -1) + (share.token.endsWith("a") ? "b" : "a");
     expect((await app.request(`/api/shares/${encodeURIComponent(tampered)}`, bearer(viewer.token))).status).toBe(404);
+    expect((await app.request(`/api/shares/${encodeURIComponent(tampered)}/tasks/${task.id}/trace`, bearer(viewer.token))).status).toBe(404);
 
     const viewerRevoke = await app.request(`/api/issues/${issue.id}/share`, {
       method: "DELETE",
@@ -233,6 +387,7 @@ describe("Multiremi API - issue sharing", () => {
     });
     expect(revoked.status).toBe(204);
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}`, bearer(viewer.token))).status).toBe(404);
+    expect((await app.request(tracePath, bearer(viewer.token))).status).toBe(404);
   });
 
   it("requires a logged-in user even when the share token is valid", async () => {

@@ -1,4 +1,5 @@
 export const QUEUED_CAPABILITY_GRACE_MS = 120_000;
+export const QUEUED_CAPABILITY_FALLBACK_MS = 5 * 60_000;
 // This lightweight alert uses task creation age. Before adding Inbox/Feishu
 // delivery, persist starvation_started_at and measure continuous capability failure.
 export const QUEUED_CAPABILITY_ALERT_MS = 15 * 60_000;

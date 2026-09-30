@@ -14,6 +14,8 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { DaemonRetiredError } from "@multiremi/store/repos/daemon-retirement-repo.js";
 import type {
   CreatePinnedItemInput,
@@ -333,28 +335,41 @@ export class ProjectsRepo {
     return rows.map(toPinnedItem);
   }
 
+  /**
+   * `position` is another `MAX + 1` (MUL-405): two processes pinning at the same
+   * time read the same maximum and then write the same position, so the list
+   * order stops being reproducible. The read and the insert share one
+   * transaction that first takes the per-owner number lock.
+   */
   createPinnedItem(input: CreatePinnedItemInput): MultiremiPinnedItem {
     const itemType = normalizePinnedItemType(input.itemType ?? input.item_type);
     const itemId = String(input.itemId ?? input.item_id ?? "").trim();
     if (!itemId) throw new Error("item_id is required");
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const userId = input.userId ?? input.user_id ?? "local";
-    this.validatePinnedItemTarget(workspaceId, itemType, itemId);
-    const existing = this.ctx.db.query(
-      "SELECT id FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
-    ).get(workspaceId, userId, itemType, itemId) as Row | null;
-    if (existing) throw new Error("Item already pinned");
-    const maxRow = this.ctx.db.query(
-      "SELECT COALESCE(MAX(position), 0) AS max_position FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ?",
-    ).get(workspaceId, userId) as Row | null;
-    const id = input.id ?? createId("pin");
-    const position = Number(maxRow?.max_position ?? 0) + 1;
-    this.ctx.db.run(
-      `INSERT INTO multiremi_pinned_items (id, workspace_id, user_id, item_type, item_id, position, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, workspaceId, userId, itemType, itemId, position, nowIso()],
-    );
-    return this.getPinnedItem(id)!;
+    return this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+      // lifecycle row lock precedes the number lock on every path that needs
+      // both, so no transaction can take them in opposite orders.
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`pinned-item:${workspaceId}:${userId}`));
+      this.validatePinnedItemTarget(workspaceId, itemType, itemId);
+      const existing = this.ctx.db.query(
+        "SELECT id FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
+      ).get(workspaceId, userId, itemType, itemId) as Row | null;
+      if (existing) throw new Error("Item already pinned");
+      const maxRow = this.ctx.db.query(
+        "SELECT COALESCE(MAX(position), 0) AS max_position FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ?",
+      ).get(workspaceId, userId) as Row | null;
+      const id = input.id ?? createId("pin");
+      const position = Number(maxRow?.max_position ?? 0) + 1;
+      this.ctx.db.run(
+        `INSERT INTO multiremi_pinned_items (id, workspace_id, user_id, item_type, item_id, position, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, workspaceId, userId, itemType, itemId, position, nowIso()],
+      );
+      return this.getPinnedItem(id)!;
+    })();
   }
 
   getPinnedItem(id: string): MultiremiPinnedItem | null {

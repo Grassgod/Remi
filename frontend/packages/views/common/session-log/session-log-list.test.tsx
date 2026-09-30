@@ -141,6 +141,19 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("notifies the route only after the log becomes visible", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)], ready: true } });
+    const onRevealed = vi.fn();
+    const view = renderList(replica, { contentReady: false, onRevealed });
+    reveal();
+    expect(onRevealed).not.toHaveBeenCalled();
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} contentReady onRevealed={onRevealed} />);
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    view.restore();
+  });
+
   it("publishes fresh=0 while the replica's window is behind the server", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1)], ready: true, fresh: false },
@@ -149,6 +162,42 @@ describe("SessionLogList", () => {
     reveal();
     expect(view.root.getAttribute("data-perf-state")).toBe("ready");
     expect(view.root.getAttribute("data-perf-fresh")).toBe("0");
+    view.restore();
+  });
+
+  it("holds the first visible frame until content above the anchor is ready", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1)], ready: true, fresh: true },
+    });
+    const view = renderList(replica, { contentReady: false });
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("pending");
+    expect(view.content.style.visibility).toBe("hidden");
+
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} contentReady />);
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(view.content.style.visibility).toBe("");
+    view.restore();
+  });
+
+  it("positions a cached inbox target when the Issue resolves after the log window", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2)], ready: true, fresh: true },
+    });
+    const anchor = { kind: "element" as const, id: "comment-cmt_2" };
+    const view = renderList(replica, { anchor, contentReady: false });
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("pending");
+    expect(view.content.style.visibility).toBe("hidden");
+
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} anchor={anchor} contentReady />);
+    reveal();
+    const target = view.container.querySelector('[data-perf-anchor="target-comment"]');
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(target).toHaveAttribute("id", anchor.id);
+    expect(target).toHaveClass("bg-warning/10");
+    expect(view.content.style.visibility).toBe("");
     view.restore();
   });
 
@@ -166,6 +215,21 @@ describe("SessionLogList", () => {
     expect(rows[1]!.getAttribute("data-perf-anchor")).toBe("latest-message");
     expect(rows[0]!.id).toBe("comment-cmt_1");
     expect(rows[0]!.textContent).toContain("body 1");
+    view.restore();
+  });
+
+  it("marks the newest Issue comment as its terminal anchor even after a system notice", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2, {
+        kind: "follow_frozen", body_md: "Frozen",
+      })] },
+    });
+    const view = renderList(replica, { perfScroll: "issue-detail", latestAnchor: "latest-comment" });
+    reveal();
+
+    expect(view.root.getAttribute("data-perf-scroll")).toBe("issue-detail");
+    expect(view.container.querySelector('[data-perf-anchor="latest-comment"]')?.id).toBe("comment-cmt_1");
+    expect(view.container.querySelectorAll('[data-perf-anchor="latest-message"]')).toHaveLength(0);
     view.restore();
   });
 
@@ -281,6 +345,12 @@ describe("SessionLogList", () => {
     const capped = view.container.querySelector("[data-session-log-new-messages]");
     expect(capped!.textContent).toContain("99+");
     expect(capped!.getAttribute("aria-label")).toContain("123");
+    act(() => {
+      fireEvent.click(capped!);
+      raf.runFrame();
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("returning");
+    expect(view.container.querySelector("[data-session-log-new-messages]")).toBeNull();
     view.restore();
   });
 

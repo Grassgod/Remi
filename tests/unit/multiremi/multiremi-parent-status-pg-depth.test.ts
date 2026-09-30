@@ -4,15 +4,22 @@
  * the E2 hook's own atomicity and the "two children end while the owner is
  * busy" coalescing contract.
  *
- * The depth counter wraps the `PostgresSyncDatabase` the store was built with,
- * so it measures the real BEGIN/COMMIT nesting. Anything above 1 means an inner
- * COMMIT ended the outer transaction early (there are no savepoints).
+ * Depth 1 is a hard contract for these entry points, not a bridge limit (Senior
+ * ruling cmt_96e1yqxgifms §1,
+ * docs/adr/0011-transaction-ownership-and-side-effect-timing.md). The depth
+ * counter wraps the `PostgresSyncDatabase` the store was built with and counts
+ * every `transaction()` frame, outer and nested: a nested frame is a SAVEPOINT
+ * (MUL-405), the cross-repo-reuse safety net (ADR 0011 §2), not a frame a
+ * guarded helper may add. It also records the actual transaction-control SQL:
+ * before the outer COMMIT, no second BEGIN or premature COMMIT is allowed, and a
+ * nested layer may only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT.
+ * The post-commit hook, atomicity, rollback and event checks stay as they are.
  *
  * Skipped (not failed) when Postgres is unreachable, matching the other PG
  * suites. Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the
  * configured role may CREATE DATABASE.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -47,16 +54,86 @@ if (!pgAvailable) {
   );
 }
 
-interface DepthCounter { max: number; reset(): void }
+interface TransactionControl {
+  sql: string;
+  invocationDepth: number;
+  callbackDepth: number;
+  inTransaction: boolean;
+}
+
+interface DepthCounter {
+  max: number;
+  controls: TransactionControl[];
+  reset(): void;
+  assertTransactionControl(label?: string): void;
+}
 
 /** Wrap `transaction()` on the real handle; the store's proxy forwards to it. */
 function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const original = database.transaction.bind(database);
-  const counter: DepthCounter = { max: 0, reset() { counter.max = 0; } };
+  const counter: DepthCounter = {
+    max: 0,
+    controls: [],
+    reset() {
+      counter.assertTransactionControl("before the next entry point");
+      counter.max = 0;
+      counter.controls = [];
+    },
+    assertTransactionControl(label = "PG transaction control") {
+      let outerOpen = false;
+      const savepoints: string[] = [];
+      for (const control of counter.controls) {
+        const detail = `${label}: ${control.sql}`;
+        if (control.sql === "BEGIN") {
+          expect(outerOpen, detail).toBe(false);
+          expect(control.inTransaction, detail).toBe(false);
+          expect(control.invocationDepth, detail).toBe(1);
+          expect(control.callbackDepth, detail).toBe(0);
+          outerOpen = true;
+        } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+          expect(outerOpen, detail).toBe(true);
+          expect(control.inTransaction, detail).toBe(true);
+          expect(control.invocationDepth, detail).toBe(1);
+          expect(control.callbackDepth, detail).toBe(0);
+          expect(savepoints, detail).toHaveLength(0);
+          outerOpen = false;
+        } else {
+          expect(outerOpen, detail).toBe(true);
+          expect(control.inTransaction, detail).toBe(true);
+          expect(control.invocationDepth, detail).toBeGreaterThan(1);
+          expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+          const name = control.sql.split(" ").at(-1)!;
+          if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+          else {
+            // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
+            expect(savepoints.at(-1), detail).toBe(name);
+            savepoints.pop();
+          }
+        }
+      }
+      expect(outerOpen, label).toBe(false);
+      expect(savepoints, label).toHaveLength(0);
+    },
+  };
   let depth = 0;
+  let callbackDepth = 0;
+  // Observe statements at the bridge boundary and retain callback ownership.
+  const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+  const execute = target.execute.bind(database);
+  target.execute = (sql, params) => {
+    const command = sql.trim().toUpperCase();
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+      counter.controls.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
+    }
+    return execute(sql, params);
+  };
   (database as unknown as { transaction: unknown }).transaction =
     (fn: (...args: never[]) => unknown) => {
-      const run = original(fn as never) as (...args: unknown[]) => unknown;
+      const run = original((...args: never[]) => {
+        callbackDepth += 1;
+        try { return fn(...args); }
+        finally { callbackDepth -= 1; }
+      }) as (...args: unknown[]) => unknown;
       return (...args: unknown[]) => {
         depth += 1;
         counter.max = Math.max(counter.max, depth);
@@ -125,6 +202,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     await admin?.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin?.end();
   });
+
+  beforeEach(() => counter.reset());
+  afterEach(() => counter.assertTransactionControl());
 
   /** A fresh workspace per case, so issue numbering and locks stay isolated. */
   function freshWorkspace(): { workspaceId: string; agent: string; runtime: string } {
@@ -906,6 +986,171 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(threw).toBe(true);
     expect(store.getTask(targetTask.id)?.status).toBe("queued");
     expect(events).toHaveLength(0);
+  });
+
+  it("publishes the self-transactional system-comment activity after its outer COMMIT (Postgres)", () => {
+    const { workspaceId } = freshWorkspace();
+    const issue = store.createIssue({ title: "PG wrapper issue", workspaceId, status: "in_progress" });
+    const events: Array<{ action: string; inTransaction: boolean; lastControl: string | undefined }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") {
+        events.push({
+          action: entry?.action ?? "",
+          inTransaction: db.inTransaction,
+          lastControl: counter.controls.at(-1)?.sql,
+        });
+      }
+    });
+    // MUL-402 12:20 ruling (a): the main wrapper owns its COMMIT, not a savepoint.
+    counter.reset();
+    try {
+      store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper", "PG wrapper body");
+    } finally {
+      unsubscribe();
+    }
+    expect(counter.max).toBe(1);
+    counter.assertTransactionControl("createTaskFailureSystemComment COMMIT");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(1);
+    expect(events).toEqual([{ action: "comment_created", inTransaction: false, lastControl: "COMMIT" }]);
+
+    const rollbackEvents: string[] = [];
+    const unsubscribeRollback = store.onWorkspaceEvent((event) => { rollbackEvents.push(event.type); });
+    const original = StoreContext.prototype.appendIssueActivity;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      ...args: Parameters<StoreContext["appendIssueActivity"]>
+    ) {
+      const result = original.apply(this, args);
+      if (args[1].type === "comment_created") throw new Error("PG wrapper rollback injection");
+      return result;
+    };
+    counter.reset();
+    try {
+      expect(() => store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper_2", "PG rollback body"))
+        .toThrow("PG wrapper rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribeRollback();
+    }
+    counter.assertTransactionControl("createTaskFailureSystemComment ROLLBACK");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(0);
+    expect(counter.controls.filter((control) => control.sql === "ROLLBACK")).toHaveLength(1);
+    expect(rollbackEvents).toHaveLength(0);
+    expect(store.listIssueComments(issue.id).filter((comment) => comment.body === "PG rollback body")).toHaveLength(0);
+  });
+
+  it("records actual PG transaction control for the remaining SQLite-suite entry points", () => {
+    let observed = 0;
+    const check = (label: string, action: () => void) => {
+      counter.reset();
+      action();
+      counter.assertTransactionControl(label);
+      expect(counter.max, label).toBeLessThanOrEqual(1);
+      observed += counter.controls.length;
+    };
+
+    for (const status of ["blocked", "cancelled"] as const) {
+      for (const busy of [false, true]) {
+        const { workspaceId, agent } = freshWorkspace();
+        const parent = store.createIssue({
+          title: `PG ${status} parent ${busy}`, workspaceId, status: "in_progress",
+          assigneeType: "agent", assigneeId: agent,
+        });
+        if (busy) {
+          const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
+          db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+        }
+        const child = store.createIssue({ title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+        check(`updateIssue ${status}, busy=${busy}`, () => { store.updateIssue(child.id, { status }); });
+      }
+    }
+
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const parent = store.createIssue({ title: "PG remaining parent", workspaceId, status: "in_review" });
+    let child!: ReturnType<MultiremiStore["createIssue"]>;
+    check("createIssue re-derivation", () => {
+      child = store.createIssue({ title: "PG new child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+    });
+    const second = store.createIssue({ title: "PG second parent", workspaceId, status: "in_review" });
+    check("updateIssue re-parent", () => { store.updateIssue(child.id, { parentIssueId: second.id }); });
+
+    const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "PG ask" });
+    let claimed = store.claimTask(runtime);
+    while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime);
+    if (!claimed) throw new Error("PG human request task was not claimed");
+    store.startTask(task.id);
+    let request!: ReturnType<MultiremiStore["createTaskHumanRequest"]>;
+    check("createTaskHumanRequest", () => {
+      request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "PG choice?" } });
+    });
+    check("respondTaskHumanRequest", () => { store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } }); });
+    request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "PG expiry?" } });
+    check("expireTaskHumanRequest", () => { store.expireTaskHumanRequest(request.id, "timeout"); });
+    store.cancelTask(task.id);
+
+    const comment = store.createIssueComment(child.id, { authorType: "member", authorId: "local", body: "PG trigger" });
+    store.createTask({ agentId: agent, issueId: child.id, runtimeId: runtime, triggerCommentId: comment.id, prompt: "PG triggered" });
+    check("cancelTasksByTriggerComments", () => { store.cancelTasksByTriggerComments(workspaceId, [comment.id]); });
+    const orphan = store.createTask({ agentId: agent, issueId: child.id, runtimeId: runtime, prompt: "PG orphan" });
+    claimed = store.claimTask(runtime);
+    while (claimed && claimed.id !== orphan.id) claimed = store.claimTask(runtime);
+    if (!claimed) throw new Error("PG orphan task was not claimed");
+    check("recoverOrphans", () => { store.recoverOrphans(runtime); });
+
+    const supervisor = store.createAgent({ name: "PG controls organizer", provider: "claude", workspaceId, role: "supervisor" });
+    const worker = store.createAgent({ name: "PG controls worker", provider: "claude", workspaceId });
+    const patrol = store.createIssue({ title: "PG controls patrol", workspaceId });
+    const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "PG patrol" });
+    store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
+    for (const action of ["cancel", "redispatch"] as const) {
+      const target = store.createTask({ agentId: worker.id, issueId: child.id, prompt: `PG ${action}` });
+      check(`performOrganizerAction ${action}`, () => {
+        store.performOrganizerAction({
+          supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisor.id,
+          targetTaskId: target.id, action, reason: "PG controls probe",
+        });
+      });
+    }
+
+    const originalKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const repositoryId = `repo_pg_controls_${workspaceCounter}`;
+      store.updateWorkspace(workspaceId, {
+        repos: [{ id: repositoryId, name: "widgets", url: "git@github.com:acme/widgets.git", source: "github", default_branch: "main" }],
+        settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+      });
+      const connection = store.createScmConnection({
+        workspaceId, name: "PG controls SCM", provider: "github", mode: "hybrid",
+        accessToken: "ghp_depth_token", webhookSecret: "depth-webhook-secret", repositoryIds: [repositoryId],
+      });
+      for (const hasOpenChildren of [true, false]) {
+        const mergedIssue = store.createIssue({ title: "PG SCM controls", workspaceId, status: "in_progress" });
+        const scmChild = store.createIssue({ title: "PG SCM child", workspaceId, parentIssueId: mergedIssue.id, status: "in_progress" });
+        if (!hasOpenChildren) store.updateIssue(scmChild.id, { status: "done" });
+        const externalId = hasOpenChildren ? "42" : "43";
+        store.advanceScmEntitySnapshot({
+          connectionId: connection.id, repositoryId, entityType: "change_request", externalId,
+          revisionAt: "2026-08-21T10:00:00.000Z", revision: `v-${externalId}`, contentHash: `change-${externalId}`,
+          payload: { number: Number(externalId), title: `${mergedIssue.key}: deliver`, state: "merged", source_branch: "agent/depth", url: `https://github.com/acme/widgets/pull/${externalId}` },
+        });
+        check(`recordScmCanonicalEvent held=${hasOpenChildren}`, () => {
+          store.recordScmCanonicalEvent({
+            workspaceId, connectionId: connection.id, repositoryId, type: "change.merged",
+            subjectType: "change_request", subjectId: externalId, logicalKey: `change.merged:${externalId}:controls`, fidelity: "inferred",
+            payload: { id: `provider-change-${externalId}`, number: Number(externalId), branch: "main", mergeSha: "abc" },
+            evidence: { source: "poll", dedupeKey: `poll:${externalId}`, providerEventId: null },
+          });
+        });
+      }
+    } finally {
+      if (originalKey === undefined) delete process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_SCM_ENCRYPTION_KEY = originalKey;
+    }
+    expect(observed, "actual PG transaction control statements were recorded").toBeGreaterThan(0);
   });
 
   it("coalesces two children ending concurrently into one queued round (Postgres)", async () => {

@@ -132,7 +132,7 @@
   "fallback": {
     "model_label": "Fallback model",
     "thinking_label": "Fallback reasoning effort",
-    "description": "Only takes over the current task when the primary model's gateway resources are unavailable.",
+    "description": "Takes over the current task when the primary model or gateway is unavailable.",
     "unconfigured": "Not configured",
     "same_as_primary": "Must differ from the primary model",
     "clear": "Remove fallback model",
@@ -141,6 +141,9 @@
     "switch_count": "{{count}} switch",
     "reason_gateway": "Gateway resources unavailable",
     "reason_no_account": "No available gateway account",
+    "reason_model_unavailable": "Primary model unavailable",
+    "reason_server": "Provider server error",
+    "reason_queued": "No Runtime supports the primary model",
     "reason_unknown": "Resource unavailable"
   },
   "inspector": {
@@ -430,6 +433,18 @@
   },
   "transcript": {
     "dialog_title": "Agent Execution Transcript",
+    "view_live": "View live execution",
+    "view_finished": "View finished execution",
+    "trace_loading": "Loading execution trace…",
+    "trace_live": "Live updates",
+    "trace_finished": "Execution finished · {{count}} events",
+    "trace_unreachable": "Runtime {{name}} is offline; execution trace is temporarily unavailable",
+    "trace_last_seen": "Last online {{time}}",
+    "trace_backfilling": "Execution trace is being restored",
+    "trace_lost": "Execution trace was lost",
+    "trace_not_found": "No execution trace is available",
+    "trace_failed": "Could not load the execution trace",
+    "trace_retry": "Retry",
     "execution_view": "Execution",
     "prompt_view": "Input Prompt",
     "copy_prompt": "Copy prompt",

@@ -12,6 +12,7 @@
  */
 export const TaskFailureReason = {
   QueuedExpired: "queued_expired",
+  QueuedModelUnavailable: "queued_model_unavailable",
   RuntimeOffline: "runtime_offline",
   RuntimeRecovery: "runtime_recovery",
   Timeout: "timeout",
@@ -42,16 +43,17 @@ export const TaskFailureReason = {
 export type TaskFailureReasonValue = typeof TaskFailureReason[keyof typeof TaskFailureReason];
 
 /**
- * Recoverable resource exhaustion of the primary model's gateway. The model has
- * no capacity left, so running the SAME model again cannot help — these are the
- * only reasons allowed to switch a task to its Agent's fallback model, and only
- * once per recovery chain. Auth, model-access, request-shape, context, tool and
- * business failures are deliberately absent: they are not resource problems and
- * switching models would hide a real misconfiguration instead of fixing it.
+ * Primary model or gateway unavailable (MUL-478). These reasons may spend the
+ * recovery chain's single switch to the Agent's fallback model. Model lookup,
+ * server errors and capability starvation are included; auth, configuration,
+ * request-shape, context, tool and business failures retain their own policies.
  */
 export const MODEL_FALLBACK_FAILURE_REASONS: ReadonlySet<string> = new Set<string>([
   TaskFailureReason.AgentProviderNoAvailableAccount,
   TaskFailureReason.AgentProviderQuotaLimit,
+  TaskFailureReason.AgentModelNotFoundOrUnavailable,
+  TaskFailureReason.AgentProviderServerError,
+  TaskFailureReason.QueuedModelUnavailable,
 ]);
 
 /**

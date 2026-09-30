@@ -18,6 +18,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import {
   type CommitEventQueue,
+  type CreatedIssueComment,
   type StoreContext,
   type WorkspaceEvent,
   createCommitEventQueue,
@@ -27,7 +28,10 @@ import {
 import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -403,9 +407,9 @@ type CreateIssueCommentOptions =
     deferAgentMentionDispatch?: boolean;
     /**
      * The caller already owns a database transaction (the organizer action
-     * facade). Every write inside must use the `WithinTransaction` flavour,
-     * because PostgresSyncDatabase has no savepoints and a nested BEGIN would
-     * end the caller's transaction at its COMMIT.
+     * facade). Every write inside must use the `WithinTransaction` flavour:
+     * a nested `transaction()` is only a SAVEPOINT (B1, MUL-426), so a
+     * standalone wrapper would publish and dispatch before the caller's COMMIT.
      */
     withinTransaction: true;
     /**
@@ -449,8 +453,15 @@ export class IssuesRepo {
    * number. Dispatch is the caller's business and happens after this commits.
    *
    * The body runs through {@link createIssueWithinTransaction}; the wrapper only
-   * decides whether it owns the transaction, because Postgres has no savepoints
-   * here and callers such as Feishu ingestion and autopilots already hold one.
+   * decides whether it owns the transaction, because callers such as Feishu
+   * ingestion and autopilots already hold one, and nested its `transaction()`
+   * would only be a SAVEPOINT (B1, MUL-426) that publishes before their COMMIT.
+   *
+   * MUL-405: the body also allocates `issue_number` under the per-workspace
+   * number advisory lock (W -> N -> D, see `store/advisory-locks.ts`), so a peer
+   * blocks instead of reading a maximum this transaction is about to consume.
+   * The `(workspace_id, issue_number)` unique index is the second line of
+   * defense, not the mechanism.
    */
   createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
@@ -833,9 +844,21 @@ export class IssuesRepo {
   ): MultiremiIssue {
     assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
+
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Global lock order (MUL-405, see store/advisory-locks.ts): W then N, before
+    // any domain row lock. Callers that already took them (Feishu ingest,
+    // messaging outcomes, Autopilot create_issue) re-take the same locks for
+    // free inside their transaction; callers that did not (the plain API path)
+    // get them here. N is taken before the MAX(issue_number) read below.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
+    // Child membership and guarded parent decisions serialize on the parent row.
+    if (parentIssueId && !lockIssueRowWithinTransaction(this.ctx.db, parentIssueId)) {
+      throw new Error(`Parent issue not found: ${parentIssueId}`);
+    }
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
     if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");
@@ -941,8 +964,10 @@ export class IssuesRepo {
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
       if (parent) {
-        // This method owns no transaction of its own; the caller's queue is the
-        // one that is (or will be) drained after the insert commits.
+        // The hops this produces are replayed by the owner of the transaction
+        // after it commits (see `createIssue`); running them here would open a
+        // nested transaction whose work a rollback could still erase.
+
         this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
@@ -2284,9 +2309,10 @@ export class IssuesRepo {
    *
    * The row update, `issue_updated`, `issue_status_forced` and
    * `parent_done_grant_used` commit together, so an exception after any of them
-   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: Postgres
-   * has no savepoints, so this method never opens a transaction and never emits
-   * a workspace event directly. The caller must run
+   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: only the
+   * caller's COMMIT makes the write durable (a nested `transaction()` is a
+   * SAVEPOINT since B1, MUL-426), so this method never opens a transaction and
+   * never emits a workspace event directly. The caller must run
    * {@link runIssueUpdatePostCommit} after its COMMIT.
    */
   updateIssueWithinTransaction(
@@ -2328,13 +2354,21 @@ export class IssuesRepo {
     // until commit, while SQLite serializes the writer transaction. Re-read
     // only after acquiring it so a user terminal transition and a worker
     // lifecycle transition can never derive writes from the same stale row.
-    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+    // Keep workspace -> child -> parent order. A new membership (even a closed
+    // child) changes A4; reopening changes the unfinished-child count as well.
+    if (nextParentIssueId && (nextParentIssueId !== current.parentIssueId
+      || (isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus)))) {
+      if (!lockIssueRowWithinTransaction(this.ctx.db, nextParentIssueId)) {
+        throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      }
+    }
     let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
     const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
     const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
@@ -2385,7 +2419,6 @@ export class IssuesRepo {
     }
 
     const updatedAt = nowIso();
-    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
     // MUL-400 E3 gate 2: dependency and parent-grant guards are both decided
     // while the same Issue row lock is held.
     this.assertDependenciesMetForStatus(id, current, nextStatus, input, deferredEvents);
@@ -2495,6 +2528,10 @@ export class IssuesRepo {
     }
     const next = this.getIssue(id)!;
     this.linkReferencedAttachmentsToIssue(id, next.description);
+    if ((input.title !== undefined && input.title !== current.title)
+      || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {
+      this.syncIssueHeads(next, updatedAt);
+    }
     this.ctx.autopilots().enqueueIssueStatusChangedEvent({
       issue: next,
       previousStatus: current.status,
@@ -2571,7 +2608,8 @@ export class IssuesRepo {
    * Publishes the audit events the committed write queued, then runs the E1/E2
    * child-status hook, replays the transitions that hook itself produced and
    * flushes the hook's own events. The write must already be durable — the hook
-   * opens its own transaction and Postgres has no savepoints.
+   * opens its own transaction and publishes after it, and inside the caller's
+   * transaction that would only be a SAVEPOINT (B1, MUL-426).
    */
   runIssueUpdatePostCommit(
     result: {
@@ -2614,7 +2652,8 @@ export class IssuesRepo {
       // new parent is covered by the hook above.
       if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
         const oldParent = this.getIssue(previous.parentIssueId);
-        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
+        if (oldParent) this.ctx.db.transaction(() =>
+          this.rederiveParentStatus(oldParent, updated, collector, hookEvents))();
       }
     } catch (err) {
       // The hook's own transaction rolled back, so its transitions and events
@@ -2763,6 +2802,23 @@ export class IssuesRepo {
     }, deferredEvents);
   }
 
+  /**
+   * Mirror the Issue title and description into the head row of each of its
+   * sessions. The rows are updated in place, so the seq axis does not shift and
+   * a reader sees the new text through `revision` / `log_version`.
+   */
+  private syncIssueHeads(issue: MultiremiIssue, at?: string): void {
+    const sessions = this.ctx.db.query(
+      "SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issue.id) as Row[];
+    for (const session of sessions) {
+      this.ctx.conversationLog().syncIssueHeadWithinTransaction(String(session.id), {
+        title: issue.title,
+        description: issue.description,
+      }, at);
+    }
+  }
+
   restoreIssue(id: string): MultiremiIssue {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
@@ -2871,8 +2927,9 @@ export class IssuesRepo {
     // the "your prerequisite failed" lines, and it is independent of whether
     // this issue has a parent at all. The automatic start opens a transaction of
     // its own (see `autoStartDependent`) and runs to completion here, at depth
-    // 0 — before the report transaction below opens, because Postgres has no
-    // savepoints on this bridge.
+    // 0 — before the report transaction below opens, so it commits on its own
+    // and publishes after that COMMIT; inside the report transaction it would
+    // only be a SAVEPOINT (B1, MUL-426).
     const readinessLines: string[] = [];
     const dependencyNested: ChildStatusChangeCollector = [];
     const dependencyEvents = createCommitEventQueue();
@@ -2896,7 +2953,11 @@ export class IssuesRepo {
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) {
         const closedQueue = createCommitEventQueue();
-        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue))();
+        this.ctx.db.transaction(() => {
+          // MUL-405: W before the audit activity/comment this branch writes.
+          this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+          this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue);
+        })();
         this.ctx.emitCommitEvents(closedQueue);
       }
       return;
@@ -2910,8 +2971,9 @@ export class IssuesRepo {
     // Depth-1 contract for anything added to this hook (S2's dependency gate):
     // this transaction is the only one open here, so a step that starts a
     // transaction of its own — `assignIssue`, `createTask`, `db.transaction` —
-    // must run BEFORE it (and commit separately), not inside it. Postgres has no
-    // savepoints: an inner COMMIT would end this transaction early.
+    // must run BEFORE it (and commit separately), not inside it. Inside it that
+    // transaction would only be a SAVEPOINT (B1, MUL-426), and the step's
+    // post-transaction notifications and events would run before this COMMIT.
     const enqueued: MultiremiTask[] = [];
     const comments: MultiremiIssueComment[] = [];
     // The round this report queues is created through the one task-creation
@@ -2922,6 +2984,12 @@ export class IssuesRepo {
     const staged: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W comes before this hook's first domain
+      // write. `notifyParentOfChildOutcome` writes the parent's notification
+      // comment before `enqueueChildDoneParentTask` takes W, which classified as
+      // D -> W; taking W here covers both branches (comment-only, queued round)
+      // and is free for the branches that take it again.
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       if (outcome) {
         // MUL-400 E3 readiness lines for dependents that share this parent ride
         // along in this one report so the parent owner reads a single round.
@@ -2940,6 +3008,10 @@ export class IssuesRepo {
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
+      // Plain read, no savepoint (Senior ruling cmt_96e1yqxgifms §2). B1's
+      // bridge-failure classification is what lets this drop the wrapper: a
+      // failed bridge reply no longer aborts the surrounding transaction, so
+      // what reaches the catch below is a real SQL error.
       const workspaceId = this.ctx.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
@@ -3620,6 +3692,12 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): void {
     if (parent.status !== "in_review") return;
+    // No parent row lock before counting (MUL-471). The conditional UPDATE below
+    // takes that lock and re-checks `in_review` after any wait, so a concurrent
+    // parent decision turns it into a no-op. A child added or reopened after
+    // this count is a child event of its own, and closing a child never takes
+    // the lock, so an earlier lock would not make the count below any more
+    // current.
     const openChildren = this.countOpenChildIssues(parent.id);
     if (openChildren === 0) return;
     const now = nowIso();
@@ -3860,9 +3938,10 @@ export class IssuesRepo {
 
   /**
    * Caller already owns a transaction (the E2 hook runs inside the round's
-   * transaction). The Session event must use the `WithinTransaction` append or
-   * Postgres would see a nested BEGIN, whose COMMIT would end the caller's
-   * transaction early.
+   * transaction). The comment, its Session event and its activity commit with
+   * the caller's transaction: the Session event uses the `WithinTransaction`
+   * append (the standalone one would only add a SAVEPOINT since B1, MUL-426),
+   * and the activity's realtime push waits on the caller's queue.
    */
   private createSystemIssueCommentWithinTransaction(
     issueId: string,
@@ -3970,9 +4049,9 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): MultiremiTask[] {
     // The caller (notifyChildStatusChange) owns the only transaction, so every
-    // write here is the `WithinTransaction` flavour: `createTask` would open a
-    // second BEGIN and its COMMIT would end the caller's transaction early on
-    // Postgres, which has no savepoints.
+    // write here is the `WithinTransaction` flavour: `createTask` would run its
+    // transaction as a SAVEPOINT here (B1, MUL-426) and send its enqueue
+    // notification, child-status replay and events before the caller's COMMIT.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
@@ -4054,7 +4133,11 @@ export class IssuesRepo {
       ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
     return delegatedSession?.issueId === parentIssueId
       ? delegatedSession.id
-      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
+      // Both callers are `WithinTransaction` flavours owned by the child-status
+      // transaction, so ask for the within-transaction flavour explicitly
+      // instead of letting the public entry point add a nested frame
+      // (Senior ruling cmt_96e1yqxgifms §2).
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(parentIssueId, null).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -4194,18 +4277,25 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.db.run(
-      `UPDATE multiremi_issues
-       SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
-       WHERE id = ?`,
-      [
-        assigneeType,
-        assigneeId,
-        taskAgent ? "todo" : current.status,
-        now,
-        id,
-      ],
-    );
+    const writeAssignment = () => {
+      if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+      if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
+      const locked = this.getIssue(id)!;
+      // Agent assignment also reopens a settled Issue, independently of PATCH.
+      if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
+        if (!lockIssueRowWithinTransaction(this.ctx.db, locked.parentIssueId)) {
+          throw new Error(`Parent issue not found: ${locked.parentIssueId}`);
+        }
+      }
+      this.ctx.db.run(
+        `UPDATE multiremi_issues
+         SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
+         WHERE id = ?`,
+        [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
+      );
+    };
+    if (this.ctx.db.inTransaction) writeAssignment();
+    else this.ctx.db.transaction(writeAssignment)();
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {
@@ -4471,8 +4561,71 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
+    // The comment, its Session event and its log row commit together (B1).
+    // Notifications and agent dispatch follow that COMMIT, as before B1: a
+    // failed forced start (MUL-458) must not roll back the member's comment,
+    // and no realtime push may reach clients before the row is durable.
+    //
+    // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
+    // also reached from a caller that already owns a transaction — the
+    // Organizer action transaction that passes `withinTransaction` — so it
+    // opens a BEGIN only when it is called from outside one. (The automatic
+    // reply owns its frame and calls the two halves directly; see
+    // `postAgentReplyComment`.) A second frame there would be a pure
+    // savepoint wrapper over the same writes and would push a guarded path past
+    // the single BEGIN the depth probes assert. When we do own the frame, we
+    // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,
+    // so a caller-owned rollback still drops every push either way.
+    const commitEvents = options.deferredEvents ? null : createCommitEventQueue();
+    const deferredEvents = commitEvents ?? options.deferredEvents;
+    const run = () => this.createIssueCommentWithinTransaction(issueId, input, {
+      ...options,
+      ...(deferredEvents ? { deferredEvents } : {}),
+    });
+    const created = this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
+    if (commitEvents) this.ctx.emitCommitEvents(commitEvents);
+    this.runIssueCommentPostCommit(created, input, options);
+    return created.comment;
+  }
+
+  /**
+   * Post-COMMIT half of {@link createIssueCommentWithinTransaction}: member
+   * notifications, then agent dispatch, in main's order. A caller that owns the
+   * comment's transaction runs it after that COMMIT (ruling (ab) item 2).
+   */
+  runIssueCommentPostCommit(
+    created: CreatedIssueComment,
+    input: CreateIssueCommentInput,
+    options: { deferAgentMentionDispatch?: boolean } = {},
+  ): void {
+    const { issue, comment, body, authorType, issueSessionId, sessionEventSeq } = created;
+    const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
+    this.notifySubscribedMembers(
+      issue,
+      "New comment",
+      body,
+      authorType,
+      input.authorId ?? null,
+      mentionedMemberIds,
+      { comment_id: comment.id, issue_session_id: issueSessionId },
+    );
+    if (options.deferAgentMentionDispatch) return;
+    const mentionTasks = this.triggerCommentMentions(issue, comment, sessionEventSeq);
+    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
+  }
+
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: CreateIssueCommentOptions,
+  ): CreatedIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    // Lock before reading Issue/session state so concurrent first comments can
+    // both reach the shared seq allocator on SQLite's deferred transactions.
+    if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
+      throw new Error(`Issue not found: ${issueId}`);
+    }
     const authorType = input.authorType ?? "member";
     if (options.deferAgentMentionDispatch && authorType !== "agent") {
       throw new Error("Only agent comment mentions can be deferred");
@@ -4524,25 +4677,18 @@ export class IssuesRepo {
       }
     }
     const sessionEvents = this.ctx.issueSessions();
-    const commentEvent = options.withinTransaction
-      ? sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      })
-      : sessionEvents.appendSessionEvent(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      });
+    // Always the within-transaction flavour: the public entry point, or the
+    // caller that runs this half directly, guarantees a frame is open around
+    // every write below.
+    const commentEvent = sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
+      authorType,
+      authorId: input.authorId ?? null,
+      kind: "message",
+      body,
+      sourceCommentId: id,
+      metadata: { parent_comment_id: parentId },
+      createdAt: now,
+    });
     if (authorType === "member" && input.authorId) {
       // Member authors may use a member row id or a request user id. Resolve
       // explicitly for subscriptions without broadening authorization lookup.
@@ -4575,27 +4721,13 @@ export class IssuesRepo {
     };
     if (options.deferredEvents) options.deferredEvents.workspace.push(commentCreatedEvent);
     else this.ctx.emitWorkspaceEvent(commentCreatedEvent);
-    const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
-    this.notifySubscribedMembers(
-      issue,
-      "New comment",
-      body,
-      authorType,
-      input.authorId ?? null,
-      mentionedMemberIds,
-      { comment_id: id, issue_session_id: issueSessionId },
-    );
-    if (options.deferAgentMentionDispatch) return comment;
-    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
-    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
-    return comment;
+    return { issue, comment, body, authorType, issueSessionId, sessionEventSeq: commentEvent.seq };
   }
 
   /**
    * Dispatch mentions for an agent comment that was persisted by an outer
-   * transaction. PostgresSyncDatabase has no nested transaction/savepoint
-   * support, so task creation and enqueue notification must happen only after
-   * that caller commits.
+   * transaction. Task enqueue notifications happen only after that caller
+   * commits, even though nested database writes now use savepoints.
    */
   dispatchDeferredAgentCommentMentions(commentId: string): MultiremiTask[] {
     const comment = this.getIssueComment(commentId);
@@ -4679,6 +4811,17 @@ export class IssuesRepo {
   }
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
+    const { comment, changed, issueId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input))();
+    // Keep the comment and its log revision atomic. Trigger cancellation can
+    // wait on a workspace lock, so it follows that commit rather than holding
+    // the comment row invisible for the entire wait.
+    if (changed) this.cancelTasksByTriggerComments(issueId, [id]);
+    return comment;
+  }
+
+  private updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput): {
+    comment: MultiremiIssueComment; changed: boolean; issueId: string;
+  } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const body = (input.body ?? input.content ?? "").trim();
@@ -4691,9 +4834,22 @@ export class IssuesRepo {
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
     this.linkReferencedAttachmentsToComment(id, current.issueId, body);
-    if (current.body !== body) this.cancelTasksByTriggerComments(current.issueId, [id]);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId && current.body !== body) {
+      // The edit lands in place on the comment's own row and bumps `revision`;
+      // the hidden marker records what it replaced, for projections and the
+      // browser replica's change feed.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(current.id), {
+        fields: {
+          body_md: body,
+          updated_at: now,
+          metadata: {
+            ...this.commentLogMetadata(current.id),
+            body,
+            previous_body: current.body,
+          },
+        },
+      });
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4710,10 +4866,14 @@ export class IssuesRepo {
       body,
       data: { commentId: id },
     });
-    return this.getIssueComment(id)!;
+    return { comment: this.getIssueComment(id)!, changed: current.body !== body, issueId: current.issueId };
   }
 
   deleteIssueComment(id: string): void {
+    this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id))();
+  }
+
+  private deleteIssueCommentWithinTransaction(id: string): void {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const ids = this.collectCommentTreeIds(id);
@@ -4731,6 +4891,21 @@ export class IssuesRepo {
     }
     for (const comment of deletedComments) {
       if (!comment.issueSessionId) continue;
+      // Tombstone: the row stays on the axis with `deleted_at` set, its body
+      // cleared and the text preserved under `metadata.deleted_body`. Display
+      // windows filter it out; agent projections still see the marker.
+      const seq = this.commentLogSeq(comment.id);
+      const existing = this.ctx.conversationLog().getConversationLogEntry(comment.issueSessionId, seq);
+      if (existing) {
+        this.ctx.conversationLog().updateWithinTransaction(comment.issueSessionId, seq, {
+          fields: {
+            body_md: "",
+            deleted_at: now,
+            updated_at: now,
+            metadata: { ...existing.metadata, deleted_body: comment.body },
+          },
+        });
+      }
       this.ctx.issueSessions().appendSessionEvent(comment.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4751,6 +4926,10 @@ export class IssuesRepo {
   }
 
   resolveIssueComment(id: string, input: { actorType?: string; actorId?: string | null } = {}): MultiremiIssueComment {
+    return this.ctx.db.transaction(() => this.resolveIssueCommentWithinTransaction(id, input))();
+  }
+
+  private resolveIssueCommentWithinTransaction(id: string, input: { actorType?: string; actorId?: string | null }): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -4764,6 +4943,21 @@ export class IssuesRepo {
     );
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
+      // The log resolves in place with `revision++`; the browser replica learns
+      // the new state from the patch's three resolved columns.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(id), {
+        fields: {
+          resolved_at: now,
+          resolved_by_type: input.actorType ?? "member",
+          resolved_by_id: input.actorId ?? "local",
+          updated_at: now,
+        },
+      });
+      // TODO(MUL-402 B2/B9): remove this legacy marker when readers move off
+      // session_events or the old table is deleted.
+      // The legacy table keeps this marker for internal readers until B2. The
+      // log and its `/events` compatibility read contain no resolved marker:
+      // resolution lives on the comment row and travels as a patch.
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: input.actorType ?? "member",
         authorId: input.actorId ?? "local",
@@ -4784,6 +4978,10 @@ export class IssuesRepo {
   }
 
   unresolveIssueComment(id: string): MultiremiIssueComment {
+    return this.ctx.db.transaction(() => this.unresolveIssueCommentWithinTransaction(id))();
+  }
+
+  private unresolveIssueCommentWithinTransaction(id: string): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -4795,6 +4993,16 @@ export class IssuesRepo {
     );
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
+      // Unresolve clears all three columns on the same row and bumps `revision`.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(id), {
+        fields: {
+          resolved_at: null,
+          resolved_by_type: null,
+          resolved_by_id: null,
+          updated_at: now,
+        },
+      });
+      // TODO(MUL-402 B2/B9): remove this legacy marker with the old read path.
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4815,15 +5023,41 @@ export class IssuesRepo {
   }
 
   getIssueComment(id: string): MultiremiIssueComment | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
-    return row ? this.hydrateIssueComment(toIssueComment(row)) : null;
+    const row = this.ctx.db.query(
+      `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
+         log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
+         log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
+       FROM multiremi_issue_comments cmt
+       LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
+       WHERE cmt.id = ?`,
+    ).get(id) as Row | null;
+    return row ? this.hydrateIssueComment(this.commentFromLogRow(row)) : null;
   }
 
   listIssueComments(issueId: string): MultiremiIssueComment[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
+      `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
+         log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
+         log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
+       FROM multiremi_issue_comments cmt
+       LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
+       WHERE cmt.issue_id = ? ORDER BY cmt.created_at ASC`,
     ).all(issueId) as Row[];
-    return this.hydrateIssueComments(rows.map(toIssueComment));
+    return this.hydrateIssueComments(rows.map((row) => this.commentFromLogRow(row)));
+  }
+
+  private commentFromLogRow(row: Row): MultiremiIssueComment {
+    // B7 backfills historical comments. Until then, a missing log row retains
+    // the legacy wire while every newly mirrored comment reads its log revision.
+    if (row.log_id == null) return toIssueComment(row);
+    return toIssueComment({
+      ...row,
+      body: row.log_body_md,
+      updated_at: row.log_updated_at,
+      resolved_at: row.log_resolved_at,
+      resolved_by_type: row.log_resolved_by_type,
+      resolved_by_id: row.log_resolved_by_id,
+    });
   }
 
   listIssueCommentsForGoCli(issueId: string, input: ListIssueCommentsInput = {}): ListIssueCommentsResult {
@@ -6068,6 +6302,34 @@ export class IssuesRepo {
     };
   }
 
+  /**
+   * The conversation log seq of a comment. Issue comments are mirrored into
+   * `session_events` at the same seq as the log row, and that event carries
+   * `source_comment_id`, so it is the authoritative pointer for in-place updates
+   * (edit, delete, resolve) which arrive with a comment id, not a seq.
+   */
+  private commentLogSeq(commentId: string): number {
+    const row = this.ctx.db.query(
+      `SELECT seq FROM multiremi_conversation_log
+       WHERE id = ? AND kind IN ('message', 'system')
+       LIMIT 1`,
+    ).get(commentId) as { seq?: number } | null;
+    if (row?.seq != null) return Number(row.seq);
+    const event = this.ctx.db.query(
+      "SELECT seq FROM multiremi_session_events WHERE source_comment_id = ? LIMIT 1",
+    ).get(commentId) as { seq?: number } | null;
+    if (event?.seq == null) throw new Error(`Conversation log entry not found for comment: ${commentId}`);
+    return Number(event.seq);
+  }
+
+  /** The comment log row's current metadata, for a metadata update that replaces it. */
+  private commentLogMetadata(commentId: string): Record<string, unknown> {
+    const row = this.ctx.db.query(
+      "SELECT metadata FROM multiremi_conversation_log WHERE id = ? LIMIT 1",
+    ).get(commentId) as { metadata?: string } | null;
+    return row ? parseJson<Record<string, unknown>>(row.metadata, {}) : {};
+  }
+
   private collectCommentTreeIds(commentId: string): string[] {
     const ids: string[] = [];
     const visit = (id: string) => {
@@ -6083,10 +6345,17 @@ export class IssuesRepo {
     let current = this.ctx.getRawIssueComment(commentId);
     while (current?.parentId) current = this.ctx.getRawIssueComment(current.parentId);
     if (!current?.resolvedAt) return;
+    const now = nowIso();
     this.ctx.db.run(
       "UPDATE multiremi_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
-      [nowIso(), current.id],
+      [now, current.id],
     );
+    const entry = this.ctx.conversationLog().getConversationLogEntryById(current.id);
+    if (entry && current.issueSessionId) {
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, entry.seq, {
+        fields: { resolved_at: null, resolved_by_type: null, resolved_by_id: null, updated_at: now },
+      });
+    }
   }
 
   private linkAttachmentsToComment(commentId: string, issueId: string, attachmentIds: string[]): void {

@@ -1,0 +1,91 @@
+{
+  "results": [
+    {
+      "name": "production Next build",
+      "ok": true
+    },
+    {
+      "name": "trace endpoint stays idle before click",
+      "ok": true
+    },
+    {
+      "name": "all routed trace API responds",
+      "ok": true,
+      "status": 200,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "all browser renders ok",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "all browser renders backfilling",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "all browser renders unreachable",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "mobile trace dialog occupies the viewport",
+      "ok": true,
+      "width": 390,
+      "height": 844,
+      "viewport": 390
+    },
+    {
+      "name": "all browser renders lost",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "all browser renders not_found",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 0
+    },
+    {
+      "name": "split routed trace API responds",
+      "ok": true,
+      "status": 200,
+      "runtimeRequests": 1
+    },
+    {
+      "name": "split browser renders ok",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 1
+    },
+    {
+      "name": "split browser renders backfilling",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 1
+    },
+    {
+      "name": "split browser renders unreachable",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 1
+    },
+    {
+      "name": "split browser renders lost",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 1
+    },
+    {
+      "name": "split browser renders not_found",
+      "ok": true,
+      "requests": 1,
+      "runtimeRequests": 1
+    }
+  ]
+}

@@ -54,6 +54,7 @@ type Internals = {
       run(sql: string, params?: unknown[]): unknown;
       transaction<T>(fn: () => T): () => T;
       query(sql: string): { get(...args: unknown[]): unknown };
+      readonly inTransaction: boolean;
     };
   };
 };
@@ -80,7 +81,8 @@ if (mode === "before-commit") {
     const run = original(fn);
     return () => {
       const result = run();
-      if (armed) {
+      // A nested transaction() only releases a SAVEPOINT; the seam is the top-level COMMIT (MUL-402 ② / (c)).
+      if (armed && !handle.inTransaction) {
         const row = handle.query("SELECT status FROM multiremi_issues WHERE id = ?").get(issueId) as
           | { status: string }
           | null;

@@ -12,7 +12,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
   pending: {} as Record<string, unknown>,
-  create: vi.fn(), update: vi.fn(), send: vi.fn(),
+  create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
@@ -26,9 +26,18 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     ] }),
     listRuntimeWorkspaces: async () => [{ id: "rws-a", name: "Local workbench", root_path: "/work", cwd: ".", daemon_id: "daemon-a", status: "available" }],
     listRuntimes: async () => [],
-    listChatSessions: async () => backend.sessions,
-    listChatMessagesPage: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
-    getPendingChatTask: async () => backend.pending,
+    listChatSessions: async () => {
+      listChatSessionsCalls();
+      return backend.sessions;
+    },
+    listChatMessagesPage: async () => {
+      listChatMessagesPageCalls();
+      return { messages: [], limit: 50, has_more: false, next_cursor: null };
+    },
+    getPendingChatTask: async () => {
+      getPendingChatTaskCalls();
+      return backend.pending;
+    },
     createChatSession: backend.create,
     updateChatSession: backend.update,
     sendChatMessage: backend.send,
@@ -50,6 +59,14 @@ vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a"
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
 vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {} }));
+vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string, _initial: unknown, _comment: unknown, _cached: unknown, enabled: boolean) => {
+  // The 444 replica replaces listChatMessagesPage; observe its load gate here.
+  if (enabled && sessionId) listChatMessagesPageCalls();
+  return ({
+  replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: [] }) },
+  snapshot: { entries: [], head: null, ready: true }, error: false,
+  });
+} }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ chat: () => "/chat" }) }));
 vi.mock("@multiremi/views/issues/components", () => ({ canAssignAgent: () => true }));
 vi.mock("../../navigation", () => ({ useNavigation: () => ({ push: vi.fn() }) }));
@@ -70,6 +87,36 @@ vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, disabled }: { onSend: (va
 
 import { ApiError } from "@multiremi/core/api";
 import { ChatWindow } from "./chat-window";
+
+const listChatSessionsCalls = vi.hoisted(() => vi.fn());
+const listChatMessagesPageCalls = vi.hoisted(() => vi.fn());
+const getPendingChatTaskCalls = vi.hoisted(() => vi.fn());
+
+/**
+ * MUL-472 b: the floating window must not preload the conversation while it is
+ * minimised. `mount()` uses `presentation="page"` (always visible) for the
+ * other suites, so this one drives the floating presentation.
+ */
+function mountFloatingOpen(open: boolean) {
+  const values = new Map<string, string>();
+  const store = createChatStore({ storage: {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+    removeItem: key => { values.delete(key); },
+  } });
+  store.getState().setActiveSession(session.id);
+  store.getState().setOpen(open);
+  registerChatStore(store);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const result = render(
+    <QueryClientProvider client={client}>
+      <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, runtimes: enRuntimes } }}>
+        <ChatWindow />
+      </I18nProvider>
+    </QueryClientProvider>,
+  );
+  return { ...result, store, client };
+}
 
 const session: ChatSession = {
   id: "chat-a", workspace_id: "workspace-a", agent_id: "agent-a", creator_id: "user-a",
@@ -98,6 +145,9 @@ function mount(active: boolean = false) {
 }
 
 beforeEach(() => {
+  listChatSessionsCalls.mockReset();
+  listChatMessagesPageCalls.mockReset();
+  getPendingChatTaskCalls.mockReset();
   backend.sessions = [];
   backend.pending = {};
   backend.create.mockReset().mockImplementation(async (data) => {
@@ -110,6 +160,7 @@ beforeEach(() => {
     return backend.sessions[0];
   });
   backend.send.mockReset().mockResolvedValue({ task_id: "task-a", message_id: "message-a", created_at: "2026-09-17", supports_queue: true, queued: false });
+  backend.refresh.mockReset().mockResolvedValue(undefined);
   apiLogger.error.mockReset();
 });
 
@@ -132,7 +183,8 @@ describe("ChatWindow plain HTTP sends", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
   });
 
   it("sends a follow-up in an existing session without randomUUID", async () => {
@@ -143,7 +195,7 @@ describe("ChatWindow plain HTTP sends", () => {
     expect(globalThis.crypto.randomUUID).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
     expect(backend.create).not.toHaveBeenCalled();
   });
 
@@ -216,7 +268,7 @@ describe("ChatWindow project settings", () => {
     expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
     expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
   });
@@ -254,7 +306,7 @@ describe("ChatWindow project settings", () => {
     expect(backend.update).not.toHaveBeenCalled();
     expect(backend.create).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
   });
 
   it("keeps no location strip for an existing chat with nothing bound", async () => {
@@ -303,5 +355,36 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(store.getState().draftProjectId).toBeNull();
     expect(screen.getByRole("button", { name: "Work location: Automatic" })).toBeEnabled();
+  });
+});
+
+describe("minimised chat window preloads nothing (MUL-472 b)", () => {
+  it("does not fetch sessions, messages or the pending task while closed", async () => {
+    mountFloatingOpen(false);
+
+    // Give the queries a couple of macrotasks to start if they were enabled.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(listChatSessionsCalls).not.toHaveBeenCalled();
+    expect(listChatMessagesPageCalls).not.toHaveBeenCalled();
+    expect(getPendingChatTaskCalls).not.toHaveBeenCalled();
+  });
+
+  it("starts fetching as soon as the window is opened", async () => {
+    const { store } = mountFloatingOpen(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(listChatSessionsCalls).not.toHaveBeenCalled();
+
+    await act(async () => {
+      store.getState().setOpen(true);
+    });
+
+    await waitFor(() => expect(listChatSessionsCalls).toHaveBeenCalled());
+    await waitFor(() => expect(getPendingChatTaskCalls).toHaveBeenCalled());
+    await waitFor(() => expect(listChatMessagesPageCalls).toHaveBeenCalled());
   });
 });

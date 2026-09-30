@@ -1,4 +1,5 @@
 import { HttpClient, type ApiClientOptions } from "./http";
+import { SessionLogEndpoints } from "./endpoints/session-log";
 import { AuthEndpoints } from "./endpoints/auth";
 import { IssuesEndpoints } from "./endpoints/issues";
 import { CommentsEndpoints } from "./endpoints/comments";
@@ -56,6 +57,7 @@ function bindEndpoints(instance: object): Record<string, unknown> {
  *  facade. Adding a domain means adding one line here and one `extends` entry
  *  below — nothing else in this file changes. */
 export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
+  (http: HttpClient) => new SessionLogEndpoints(http),
   (http: HttpClient) => new AuthEndpoints(http),
   (http: HttpClient) => new IssuesEndpoints(http),
   (http: HttpClient) => new CommentsEndpoints(http),
@@ -104,6 +106,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
 // runtime check the compiler cannot do.
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- wiring asserted in client-composition.test.ts
 export interface ApiClient extends
+    SessionLogEndpoints,
     AuthEndpoints,
     IssuesEndpoints,
     CommentsEndpoints,

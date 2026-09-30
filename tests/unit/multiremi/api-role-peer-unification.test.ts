@@ -30,6 +30,10 @@ import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/h
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import * as apiRoleConfig from "@multiremi/config/api-role.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+
+const legacyHub = () => createEmptyLiveHub(createLocalHubTransport());
 
 it("resolves the role once during a real server start and retains the unconfigured default", async () => {
   delete process.env.MULTIREMI_API_ROLE;
@@ -38,7 +42,7 @@ it("resolves the role once during a real server start and retains the unconfigur
   expect(resolveStartupApiRole({ MULTIREMI_API_ROLE: "all" })).toEqual({ role: "all", configured: true });
   const resolver = spyOn(apiRoleConfig, "resolveApiRole");
   const { store, db } = memoryStore();
-  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
+  const server = startMultiremiServer({ store, liveHub: legacyHub(), port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
   try {
     expect(resolver).toHaveBeenCalledTimes(1);
     const base = `http://127.0.0.1:${server.port}`;
@@ -152,6 +156,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
     const { store, db } = memoryStore();
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,
@@ -192,6 +197,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
     const { store, db } = memoryStore();
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,
@@ -220,9 +226,10 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
   it("behaves exactly like main when neither env nor apiRole is set", async () => {
     delete process.env[ROLE_ENV];
     const { store, db } = memoryStore();
-    const app = createMultiremiApp({ store, authToken: null });
+    const app = createMultiremiApp({ store, liveHub: legacyHub(), authToken: null });
     const spy = roleSpy();
     const server = startMultiremiServer({
+      liveHub: legacyHub(),
       store,
       scheduler: null,
       port: 0,

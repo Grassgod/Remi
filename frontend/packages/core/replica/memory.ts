@@ -19,8 +19,8 @@ import type {
   SessionLogEntry,
   SessionReplicaPort,
   SessionReplicaSnapshot,
-} from "./port.js";
-import { rowHeightKey, type RowHeightKeyInput } from "./port.js";
+} from "./port";
+import { rowHeightKey, type RowHeightKeyInput } from "./port";
 
 export interface MemorySessionReplicaSeed {
   entries?: readonly SessionLogEntry[];

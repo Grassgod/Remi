@@ -35,7 +35,7 @@
  * would be a second implementation of the log's own schema evolution (plan 3/6
  * §1.6 lists schema upgrade among the full-clear triggers).
  */
-export const REPLICA_SCHEMA_VERSION = 2;
+export const REPLICA_SCHEMA_VERSION = 3;
 
 /** `meta` keys. `user_id` is a cleanup trigger, not bookkeeping. */
 export const META_USER_ID = "user_id";
@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS ranges (
   from_seq   INTEGER NOT NULL,
   to_seq     INTEGER NOT NULL,
   PRIMARY KEY (session_id, from_seq)
+);
+
+CREATE TABLE IF NOT EXISTS entry_payloads (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS revision_watermarks (
@@ -110,13 +117,18 @@ export const SQL = {
        body_html = excluded.body_html,
        render_version = excluded.render_version`,
   deleteEntry: "DELETE FROM entries WHERE session_id = ? AND seq = ?",
-  selectWindow: `SELECT session_id, seq, id, revision, kind, body_md, body_html, render_version
-     FROM entries WHERE session_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC`,
+  upsertPayload: `INSERT INTO entry_payloads (session_id, seq, payload_json) VALUES (?, ?, ?)
+    ON CONFLICT(session_id, seq) DO UPDATE SET payload_json = excluded.payload_json`,
+  deletePayload: "DELETE FROM entry_payloads WHERE session_id = ? AND seq = ?",
+  selectWindow: `SELECT e.*, p.payload_json FROM entries e
+     LEFT JOIN entry_payloads p ON p.session_id = e.session_id AND p.seq = e.seq
+     WHERE e.session_id = ? AND e.seq >= ? AND e.seq <= ? ORDER BY e.seq ASC`,
   countEntries: "SELECT COUNT(*) AS n FROM entries WHERE session_id = ?",
   selectRevisionWatermarks: "SELECT seq, revision FROM revision_watermarks WHERE session_id = ?",
   upsertRevisionWatermark: `INSERT INTO revision_watermarks (session_id, seq, revision) VALUES (?, ?, ?)
      ON CONFLICT(session_id, seq) DO UPDATE SET revision = MAX(revision_watermarks.revision, excluded.revision)`,
   deleteSessionEntries: "DELETE FROM entries WHERE session_id = ?",
+  deleteSessionPayloads: "DELETE FROM entry_payloads WHERE session_id = ?",
   deleteSessionRevisionWatermarks: "DELETE FROM revision_watermarks WHERE session_id = ?",
   deleteSessionHead: "DELETE FROM heads WHERE session_id = ?",
   deleteSessionHeights: "DELETE FROM row_heights WHERE session_id = ?",
@@ -141,6 +153,7 @@ export const SQL = {
    * `user_id` check exists to prevent.
    */
   deleteAllEntries: "DELETE FROM entries",
+  deleteAllPayloads: "DELETE FROM entry_payloads",
   deleteAllRevisionWatermarks: "DELETE FROM revision_watermarks",
   deleteAllRanges: "DELETE FROM ranges",
   deleteAllHeads: "DELETE FROM heads",

@@ -75,6 +75,21 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["issues", "ws-1"] });
   });
 
+  it("keeps Chat's cursor-backed rows during a same-instance reconnect", () => {
+    const ws = createMockWs();
+    let reconnect: (() => void) | undefined;
+    (ws.onReconnect as unknown as ReturnType<typeof vi.fn>).mockImplementation((cb: () => void) => {
+      reconnect = cb;
+      return () => { reconnect = undefined; };
+    });
+    renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+    invalidateSpy.mockClear();
+    reconnect?.();
+    const keys = invalidateSpy.mock.calls.map((call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey);
+    expect(keys).toContainEqual(["issues", "ws-1"]);
+    expect(keys).not.toContainEqual(["chat", "ws-1"]);
+  });
+
   it("skips invalidation on first non-null ws instance", () => {
     const ws = createMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {

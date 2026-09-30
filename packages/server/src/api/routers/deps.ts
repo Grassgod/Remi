@@ -9,6 +9,8 @@ import type { SessionArchiveService } from "@multiremi/session-archive/service.j
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
 import type { retitleIssue } from "@multiremi/issue-title/service.js";
 import type { MessageProviderRegistry } from "@multiremi/messaging/registry.js";
+import type { TraceReader } from "@multiremi/trace/trace-reader.js";
+import type { OrganizerTurnStats } from "../helpers/organizer.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -28,6 +30,8 @@ export interface RouterDeps {
   projectKnowledge: ProjectKnowledgeServiceContract;
   repositoryWiki: RepositoryWikiServiceContract;
   sessionArchives: SessionArchiveService;
+  traceReader: TraceReader;
+  getOrganizerTurnStats: (taskId: string) => OrganizerTurnStats | null;
   daemonDirectBaseUrl: string | null;
   verifyScmConnection: ScmConnectionVerifier;
   /** The Core's only way to reach a channel. Empty means no Provider is installed. */

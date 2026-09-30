@@ -23,7 +23,7 @@
  * renders what their state says.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 import { ArrowDown } from "lucide-react";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
@@ -79,6 +79,22 @@ export interface SessionLogListProps {
   className?: string;
   /** Element carrying the scroll root's data attributes, for tests and probes. */
   testIdPrefix?: string;
+  perfScroll?: "session-log" | "issue-detail";
+  latestAnchor?: "latest-message" | "latest-comment";
+  initialPositioned?: boolean;
+  /** Additional content above the anchor must settle before the list reveals. */
+  contentReady?: boolean;
+  onRevealed?: () => void;
+  afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
+  header?: React.ReactNode;
+  footer?: React.ReactNode;
+  transformEntries?: (entries: readonly SessionLogEntry[]) => readonly SessionLogEntry[];
+  entryKey?: (entry: SessionLogEntry) => string;
+  showPendingSkeleton?: boolean;
+  /** A local send can be displayed before an empty session's first server window arrives. */
+  localDataReady?: boolean;
+  onReturnToLatest?: () => void;
+  onScrollRoot?: (el: HTMLDivElement | null) => void;
 }
 
 /**
@@ -127,8 +143,23 @@ export function SessionLogList({
   renderPending,
   className,
   testIdPrefix = "session-log",
+  perfScroll = "session-log",
+  latestAnchor = "latest-message",
+  initialPositioned = false,
+  contentReady = true,
+  onRevealed,
+  afterEntry,
+  header,
+  footer,
+  transformEntries,
+  entryKey,
+  showPendingSkeleton = true,
+  localDataReady = false,
+  onReturnToLatest,
+  onScrollRoot,
 }: SessionLogListProps): React.ReactElement {
   const { t } = useT("chat");
+  const scrollId = useId();
 
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   /**
@@ -166,17 +197,27 @@ export function SessionLogList({
    * window in the replica, so `head`-relative counts stay correct.
    */
   const entries = useMemo(() => {
-    const all = snapshot.entries;
+    const all = transformEntries ? transformEntries(snapshot.entries) : snapshot.entries;
     return all.length > SESSION_LOG_DOM_LIMIT ? all.slice(all.length - SESSION_LOG_DOM_LIMIT) : all;
-  }, [snapshot.entries]);
+  }, [snapshot.entries, transformEntries]);
 
   const anchorId = anchor.kind === "element" ? anchor.id : null;
+  const [highlighted, setHighlighted] = useState(Boolean(anchorId));
+  useEffect(() => {
+    setHighlighted(Boolean(anchorId));
+    if (!anchorId) return;
+    const timeout = setTimeout(() => setHighlighted(false), 2500);
+    return () => clearTimeout(timeout);
+  }, [anchorId]);
+  const latestEntry = latestAnchor === "latest-comment"
+    ? entries.findLast(entry => entry.kind === "message")
+    : entries.at(-1);
 
   const reveal = useAnchoredReveal({
     scrollEl,
     contentEl,
     resetKey: resetKey ?? `${sessionId}:${anchorId ?? "bottom"}`,
-    dataReady: snapshot.ready,
+    dataReady: (snapshot.ready || localDataReady) && contentReady,
     anchor,
     // Trivially true: the flat list has no virtualizer whose measurement window
     // has to close before the anchor position is final (plan 3/6 §3).
@@ -184,7 +225,9 @@ export function SessionLogList({
     // Only the replica's own verdict: a list that happened to hold every row it
     // was given is not the same claim as "this equals the server's head".
     fresh: snapshot.fresh,
+    initialPositioned,
   });
+  useEffect(() => { if (reveal.revealed) onRevealed?.(); }, [reveal.revealed, onRevealed]);
 
   const stick = useStickToBottom({
     scrollEl,
@@ -285,24 +328,33 @@ export function SessionLogList({
   });
 
   const handleReturn = useCallback(() => {
+    if (onReturnToLatest) { onReturnToLatest(); return; }
     stick.returnToBottom();
-  }, [stick]);
+  }, [stick, onReturnToLatest]);
 
   return (
     <div className={`relative min-h-0 flex-1 ${className ?? ""}`}>
       <div
-        ref={setScrollEl}
+        id={scrollId}
+        ref={useCallback((el: HTMLDivElement | null) => { setScrollEl(el); onScrollRoot?.(el); }, [onScrollRoot])}
+        data-tab-scroll-root=""
         data-session-log-scroll=""
+        data-ssr-initial={initialPositioned ? "" : undefined}
+        data-ssr-expected={initialPositioned ? entries.length : undefined}
+        data-ssr-anchor-id={initialPositioned ? anchorId ?? undefined : undefined}
         data-session-log-degraded={degradedCount}
-        data-perf-scroll="session-log"
+        data-perf-scroll={perfScroll}
+        data-perf-state={initialPositioned ? "pending" : undefined}
+        data-perf-fresh={snapshot.fresh ? "1" : "0"}
+        data-stick-state={stick.state}
         className="relative h-full overflow-y-auto"
       >
         {/* The reveal hook hides this subtree until its gates hold, so the first
             frame that shows content is already at its final position. It keeps
             `visibility: hidden` rather than unmounting because the hook measures
             real heights to know where "final" is. */}
-        <div ref={setContentEl} className="relative mx-auto w-full max-w-4xl px-4 py-6">
-          {reveal.state === "pending" && (
+        <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className="relative mx-auto w-full max-w-4xl px-4 py-6">
+          {showPendingSkeleton && reveal.state === "pending" && (
             <div
               data-slot="skeleton"
               data-testid={`${testIdPrefix}-skeleton`}
@@ -314,20 +366,21 @@ export function SessionLogList({
             </div>
           )}
           {!snapshot.ready && renderPending ? renderPending() : null}
+          {header}
           {entries.map((entry) => {
             const reservedHeight = reserve(entry);
-            const isLast = entry === entries[entries.length - 1];
+            const isLatest = entry === latestEntry;
             return (
               <div
-                key={entry.seq}
+                key={entryKey?.(entry) ?? entry.seq}
                 ref={setRowRef(entry.seq)}
                 id={`comment-${entry.id}`}
                 data-perf-item="message"
                 data-perf-key={entry.id}
                 {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
-                {...(isLast ? { "data-perf-anchor": "latest-message" } : null)}
+                {...(isLatest && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": latestAnchor } : null)}
                 style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
-                className="pb-3"
+                className={`pb-3 transition-colors duration-500 ${highlighted && anchorId === `comment-${entry.id}` ? "bg-warning/10" : ""}`}
               >
                 {renderEntry
                   ? renderEntry({ entry, reservedHeight })
@@ -339,9 +392,12 @@ export function SessionLogList({
                       fallback={renderFallback ? renderFallback(entry) : null}
                     />
                   )}
+                {afterEntry?.(entry)}
               </div>
             );
           })}
+          {footer}
+          {anchorId && <div aria-hidden="true" className="h-[50vh]" />}
         </div>
       </div>
       {newMessageCount > 0 && stick.state === "released" && (

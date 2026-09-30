@@ -5,6 +5,7 @@ import {
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
   gatewayReasoningLevels,
+  validateGatewayContextWindow,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
   isFirstAgentInWorkspace,
@@ -1343,6 +1344,26 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     // the client never has to guess whether its own write took effect — a
     // declaration can be outranked by a gateway/Runtime statement, and the row's
     // `effective.source` is the only honest answer to that.
+    return c.json({ deleted, ...gatewayReasoningLevels(store, workspaceId, engine, updatedBy) });
+  });
+  app.put("/api/workspaces/:id/relay-config/:engine/context-window", async (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude") return c.json({ error: "1M context is only supported for Claude" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    const body = await readJsonStrict<{ model?: unknown; one_million?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const validation = validateGatewayContextWindow(body);
+    if (!validation.ok) return c.json({ error: validation.error }, 400);
+    const updatedBy = currentRequestUserId(c);
+    let deleted = false;
+    if (validation.oneMillion) {
+      store.saveGatewayModelContext(workspaceId, engine, { modelId: validation.modelId, updatedBy });
+    } else {
+      deleted = store.deleteGatewayModelContext(workspaceId, engine, validation.modelId);
+    }
     return c.json({ deleted, ...gatewayReasoningLevels(store, workspaceId, engine, updatedBy) });
   });
   app.post("/api/workspaces/:id/leave", async (c) => {

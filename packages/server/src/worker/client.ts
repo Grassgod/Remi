@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
+import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
@@ -93,6 +95,7 @@ export interface MultiremiRelayEngineWire {
   fragment: string;
   auth_token: string;
   revision: number;
+  one_million_models?: string[];
 }
 export interface MultiremiRelayWire {
   claude: MultiremiRelayEngineWire | null;
@@ -1217,9 +1220,26 @@ export class MultiremiDaemonClient {
     return this.get<MultiremiDaemonGcStatus>(`/api/daemon/issues/${encodeURIComponent(issueId)}/gc-check`);
   }
 
-  async getIssueSessionArchiveStatus(
+  /**
+   * Session Archive upload protocol, for any subject.
+   *
+   * Issues, Chats and one-shot Tasks differ only in the route path segment and
+   * the subject id, so one implementation serves all three. The client names the
+   * v2 format itself: the server refuses an upload that does not, which is how an
+   * un-upgraded daemon is stopped before it claims an attempt.
+   */
+  private sessionArchiveSubjectBase(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
+  ): string {
+    return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
+      + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}`
+      + `/${encodeURIComponent(subject.id)}/session-archives`;
+  }
+
+  async getSessionArchiveStatus(
+    runtimeId: string,
+    subject: SessionArchiveClientSubject,
     sourceRevision?: string,
     sha256?: string,
     verifyReady = false,
@@ -1230,28 +1250,33 @@ export class MultiremiDaemonClient {
     if (verifyReady) query.set("verify_ready", "1");
     const suffix = query.size ? `?${query}` : "";
     return this.get<MultiremiDaemonSessionArchiveStatus>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/status${suffix}`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/status${suffix}`,
     );
   }
 
-  async initIssueSessionArchive(runtimeId: string, issueId: string, input: {
-    sourceRevision: string;
-    sha256: string;
-    sizeBytes: number;
-    fileCount: number;
-    metadata?: Record<string, unknown>;
-  }): Promise<MultiremiDaemonSessionArchiveInitResponse> {
+  async initSessionArchive(
+    runtimeId: string,
+    subject: SessionArchiveClientSubject,
+    input: {
+      sourceRevision: string;
+      sha256: string;
+      sizeBytes: number;
+      fileCount?: number | null;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<MultiremiDaemonSessionArchiveInitResponse> {
     const response = await this.post<MultiremiDaemonSessionArchiveInitResponse>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/init`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/init`,
       {
         source_revision: input.sourceRevision,
         sha256: input.sha256,
         size_bytes: input.sizeBytes,
-        file_count: input.fileCount,
-        metadata: input.metadata ?? {},
+        file_count: input.fileCount ?? null,
+        // The format marker is what tells the server this is a v2 container.
+        metadata: { ...(input.metadata ?? {}), format: SESSION_ARCHIVE_FORMAT_V2 },
       },
     );
-    const key = sessionArchiveAttemptKey(runtimeId, issueId, response.archive.id);
+    const key = sessionArchiveAttemptKey(runtimeId, subject, response.archive.id);
     if (Number.isSafeInteger(response.upload_attempt) && Number(response.upload_attempt) > 0) {
       this.sessionArchiveUploadAttempts.set(key, {
         attempt: Number(response.upload_attempt),
@@ -1265,26 +1290,26 @@ export class MultiremiDaemonClient {
     return response;
   }
 
-  async reportIssueSessionArchiveFailure(
+  async reportSessionArchiveFailure(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     input: { stage: "prepare"; error: string },
   ): Promise<MultiremiDaemonSessionArchiveWire> {
     const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/failure`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/failure`,
       input,
     );
     return response.archive;
   }
 
-  async uploadIssueSessionArchive(
+  async uploadSessionArchive(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
     archivePath: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
-    const path = sessionArchiveUploadPath(runtimeId, issueId, archiveId, claim.attempt);
+    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
+    const path = sessionArchiveUploadPath(runtimeId, subject, archiveId, claim.attempt);
     try {
       const target = this.resolveSessionArchiveUploadTarget(path, claim.uploadUrl);
       const archiveStat = await stat(archivePath);
@@ -1334,19 +1359,20 @@ export class MultiremiDaemonClient {
       const message = error instanceof Error ? error.message : String(error);
       try {
         await this.post(
-          `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/failure?attempt=${claim.attempt}`,
+          `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
+          + `/failure?attempt=${claim.attempt}`,
           { error: message },
           undefined,
           AbortSignal.timeout(this.sessionArchiveFailureReportTimeoutMs),
         );
-        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
       } catch (reportError) {
         if (
           reportError instanceof MultiremiDaemonHttpError
           && reportError.status === 409
           && reportError.code === "session_archive_attempt_conflict"
         ) {
-          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
           throw error;
         }
         const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
@@ -1358,15 +1384,16 @@ export class MultiremiDaemonClient {
     }
   }
 
-  async completeIssueSessionArchive(
+  async completeSessionArchive(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
-    const key = sessionArchiveAttemptKey(runtimeId, issueId, archiveId);
+    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
+    const key = sessionArchiveAttemptKey(runtimeId, subject, archiveId);
     const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/complete?attempt=${attempt}`,
+      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
+      + `/complete?attempt=${attempt}`,
       {},
     );
     if (response.archive.status === "ready") this.sessionArchiveUploadAttempts.delete(key);
@@ -1375,10 +1402,12 @@ export class MultiremiDaemonClient {
 
   private requireSessionArchiveUploadAttempt(
     runtimeId: string,
-    issueId: string,
+    subject: SessionArchiveClientSubject,
     archiveId: string,
   ): { attempt: number; uploadUrl: string | null } {
-    const claim = this.sessionArchiveUploadAttempts.get(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+    const claim = this.sessionArchiveUploadAttempts.get(
+      sessionArchiveAttemptKey(runtimeId, subject, archiveId),
+    );
     if (!claim) throw new Error("Session archive must be initialized before upload or completion");
     return claim;
   }
@@ -1553,12 +1582,41 @@ export class MultiremiDaemonClient {
   }
 }
 
-function sessionArchiveAttemptKey(runtimeId: string, issueId: string, archiveId: string): string {
-  return JSON.stringify([runtimeId, issueId, archiveId]);
+/**
+ * One archive upload subject: an Issue, a Chat session, or a one-shot Task.
+ *
+ * The kind picks the route segment; the id is the subject itself. Keeping them
+ * together means a caller cannot mix an id with the wrong ownership rule.
+ */
+export interface SessionArchiveClientSubject {
+  kind: MultiremiSessionArchiveSubjectKind;
+  id: string;
 }
 
-function sessionArchiveUploadPath(runtimeId: string, issueId: string, archiveId: string, attempt: number): string {
-  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
+/** Route segment per subject kind, shared by the client and the router. */
+export const SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT: Record<MultiremiSessionArchiveSubjectKind, string> = {
+  issue: "issues",
+  chat: "chats",
+  task: "tasks",
+};
+
+function sessionArchiveAttemptKey(
+  runtimeId: string,
+  subject: SessionArchiveClientSubject,
+  archiveId: string,
+): string {
+  return [runtimeId, subject.kind, subject.id, archiveId].join(":");
+}
+
+function sessionArchiveUploadPath(
+  runtimeId: string,
+  subject: SessionArchiveClientSubject,
+  archiveId: string,
+  attempt: number,
+): string {
+  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
+    + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}/${encodeURIComponent(subject.id)}`
+    + `/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
 }
 
 function normalizeSessionArchiveUploadBaseUrl(value: string | null | undefined): URL | null {
