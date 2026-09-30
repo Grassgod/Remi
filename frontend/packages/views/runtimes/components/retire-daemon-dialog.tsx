@@ -412,9 +412,7 @@ function PlanBody({
   );
 }
 
-// Abandoning an offline daemon's Issue workspaces also gives up the hot traces
-// it never archived, so that blocker may come along.
-const ABANDONABLE_BLOCKING_REASONS = new Set(["active_issue_workspaces", "unarchived_hot_traces"]);
+const ABANDONABLE_BLOCKING_REASONS = new Set(["active_issue_workspaces"]);
 
 function isIssueWorkspaceOnlyBlocker(plan: DaemonRetirementPlan): boolean {
   return plan.can_abandon_issue_workspaces === true
