@@ -11,12 +11,14 @@
  * pair, not the store alone. Every assertion also checks the *effect* the
  * forgery would have had: after T ends, the return must be there.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
+
+import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 let sequence = 0;
@@ -29,7 +31,7 @@ const PG_TEST_TIMEOUT = 30_000;
 
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
@@ -164,8 +166,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
 
           // And the plant cannot swallow the real return. T ends; the report
           // lands on the leader's queued round for that session. That round is
-          // the normal coalescing target (`covered_by_queued_task`), not the D4
-          // manual-wakeup suppression this fix closes.
+          // the normal coalescing target, not manual-wakeup suppression.
           store.cancelTask(f.delegatedTask.id);
           const covered = store.getTask(f.delegatedTask.id)?.delegationReturnTaskId;
           expect(covered, label).not.toBeNull();
@@ -173,7 +174,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
             .filter((activity) => activity.type === "delegation_return_skipped")
             .map((activity) => (activity.data as Record<string, unknown>).reason);
           expect(skipped, label).not.toContain("covered_by_delegate_wakeup");
-          expect(skipped, label).toContain("covered_by_queued_task");
+          expect(store.listIssueActivity(f.parent.id).some(activity =>
+            activity.type === "pending_turn_coalesced"
+            && (activity.data as Record<string, unknown>).task_id === covered), label).toBe(true);
           // The report really reached the dispatcher's Session instead of being
           // dropped: the terminal transaction appended the bridge event that
           // the leader's next round projects.
@@ -321,8 +324,11 @@ for (const backend of ["sqlite", "postgres"] as const) {
           ((await commentResponse.json()) as { id: string }).id,
         )!;
         expect(comment.taskId).toBeNull();
-        const mentioned = store.listTasksForIssue(f.parent.id)
-          .filter((task) => task.triggerCommentId === comment.id);
+        const coalesced = store.listIssueActivity(f.parent.id).filter(activity =>
+          activity.type === "pending_turn_coalesced" && (activity.data as Record<string, unknown>).commentId === comment.id);
+        const mentioned = HUMAN_COMMENT_JOINS_QUEUED_ROUND
+          ? coalesced.map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)
+          : store.listTasksForIssue(f.parent.id).filter(task => task.triggerCommentId === comment.id);
         expect(mentioned).toHaveLength(1);
         expect(mentioned[0]!.parentTaskId).toBeNull();
       });

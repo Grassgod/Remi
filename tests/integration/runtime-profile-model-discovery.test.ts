@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import { MultiremiDaemon } from "@multiremi/daemon.js";
 for (const provider of ["codex", "claude"] as const) {
   it(`discovers custom ${provider} models, caches refreshes and executes the selected model`, async () => {
     const root = mkdtempSync(join(tmpdir(), "remi-profile-catalog-"));
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     const envKey = provider === "codex" ? "REMI_CODEX_CATALOG_TEST_KEY" : "REMI_CLAUDE_CATALOG_TEST_KEY";

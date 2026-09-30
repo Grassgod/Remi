@@ -10,14 +10,15 @@
 // These tests pin the derivation itself: after every lifecycle transition,
 // the Issue status must match what the surviving task rows imply.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 
 let db: Database | null = null;
 
 function createStore(): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   return store;

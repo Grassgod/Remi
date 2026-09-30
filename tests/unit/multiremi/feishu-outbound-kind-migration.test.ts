@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { ensureFeishuOutboundKindsSchema, runMigrations } from "@multiremi/store/migrations.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -31,7 +31,7 @@ function verify(db: SqlDatabase, dialect: "sqlite" | "postgres") {
 
 describe("C5 outbound schema on SQLite", () => {
   it("retains NULL lanes, E5 NULL task IDs, all columns and the original rows on repeated migration", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       seed(db);
       verify(db, "sqlite");
@@ -41,7 +41,7 @@ describe("C5 outbound schema on SQLite", () => {
   });
 
   it("runs the full startup migration twice without rebuilding or losing foreign keys", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       db.exec("PRAGMA foreign_keys = ON");
       runMigrations(db);
@@ -53,7 +53,7 @@ describe("C5 outbound schema on SQLite", () => {
   });
 
   it("retains both backups and restores live unique indexes when a legacy table is recreated beside a C5 archive", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try {
       seed(db);
       verify(db, "sqlite");

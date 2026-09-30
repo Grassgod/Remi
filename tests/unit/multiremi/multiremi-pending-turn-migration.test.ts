@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
-import { migrateTaskExecutionScope, runMigrations } from "@multiremi/store/migrations.js";
-import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
+import { executionScopeSql, PENDING_TURN_MIGRATION, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
 import { installPendingTurnTestConstraints, pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 pendingTurnBackendTests("one pending turn migration", (fixture) => {
@@ -9,6 +9,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     db.exec(`DROP INDEX IF EXISTS idx_multiremi_tasks_one_pending_turn_session;
       DROP INDEX IF EXISTS idx_multiremi_tasks_one_pending_turn_chat;`);
     db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [TASK_EXECUTION_SCOPE_MIGRATION]);
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [PENDING_TURN_MIGRATION]);
     const agent = store.createAgent({ name: "Migration owner", provider: "codex" });
     const other = store.createAgent({ name: "Delegator", provider: "codex" });
     const issue = store.createIssue({ title: "Migration lane" });
@@ -25,8 +26,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
   }
 
   function migrate() {
-    migrateTaskExecutionScope(fixture().db);
-    installPendingTurnTestConstraints(fixture());
+    runMigrations(fixture().db);
     // A server upgrade opens a fresh connection after changing SELECT * shapes.
     fixture().reopen();
   }
@@ -63,8 +63,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_tasks WHERE status = 'queued'").get())
       .toEqual({ count: 2 });
     const snapshot = f.db.query("SELECT id, status, prompt, updated_at, execution_scope FROM multiremi_tasks ORDER BY id").all();
-    migrateTaskExecutionScope(f.db);
-    installPendingTurnTestConstraints(fixture());
+    runMigrations(f.db);
     expect(f.db.query("SELECT id, status, prompt, updated_at, execution_scope FROM multiremi_tasks ORDER BY id").all()).toEqual(snapshot);
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_schema_migrations WHERE id = ?").get(TASK_EXECUTION_SCOPE_MIGRATION))
       .toEqual({ count: 1 });
@@ -109,24 +108,29 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
       .toEqual({ execution_scope: "stored_scope" });
   });
 
-  it("runs only the column migration at startup and preserves existing multiple queued turns", () => {
+  it("folds and indexes existing platform turns in one registered startup migration, once", () => {
     const f = legacyFixture();
-    f.add("first");
-    f.add("second");
-    f.add("third");
-    const before = f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all();
+    const tasks = ["first", "second", "third"].map(prompt => f.add(prompt));
     runMigrations(f.db);
     fixture().reopen();
-    expect(f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all()).toEqual(before);
+    expect(tasks.map(task => f.store.getTask(task.id)!.status)).toEqual(["queued", "cancelled", "cancelled"]);
+    const kept = f.store.getTask(tasks[0]!.id)!;
+    expect(kept.prompt.indexOf("second")).toBeGreaterThan(kept.prompt.indexOf("first"));
+    expect(kept.prompt.indexOf("third")).toBeGreaterThan(kept.prompt.indexOf("second"));
     const objects = f.db.query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')").all() as Array<{ name: string; type: string }>;
     expect(objects.filter(row => row.type === "index" && [
       "idx_multiremi_tasks_one_pending_turn_session", "idx_multiremi_tasks_one_pending_turn_chat",
-    ].includes(row.name))).toEqual([]);
+    ].includes(row.name)).map(row => row.name).sort()).toEqual([
+      "idx_multiremi_tasks_one_pending_turn_chat", "idx_multiremi_tasks_one_pending_turn_session",
+    ]);
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_schema_migrations WHERE id = ?")
       .get(TASK_EXECUTION_SCOPE_MIGRATION)).toEqual({ count: 1 });
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_schema_migrations WHERE id = ?")
-      .get("20260929_tasks_one_pending_turn")).toEqual({ count: 0 });
-    expect(f.add("fourth").status).toBe("queued");
+      .get(PENDING_TURN_MIGRATION)).toEqual({ count: 1 });
+    expect(() => f.add("fourth")).toThrow(/unique/i);
+    const snapshot = f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all();
+    runMigrations(f.db);
+    expect(f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all()).toEqual(snapshot);
   });
 
   it("T2: rejects a second platform turn but permits human rows and continuations, then admits one after running", () => {
@@ -163,8 +167,11 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     const f = legacyFixture();
     const users = ["user first", "user second", "user third"].map(content => f.store.sendChatMessage(f.chat.id, { content }).task);
     for (const body of ["First mention", "Second mention"]) {
-      f.store.createIssueComment(f.issue.id, { authorType: "member",
-        body: `${body} [@Migration owner](mention://agent/${f.agent.id})` });
+      const comment = f.store.createIssueComment(f.issue.id, { authorType: "member",
+        body });
+      f.db.run("UPDATE multiremi_issue_comments SET body = ? WHERE id = ?",
+        [`${body} [@Migration owner](mention://agent/${f.agent.id})`, comment.id]);
+      f.add(body, { triggerCommentId: comment.id, wakeSource: null });
     }
     const human = f.store.listTasksForIssue(f.issue.id).filter(task => task.triggerCommentId);
     expect(human).toHaveLength(2);

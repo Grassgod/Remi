@@ -1,3 +1,4 @@
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capability.js";
@@ -662,7 +663,7 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
   it("answers the submissions list from a projection that never selects body or patch", async () => {
     const store = createStore();
     const statements: string[] = [];
-    const db2 = new (await import("bun:sqlite")).Database(":memory:");
+    const db2 = openSqliteDatabase(":memory:");
     void db2;
     // Record the SQL the store emits for the list page, then assert on it.
     const original = store.listKnowledgeSubmissionsPage.bind(store);

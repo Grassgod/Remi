@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -12,7 +12,7 @@ const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 
 async function withStore(backend: "sqlite" | "pg", run: (store: MultiremiStore, db: SqlDatabase) => void): Promise<void> {
   if (backend === "sqlite") {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { run(new MultiremiStore(db), db); } finally { db.close(); }
     return;
   }

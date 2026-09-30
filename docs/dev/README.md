@@ -24,11 +24,14 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改 Agent 并行调度与执行目录 | [并行执行](../parallel-agent-execution.md) | Agent/Session 执行隔离、共享代码和 daemon 协议升级 |
 | 修改登录、租户隔离或 token 权限 | [认证与权限](auth.md) | 身份来源、资源 guard 和生产启动约束 |
 | 修改 ACP 后端或 token-sync | [Codex 接入](../design/acp-codex-via-codex-acp.md)、[Claude Code 接入](../design/acp-claude-via-claude-agent-acp.md)、[认证插件与同步](../design/1passport-bytedance-sso.md) | 实际启动、认证、会话和凭据隔离边界 |
+| 改 turn 失败检测、备用模型恢复或能力排队切换 | [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) | AIR 失败 metadata、失败分类、单次切换、5 分钟能力等待与提交后事件 |
 | 修改 Antigravity / agy 执行 | [Antigravity Runtime](../antigravity.md) | 原生 CLI 发现、事件流、续接、旧版恢复和能力边界 |
 | 修改云友模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
+| 改系统收件箱、平台待处理轮或唤醒事务 | [ADR 0012](../adr/0012-unified-inbox-and-single-pending-turn.md)、[ADR 0003 决策 8](../adr/0003-parent-status-derived-from-children.md) | 信封去重、平台轮次索引、评论合并与同事务编辑补救 |
+| 改提问卡片答复鉴权、令牌轮换或宿主重启恢复 | [ADR 0011](../adr/0011-question-card-one-time-token.md) | 服务端一次性令牌、收件人绑定与成员映射的边界 |
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
 | 改跨单委派回叫、回叫落点或 `wake_source` | [ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 跨单判定、回叫会话、D4 去重和结果评论口径 |
 | 改详情页首屏定位、贴底或 `data-perf-state` 契约 | [ADR 0008](../adr/0008-issue-detail-anchored-reveal-and-stick-to-bottom.md) | 先隐藏后一次定位、贴底状态机与预算口径 |

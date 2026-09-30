@@ -3600,6 +3600,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.workspace.abandon": {
+      "command": "remi issue workspace abandon",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.workspace.abandon",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.decision.request": {
       "command": "remi issue decision request",
       "aliases": [],
@@ -11745,6 +11762,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11900,6 +11922,9 @@
     },
     "POST /api/issues/:id/unsubscribe": {
       "command": "issue.subscriber.remove"
+    },
+    "POST /api/issues/:id/workspace/abandon": {
+      "command": "issue.workspace.abandon"
     },
     "POST /api/issues/:issueId/session-archives/:archiveId/retry": {
       "command": "session.archive.retry"

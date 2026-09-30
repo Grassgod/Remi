@@ -15,6 +15,23 @@ afterEach(() => {
 });
 
 describe("RuntimesEndpoints runtime response schema", () => {
+  it("passes explicit workspace abandonment to both deletion paths and validates their counts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "ok", issue_workspaces_abandoned: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+    await expect(endpoints.deleteRuntime("rt/1", true)).resolves.toMatchObject({ issue_workspaces_abandoned: 2 });
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://api.example.test/api/runtimes/rt%2F1?abandon_issue_workspaces=true");
+    fetchMock.mockImplementation(async () => jsonResponse({ status: "ok", agents_archived: 1, tasks_cancelled: 3, issue_workspaces_abandoned: 2 }));
+    await endpoints.archiveAgentsAndDeleteRuntime("rt/1", ["agent-1"], true);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ expected_active_agent_ids: ["agent-1"], abandon_issue_workspaces: true });
+    await endpoints.archiveAgentsAndDeleteRuntime("rt/1", ["agent-1"]);
+    expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toEqual({ expected_active_agent_ids: ["agent-1"] });
+    for (const malformed of [{ status: "ok" }, { status: "ok", issue_workspaces_abandoned: "2" }]) {
+      fetchMock.mockImplementation(async () => jsonResponse(malformed));
+      await expect(endpoints.deleteRuntime("rt-1")).rejects.toBeInstanceOf(ApiContractError);
+      await expect(endpoints.archiveAgentsAndDeleteRuntime("rt-1", [])).rejects.toBeInstanceOf(ApiContractError);
+    }
+  });
   it("sends profile credentials only on write and rejects malformed profile responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ profile: null }));
     vi.stubGlobal("fetch", fetchMock);

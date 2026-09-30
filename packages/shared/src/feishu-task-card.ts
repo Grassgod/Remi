@@ -128,7 +128,7 @@ export function normalizePermissionOptions(value: unknown): NormalizedPermission
   });
 }
 
-export function buildQuestionElements(marker: string, data: AskUserQuestionData): Card {
+export function buildQuestionElements(marker: string, data: AskUserQuestionData, value?: Record<string, unknown>): Card {
   const elements: Card[] = [];
   data.questions.forEach((question, qi) => {
     elements.push({
@@ -155,11 +155,13 @@ export function buildQuestionElements(marker: string, data: AskUserQuestionData)
   elements.push({
     tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
     type: "primary_filled", width: "fill", form_action_type: "submit",
+    ...(value ? { value } : {}),
   });
   return { tag: "form", name: `form_${marker}`, elements };
 }
 
 export interface TaskInteractionCardOptions {
+  token?: string;
   agentName?: string | null;
   sessionId?: string | null;
   recipientOpenId?: string;
@@ -188,6 +190,30 @@ export interface DecisionCardBody {
   card: Record<string, unknown>;
   /** Plain-text twin used when a card cannot be delivered at all. */
   fallback_text?: string;
+}
+
+export function questionCardAction(card: Record<string, unknown>): Record<string, unknown> | null {
+  const visit = (node: unknown): Record<string, unknown> | null => {
+    if (!node || typeof node !== "object") return null;
+    if (Array.isArray(node)) {
+      for (const child of node) { const found = visit(child); if (found) return found; }
+      return null;
+    }
+    const row = node as Record<string, unknown>;
+    const value = object(row.value);
+    if (row.tag === "button" && typeof value.t === "string" && typeof value.r === "string") return value;
+    for (const child of Object.values(row)) { const found = visit(child); if (found) return found; }
+    return null;
+  };
+  return visit(card);
+}
+
+/** Each rotated credential is a new delivery, not a replay of the old card. */
+export function questionCardIdempotencyKey(card: Card, deliveryKey: string): string {
+  const token = questionCardAction(card)?.t;
+  return typeof token === "string"
+    ? createHash("sha256").update(`${deliveryKey}:${token}`).digest("hex").slice(0, 32)
+    : deliveryKey;
 }
 
 export function encodeDecisionCardBody(body: DecisionCardBody): string {
@@ -261,7 +287,8 @@ export function buildTaskInteractionCard(
   } else if (!options.recipientOpenId && !options.recipientPending) {
     elements.push({ tag: "markdown", content: "未能确定处理人，请在 Remi 工作台处理此请求。" });
   } else if (request.kind === "question" && questions) {
-    elements.push(buildQuestionElements(marker, questions));
+    elements.push(buildQuestionElements(marker, questions,
+      options.token ? { t: options.token, r: request.id, task_id: request.taskId } : undefined));
   } else {
     const title = String(tool.title ?? tool.name ?? "操作审批");
     elements.push({ tag: "markdown", content: `**${escapeCardText(title)}**` });
@@ -280,6 +307,7 @@ export function buildTaskInteractionCard(
           tag: "column_set", flex_mode: "none", columns: choices.map((choice, index) => ({
             tag: "column", width: "weighted", weight: 1, elements: [{
               tag: "button", name: `${marker}_o${index}`, form_action_type: "submit",
+              ...(options.token ? { value: { t: options.token, r: request.id, task_id: request.taskId } } : {}),
               type: /reject|deny/.test(choice.kind) ? "danger" : "default", width: "fill",
               text: { tag: "plain_text", content: choice.name || choice.optionId },
             }],
@@ -360,6 +388,7 @@ export function decisionOptionValue(index: number): string {
 }
 
 export interface IssueDecisionCardOptions {
+  token?: string;
   header: Record<string, unknown>;
   recipientOpenId?: string;
   /** Only the sending host can resolve the recipient; see TaskInteractionCardOptions. */
@@ -454,6 +483,7 @@ export function buildIssueDecisionCard(
     form.push({
       tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
       type: "primary_filled", width: "fill", form_action_type: "submit",
+      ...(options.token ? { value: { t: options.token, r: decision.id, issue_id: decision.issueId } } : {}),
     });
     elements.push({ tag: "form", name: `form_${marker}`, elements: form });
   }

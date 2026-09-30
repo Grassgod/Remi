@@ -15,7 +15,8 @@ import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
-import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
+import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION,
+  preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -3328,6 +3329,15 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     UNIQUE(workspace_id, kind, unit_key));
     CREATE INDEX IF NOT EXISTS idx_feishu_outbound_operations_pending
       ON multiremi_feishu_bot_outbound_operations(workspace_id, status, available_at, leased_until);`);
+  runMigrationOnce(db, "20260929_human_request_tokens", () => {
+    for (const table of ["multiremi_task_human_requests", "multiremi_issue_decisions"]) {
+      addColumnIfMissing(db, table, "token_hash TEXT");
+      addColumnIfMissing(db, table, "token_recipient TEXT");
+      addColumnIfMissing(db, table, "token_consumed_at TEXT");
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_token_hash
+        ON ${table}(token_hash) WHERE token_hash IS NOT NULL`);
+    }
+  });
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
@@ -3434,6 +3444,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     backfillConversationLogWithinTransaction(db);
   });
   migrateTaskExecutionScope(db);
+  runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
+    preparePendingTurnConstraintsWithinTransaction(db);
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 

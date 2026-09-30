@@ -1,6 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
-import { buildTaskInteractionCard, handleTaskInteractionEvent, interactionMarker, parseQuestionAnswers, registerTaskInteraction } from "@connectors/feishu/task-interaction.js";
+import { buildTaskInteractionCard, handleTaskInteractionEvent, interactionMarker, parseQuestionAnswers } from "@connectors/feishu/task-interaction.js";
+import { registerTaskInteractionFixture as registerTaskInteraction, resetQuestionCardHostFixtures } from "./question-card-host-fixture.js";
+afterEach(resetQuestionCardHostFixtures);
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { nativeHarness, taskEvent, completed } from "./feishu-native-harness.js";
 
@@ -18,7 +20,7 @@ function request(kind: "question" | "permission" = "question"): MultiremiTaskHum
 }
 const action = (name: string, form_value?: Record<string, unknown>, operator = "ou_owner") => ({
   operator: { open_id: operator }, context: { open_chat_id: "oc_group", open_message_id: "om_request" },
-  action: { tag: "button", name, ...(form_value ? { form_value } : {}) },
+  action: { tag: "button", name, value: { t: "card-token-fixture", r: "hr_test", task_id: "tsk_test" }, ...(form_value ? { form_value } : {}) },
 });
 const answered = (r: MultiremiTaskHumanRequest, response: Record<string, unknown>): MultiremiTaskHumanRequest =>
   ({ ...r, status: "responded", response, respondedAt: new Date().toISOString(), respondedBy: "feishu" });
@@ -90,21 +92,20 @@ describe("standalone Task interactions", () => {
     });
   }
 
-  it("rejects another operator, chat, message, app or button without resolving the Task", async () => {
+  it("forwards operator checks to the server and rejects another app or button", async () => {
     const r = request("permission"); let writes = 0;
     const registration = registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_request", recipientOpenId: "ou_owner", request: r,
       submit: async response => { writes++; return answered(r, response); } });
     try {
       const name = `${interactionMarker(r.taskId, r.id)}_o0`;
-      const events = [action(name, undefined, "ou_other"), { ...action(name), context: { open_chat_id: "oc_other", open_message_id: "om_request" } },
-        { ...action(name), context: { open_chat_id: "oc_group", open_message_id: "om_forwarded" } }, action("fr_invalid_o0")];
+      const events = [action(name, undefined, "ou_other"), action("fr_invalid_o0")];
       for (const event of events) expect((await handleTaskInteractionEvent("cli_test", event) as any).toast.type).not.toBe("success");
       expect((await handleTaskInteractionEvent("cli_other", action(name)) as any).toast.type).not.toBe("success");
       expect(writes).toBe(0);
     } finally { registration.dispose(); }
   });
 
-  it("two simultaneous decisions commit only the first one", async () => {
+  it("two simultaneous callbacks reach server CAS and only the first commits", async () => {
     const r = request("permission"); const writes: any[] = [];
     let resolve!: (request: MultiremiTaskHumanRequest) => void;
     const registration = registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_request", recipientOpenId: "ou_owner", request: r,
@@ -112,9 +113,11 @@ describe("standalone Task interactions", () => {
     try {
       const first = handleTaskInteractionEvent("cli_test", action(`${interactionMarker(r.taskId, r.id)}_o0`));
       const second = handleTaskInteractionEvent("cli_test", action(`${interactionMarker(r.taskId, r.id)}_o1`));
+      await Bun.sleep(1);
       expect(writes).toEqual([{ option_id: "allow" }]);
       resolve(answered(r, writes[0]));
-      expect(await first).toEqual(await second);
+      expect((await first)?.toast).toMatchObject({ type: "success" });
+      expect((await second)?.toast).toMatchObject({ type: "info", content: "请求已结束" });
     } finally { registration.dispose(); }
   });
 
@@ -139,6 +142,8 @@ describe("standalone Task interactions", () => {
   it("restores the original pending card and submits all answers through its original Task", async () => {
     const h = nativeHarness();
     let r = request();
+    registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_request", recipientOpenId: "ou_owner", request: r,
+      submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, getHumanRequest: async () => r,
       respondHumanRequest: async (id, response) => { expect(id).toBe("hr_test"); r = answered(r, response); return r; },
@@ -191,6 +196,8 @@ describe("standalone Task interactions", () => {
     const pending = new Promise<void>(resolve => { release = resolve; });
     h.client.request = async input => { blocked = true; await pending; return original(input); };
     let r = request("permission");
+    registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_1", recipientOpenId: "ou_owner", request: r,
+      submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, getHumanRequest: async () => r,
       respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
@@ -211,6 +218,8 @@ describe("standalone Task interactions", () => {
   it("gives the request card, its receipt and the result card one shared session title", async () => {
     const h = nativeHarness();
     let r = request("permission");
+    registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_1", recipientOpenId: "ou_owner", request: r,
+      submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, displayName: "小助手", sessionId: null, getHumanRequest: async () => r,
       respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },

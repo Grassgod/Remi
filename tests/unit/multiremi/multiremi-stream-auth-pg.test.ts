@@ -20,7 +20,7 @@
  * `multiremi-postgres-store.test.ts` and `read-pool.test.ts` use.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -124,7 +124,7 @@ describe("MUL-438 stream auth SQL passes the read pool's own gate", () => {
  */
 describe("MUL-438 stream auth SQL, executed through the read pool", () => {
   it("projects the log and trace facts the decision functions read", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db as unknown as SqlDatabase);
     store.ensureLocalWorkspace();
     const workspaceId = store.ensureLocalWorkspace().id;

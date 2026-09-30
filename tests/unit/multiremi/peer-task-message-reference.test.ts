@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { Hono } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -188,19 +188,19 @@ async function assertUpsertConvergence(writer: SqlDatabase, reader: SqlDatabase,
 
 describe("peer current-committed message references", () => {
   it("preserves seqs, converges with the real browser merge, and queues only after commit (SQLite upsert)", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { await assertUpsertConvergence(db, db); }
     finally { db.close(); }
   }, 20_000);
 
   it("converges even when a reference delivers a newer version before an older queued full frame", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { await assertUpsertConvergence(db, db, true); }
     finally { db.close(); }
   }, 20_000);
 
   it("does not silently swallow a reference query failure or send its header to a denied recipient", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const pair = fanoutPair(db, db, 1024);
     const read = spyOn(pair.receiverStore, "listTaskMessages").mockImplementation(() => { throw new Error("fake-reference-query-failure"); });
     try {

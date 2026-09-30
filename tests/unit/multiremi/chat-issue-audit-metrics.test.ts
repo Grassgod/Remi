@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { readFileSync } from "node:fs";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -374,7 +374,7 @@ function assertPrelinkedIssueConflicts(db: SqlDatabase) {
 
 describe("MUL-301 executable audit metrics and recovery runbook", () => {
   it("audits overlapping proofs and real inbound activity, and executes guarded recovery on SQLite", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     try { assertAuditMetricsAndRecovery(db); } finally { db.close(); }
   });
 });

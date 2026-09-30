@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 795,
+    "routeCount": 797,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 567,
+      "compat": 569,
       "root": 16
     },
     "getRoutes": 339,
@@ -15,7 +15,7 @@
       "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 456,
+    "mutationRoutes": 458,
     "mutationRoutesCovered": 283,
     "flows": [
       "agents-compat",
@@ -589,6 +589,7 @@
     "POST /api/daemon/tasks/:taskId/dispatch-lease",
     "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
     "POST /api/daemon/tasks/:taskId/messages",
@@ -633,6 +634,7 @@
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
     "POST /api/issues/:id/unsubscribe",
+    "POST /api/issues/:id/workspace/abandon",
     "POST /api/issues/:issueId/session-archives/:archiveId/retry",
     "POST /api/issues/:issueId/session-archives/:archiveId/verify",
     "POST /api/issues/batch-delete",
@@ -1494,7 +1496,7 @@
       "path": "/api/agents",
       "status": 201,
       "body": {
-        "id": "agt_7212d1hv48ko",
+        "id": "agt_ntqjp15rt1ph",
         "workspace_id": "local",
         "runtime_id": "rt_snapshot",
         "execution_group_id": "eg_28e77cae80e6822ff0223ecf2c27d4a7",
@@ -1531,10 +1533,10 @@
     {
       "key": "agents-compat#001 PUT /api/agents/:id",
       "route": "PUT /api/agents/:id",
-      "path": "/api/agents/agt_7212d1hv48ko",
+      "path": "/api/agents/agt_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "agt_7212d1hv48ko",
+        "id": "agt_ntqjp15rt1ph",
         "workspace_id": "local",
         "runtime_id": "rt_snapshot",
         "execution_group_id": "eg_28e77cae80e6822ff0223ecf2c27d4a7",
@@ -1571,10 +1573,10 @@
     {
       "key": "agents-compat#002 PUT /api/agents/:id/env",
       "route": "PUT /api/agents/:id/env",
-      "path": "/api/agents/agt_7212d1hv48ko/env",
+      "path": "/api/agents/agt_ntqjp15rt1ph/env",
       "status": 200,
       "body": {
-        "agent_id": "agt_7212d1hv48ko",
+        "agent_id": "agt_ntqjp15rt1ph",
         "custom_env": {
           "A": "1"
         }
@@ -1583,7 +1585,7 @@
     {
       "key": "agents-compat#003 PUT /api/agents/:id/skills",
       "route": "PUT /api/agents/:id/skills",
-      "path": "/api/agents/agt_7212d1hv48ko/skills",
+      "path": "/api/agents/agt_ntqjp15rt1ph/skills",
       "status": 200,
       "body": [
         {
@@ -1601,7 +1603,7 @@
     {
       "key": "agents-compat#004 POST /api/agents/:id/skills/add",
       "route": "POST /api/agents/:id/skills/add",
-      "path": "/api/agents/agt_7212d1hv48ko/skills/add",
+      "path": "/api/agents/agt_ntqjp15rt1ph/skills/add",
       "status": 200,
       "body": [
         {
@@ -1619,7 +1621,7 @@
     {
       "key": "agents-compat#005 POST /api/agents/:id/cancel-tasks",
       "route": "POST /api/agents/:id/cancel-tasks",
-      "path": "/api/agents/agt_7212d1hv48ko/cancel-tasks",
+      "path": "/api/agents/agt_ntqjp15rt1ph/cancel-tasks",
       "status": 200,
       "body": {
         "cancelled": 0
@@ -1628,10 +1630,10 @@
     {
       "key": "agents-compat#006 POST /api/agents/:id/archive",
       "route": "POST /api/agents/:id/archive",
-      "path": "/api/agents/agt_7212d1hv48ko/archive",
+      "path": "/api/agents/agt_ntqjp15rt1ph/archive",
       "status": 200,
       "body": {
-        "id": "agt_7212d1hv48ko",
+        "id": "agt_ntqjp15rt1ph",
         "workspace_id": "local",
         "runtime_id": "rt_snapshot",
         "execution_group_id": "eg_28e77cae80e6822ff0223ecf2c27d4a7",
@@ -1674,10 +1676,10 @@
     {
       "key": "agents-compat#007 POST /api/agents/:id/restore",
       "route": "POST /api/agents/:id/restore",
-      "path": "/api/agents/agt_7212d1hv48ko/restore",
+      "path": "/api/agents/agt_ntqjp15rt1ph/restore",
       "status": 200,
       "body": {
-        "id": "agt_7212d1hv48ko",
+        "id": "agt_ntqjp15rt1ph",
         "workspace_id": "local",
         "runtime_id": "rt_snapshot",
         "execution_group_id": "eg_28e77cae80e6822ff0223ecf2c27d4a7",
@@ -1724,7 +1726,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_ibk9if0740q3",
+          "id": "agt_ic8dc9g1qpho",
           "workspace_id": "local",
           "runtime_id": "",
           "execution_group_id": null,
@@ -1931,7 +1933,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_ntqjp15rt1ph",
+          "id": "agt_ibk9if0740q3",
           "name": "Native From Template",
           "description": "Captures an architecture decision in the standard Context / Decision / Consequences format — so future-you knows why.",
           "avatarUrl": null,
@@ -2108,7 +2110,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_7212d1hv48ko",
+          "id": "att_ntqjp15rt1ph",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -2131,7 +2133,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_ntqjp15rt1ph",
+          "id": "att_ibk9if0740q3",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -2150,12 +2152,12 @@
     {
       "key": "attachments#003 DELETE /api/attachments/:id",
       "route": "DELETE /api/attachments/:id",
-      "path": "/api/attachments/att_7212d1hv48ko",
+      "path": "/api/attachments/att_ntqjp15rt1ph",
       "status": 200,
       "body": {
         "ok": true,
         "attachment": {
-          "id": "att_7212d1hv48ko",
+          "id": "att_ntqjp15rt1ph",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -2289,7 +2291,7 @@
       "path": "/api/autopilots",
       "status": 201,
       "body": {
-        "id": "aut_7212d1hv48ko",
+        "id": "aut_ntqjp15rt1ph",
         "workspace_id": "local",
         "title": "Compat autopilot",
         "description": null,
@@ -2314,10 +2316,10 @@
     {
       "key": "autopilots-compat#001 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_7212d1hv48ko",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "aut_7212d1hv48ko",
+        "id": "aut_ntqjp15rt1ph",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2342,18 +2344,18 @@
     {
       "key": "autopilots-compat#002 POST /api/autopilots/:id/triggers",
       "route": "POST /api/autopilots/:id/triggers",
-      "path": "/api/autopilots/aut_7212d1hv48ko/triggers",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/triggers",
       "status": 201,
       "body": {
-        "id": "trg_ibk9if0740q3",
-        "autopilot_id": "aut_7212d1hv48ko",
+        "id": "trg_ic8dc9g1qpho",
+        "autopilot_id": "aut_ntqjp15rt1ph",
         "kind": "webhook",
         "enabled": true,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_ic8dc9g1qpho3gq3rl",
-        "webhook_path": "/api/webhooks/autopilots/awt_ic8dc9g1qpho3gq3rl",
+        "webhook_token": "awt_3gq3rlr8o45b2ryujm",
+        "webhook_path": "/api/webhooks/autopilots/awt_3gq3rlr8o45b2ryujm",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2372,18 +2374,18 @@
     {
       "key": "autopilots-compat#003 PATCH /api/autopilots/:id/triggers/:triggerId",
       "route": "PATCH /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_7212d1hv48ko/triggers/trg_ibk9if0740q3",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/triggers/trg_ic8dc9g1qpho",
       "status": 200,
       "body": {
-        "id": "trg_ibk9if0740q3",
-        "autopilot_id": "aut_7212d1hv48ko",
+        "id": "trg_ic8dc9g1qpho",
+        "autopilot_id": "aut_ntqjp15rt1ph",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_ic8dc9g1qpho3gq3rl",
-        "webhook_path": "/api/webhooks/autopilots/awt_ic8dc9g1qpho3gq3rl",
+        "webhook_token": "awt_3gq3rlr8o45b2ryujm",
+        "webhook_path": "/api/webhooks/autopilots/awt_3gq3rlr8o45b2ryujm",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2402,18 +2404,18 @@
     {
       "key": "autopilots-compat#004 PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
       "route": "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
-      "path": "/api/autopilots/aut_7212d1hv48ko/triggers/trg_ibk9if0740q3/signing-secret",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/triggers/trg_ic8dc9g1qpho/signing-secret",
       "status": 200,
       "body": {
-        "id": "trg_ibk9if0740q3",
-        "autopilot_id": "aut_7212d1hv48ko",
+        "id": "trg_ic8dc9g1qpho",
+        "autopilot_id": "aut_ntqjp15rt1ph",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_ic8dc9g1qpho3gq3rl",
-        "webhook_path": "/api/webhooks/autopilots/awt_ic8dc9g1qpho3gq3rl",
+        "webhook_token": "awt_3gq3rlr8o45b2ryujm",
+        "webhook_path": "/api/webhooks/autopilots/awt_3gq3rlr8o45b2ryujm",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2432,18 +2434,18 @@
     {
       "key": "autopilots-compat#005 POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
       "route": "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
-      "path": "/api/autopilots/aut_7212d1hv48ko/triggers/trg_ibk9if0740q3/rotate-webhook-token",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/triggers/trg_ic8dc9g1qpho/rotate-webhook-token",
       "status": 200,
       "body": {
-        "id": "trg_ibk9if0740q3",
-        "autopilot_id": "aut_7212d1hv48ko",
+        "id": "trg_ic8dc9g1qpho",
+        "autopilot_id": "aut_ntqjp15rt1ph",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_r8o45b2ryujm2j4i6h",
-        "webhook_path": "/api/webhooks/autopilots/awt_r8o45b2ryujm2j4i6h",
+        "webhook_token": "awt_2j4i6hpiqp1rpc1xal",
+        "webhook_path": "/api/webhooks/autopilots/awt_2j4i6hpiqp1rpc1xal",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2462,26 +2464,26 @@
     {
       "key": "autopilots-compat#006 POST /api/autopilots/:id/trigger",
       "route": "POST /api/autopilots/:id/trigger",
-      "path": "/api/autopilots/aut_7212d1hv48ko/trigger",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/trigger",
       "status": 200,
       "body": {
-        "id": "run_piqp1rpc1xal",
-        "autopilot_id": "aut_7212d1hv48ko",
+        "id": "run_q5010won31uy",
+        "autopilot_id": "aut_ntqjp15rt1ph",
         "trigger_id": null,
         "event_id": null,
         "source": "manual",
         "status": "running",
-        "issue_id": "iss_q5010won31uy",
-        "issue_session_id": "ises_3gdnj5pggzmd",
-        "task_id": "tsk_jez2ujdp6d5n",
+        "issue_id": "iss_zsxpe4iu5err",
+        "issue_session_id": "ises_jez2ujdp6d5n",
+        "task_id": "tsk_l30ikvaows9d",
         "triggered_at": "<timestamp>",
         "completed_at": null,
         "failure_reason": null,
         "trigger_payload": null,
         "result": {
-          "taskId": "tsk_jez2ujdp6d5n",
-          "issueId": "iss_q5010won31uy",
-          "issueSessionId": "ises_3gdnj5pggzmd"
+          "taskId": "tsk_l30ikvaows9d",
+          "issueId": "iss_zsxpe4iu5err",
+          "issueSessionId": "ises_jez2ujdp6d5n"
         },
         "created_at": "<timestamp>",
         "schedule_target": null,
@@ -2491,10 +2493,10 @@
     {
       "key": "autopilots-compat#007 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_7212d1hv48ko",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "aut_7212d1hv48ko",
+        "id": "aut_ntqjp15rt1ph",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2519,13 +2521,13 @@
     {
       "key": "autopilots-compat#008 POST /api/autopilots/:id/deliveries/:deliveryId/replay",
       "route": "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
-      "path": "/api/autopilots/apl_snapshot/deliveries/whd_8rcx9z88woyu/replay",
+      "path": "/api/autopilots/apl_snapshot/deliveries/whd_r4ic9doizq3q/replay",
       "status": 201,
       "body": {
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_mr804acwglzg",
+          "id": "whd_c77isk189u85",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2542,28 +2544,28 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_mr804acwglzg\",\"runId\":\"run_c77isk189u85\"}",
-          "autopilotRunId": "run_c77isk189u85",
-          "replayedFromDeliveryId": "whd_8rcx9z88woyu",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_c77isk189u85\",\"runId\":\"run_rmh8s6lkcse1\"}",
+          "autopilotRunId": "run_rmh8s6lkcse1",
+          "replayedFromDeliveryId": "whd_r4ic9doizq3q",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_mr804acwglzg",
-        "delivery_id": "whd_mr804acwglzg",
+        "deliveryId": "whd_c77isk189u85",
+        "delivery_id": "whd_c77isk189u85",
         "run": {
           "scheduleTarget": null,
           "scheduleBatchId": null,
-          "id": "run_c77isk189u85",
+          "id": "run_rmh8s6lkcse1",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_rmh8s6lkcse1",
-          "taskId": "tsk_ee1nx8n37scg",
+          "issueId": "iss_btodjmtppou8",
+          "taskId": "tsk_jf9hexulk9s0",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_q98004mis9bx",
+          "issueSessionId": "ises_ee1nx8n37scg",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2579,27 +2581,27 @@
             }
           },
           "result": {
-            "taskId": "tsk_ee1nx8n37scg",
-            "issueId": "iss_rmh8s6lkcse1",
-            "issueSessionId": "ises_q98004mis9bx"
+            "taskId": "tsk_jf9hexulk9s0",
+            "issueId": "iss_btodjmtppou8",
+            "issueSessionId": "ises_ee1nx8n37scg"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_c77isk189u85",
-        "run_id": "run_c77isk189u85"
+        "runId": "run_rmh8s6lkcse1",
+        "run_id": "run_rmh8s6lkcse1"
       }
     },
     {
       "key": "autopilots-compat#009 DELETE /api/autopilots/:id/triggers/:triggerId",
       "route": "DELETE /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_7212d1hv48ko/triggers/trg_ibk9if0740q3",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph/triggers/trg_ic8dc9g1qpho",
       "status": 204,
       "body": ""
     },
     {
       "key": "autopilots-compat#010 DELETE /api/autopilots/:id",
       "route": "DELETE /api/autopilots/:id",
-      "path": "/api/autopilots/aut_7212d1hv48ko",
+      "path": "/api/autopilots/aut_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -2610,7 +2612,7 @@
       "status": 201,
       "body": {
         "autopilot": {
-          "id": "aut_7212d1hv48ko",
+          "id": "aut_ntqjp15rt1ph",
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot",
@@ -2716,15 +2718,15 @@
         "run": {
           "scheduleTarget": null,
           "scheduleBatchId": null,
-          "id": "run_ibk9if0740q3",
+          "id": "run_ic8dc9g1qpho",
           "autopilotId": "apl_snapshot",
           "source": "manual",
           "status": "running",
-          "issueId": "iss_ic8dc9g1qpho",
-          "taskId": "tsk_piqp1rpc1xal",
+          "issueId": "iss_3gq3rlr8o45b",
+          "taskId": "tsk_q5010won31uy",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_2ryujm2j4i6h",
+          "issueSessionId": "ises_piqp1rpc1xal",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2732,9 +2734,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_piqp1rpc1xal",
-            "issueId": "iss_ic8dc9g1qpho",
-            "issueSessionId": "ises_2ryujm2j4i6h"
+            "taskId": "tsk_q5010won31uy",
+            "issueId": "iss_3gq3rlr8o45b",
+            "issueSessionId": "ises_piqp1rpc1xal"
           },
           "createdAt": "<timestamp>"
         }
@@ -2749,15 +2751,15 @@
         "run": {
           "scheduleTarget": null,
           "scheduleBatchId": null,
-          "id": "run_jez2ujdp6d5n",
+          "id": "run_l30ikvaows9d",
           "autopilotId": "apl_snapshot",
           "source": "schedule",
           "status": "running",
-          "issueId": "iss_l30ikvaows9d",
-          "taskId": "tsk_mr804acwglzg",
+          "issueId": "iss_aw448dcq07dx",
+          "taskId": "tsk_c77isk189u85",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_4it58rkbvy1m",
+          "issueSessionId": "ises_mr804acwglzg",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2765,9 +2767,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_mr804acwglzg",
-            "issueId": "iss_l30ikvaows9d",
-            "issueSessionId": "ises_4it58rkbvy1m"
+            "taskId": "tsk_c77isk189u85",
+            "issueId": "iss_aw448dcq07dx",
+            "issueSessionId": "ises_mr804acwglzg"
           },
           "createdAt": "<timestamp>"
         }
@@ -2782,15 +2784,15 @@
         "run": {
           "scheduleTarget": null,
           "scheduleBatchId": null,
-          "id": "run_q98004mis9bx",
+          "id": "run_ee1nx8n37scg",
           "autopilotId": "apl_snapshot",
           "source": "api",
           "status": "running",
-          "issueId": "iss_ee1nx8n37scg",
-          "taskId": "tsk_80nhvnycarf2",
+          "issueId": "iss_jf9hexulk9s0",
+          "taskId": "tsk_1ijxvp6uzepf",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_950jhzoom893",
+          "issueSessionId": "ises_80nhvnycarf2",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2798,9 +2800,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_80nhvnycarf2",
-            "issueId": "iss_ee1nx8n37scg",
-            "issueSessionId": "ises_950jhzoom893"
+            "taskId": "tsk_1ijxvp6uzepf",
+            "issueId": "iss_jf9hexulk9s0",
+            "issueSessionId": "ises_80nhvnycarf2"
           },
           "createdAt": "<timestamp>"
         }
@@ -2815,7 +2817,7 @@
         "status": "rejected",
         "duplicate": false,
         "delivery": {
-          "id": "whd_z9xe80gxork5",
+          "id": "whd_m7768npxoima",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2830,7 +2832,7 @@
           "contentType": "application/json",
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 401,
-          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_z9xe80gxork5\",\"reason\":\"missing_signature\"}",
+          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_m7768npxoima\",\"reason\":\"missing_signature\"}",
           "autopilotRunId": null,
           "replayedFromDeliveryId": null,
           "error": "missing_signature",
@@ -2838,8 +2840,8 @@
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_z9xe80gxork5",
-        "delivery_id": "whd_z9xe80gxork5",
+        "deliveryId": "whd_m7768npxoima",
+        "delivery_id": "whd_m7768npxoima",
         "run": null,
         "runId": null,
         "run_id": null
@@ -2848,13 +2850,13 @@
     {
       "key": "autopilots-native#006 POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
       "route": "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
-      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_8rcx9z88woyu/replay",
+      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_r4ic9doizq3q/replay",
       "status": 201,
       "body": {
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_m7768npxoima",
+          "id": "whd_8zc961lccygb",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2871,28 +2873,28 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_m7768npxoima\",\"runId\":\"run_8zc961lccygb\"}",
-          "autopilotRunId": "run_8zc961lccygb",
-          "replayedFromDeliveryId": "whd_8rcx9z88woyu",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8zc961lccygb\",\"runId\":\"run_ugay511zmcbn\"}",
+          "autopilotRunId": "run_ugay511zmcbn",
+          "replayedFromDeliveryId": "whd_r4ic9doizq3q",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_m7768npxoima",
-        "delivery_id": "whd_m7768npxoima",
+        "deliveryId": "whd_8zc961lccygb",
+        "delivery_id": "whd_8zc961lccygb",
         "run": {
           "scheduleTarget": null,
           "scheduleBatchId": null,
-          "id": "run_8zc961lccygb",
+          "id": "run_ugay511zmcbn",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_ugay511zmcbn",
-          "taskId": "tsk_0lwbwha18773",
+          "issueId": "iss_ryftqqq96jq8",
+          "taskId": "tsk_abfpx6x712mq",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_pvjvnh1s9nxz",
+          "issueSessionId": "ises_0lwbwha18773",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2908,14 +2910,14 @@
             }
           },
           "result": {
-            "taskId": "tsk_0lwbwha18773",
-            "issueId": "iss_ugay511zmcbn",
-            "issueSessionId": "ises_pvjvnh1s9nxz"
+            "taskId": "tsk_abfpx6x712mq",
+            "issueId": "iss_ryftqqq96jq8",
+            "issueSessionId": "ises_0lwbwha18773"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_8zc961lccygb",
-        "run_id": "run_8zc961lccygb"
+        "runId": "run_ugay511zmcbn",
+        "run_id": "run_ugay511zmcbn"
       }
     },
     {
@@ -2976,7 +2978,7 @@
       "path": "/api/chat/sessions",
       "status": 201,
       "body": {
-        "id": "chat_7212d1hv48ko",
+        "id": "chat_ntqjp15rt1ph",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "runtime_workspace_id": null,
@@ -2995,30 +2997,30 @@
     {
       "key": "chat#001 POST /api/chat/sessions/:sessionId/messages",
       "route": "POST /api/chat/sessions/:sessionId/messages",
-      "path": "/api/chat/sessions/chat_7212d1hv48ko/messages",
+      "path": "/api/chat/sessions/chat_ntqjp15rt1ph/messages",
       "status": 201,
       "body": {
         "supports_queue": true,
         "queued": false,
-        "message_id": "msg_ntqjp15rt1ph",
-        "task_id": "tsk_ibk9if0740q3",
+        "message_id": "msg_ibk9if0740q3",
+        "task_id": "tsk_ic8dc9g1qpho",
         "created_at": "<timestamp>"
       }
     },
     {
       "key": "chat#002 POST /api/chat/sessions/:sessionId/read",
       "route": "POST /api/chat/sessions/:sessionId/read",
-      "path": "/api/chat/sessions/chat_7212d1hv48ko/read",
+      "path": "/api/chat/sessions/chat_ntqjp15rt1ph/read",
       "status": 204,
       "body": ""
     },
     {
       "key": "chat#003 PATCH /api/chat/sessions/:sessionId",
       "route": "PATCH /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_7212d1hv48ko",
+      "path": "/api/chat/sessions/chat_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "chat_7212d1hv48ko",
+        "id": "chat_ntqjp15rt1ph",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "runtime_workspace_id": null,
@@ -3041,7 +3043,7 @@
     {
       "key": "chat#004 DELETE /api/chat/sessions/:sessionId",
       "route": "DELETE /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_7212d1hv48ko",
+      "path": "/api/chat/sessions/chat_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -3053,7 +3055,7 @@
       "body": {
         "session": {
           "runtimeWorkspaceId": null,
-          "id": "chat_ic8dc9g1qpho",
+          "id": "chat_3gq3rlr8o45b",
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
@@ -3096,7 +3098,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_2ryujm2j4i6h",
+          "latestTaskId": "tsk_piqp1rpc1xal",
           "unreadSince": null,
           "hasUnread": false,
           "pinned": false,
@@ -3110,9 +3112,9 @@
           "updatedAt": "<timestamp>"
         },
         "message": {
-          "id": "msg_3gq3rlr8o45b",
+          "id": "msg_2ryujm2j4i6h",
           "chatSessionId": "cht_snapshot",
-          "taskId": "tsk_2ryujm2j4i6h",
+          "taskId": "tsk_piqp1rpc1xal",
           "role": "user",
           "body": "native message",
           "failureReason": null,
@@ -3120,7 +3122,7 @@
           "createdAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_2ryujm2j4i6h",
+          "id": "tsk_piqp1rpc1xal",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -3239,7 +3241,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_2ryujm2j4i6h",
+          "latestTaskId": "tsk_piqp1rpc1xal",
           "unreadSince": null,
           "hasUnread": false,
           "pinned": false,
@@ -3260,11 +3262,11 @@
       "path": "/api/cloud-runtime/nodes",
       "status": 201,
       "body": {
-        "id": "crn_7212d1hv48ko",
+        "id": "crn_ntqjp15rt1ph",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_7212d1hv48ko",
-        "instance_id": "local-crn_7212d1hv48ko",
+        "instanceId": "local-crn_ntqjp15rt1ph",
+        "instance_id": "local-crn_ntqjp15rt1ph",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3290,11 +3292,11 @@
       "path": "/api/cloud-runtime/nodes/status",
       "status": 200,
       "body": {
-        "id": "crn_7212d1hv48ko",
+        "id": "crn_ntqjp15rt1ph",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_7212d1hv48ko",
-        "instance_id": "local-crn_7212d1hv48ko",
+        "instanceId": "local-crn_ntqjp15rt1ph",
+        "instance_id": "local-crn_ntqjp15rt1ph",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3320,11 +3322,11 @@
       "path": "/api/cloud-runtime/nodes/start",
       "status": 200,
       "body": {
-        "id": "crn_7212d1hv48ko",
+        "id": "crn_ntqjp15rt1ph",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_7212d1hv48ko",
-        "instance_id": "local-crn_7212d1hv48ko",
+        "instanceId": "local-crn_ntqjp15rt1ph",
+        "instance_id": "local-crn_ntqjp15rt1ph",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3350,11 +3352,11 @@
       "path": "/api/cloud-runtime/nodes/stop",
       "status": 200,
       "body": {
-        "id": "crn_7212d1hv48ko",
+        "id": "crn_ntqjp15rt1ph",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_7212d1hv48ko",
-        "instance_id": "local-crn_7212d1hv48ko",
+        "instanceId": "local-crn_ntqjp15rt1ph",
+        "instance_id": "local-crn_ntqjp15rt1ph",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3380,11 +3382,11 @@
       "path": "/api/cloud-runtime/nodes/reboot",
       "status": 200,
       "body": {
-        "id": "crn_7212d1hv48ko",
+        "id": "crn_ntqjp15rt1ph",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_7212d1hv48ko",
-        "instance_id": "local-crn_7212d1hv48ko",
+        "instanceId": "local-crn_ntqjp15rt1ph",
+        "instance_id": "local-crn_ntqjp15rt1ph",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3411,11 +3413,11 @@
       "status": 200,
       "body": {
         "node": {
-          "id": "crn_7212d1hv48ko",
+          "id": "crn_ntqjp15rt1ph",
           "ownerId": "local",
           "owner_id": "local",
-          "instanceId": "local-crn_7212d1hv48ko",
-          "instance_id": "local-crn_7212d1hv48ko",
+          "instanceId": "local-crn_ntqjp15rt1ph",
+          "instance_id": "local-crn_ntqjp15rt1ph",
           "region": "local",
           "instanceType": "small",
           "instance_type": "small",
@@ -3435,7 +3437,7 @@
           "updated_at": "<timestamp>"
         },
         "exit_code": 0,
-        "stdout": "local cloud runtime node crn_7212d1hv48ko: uname -a",
+        "stdout": "local cloud runtime node crn_ntqjp15rt1ph: uname -a",
         "stderr": ""
       }
     },
@@ -3479,7 +3481,7 @@
       "path": "/api/issues/iss_snapshot/comments",
       "status": 201,
       "body": {
-        "id": "cmt_7212d1hv48ko",
+        "id": "cmt_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3500,10 +3502,10 @@
     {
       "key": "comments-compat#001 PUT /api/comments/:id",
       "route": "PUT /api/comments/:id",
-      "path": "/api/comments/cmt_7212d1hv48ko",
+      "path": "/api/comments/cmt_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "cmt_7212d1hv48ko",
+        "id": "cmt_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3524,11 +3526,11 @@
     {
       "key": "comments-compat#002 POST /api/comments/:id/reactions",
       "route": "POST /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_7212d1hv48ko/reactions",
+      "path": "/api/comments/cmt_ntqjp15rt1ph/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_aw448dcq07dx",
-        "comment_id": "cmt_7212d1hv48ko",
+        "id": "rxn_zsxpe4iu5err",
+        "comment_id": "cmt_ntqjp15rt1ph",
         "actor_type": "member",
         "actor_id": "local",
         "emoji": "tada",
@@ -3538,17 +3540,17 @@
     {
       "key": "comments-compat#003 DELETE /api/comments/:id/reactions",
       "route": "DELETE /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_7212d1hv48ko/reactions",
+      "path": "/api/comments/cmt_ntqjp15rt1ph/reactions",
       "status": 204,
       "body": ""
     },
     {
       "key": "comments-compat#004 POST /api/comments/:id/resolve",
       "route": "POST /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_7212d1hv48ko/resolve",
+      "path": "/api/comments/cmt_ntqjp15rt1ph/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_7212d1hv48ko",
+        "id": "cmt_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3569,10 +3571,10 @@
     {
       "key": "comments-compat#005 DELETE /api/comments/:id/resolve",
       "route": "DELETE /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_7212d1hv48ko/resolve",
+      "path": "/api/comments/cmt_ntqjp15rt1ph/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_7212d1hv48ko",
+        "id": "cmt_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3593,7 +3595,7 @@
     {
       "key": "comments-compat#006 DELETE /api/comments/:id",
       "route": "DELETE /api/comments/:id",
-      "path": "/api/comments/cmt_7212d1hv48ko",
+      "path": "/api/comments/cmt_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -3604,7 +3606,7 @@
       "status": 201,
       "body": {
         "comment": {
-          "id": "cmt_7212d1hv48ko",
+          "id": "cmt_ntqjp15rt1ph",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3666,7 +3668,7 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "commentId": "cmt_0ts9yveh51cp",
               "workspaceId": "local",
               "actorType": "member",
@@ -3730,7 +3732,7 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "commentId": "cmt_0ts9yveh51cp",
               "workspaceId": "local",
               "actorType": "member",
@@ -3770,7 +3772,7 @@
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_c77isk189u85",
+          "id": "rxn_btodjmtppou8",
           "commentId": "cmt_0ts9yveh51cp",
           "workspaceId": "local",
           "actorType": "member",
@@ -3820,7 +3822,7 @@
           "resolved_by_id": "local",
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "commentId": "cmt_0ts9yveh51cp",
               "workspaceId": "local",
               "actorType": "member",
@@ -3884,7 +3886,7 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "commentId": "cmt_0ts9yveh51cp",
               "workspaceId": "local",
               "actorType": "member",
@@ -3936,7 +3938,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "a39719439b495a56582d978a433d92f690c0fcf52d8a4e5399eadcbd2f4bb4dd",
+          "snapshot": "e138cae8f69ba4be5c21dade72bbd53ef616f764dfafd56261f1d379fe1f31de",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -3961,21 +3963,21 @@
           "active_tasks": [],
           "queued_tasks": [
             {
-              "id": "tsk_ccpewwo14x7v",
+              "id": "tsk_58aij4tcn1m0",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
-              "issue_id": "iss_gbmah1mhgwob"
+              "issue_id": "iss_qdrfz8sqy58x"
             },
             {
-              "id": "tsk_ebtova4a347t",
+              "id": "tsk_ngo6cdqkk9pi",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
-              "issue_id": "iss_j3m15clzy3p6"
+              "issue_id": "iss_9i3epsr6j5hf"
             },
             {
-              "id": "tsk_lv85f3t6oap5",
+              "id": "tsk_sv4llynq4cfm",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
@@ -4035,7 +4037,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_7212d1hv48ko",
+          "id": "tsk_ntqjp15rt1ph",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -4079,8 +4081,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_ibk9if0740q3",
-          "assignment_event_id": "sevt_ibk9if0740q3",
+          "assignmentEventId": "sevt_ic8dc9g1qpho",
+          "assignment_event_id": "sevt_ic8dc9g1qpho",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -4283,7 +4285,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 5,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"inbox_toc\",\"entries\":[{\"seq\":1,\"id\":\"sevt_jljden7o2lqj\",\"priority\":4,\"kind\":\"turn\",\"author_name\":null,\"created_at\":\"<timestamp>\",\"title\":\"Snapshot prompt\",\"chars\":15,\"folded\":false},{\"seq\":3,\"id\":\"cmt_0ts9yveh51cp\",\"priority\":4,\"kind\":\"message\",\"author_name\":\"Snapshot Member\",\"created_at\":\"<timestamp>\",\"title\":\"Snapshot comment body\",\"chars\":21,\"folded\":false},{\"seq\":5,\"id\":\"sevt_ibk9if0740q3\",\"priority\":4,\"kind\":\"turn\",\"author_name\":null,\"created_at\":\"<timestamp>\",\"title\":\"Snapshot lifecycle task\",\"chars\":23,\"folded\":false}]}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_0ts9yveh51cp\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_7212d1hv48ko\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"inbox_toc\",\"entries\":[{\"seq\":1,\"id\":\"sevt_jljden7o2lqj\",\"priority\":4,\"kind\":\"turn\",\"author_name\":null,\"created_at\":\"<timestamp>\",\"title\":\"Snapshot prompt\",\"chars\":15,\"folded\":false},{\"seq\":3,\"id\":\"cmt_0ts9yveh51cp\",\"priority\":4,\"kind\":\"message\",\"author_name\":\"Snapshot Member\",\"created_at\":\"<timestamp>\",\"title\":\"Snapshot comment body\",\"chars\":21,\"folded\":false},{\"seq\":5,\"id\":\"sevt_ic8dc9g1qpho\",\"priority\":4,\"kind\":\"turn\",\"author_name\":null,\"created_at\":\"<timestamp>\",\"title\":\"Snapshot lifecycle task\",\"chars\":23,\"folded\":false}]}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_0ts9yveh51cp\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_ntqjp15rt1ph\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
             "truncated": false,
             "omitted_events": 0,
             "estimated_tokens": 620
@@ -4391,7 +4393,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.\n\n## Artifact Delivery Contract\n\nWhen a task produces a viewable artifact (HTML page, chart, diagram, rendered report):\n- In an Issue, attach it to the reply comment with `remi comment add <issue> --content <summary> --attachment <path>`. Report the comment ID and attachment filename.\n- Never deliver by workspace path alone. Short diagrams may go in the comment body as fenced Mermaid or HTML; use attachments for full pages and shareable reports.\n\nChat supports attachment delivery through `remi chat attachment send --attachment <path>`; repeat `--attachment` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.\n- Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.\n- Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.\n- For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.\n- Report the attachment IDs and filenames returned by the command. A workspace path alone is not a delivered attachment.\n- Incoming Chat attachments are listed with local paths when available. Read those files directly; otherwise use the listed `remi attachment download` command. Use lark-cli download only as a fallback when platform attachment access is unavailable.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_ea542cc1307558b5f2a959a8b7e83edbcfa53f2c"
+          "auth_token": "mat_b7e83edbcfa53f2c3c04959bb6abd6ae5beeb6a3"
         }
       }
     },
@@ -4402,7 +4404,7 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_lv85f3t6oap5",
+          "id": "tsk_sv4llynq4cfm",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
@@ -4476,7 +4478,7 @@
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "chat_message_attachments": [],
-          "auth_token": "mat_701206c58536f23d011ba99c6dd52e1586b9fcb5"
+          "auth_token": "mat_6dd52e1586b9fcb52420cc834b91668e8fd0d53d"
         }
       }
     },
@@ -4487,10 +4489,10 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_ebtova4a347t",
+          "id": "tsk_58aij4tcn1m0",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_j3m15clzy3p6",
+          "issue_id": "iss_qdrfz8sqy58x",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
@@ -4504,9 +4506,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_k128jfpswkpm",
+          "issue_session_id": "ises_ebtova4a347t",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_2xbrsagogw63",
+          "autopilot_run_id": "run_j3m15clzy3p6",
           "plugin_snapshot": [],
           "codex_profile": null,
           "claude_profile": null,
@@ -4549,7 +4551,7 @@
             "max_concurrent_tasks": 6
           },
           "issue": {
-            "id": "iss_j3m15clzy3p6",
+            "id": "iss_qdrfz8sqy58x",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -4581,20 +4583,20 @@
             "attachments": []
           },
           "session_projection": {
-            "session_id": "ises_k128jfpswkpm",
+            "session_id": "ises_ebtova4a347t",
             "target_agent_id": "agt_snapshot",
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_k128jfpswkpm\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"inbox_toc\",\"entries\":[]}",
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_ebtova4a347t\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"inbox_toc\",\"entries\":[]}",
             "truncated": false,
             "omitted_events": 0,
             "estimated_tokens": 53
           },
           "issue_session": {
-            "id": "ises_k128jfpswkpm",
-            "issueId": "iss_j3m15clzy3p6",
-            "issue_id": "iss_j3m15clzy3p6",
+            "id": "ises_ebtova4a347t",
+            "issueId": "iss_qdrfz8sqy58x",
+            "issue_id": "iss_qdrfz8sqy58x",
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Main",
@@ -4689,7 +4691,7 @@
           "autopilot_source": "manual",
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_56945af605e63f3fff587917a3dd8510e847ee79"
+          "auth_token": "mat_a3dd8510e847ee797f566bb642a39d3dba79b93b"
         }
       }
     },
@@ -4700,10 +4702,10 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_ccpewwo14x7v",
+          "id": "tsk_ngo6cdqkk9pi",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_gbmah1mhgwob",
+          "issue_id": "iss_9i3epsr6j5hf",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
@@ -4717,9 +4719,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_abrrt3qds322",
+          "issue_session_id": "ises_ccpewwo14x7v",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_r4ic9doizq3q",
+          "autopilot_run_id": "run_gbmah1mhgwob",
           "plugin_snapshot": [],
           "codex_profile": null,
           "claude_profile": null,
@@ -4762,7 +4764,7 @@
             "max_concurrent_tasks": 6
           },
           "issue": {
-            "id": "iss_gbmah1mhgwob",
+            "id": "iss_9i3epsr6j5hf",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -4794,20 +4796,20 @@
             "attachments": []
           },
           "session_projection": {
-            "session_id": "ises_abrrt3qds322",
+            "session_id": "ises_ccpewwo14x7v",
             "target_agent_id": "agt_snapshot",
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_abrrt3qds322\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"inbox_toc\",\"entries\":[]}",
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_ccpewwo14x7v\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"inbox_toc\",\"entries\":[]}",
             "truncated": false,
             "omitted_events": 0,
             "estimated_tokens": 53
           },
           "issue_session": {
-            "id": "ises_abrrt3qds322",
-            "issueId": "iss_gbmah1mhgwob",
-            "issue_id": "iss_gbmah1mhgwob",
+            "id": "ises_ccpewwo14x7v",
+            "issueId": "iss_9i3epsr6j5hf",
+            "issue_id": "iss_9i3epsr6j5hf",
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Main",
@@ -4911,7 +4913,7 @@
           },
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_5dff90125cd352cc2088750de2f894b85055303e"
+          "auth_token": "mat_e2f894b85055303efcdf79217012410550cf8053"
         }
       }
     },
@@ -4936,7 +4938,7 @@
     {
       "key": "daemon-task-lifecycle#007 POST /api/daemon/tasks/:taskId/wait-local-directory",
       "route": "POST /api/daemon/tasks/:taskId/wait-local-directory",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/wait-local-directory",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/wait-local-directory",
       "status": 400,
       "body": {
         "error": "mark task waiting_local_directory: no rows in result set"
@@ -4945,7 +4947,7 @@
     {
       "key": "daemon-task-lifecycle#008 POST /api/daemon/tasks/:taskId/start",
       "route": "POST /api/daemon/tasks/:taskId/start",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/start",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/start",
       "status": 400,
       "body": {
         "error": "start task: no rows in result set"
@@ -4954,7 +4956,7 @@
     {
       "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/progress",
       "route": "POST /api/daemon/tasks/:taskId/progress",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/progress",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/progress",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4963,7 +4965,7 @@
     {
       "key": "daemon-task-lifecycle#010 POST /api/daemon/tasks/:taskId/messages",
       "route": "POST /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/messages",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/messages",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4972,10 +4974,10 @@
     {
       "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/prompt",
       "route": "POST /api/daemon/tasks/:taskId/prompt",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/prompt",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_7212d1hv48ko",
+        "task_id": "tsk_ntqjp15rt1ph",
         "mode": "bootstrap",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
         "assembled_at": "<timestamp>"
@@ -4984,10 +4986,10 @@
     {
       "key": "daemon-task-lifecycle#012 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
-      "path": "/api/tasks/tsk_7212d1hv48ko/prompt",
+      "path": "/api/tasks/tsk_ntqjp15rt1ph/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_7212d1hv48ko",
+        "task_id": "tsk_ntqjp15rt1ph",
         "mode": "bootstrap",
         "prompt": "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
@@ -4997,14 +4999,14 @@
     {
       "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/session",
       "route": "POST /api/daemon/tasks/:taskId/session",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/session",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/session",
       "status": 204,
       "body": ""
     },
     {
       "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/usage",
       "route": "POST /api/daemon/tasks/:taskId/usage",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/usage",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/usage",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5013,12 +5015,12 @@
     {
       "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_glzgc77isk18",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_9u85rmh8s6lk",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -5035,12 +5037,12 @@
     {
       "key": "daemon-task-lifecycle#016 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/human-requests/hrq_glzgc77isk18/respond",
+      "path": "/api/multiremi/tasks/tsk_ntqjp15rt1ph/human-requests/hrq_9u85rmh8s6lk/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_glzgc77isk18",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_9u85rmh8s6lk",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -5057,12 +5059,12 @@
     {
       "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_9u85rmh8s6lk",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_cse1btodjmtp",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -5079,12 +5081,12 @@
     {
       "key": "daemon-task-lifecycle#018 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_7212d1hv48ko/human-requests/hrq_9u85rmh8s6lk/respond",
+      "path": "/api/tasks/tsk_ntqjp15rt1ph/human-requests/hrq_cse1btodjmtp/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_9u85rmh8s6lk",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_cse1btodjmtp",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -5101,12 +5103,12 @@
     {
       "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_cse1btodjmtp",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_pou8q98004mi",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -5123,12 +5125,12 @@
     {
       "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests/hrq_cse1btodjmtp/expire",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/human-requests/hrq_pou8q98004mi/expire",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_cse1btodjmtp",
-          "taskId": "tsk_7212d1hv48ko",
+          "id": "hrq_pou8q98004mi",
+          "taskId": "tsk_ntqjp15rt1ph",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -5145,10 +5147,10 @@
     {
       "key": "daemon-task-lifecycle#021 POST /api/daemon/tasks/:taskId/complete",
       "route": "POST /api/daemon/tasks/:taskId/complete",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/complete",
+      "path": "/api/daemon/tasks/tsk_ntqjp15rt1ph/complete",
       "status": 200,
       "body": {
-        "id": "tsk_7212d1hv48ko",
+        "id": "tsk_ntqjp15rt1ph",
         "agent_id": "agt_snapshot",
         "runtime_id": "rt_snapshot",
         "issue_id": "iss_snapshot",
@@ -5544,7 +5546,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.\n\n## Artifact Delivery Contract\n\nWhen a task produces a viewable artifact (HTML page, chart, diagram, rendered report):\n- In an Issue, attach it to the reply comment with `remi comment add <issue> --content <summary> --attachment <path>`. Report the comment ID and attachment filename.\n- Never deliver by workspace path alone. Short diagrams may go in the comment body as fenced Mermaid or HTML; use attachments for full pages and shareable reports.\n\nChat supports attachment delivery through `remi chat attachment send --attachment <path>`; repeat `--attachment` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.\n- Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.\n- Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.\n- For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.\n- Report the attachment IDs and filenames returned by the command. A workspace path alone is not a delivered attachment.\n- Incoming Chat attachments are listed with local paths when available. Read those files directly; otherwise use the listed `remi attachment download` command. Use lark-cli download only as a fallback when platform attachment access is unavailable.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_7e9bec99c6e7b44f94d8ceb7ea542cc1307558b5"
+          "auth_token": "mat_ea542cc1307558b5f2a959a8b7e83edbcfa53f2c"
         }
       }
     },
@@ -5580,7 +5582,7 @@
     {
       "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/models/rml_95b5dwter7av/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/models/rml_u7jlxs9tay5o/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5593,7 +5595,7 @@
       "status": 200,
       "body": {
         "request": {
-          "id": "rds_u7jlxs9tay5o",
+          "id": "rds_s05boock1828",
           "runtimeId": "rt_snapshot",
           "status": "running",
           "params": {
@@ -5613,7 +5615,7 @@
     {
       "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_u7jlxs9tay5o/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_s05boock1828/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5631,7 +5633,7 @@
     {
       "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_s05boock1828/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_bbo9f1dxazyr/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5649,7 +5651,7 @@
     {
       "key": "daemon#011 POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_bbo9f1dxazyr/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_yy6thkeq1n3e/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5667,7 +5669,7 @@
     {
       "key": "daemon#013 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/update/rup_yy6thkeq1n3e/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/update/rup_zofbpdsnw9pi/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5931,7 +5933,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_ccpewwo14x7v",
+          "id": "tsk_ngo6cdqkk9pi",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5951,15 +5953,15 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_gbmah1mhgwob",
-          "issueSessionId": "ises_abrrt3qds322",
-          "issue_session_id": "ises_abrrt3qds322",
+          "issueId": "iss_9i3epsr6j5hf",
+          "issueSessionId": "ises_ccpewwo14x7v",
+          "issue_session_id": "ises_ccpewwo14x7v",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_r4ic9doizq3q",
+          "autopilotRunId": "run_gbmah1mhgwob",
           "triggerCommentId": null,
           "triggerSummary": null,
           "requestingUserName": null,
@@ -5975,8 +5977,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_cyvme8h5925t",
-          "assignment_event_id": "sevt_cyvme8h5925t",
+          "assignmentEventId": "sevt_xtp8jpp4a7us",
+          "assignment_event_id": "sevt_xtp8jpp4a7us",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6027,7 +6029,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_ebtova4a347t",
+          "id": "tsk_58aij4tcn1m0",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6047,15 +6049,15 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_j3m15clzy3p6",
-          "issueSessionId": "ises_k128jfpswkpm",
-          "issue_session_id": "ises_k128jfpswkpm",
+          "issueId": "iss_qdrfz8sqy58x",
+          "issueSessionId": "ises_ebtova4a347t",
+          "issue_session_id": "ises_ebtova4a347t",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_2xbrsagogw63",
+          "autopilotRunId": "run_j3m15clzy3p6",
           "triggerCommentId": null,
           "triggerSummary": null,
           "requestingUserName": null,
@@ -6071,8 +6073,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_ksk9u210lmg0",
-          "assignment_event_id": "sevt_ksk9u210lmg0",
+          "assignmentEventId": "sevt_u4c9m3gewz2d",
+          "assignment_event_id": "sevt_u4c9m3gewz2d",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6123,7 +6125,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_lv85f3t6oap5",
+          "id": "tsk_sv4llynq4cfm",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6972,7 +6974,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_ccpewwo14x7v",
+          "id": "tsk_ngo6cdqkk9pi",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6992,15 +6994,15 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_gbmah1mhgwob",
-          "issueSessionId": "ises_abrrt3qds322",
-          "issue_session_id": "ises_abrrt3qds322",
+          "issueId": "iss_9i3epsr6j5hf",
+          "issueSessionId": "ises_ccpewwo14x7v",
+          "issue_session_id": "ises_ccpewwo14x7v",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_r4ic9doizq3q",
+          "autopilotRunId": "run_gbmah1mhgwob",
           "triggerCommentId": null,
           "triggerSummary": null,
           "requestingUserName": null,
@@ -7016,8 +7018,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_cyvme8h5925t",
-          "assignment_event_id": "sevt_cyvme8h5925t",
+          "assignmentEventId": "sevt_xtp8jpp4a7us",
+          "assignment_event_id": "sevt_xtp8jpp4a7us",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -7068,7 +7070,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_ebtova4a347t",
+          "id": "tsk_58aij4tcn1m0",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -7088,15 +7090,15 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_j3m15clzy3p6",
-          "issueSessionId": "ises_k128jfpswkpm",
-          "issue_session_id": "ises_k128jfpswkpm",
+          "issueId": "iss_qdrfz8sqy58x",
+          "issueSessionId": "ises_ebtova4a347t",
+          "issue_session_id": "ises_ebtova4a347t",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_2xbrsagogw63",
+          "autopilotRunId": "run_j3m15clzy3p6",
           "triggerCommentId": null,
           "triggerSummary": null,
           "requestingUserName": null,
@@ -7112,8 +7114,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_ksk9u210lmg0",
-          "assignment_event_id": "sevt_ksk9u210lmg0",
+          "assignmentEventId": "sevt_u4c9m3gewz2d",
+          "assignment_event_id": "sevt_u4c9m3gewz2d",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -7164,7 +7166,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_lv85f3t6oap5",
+          "id": "tsk_sv4llynq4cfm",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -7620,15 +7622,15 @@
         },
         "triggers": [
           {
-            "id": "trg_aunci5sv8e5p",
+            "id": "trg_1ut6x0i244sp",
             "autopilot_id": "apl_snapshot",
             "kind": "webhook",
             "enabled": true,
             "cron_expression": null,
             "timezone": null,
             "next_run_at": null,
-            "webhook_token": "awt_1ut6x0i244sp2mewms",
-            "webhook_path": "/api/webhooks/autopilots/awt_1ut6x0i244sp2mewms",
+            "webhook_token": "awt_2mewms2xbrsagogw63",
+            "webhook_path": "/api/webhooks/autopilots/awt_2mewms2xbrsagogw63",
             "webhook_url": null,
             "provider": "github",
             "has_signing_secret": false,
@@ -7653,7 +7655,7 @@
       "status": 200,
       "body": [
         {
-          "id": "whd_8rcx9z88woyu",
+          "id": "whd_r4ic9doizq3q",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -7670,8 +7672,8 @@
           "contentType": null,
           "rawBody": null,
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8rcx9z88woyu\",\"runId\":\"run_r4ic9doizq3q\"}",
-          "autopilotRunId": "run_r4ic9doizq3q",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_r4ic9doizq3q\",\"runId\":\"run_gbmah1mhgwob\"}",
+          "autopilotRunId": "run_gbmah1mhgwob",
           "replayedFromDeliveryId": null,
           "error": null,
           "receivedAt": "<timestamp>",
@@ -7683,10 +7685,10 @@
     {
       "key": "get-sweep GET /api/autopilots/:id/deliveries/:deliveryId",
       "route": "GET /api/autopilots/:id/deliveries/:deliveryId",
-      "path": "/api/autopilots/apl_snapshot/deliveries/whd_8rcx9z88woyu",
+      "path": "/api/autopilots/apl_snapshot/deliveries/whd_r4ic9doizq3q",
       "status": 200,
       "body": {
-        "id": "whd_8rcx9z88woyu",
+        "id": "whd_r4ic9doizq3q",
         "workspaceId": "local",
         "autopilotId": "apl_snapshot",
         "triggerId": "apl_snapshot",
@@ -7703,8 +7705,8 @@
         "contentType": null,
         "rawBody": "{\"action\":\"opened\"}",
         "responseStatus": 201,
-        "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8rcx9z88woyu\",\"runId\":\"run_r4ic9doizq3q\"}",
-        "autopilotRunId": "run_r4ic9doizq3q",
+        "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_r4ic9doizq3q\",\"runId\":\"run_gbmah1mhgwob\"}",
+        "autopilotRunId": "run_gbmah1mhgwob",
         "replayedFromDeliveryId": null,
         "error": null,
         "receivedAt": "<timestamp>",
@@ -7720,23 +7722,23 @@
       "body": {
         "runs": [
           {
-            "id": "run_r4ic9doizq3q",
+            "id": "run_gbmah1mhgwob",
             "autopilot_id": "apl_snapshot",
             "trigger_id": null,
             "event_id": null,
             "source": "webhook",
             "status": "running",
-            "issue_id": "iss_gbmah1mhgwob",
-            "issue_session_id": "ises_abrrt3qds322",
-            "task_id": "tsk_ccpewwo14x7v",
+            "issue_id": "iss_9i3epsr6j5hf",
+            "issue_session_id": "ises_ccpewwo14x7v",
+            "task_id": "tsk_ngo6cdqkk9pi",
             "triggered_at": "<timestamp>",
             "completed_at": null,
             "failure_reason": null,
             "trigger_payload": null,
             "result": {
-              "taskId": "tsk_ccpewwo14x7v",
-              "issueId": "iss_gbmah1mhgwob",
-              "issueSessionId": "ises_abrrt3qds322"
+              "taskId": "tsk_ngo6cdqkk9pi",
+              "issueId": "iss_9i3epsr6j5hf",
+              "issueSessionId": "ises_ccpewwo14x7v"
             },
             "created_at": "<timestamp>",
             "schedule_target": null,
@@ -7754,23 +7756,23 @@
             }
           },
           {
-            "id": "run_2xbrsagogw63",
+            "id": "run_j3m15clzy3p6",
             "autopilot_id": "apl_snapshot",
             "trigger_id": null,
             "event_id": null,
             "source": "manual",
             "status": "running",
-            "issue_id": "iss_j3m15clzy3p6",
-            "issue_session_id": "ises_k128jfpswkpm",
-            "task_id": "tsk_ebtova4a347t",
+            "issue_id": "iss_qdrfz8sqy58x",
+            "issue_session_id": "ises_ebtova4a347t",
+            "task_id": "tsk_58aij4tcn1m0",
             "triggered_at": "<timestamp>",
             "completed_at": null,
             "failure_reason": null,
             "trigger_payload": null,
             "result": {
-              "taskId": "tsk_ebtova4a347t",
-              "issueId": "iss_j3m15clzy3p6",
-              "issueSessionId": "ises_k128jfpswkpm"
+              "taskId": "tsk_58aij4tcn1m0",
+              "issueId": "iss_qdrfz8sqy58x",
+              "issueSessionId": "ises_ebtova4a347t"
             },
             "created_at": "<timestamp>",
             "schedule_target": null,
@@ -7784,26 +7786,26 @@
     {
       "key": "get-sweep GET /api/autopilots/:id/runs/:runId",
       "route": "GET /api/autopilots/:id/runs/:runId",
-      "path": "/api/autopilots/apl_snapshot/runs/run_2xbrsagogw63",
+      "path": "/api/autopilots/apl_snapshot/runs/run_j3m15clzy3p6",
       "status": 200,
       "body": {
-        "id": "run_2xbrsagogw63",
+        "id": "run_j3m15clzy3p6",
         "autopilot_id": "apl_snapshot",
         "trigger_id": null,
         "event_id": null,
         "source": "manual",
         "status": "running",
-        "issue_id": "iss_j3m15clzy3p6",
-        "issue_session_id": "ises_k128jfpswkpm",
-        "task_id": "tsk_ebtova4a347t",
+        "issue_id": "iss_qdrfz8sqy58x",
+        "issue_session_id": "ises_ebtova4a347t",
+        "task_id": "tsk_58aij4tcn1m0",
         "triggered_at": "<timestamp>",
         "completed_at": null,
         "failure_reason": null,
         "trigger_payload": null,
         "result": {
-          "taskId": "tsk_ebtova4a347t",
-          "issueId": "iss_j3m15clzy3p6",
-          "issueSessionId": "ises_k128jfpswkpm"
+          "taskId": "tsk_58aij4tcn1m0",
+          "issueId": "iss_qdrfz8sqy58x",
+          "issueSessionId": "ises_ebtova4a347t"
         },
         "created_at": "<timestamp>",
         "schedule_target": null,
@@ -7818,7 +7820,7 @@
       "body": {
         "tasks": [
           {
-            "task_id": "tsk_lv85f3t6oap5",
+            "task_id": "tsk_sv4llynq4cfm",
             "status": "queued",
             "chat_session_id": "cht_snapshot"
           }
@@ -7886,11 +7888,11 @@
       "status": 200,
       "body": [
         {
-          "id": "msg_8be626isk151",
+          "id": "msg_lv85f3t6oap5",
           "chat_session_id": "cht_snapshot",
           "role": "user",
           "content": "Snapshot chat message",
-          "task_id": "tsk_lv85f3t6oap5",
+          "task_id": "tsk_sv4llynq4cfm",
           "created_at": "<timestamp>",
           "failure_reason": null,
           "elapsed_ms": null
@@ -7905,11 +7907,11 @@
       "body": {
         "messages": [
           {
-            "id": "msg_8be626isk151",
+            "id": "msg_lv85f3t6oap5",
             "chat_session_id": "cht_snapshot",
             "role": "user",
             "content": "Snapshot chat message",
-            "task_id": "tsk_lv85f3t6oap5",
+            "task_id": "tsk_sv4llynq4cfm",
             "created_at": "<timestamp>",
             "failure_reason": null,
             "elapsed_ms": null
@@ -7926,7 +7928,7 @@
       "path": "/api/chat/sessions/cht_snapshot/pending-task",
       "status": 200,
       "body": {
-        "task_id": "tsk_lv85f3t6oap5",
+        "task_id": "tsk_sv4llynq4cfm",
         "status": "queued",
         "created_at": "<timestamp>",
         "supports_queue": true,
@@ -10060,6 +10062,17 @@
             "id": "issue.workspace",
             "command": "remi issue workspace",
             "capability": "issue.workspace",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.workspace.abandon",
+            "command": "remi issue workspace abandon",
+            "capability": "issue.workspace.abandon",
             "outputs": [
               "table",
               "json",
@@ -14056,7 +14069,7 @@
     {
       "key": "get-sweep GET /api/daemon/autopilot-runs/:runId/gc-check",
       "route": "GET /api/daemon/autopilot-runs/:runId/gc-check",
-      "path": "/api/daemon/autopilot-runs/run_2xbrsagogw63/gc-check",
+      "path": "/api/daemon/autopilot-runs/run_j3m15clzy3p6/gc-check",
       "status": 200,
       "body": {
         "status": "running",
@@ -14206,7 +14219,7 @@
     {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
-      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/outbound/whd_8rcx9z88woyu/attachments/att_snapshot",
+      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/outbound/whd_r4ic9doizq3q/attachments/att_snapshot",
       "status": 403,
       "body": {
         "error": "daemon token required",
@@ -14288,7 +14301,7 @@
           "trigger_author_name": "Snapshot Member"
         },
         {
-          "id": "tsk_lv85f3t6oap5",
+          "id": "tsk_sv4llynq4cfm",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
@@ -14310,10 +14323,10 @@
           "claude_profile": null
         },
         {
-          "id": "tsk_ebtova4a347t",
+          "id": "tsk_58aij4tcn1m0",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_j3m15clzy3p6",
+          "issue_id": "iss_qdrfz8sqy58x",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
@@ -14327,17 +14340,17 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_k128jfpswkpm",
+          "issue_session_id": "ises_ebtova4a347t",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_2xbrsagogw63",
+          "autopilot_run_id": "run_j3m15clzy3p6",
           "codex_profile": null,
           "claude_profile": null
         },
         {
-          "id": "tsk_ccpewwo14x7v",
+          "id": "tsk_ngo6cdqkk9pi",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_gbmah1mhgwob",
+          "issue_id": "iss_9i3epsr6j5hf",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
@@ -14351,9 +14364,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_abrrt3qds322",
+          "issue_session_id": "ises_ccpewwo14x7v",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_r4ic9doizq3q",
+          "autopilot_run_id": "run_gbmah1mhgwob",
           "codex_profile": null,
           "claude_profile": null
         }
@@ -14602,7 +14615,7 @@
       "status": 200,
       "body": [
         {
-          "id": "inb_vfs9viv2ilj6",
+          "id": "inb_mmcj3uiam2jc",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -14672,7 +14685,7 @@
       "body": {
         "items": [
           {
-            "id": "inb_vfs9viv2ilj6",
+            "id": "inb_mmcj3uiam2jc",
             "workspaceId": "local",
             "workspace_id": "local",
             "issueId": "iss_snapshot_blocked",
@@ -14767,10 +14780,10 @@
     {
       "key": "get-sweep GET /api/invitations/:id",
       "route": "GET /api/invitations/:id",
-      "path": "/api/invitations/inv_m21cp1q6gys4",
+      "path": "/api/invitations/inv_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "inv_m21cp1q6gys4",
+        "id": "inv_nwk7j7pg419m",
         "workspaceId": "local",
         "workspace_id": "local",
         "inviterId": "local",
@@ -14828,7 +14841,7 @@
             "labels": []
           },
           {
-            "id": "iss_gbmah1mhgwob",
+            "id": "iss_9i3epsr6j5hf",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -14859,7 +14872,7 @@
             "labels": []
           },
           {
-            "id": "iss_j3m15clzy3p6",
+            "id": "iss_qdrfz8sqy58x",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -15238,7 +15251,7 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "comment_id": "cmt_0ts9yveh51cp",
               "actor_type": "member",
               "actor_id": "mem_snapshot_one",
@@ -16100,7 +16113,7 @@
           "comment_type": "comment",
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "comment_id": "cmt_0ts9yveh51cp",
               "actor_type": "member",
               "actor_id": "mem_snapshot_one",
@@ -16145,6 +16158,21 @@
         {
           "type": "activity",
           "id": "act_30x2827p9355",
+          "issue_session_id": null,
+          "actor_type": "system",
+          "actor_id": null,
+          "created_at": "<timestamp>",
+          "action": "pending_turn_created",
+          "details": {
+            "task_id": "tsk_uj5ra15g3kjw",
+            "seq": 3,
+            "reason": "comment",
+            "commentId": "cmt_0ts9yveh51cp"
+          }
+        },
+        {
+          "type": "activity",
+          "id": "act_qxjbfrxonmls",
           "issue_session_id": null,
           "actor_type": "system",
           "actor_id": null,
@@ -16329,7 +16357,7 @@
             "issues": [
               {
                 "runtimeWorkspaceId": null,
-                "id": "iss_gbmah1mhgwob",
+                "id": "iss_9i3epsr6j5hf",
                 "key": "MUL-5",
                 "number": 5,
                 "title": "Snapshot {{title}}",
@@ -16361,7 +16389,7 @@
               },
               {
                 "runtimeWorkspaceId": null,
-                "id": "iss_j3m15clzy3p6",
+                "id": "iss_qdrfz8sqy58x",
                 "key": "MUL-4",
                 "number": 4,
                 "title": "snapshot run",
@@ -16468,7 +16496,7 @@
             "match_source": "title"
           },
           {
-            "id": "iss_gbmah1mhgwob",
+            "id": "iss_9i3epsr6j5hf",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -16499,7 +16527,7 @@
             "match_source": "title"
           },
           {
-            "id": "iss_j3m15clzy3p6",
+            "id": "iss_qdrfz8sqy58x",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -16645,7 +16673,7 @@
           "todo": {
             "issues": [
               {
-                "id": "iss_gbmah1mhgwob",
+                "id": "iss_9i3epsr6j5hf",
                 "workspace_id": "local",
                 "number": 5,
                 "identifier": "MUL-5",
@@ -16676,7 +16704,7 @@
                 "labels": []
               },
               {
-                "id": "iss_j3m15clzy3p6",
+                "id": "iss_qdrfz8sqy58x",
                 "workspace_id": "local",
                 "number": 4,
                 "identifier": "MUL-4",
@@ -16819,7 +16847,7 @@
       "body": {
         "runs": [
           {
-            "id": "krun_8dim5r24mzl2",
+            "id": "krun_7212d1hv48ko",
             "workspace_id": "local",
             "project_id": "prj_snapshot",
             "repository_id": null,
@@ -16844,11 +16872,11 @@
     {
       "key": "get-sweep GET /api/knowledge/runs/:id",
       "route": "GET /api/knowledge/runs/:id",
-      "path": "/api/knowledge/runs/krun_8dim5r24mzl2",
+      "path": "/api/knowledge/runs/krun_7212d1hv48ko",
       "status": 200,
       "body": {
         "run": {
-          "id": "krun_8dim5r24mzl2",
+          "id": "krun_7212d1hv48ko",
           "workspace_id": "local",
           "project_id": "prj_snapshot",
           "repository_id": null,
@@ -16876,7 +16904,7 @@
       "body": {
         "submissions": [
           {
-            "id": "ksub_va5q49t622xv",
+            "id": "ksub_8dim5r24mzl2",
             "workspace_id": "local",
             "project_id": "prj_snapshot",
             "repository_id": null,
@@ -16913,11 +16941,11 @@
     {
       "key": "get-sweep GET /api/knowledge/submissions/:id",
       "route": "GET /api/knowledge/submissions/:id",
-      "path": "/api/knowledge/submissions/ksub_va5q49t622xv",
+      "path": "/api/knowledge/submissions/ksub_8dim5r24mzl2",
       "status": 200,
       "body": {
         "submission": {
-          "id": "ksub_va5q49t622xv",
+          "id": "ksub_8dim5r24mzl2",
           "workspace_id": "local",
           "project_id": "prj_snapshot",
           "repository_id": null,
@@ -17111,7 +17139,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_ccpewwo14x7v",
+            "id": "tsk_ngo6cdqkk9pi",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -17131,15 +17159,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_gbmah1mhgwob",
-            "issueSessionId": "ises_abrrt3qds322",
-            "issue_session_id": "ises_abrrt3qds322",
+            "issueId": "iss_9i3epsr6j5hf",
+            "issueSessionId": "ises_ccpewwo14x7v",
+            "issue_session_id": "ises_ccpewwo14x7v",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_r4ic9doizq3q",
+            "autopilotRunId": "run_gbmah1mhgwob",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -17155,8 +17183,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_cyvme8h5925t",
-            "assignment_event_id": "sevt_cyvme8h5925t",
+            "assignmentEventId": "sevt_xtp8jpp4a7us",
+            "assignment_event_id": "sevt_xtp8jpp4a7us",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -17207,7 +17235,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_ebtova4a347t",
+            "id": "tsk_58aij4tcn1m0",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -17227,15 +17255,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_j3m15clzy3p6",
-            "issueSessionId": "ises_k128jfpswkpm",
-            "issue_session_id": "ises_k128jfpswkpm",
+            "issueId": "iss_qdrfz8sqy58x",
+            "issueSessionId": "ises_ebtova4a347t",
+            "issue_session_id": "ises_ebtova4a347t",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_2xbrsagogw63",
+            "autopilotRunId": "run_j3m15clzy3p6",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -17251,8 +17279,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_ksk9u210lmg0",
-            "assignment_event_id": "sevt_ksk9u210lmg0",
+            "assignmentEventId": "sevt_u4c9m3gewz2d",
+            "assignment_event_id": "sevt_u4c9m3gewz2d",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -17303,7 +17331,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_lv85f3t6oap5",
+            "id": "tsk_sv4llynq4cfm",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18230,7 +18258,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_ccpewwo14x7v",
+            "id": "tsk_ngo6cdqkk9pi",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18250,15 +18278,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_gbmah1mhgwob",
-            "issueSessionId": "ises_abrrt3qds322",
-            "issue_session_id": "ises_abrrt3qds322",
+            "issueId": "iss_9i3epsr6j5hf",
+            "issueSessionId": "ises_ccpewwo14x7v",
+            "issue_session_id": "ises_ccpewwo14x7v",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_r4ic9doizq3q",
+            "autopilotRunId": "run_gbmah1mhgwob",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -18274,8 +18302,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_cyvme8h5925t",
-            "assignment_event_id": "sevt_cyvme8h5925t",
+            "assignmentEventId": "sevt_xtp8jpp4a7us",
+            "assignment_event_id": "sevt_xtp8jpp4a7us",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -18326,7 +18354,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_ebtova4a347t",
+            "id": "tsk_58aij4tcn1m0",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18346,15 +18374,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_j3m15clzy3p6",
-            "issueSessionId": "ises_k128jfpswkpm",
-            "issue_session_id": "ises_k128jfpswkpm",
+            "issueId": "iss_qdrfz8sqy58x",
+            "issueSessionId": "ises_ebtova4a347t",
+            "issue_session_id": "ises_ebtova4a347t",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_2xbrsagogw63",
+            "autopilotRunId": "run_j3m15clzy3p6",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -18370,8 +18398,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_ksk9u210lmg0",
-            "assignment_event_id": "sevt_ksk9u210lmg0",
+            "assignmentEventId": "sevt_u4c9m3gewz2d",
+            "assignment_event_id": "sevt_u4c9m3gewz2d",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -18422,7 +18450,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_lv85f3t6oap5",
+            "id": "tsk_sv4llynq4cfm",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18875,15 +18903,15 @@
         },
         "triggers": [
           {
-            "id": "trg_aunci5sv8e5p",
+            "id": "trg_1ut6x0i244sp",
             "autopilotId": "apl_snapshot",
             "kind": "webhook",
             "enabled": true,
             "cronExpression": null,
             "timezone": null,
             "nextRunAt": null,
-            "webhookToken": "awt_1ut6x0i244sp2mewms",
-            "webhookPath": "/api/webhooks/autopilots/awt_1ut6x0i244sp2mewms",
+            "webhookToken": "awt_2mewms2xbrsagogw63",
+            "webhookPath": "/api/webhooks/autopilots/awt_2mewms2xbrsagogw63",
             "webhookUrl": null,
             "provider": "github",
             "label": "snapshot trigger",
@@ -18902,8 +18930,8 @@
             "autopilot_id": "apl_snapshot",
             "cron_expression": null,
             "next_run_at": null,
-            "webhook_token": "awt_1ut6x0i244sp2mewms",
-            "webhook_path": "/api/webhooks/autopilots/awt_1ut6x0i244sp2mewms",
+            "webhook_token": "awt_2mewms2xbrsagogw63",
+            "webhook_path": "/api/webhooks/autopilots/awt_2mewms2xbrsagogw63",
             "webhook_url": null,
             "event_filters": null,
             "event_config": null,
@@ -18920,15 +18948,15 @@
           {
             "scheduleTarget": null,
             "scheduleBatchId": null,
-            "id": "run_r4ic9doizq3q",
+            "id": "run_gbmah1mhgwob",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
             "status": "running",
-            "issueId": "iss_gbmah1mhgwob",
-            "taskId": "tsk_ccpewwo14x7v",
+            "issueId": "iss_9i3epsr6j5hf",
+            "taskId": "tsk_ngo6cdqkk9pi",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_abrrt3qds322",
+            "issueSessionId": "ises_ccpewwo14x7v",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -18944,24 +18972,24 @@
               }
             },
             "result": {
-              "taskId": "tsk_ccpewwo14x7v",
-              "issueId": "iss_gbmah1mhgwob",
-              "issueSessionId": "ises_abrrt3qds322"
+              "taskId": "tsk_ngo6cdqkk9pi",
+              "issueId": "iss_9i3epsr6j5hf",
+              "issueSessionId": "ises_ccpewwo14x7v"
             },
             "createdAt": "<timestamp>"
           },
           {
             "scheduleTarget": null,
             "scheduleBatchId": null,
-            "id": "run_2xbrsagogw63",
+            "id": "run_j3m15clzy3p6",
             "autopilotId": "apl_snapshot",
             "source": "manual",
             "status": "running",
-            "issueId": "iss_j3m15clzy3p6",
-            "taskId": "tsk_ebtova4a347t",
+            "issueId": "iss_qdrfz8sqy58x",
+            "taskId": "tsk_58aij4tcn1m0",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_k128jfpswkpm",
+            "issueSessionId": "ises_ebtova4a347t",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -18969,16 +18997,16 @@
             "failureReason": null,
             "payload": null,
             "result": {
-              "taskId": "tsk_ebtova4a347t",
-              "issueId": "iss_j3m15clzy3p6",
-              "issueSessionId": "ises_k128jfpswkpm"
+              "taskId": "tsk_58aij4tcn1m0",
+              "issueId": "iss_qdrfz8sqy58x",
+              "issueSessionId": "ises_ebtova4a347t"
             },
             "createdAt": "<timestamp>"
           }
         ],
         "deliveries": [
           {
-            "id": "whd_8rcx9z88woyu",
+            "id": "whd_r4ic9doizq3q",
             "workspaceId": "local",
             "autopilotId": "apl_snapshot",
             "triggerId": "apl_snapshot",
@@ -18995,8 +19023,8 @@
             "contentType": null,
             "rawBody": null,
             "responseStatus": 201,
-            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8rcx9z88woyu\",\"runId\":\"run_r4ic9doizq3q\"}",
-            "autopilotRunId": "run_r4ic9doizq3q",
+            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_r4ic9doizq3q\",\"runId\":\"run_gbmah1mhgwob\"}",
+            "autopilotRunId": "run_gbmah1mhgwob",
             "replayedFromDeliveryId": null,
             "error": null,
             "receivedAt": "<timestamp>",
@@ -19014,7 +19042,7 @@
       "body": {
         "deliveries": [
           {
-            "id": "whd_8rcx9z88woyu",
+            "id": "whd_r4ic9doizq3q",
             "workspaceId": "local",
             "autopilotId": "apl_snapshot",
             "triggerId": "apl_snapshot",
@@ -19031,8 +19059,8 @@
             "contentType": null,
             "rawBody": null,
             "responseStatus": 201,
-            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8rcx9z88woyu\",\"runId\":\"run_r4ic9doizq3q\"}",
-            "autopilotRunId": "run_r4ic9doizq3q",
+            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_r4ic9doizq3q\",\"runId\":\"run_gbmah1mhgwob\"}",
+            "autopilotRunId": "run_gbmah1mhgwob",
             "replayedFromDeliveryId": null,
             "error": null,
             "receivedAt": "<timestamp>",
@@ -19046,11 +19074,11 @@
     {
       "key": "get-sweep GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
       "route": "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
-      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_8rcx9z88woyu",
+      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_r4ic9doizq3q",
       "status": 200,
       "body": {
         "delivery": {
-          "id": "whd_8rcx9z88woyu",
+          "id": "whd_r4ic9doizq3q",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -19067,8 +19095,8 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_8rcx9z88woyu\",\"runId\":\"run_r4ic9doizq3q\"}",
-          "autopilotRunId": "run_r4ic9doizq3q",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_r4ic9doizq3q\",\"runId\":\"run_gbmah1mhgwob\"}",
+          "autopilotRunId": "run_gbmah1mhgwob",
           "replayedFromDeliveryId": null,
           "error": null,
           "receivedAt": "<timestamp>",
@@ -19087,15 +19115,15 @@
           {
             "scheduleTarget": null,
             "scheduleBatchId": null,
-            "id": "run_r4ic9doizq3q",
+            "id": "run_gbmah1mhgwob",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
             "status": "running",
-            "issueId": "iss_gbmah1mhgwob",
-            "taskId": "tsk_ccpewwo14x7v",
+            "issueId": "iss_9i3epsr6j5hf",
+            "taskId": "tsk_ngo6cdqkk9pi",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_abrrt3qds322",
+            "issueSessionId": "ises_ccpewwo14x7v",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -19111,24 +19139,24 @@
               }
             },
             "result": {
-              "taskId": "tsk_ccpewwo14x7v",
-              "issueId": "iss_gbmah1mhgwob",
-              "issueSessionId": "ises_abrrt3qds322"
+              "taskId": "tsk_ngo6cdqkk9pi",
+              "issueId": "iss_9i3epsr6j5hf",
+              "issueSessionId": "ises_ccpewwo14x7v"
             },
             "createdAt": "<timestamp>"
           },
           {
             "scheduleTarget": null,
             "scheduleBatchId": null,
-            "id": "run_2xbrsagogw63",
+            "id": "run_j3m15clzy3p6",
             "autopilotId": "apl_snapshot",
             "source": "manual",
             "status": "running",
-            "issueId": "iss_j3m15clzy3p6",
-            "taskId": "tsk_ebtova4a347t",
+            "issueId": "iss_qdrfz8sqy58x",
+            "taskId": "tsk_58aij4tcn1m0",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_k128jfpswkpm",
+            "issueSessionId": "ises_ebtova4a347t",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -19136,9 +19164,9 @@
             "failureReason": null,
             "payload": null,
             "result": {
-              "taskId": "tsk_ebtova4a347t",
-              "issueId": "iss_j3m15clzy3p6",
-              "issueSessionId": "ises_k128jfpswkpm"
+              "taskId": "tsk_58aij4tcn1m0",
+              "issueId": "iss_qdrfz8sqy58x",
+              "issueSessionId": "ises_ebtova4a347t"
             },
             "createdAt": "<timestamp>"
           }
@@ -19166,7 +19194,7 @@
             "sessionRuntimeId": null,
             "sessionProvider": null,
             "sessionExecutionFingerprint": null,
-            "latestTaskId": "tsk_lv85f3t6oap5",
+            "latestTaskId": "tsk_sv4llynq4cfm",
             "unreadSince": null,
             "hasUnread": false,
             "pinned": false,
@@ -19203,7 +19231,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_lv85f3t6oap5",
+          "latestTaskId": "tsk_sv4llynq4cfm",
           "unreadSince": null,
           "hasUnread": false,
           "pinned": false,
@@ -19218,9 +19246,9 @@
         },
         "messages": [
           {
-            "id": "msg_8be626isk151",
+            "id": "msg_lv85f3t6oap5",
             "chatSessionId": "cht_snapshot",
-            "taskId": "tsk_lv85f3t6oap5",
+            "taskId": "tsk_sv4llynq4cfm",
             "role": "user",
             "body": "Snapshot chat message",
             "failureReason": null,
@@ -19238,9 +19266,9 @@
       "body": {
         "messages": [
           {
-            "id": "msg_8be626isk151",
+            "id": "msg_lv85f3t6oap5",
             "chatSessionId": "cht_snapshot",
-            "taskId": "tsk_lv85f3t6oap5",
+            "taskId": "tsk_sv4llynq4cfm",
             "role": "user",
             "body": "Snapshot chat message",
             "failureReason": null,
@@ -19283,7 +19311,7 @@
       "body": {
         "reactions": [
           {
-            "id": "rxn_qxjbfrxonmls",
+            "id": "rxn_8be626isk151",
             "commentId": "cmt_0ts9yveh51cp",
             "workspaceId": "local",
             "actorType": "member",
@@ -19323,7 +19351,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "a39719439b495a56582d978a433d92f690c0fcf52d8a4e5399eadcbd2f4bb4dd",
+          "snapshot": "e138cae8f69ba4be5c21dade72bbd53ef616f764dfafd56261f1d379fe1f31de",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -19348,21 +19376,21 @@
           "active_tasks": [],
           "queued_tasks": [
             {
-              "id": "tsk_ccpewwo14x7v",
+              "id": "tsk_58aij4tcn1m0",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
-              "issue_id": "iss_gbmah1mhgwob"
+              "issue_id": "iss_qdrfz8sqy58x"
             },
             {
-              "id": "tsk_ebtova4a347t",
+              "id": "tsk_ngo6cdqkk9pi",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
-              "issue_id": "iss_j3m15clzy3p6"
+              "issue_id": "iss_9i3epsr6j5hf"
             },
             {
-              "id": "tsk_lv85f3t6oap5",
+              "id": "tsk_sv4llynq4cfm",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
@@ -19448,7 +19476,7 @@
       "body": {
         "items": [
           {
-            "id": "inb_vfs9viv2ilj6",
+            "id": "inb_mmcj3uiam2jc",
             "workspaceId": "local",
             "workspace_id": "local",
             "issueId": "iss_snapshot_blocked",
@@ -19596,7 +19624,7 @@
           },
           {
             "runtimeWorkspaceId": null,
-            "id": "iss_gbmah1mhgwob",
+            "id": "iss_9i3epsr6j5hf",
             "key": "MUL-5",
             "number": 5,
             "title": "Snapshot {{title}}",
@@ -19627,11 +19655,11 @@
             "updatedAt": "<timestamp>",
             "taskCount": 1,
             "latestTaskStatus": "queued",
-            "latestTaskId": "tsk_ccpewwo14x7v"
+            "latestTaskId": "tsk_ngo6cdqkk9pi"
           },
           {
             "runtimeWorkspaceId": null,
-            "id": "iss_j3m15clzy3p6",
+            "id": "iss_qdrfz8sqy58x",
             "key": "MUL-4",
             "number": 4,
             "title": "snapshot run",
@@ -19662,7 +19690,7 @@
             "updatedAt": "<timestamp>",
             "taskCount": 1,
             "latestTaskStatus": "queued",
-            "latestTaskId": "tsk_ebtova4a347t"
+            "latestTaskId": "tsk_58aij4tcn1m0"
           },
           {
             "runtimeWorkspaceId": null,
@@ -20311,7 +20339,7 @@
             "resolved_by_id": null,
             "reactions": [
               {
-                "id": "rxn_qxjbfrxonmls",
+                "id": "rxn_8be626isk151",
                 "commentId": "cmt_0ts9yveh51cp",
                 "workspaceId": "local",
                 "actorType": "member",
@@ -20433,6 +20461,21 @@
             "issueId": "iss_snapshot",
             "actorType": "system",
             "actorId": null,
+            "type": "pending_turn_created",
+            "body": null,
+            "data": {
+              "task_id": "tsk_uj5ra15g3kjw",
+              "seq": 3,
+              "reason": "comment",
+              "commentId": "cmt_0ts9yveh51cp"
+            },
+            "createdAt": "<timestamp>"
+          },
+          {
+            "id": "act_qxjbfrxonmls",
+            "issueId": "iss_snapshot",
+            "actorType": "system",
+            "actorId": null,
             "type": "comment_assignee_triggered",
             "body": "Queued Snapshot Agent",
             "data": {
@@ -20532,7 +20575,7 @@
             "resolved_by_id": null,
             "reactions": [
               {
-                "id": "rxn_qxjbfrxonmls",
+                "id": "rxn_8be626isk151",
                 "commentId": "cmt_0ts9yveh51cp",
                 "workspaceId": "local",
                 "actorType": "member",
@@ -20844,7 +20887,7 @@
           "comment_type": "comment",
           "reactions": [
             {
-              "id": "rxn_qxjbfrxonmls",
+              "id": "rxn_8be626isk151",
               "commentId": "cmt_0ts9yveh51cp",
               "workspaceId": "local",
               "actorType": "member",
@@ -20894,6 +20937,23 @@
         {
           "type": "activity",
           "id": "act_30x2827p9355",
+          "actorType": "system",
+          "actor_type": "system",
+          "actorId": null,
+          "actor_id": null,
+          "createdAt": "<timestamp>",
+          "created_at": "<timestamp>",
+          "action": "pending_turn_created",
+          "details": {
+            "task_id": "tsk_uj5ra15g3kjw",
+            "seq": 3,
+            "reason": "comment",
+            "commentId": "cmt_0ts9yveh51cp"
+          }
+        },
+        {
+          "type": "activity",
+          "id": "act_qxjbfrxonmls",
           "actorType": "system",
           "actor_type": "system",
           "actorId": null,
@@ -21046,7 +21106,7 @@
             "issues": [
               {
                 "runtimeWorkspaceId": null,
-                "id": "iss_gbmah1mhgwob",
+                "id": "iss_9i3epsr6j5hf",
                 "key": "MUL-5",
                 "number": 5,
                 "title": "Snapshot {{title}}",
@@ -21078,7 +21138,7 @@
               },
               {
                 "runtimeWorkspaceId": null,
-                "id": "iss_j3m15clzy3p6",
+                "id": "iss_qdrfz8sqy58x",
                 "key": "MUL-4",
                 "number": 4,
                 "title": "snapshot run",
@@ -21188,7 +21248,7 @@
           },
           {
             "runtimeWorkspaceId": null,
-            "id": "iss_gbmah1mhgwob",
+            "id": "iss_9i3epsr6j5hf",
             "key": "MUL-5",
             "number": 5,
             "title": "Snapshot {{title}}",
@@ -21221,7 +21281,7 @@
           },
           {
             "runtimeWorkspaceId": null,
-            "id": "iss_j3m15clzy3p6",
+            "id": "iss_qdrfz8sqy58x",
             "key": "MUL-4",
             "number": 4,
             "title": "snapshot run",
@@ -21822,10 +21882,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/directory-scans/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans/rds_u7jlxs9tay5o",
+      "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans/rds_s05boock1828",
       "status": 200,
       "body": {
-        "id": "rds_u7jlxs9tay5o",
+        "id": "rds_s05boock1828",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -21844,10 +21904,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/local-skills/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/local-skills/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/rls_s05boock1828",
+      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/rls_bbo9f1dxazyr",
       "status": 200,
       "body": {
-        "id": "rls_s05boock1828",
+        "id": "rls_bbo9f1dxazyr",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "skills": [],
@@ -21861,10 +21921,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/local-skills/import/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/local-skills/import/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import/rli_bbo9f1dxazyr",
+      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import/rli_yy6thkeq1n3e",
       "status": 200,
       "body": {
-        "id": "rli_bbo9f1dxazyr",
+        "id": "rli_yy6thkeq1n3e",
         "runtimeId": "rt_snapshot",
         "skillKey": "snapshot-skill",
         "name": "Snapshot skill",
@@ -21902,10 +21962,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/models/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/models/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/models/rml_95b5dwter7av",
+      "path": "/api/multiremi/runtimes/rt_snapshot/models/rml_u7jlxs9tay5o",
       "status": 200,
       "body": {
-        "id": "rml_95b5dwter7av",
+        "id": "rml_u7jlxs9tay5o",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "models": [],
@@ -21933,10 +21993,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/update/:updateId",
       "route": "GET /api/multiremi/runtimes/:id/update/:updateId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/update/rup_yy6thkeq1n3e",
+      "path": "/api/multiremi/runtimes/rt_snapshot/update/rup_zofbpdsnw9pi",
       "status": 200,
       "body": {
-        "id": "rup_yy6thkeq1n3e",
+        "id": "rup_zofbpdsnw9pi",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "scope": "agent",
@@ -22185,7 +22245,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_ccpewwo14x7v",
+            "id": "tsk_ngo6cdqkk9pi",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -22201,15 +22261,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_gbmah1mhgwob",
-            "issueSessionId": "ises_abrrt3qds322",
-            "issue_session_id": "ises_abrrt3qds322",
+            "issueId": "iss_9i3epsr6j5hf",
+            "issueSessionId": "ises_ccpewwo14x7v",
+            "issue_session_id": "ises_ccpewwo14x7v",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_r4ic9doizq3q",
+            "autopilotRunId": "run_gbmah1mhgwob",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -22224,8 +22284,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_cyvme8h5925t",
-            "assignment_event_id": "sevt_cyvme8h5925t",
+            "assignmentEventId": "sevt_xtp8jpp4a7us",
+            "assignment_event_id": "sevt_xtp8jpp4a7us",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -22274,7 +22334,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_ebtova4a347t",
+            "id": "tsk_58aij4tcn1m0",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -22290,15 +22350,15 @@
             "switch_reason": null,
             "nextRetryAt": null,
             "next_retry_at": null,
-            "issueId": "iss_j3m15clzy3p6",
-            "issueSessionId": "ises_k128jfpswkpm",
-            "issue_session_id": "ises_k128jfpswkpm",
+            "issueId": "iss_qdrfz8sqy58x",
+            "issueSessionId": "ises_ebtova4a347t",
+            "issue_session_id": "ises_ebtova4a347t",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_2xbrsagogw63",
+            "autopilotRunId": "run_j3m15clzy3p6",
             "triggerCommentId": null,
             "triggerSummary": null,
             "requestingUserName": null,
@@ -22313,8 +22373,8 @@
             "parentTaskId": null,
             "continuedFromTaskId": null,
             "continued_from_task_id": null,
-            "assignmentEventId": "sevt_ksk9u210lmg0",
-            "assignment_event_id": "sevt_ksk9u210lmg0",
+            "assignmentEventId": "sevt_u4c9m3gewz2d",
+            "assignment_event_id": "sevt_u4c9m3gewz2d",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -22363,7 +22423,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_lv85f3t6oap5",
+            "id": "tsk_sv4llynq4cfm",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -23658,10 +23718,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/runtimes/:id/directory-scans/:requestId",
-      "path": "/api/runtimes/rt_snapshot/directory-scans/rds_u7jlxs9tay5o",
+      "path": "/api/runtimes/rt_snapshot/directory-scans/rds_s05boock1828",
       "status": 200,
       "body": {
-        "id": "rds_u7jlxs9tay5o",
+        "id": "rds_s05boock1828",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -23680,10 +23740,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/local-skills/:requestId",
       "route": "GET /api/runtimes/:id/local-skills/:requestId",
-      "path": "/api/runtimes/rt_snapshot/local-skills/rls_s05boock1828",
+      "path": "/api/runtimes/rt_snapshot/local-skills/rls_bbo9f1dxazyr",
       "status": 200,
       "body": {
-        "id": "rls_s05boock1828",
+        "id": "rls_bbo9f1dxazyr",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "supported": true,
@@ -23694,10 +23754,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/local-skills/import/:requestId",
       "route": "GET /api/runtimes/:id/local-skills/import/:requestId",
-      "path": "/api/runtimes/rt_snapshot/local-skills/import/rli_bbo9f1dxazyr",
+      "path": "/api/runtimes/rt_snapshot/local-skills/import/rli_yy6thkeq1n3e",
       "status": 200,
       "body": {
-        "id": "rli_bbo9f1dxazyr",
+        "id": "rli_yy6thkeq1n3e",
         "runtime_id": "rt_snapshot",
         "skill_key": "snapshot-skill",
         "status": "running",
@@ -23726,10 +23786,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/models/:requestId",
       "route": "GET /api/runtimes/:id/models/:requestId",
-      "path": "/api/runtimes/rt_snapshot/models/rml_95b5dwter7av",
+      "path": "/api/runtimes/rt_snapshot/models/rml_u7jlxs9tay5o",
       "status": 200,
       "body": {
-        "id": "rml_95b5dwter7av",
+        "id": "rml_u7jlxs9tay5o",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "supported": true,
@@ -23752,10 +23812,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/update/:updateId",
       "route": "GET /api/runtimes/:id/update/:updateId",
-      "path": "/api/runtimes/rt_snapshot/update/rup_yy6thkeq1n3e",
+      "path": "/api/runtimes/rt_snapshot/update/rup_zofbpdsnw9pi",
       "status": 200,
       "body": {
-        "id": "rup_yy6thkeq1n3e",
+        "id": "rup_zofbpdsnw9pi",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "scope": "agent",
@@ -24104,7 +24164,7 @@
     {
       "key": "get-sweep GET /api/shares/:token",
       "route": "GET /api/shares/:token",
-      "path": "/api/shares/awt_1ut6x0i244sp2mewms",
+      "path": "/api/shares/awt_2mewms2xbrsagogw63",
       "status": 401,
       "body": {
         "error": "login required"
@@ -24113,7 +24173,7 @@
     {
       "key": "get-sweep GET /api/shares/:token/attachments/:attachmentId/content",
       "route": "GET /api/shares/:token/attachments/:attachmentId/content",
-      "path": "/api/shares/awt_1ut6x0i244sp2mewms/attachments/att_snapshot/content",
+      "path": "/api/shares/awt_2mewms2xbrsagogw63/attachments/att_snapshot/content",
       "status": 401,
       "body": {
         "error": "login required"
@@ -24122,7 +24182,7 @@
     {
       "key": "get-sweep GET /api/shares/:token/tasks/:task_id/trace",
       "route": "GET /api/shares/:token/tasks/:task_id/trace",
-      "path": "/api/shares/awt_1ut6x0i244sp2mewms/tasks/tsk_snapshot/trace",
+      "path": "/api/shares/awt_2mewms2xbrsagogw63/tasks/tsk_snapshot/trace",
       "status": 401,
       "body": {
         "error": "login required"
@@ -24591,10 +24651,10 @@
     {
       "key": "get-sweep GET /api/workspaces/:id/bot-menu/publish/:requestId",
       "route": "GET /api/workspaces/:id/bot-menu/publish/:requestId",
-      "path": "/api/workspaces/local/bot-menu/publish/bmp_zofbpdsnw9pi",
+      "path": "/api/workspaces/local/bot-menu/publish/bmp_m21cp1q6gys4",
       "status": 200,
       "body": {
-        "id": "bmp_zofbpdsnw9pi",
+        "id": "bmp_m21cp1q6gys4",
         "workspace_id": "local",
         "dry_run": true,
         "status": "pending",
@@ -24751,7 +24811,7 @@
       "status": 200,
       "body": [
         {
-          "id": "inv_m21cp1q6gys4",
+          "id": "inv_nwk7j7pg419m",
           "workspaceId": "local",
           "workspace_id": "local",
           "inviterId": "local",
@@ -25576,7 +25636,15 @@
           "hole_wait_ms": 0,
           "dropped_frames": 0,
           "pending_frames": 0,
-          "evicted_streams": 0
+          "evicted_streams": 0,
+          "peer_link": "disabled",
+          "hub_peer_loss_detected": {
+            "first_epoch": 0,
+            "epoch_change": 0,
+            "sequence_gap": 0
+          },
+          "hub_peer_reconcile_streams": 0,
+          "hub_peer_duplicate_dropped": 0
         }
       }
     },
@@ -25617,14 +25685,7 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true,
-        "hub": {
-          "role": "all",
-          "transport": "local",
-          "peer_link": false,
-          "fill_count": 0,
-          "hub_hole_wait_ms": 0
-        }
+        "ok": true
       }
     },
     {
@@ -25641,10 +25702,10 @@
     {
       "key": "inbox#000 POST /api/inbox/:id/read",
       "route": "POST /api/inbox/:id/read",
-      "path": "/api/inbox/inb_vfs9viv2ilj6/read",
+      "path": "/api/inbox/inb_mmcj3uiam2jc/read",
       "status": 200,
       "body": {
-        "id": "inb_vfs9viv2ilj6",
+        "id": "inb_mmcj3uiam2jc",
         "workspaceId": "local",
         "workspace_id": "local",
         "issueId": "iss_snapshot_blocked",
@@ -25708,10 +25769,10 @@
     {
       "key": "inbox#001 POST /api/inbox/:id/archive",
       "route": "POST /api/inbox/:id/archive",
-      "path": "/api/inbox/inb_vfs9viv2ilj6/archive",
+      "path": "/api/inbox/inb_mmcj3uiam2jc/archive",
       "status": 200,
       "body": {
-        "id": "inb_vfs9viv2ilj6",
+        "id": "inb_mmcj3uiam2jc",
         "workspaceId": "local",
         "workspace_id": "local",
         "issueId": "iss_snapshot_blocked",
@@ -25775,11 +25836,11 @@
     {
       "key": "inbox#002 POST /api/multiremi/inbox/:id/read",
       "route": "POST /api/multiremi/inbox/:id/read",
-      "path": "/api/multiremi/inbox/inb_vfs9viv2ilj6/read",
+      "path": "/api/multiremi/inbox/inb_mmcj3uiam2jc/read",
       "status": 200,
       "body": {
         "item": {
-          "id": "inb_vfs9viv2ilj6",
+          "id": "inb_mmcj3uiam2jc",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -25844,11 +25905,11 @@
     {
       "key": "inbox#003 POST /api/multiremi/inbox/:id/archive",
       "route": "POST /api/multiremi/inbox/:id/archive",
-      "path": "/api/multiremi/inbox/inb_vfs9viv2ilj6/archive",
+      "path": "/api/multiremi/inbox/inb_mmcj3uiam2jc/archive",
       "status": 200,
       "body": {
         "item": {
-          "id": "inb_vfs9viv2ilj6",
+          "id": "inb_mmcj3uiam2jc",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -25998,7 +26059,7 @@
       "path": "/api/issues/iss_snapshot/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_ic8dc9g1qpho",
+        "id": "rxn_3gq3rlr8o45b",
         "issue_id": "iss_snapshot",
         "actor_type": "member",
         "actor_id": "local",
@@ -26178,7 +26239,7 @@
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_ic8dc9g1qpho",
+          "id": "rxn_3gq3rlr8o45b",
           "issueId": "iss_snapshot",
           "workspaceId": "local",
           "actorType": "member",
@@ -26204,7 +26265,7 @@
       "status": 201,
       "body": {
         "subscriber": {
-          "id": "sub_3gq3rlr8o45b",
+          "id": "sub_2ryujm2j4i6h",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "memberId": "mem_snapshot_two",
@@ -26326,7 +26387,7 @@
       "path": "/api/issues/iss_snapshot/sessions",
       "status": 201,
       "body": {
-        "id": "ises_7212d1hv48ko",
+        "id": "ises_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session",
@@ -26346,8 +26407,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_ntqjp15rt1ph",
-            "session_id": "ises_7212d1hv48ko",
+            "id": "spart_ibk9if0740q3",
+            "session_id": "ises_ntqjp15rt1ph",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -26361,10 +26422,10 @@
     {
       "key": "issue-sessions#001 PATCH /api/issues/:id/sessions/:sessionId",
       "route": "PATCH /api/issues/:id/sessions/:sessionId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "ises_7212d1hv48ko",
+        "id": "ises_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session renamed",
@@ -26384,8 +26445,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_ntqjp15rt1ph",
-            "session_id": "ises_7212d1hv48ko",
+            "id": "spart_ibk9if0740q3",
+            "session_id": "ises_ntqjp15rt1ph",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -26399,11 +26460,11 @@
     {
       "key": "issue-sessions#002 POST /api/issues/:id/sessions/:sessionId/participants",
       "route": "POST /api/issues/:id/sessions/:sessionId/participants",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko/participants",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph/participants",
       "status": 201,
       "body": {
-        "id": "spart_ic8dc9g1qpho",
-        "session_id": "ises_7212d1hv48ko",
+        "id": "spart_3gq3rlr8o45b",
+        "session_id": "ises_ntqjp15rt1ph",
         "participant_type": "agent",
         "participant_id": "agt_snapshot",
         "role": "participant",
@@ -26415,12 +26476,12 @@
     {
       "key": "issue-sessions#003 POST /api/issues/:id/sessions/:sessionId/messages",
       "route": "POST /api/issues/:id/sessions/:sessionId/messages",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko/messages",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph/messages",
       "status": 201,
       "body": {
-        "id": "cmt_3gq3rlr8o45b",
+        "id": "cmt_2ryujm2j4i6h",
         "issue_id": "iss_snapshot",
-        "issue_session_id": "ises_7212d1hv48ko",
+        "issue_session_id": "ises_ntqjp15rt1ph",
         "author_type": "member",
         "author_id": null,
         "task_id": null,
@@ -26439,12 +26500,12 @@
     {
       "key": "issue-sessions#004 POST /api/issues/:id/sessions/:sessionId/results",
       "route": "POST /api/issues/:id/sessions/:sessionId/results",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko/results",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph/results",
       "status": 201,
       "body": {
-        "id": "sres_aw448dcq07dx",
+        "id": "sres_mr804acwglzg",
         "issue_id": "iss_snapshot",
-        "source_session_id": "ises_7212d1hv48ko",
+        "source_session_id": "ises_ntqjp15rt1ph",
         "title": "result",
         "body": "session result",
         "metadata": {},
@@ -26456,10 +26517,10 @@
     {
       "key": "issue-sessions#005 POST /api/issues/:id/sessions/:sessionId/tasks",
       "route": "POST /api/issues/:id/sessions/:sessionId/tasks",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko/tasks",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph/tasks",
       "status": 201,
       "body": {
-        "id": "tsk_c77isk189u85",
+        "id": "tsk_btodjmtppou8",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -26480,8 +26541,8 @@
         "nextRetryAt": null,
         "next_retry_at": null,
         "issueId": "iss_snapshot",
-        "issueSessionId": "ises_7212d1hv48ko",
-        "issue_session_id": "ises_7212d1hv48ko",
+        "issueSessionId": "ises_ntqjp15rt1ph",
+        "issue_session_id": "ises_ntqjp15rt1ph",
         "issueSessionGeneration": 1,
         "issue_session_generation": 1,
         "holdsWorkspace": true,
@@ -26503,8 +26564,8 @@
         "parentTaskId": null,
         "continuedFromTaskId": null,
         "continued_from_task_id": null,
-        "assignmentEventId": "sevt_btodjmtppou8",
-        "assignment_event_id": "sevt_btodjmtppou8",
+        "assignmentEventId": "sevt_ee1nx8n37scg",
+        "assignment_event_id": "sevt_ee1nx8n37scg",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -26582,7 +26643,7 @@
     {
       "key": "issue-sessions#006 DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
       "route": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_7212d1hv48ko/participants/agent/agt_snapshot",
+      "path": "/api/issues/iss_snapshot/sessions/ises_ntqjp15rt1ph/participants/agent/agt_snapshot",
       "status": 204,
       "body": ""
     },
@@ -26593,7 +26654,7 @@
       "status": 201,
       "body": {
         "share": {
-          "token": "shr_7212d1hv48kontqj.eG2Y-aWwGUflQWSCVdbX_z1ArWTugVb131jFUIoC5SI",
+          "token": "shr_ntqjp15rt1phibk9.uzE9Bwyj8DRSmB50PyVSYYi-bM-PW68Rb1Fqt4fFSy8",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -26608,7 +26669,7 @@
       "status": 200,
       "body": {
         "share": {
-          "token": "shr_7212d1hv48kontqj.eG2Y-aWwGUflQWSCVdbX_z1ArWTugVb131jFUIoC5SI",
+          "token": "shr_ntqjp15rt1phibk9.uzE9Bwyj8DRSmB50PyVSYYi-bM-PW68Rb1Fqt4fFSy8",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -26691,7 +26752,7 @@
       "path": "/api/issues",
       "status": 201,
       "body": {
-        "id": "iss_7212d1hv48ko",
+        "id": "iss_ntqjp15rt1ph",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -26727,10 +26788,10 @@
     {
       "key": "issues-compat#001 PUT /api/issues/:id",
       "route": "PUT /api/issues/:id",
-      "path": "/api/issues/iss_7212d1hv48ko",
+      "path": "/api/issues/iss_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "iss_7212d1hv48ko",
+        "id": "iss_ntqjp15rt1ph",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -26765,10 +26826,10 @@
     {
       "key": "issues-compat#002 PATCH /api/issues/:id",
       "route": "PATCH /api/issues/:id",
-      "path": "/api/issues/iss_7212d1hv48ko",
+      "path": "/api/issues/iss_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "iss_7212d1hv48ko",
+        "id": "iss_ntqjp15rt1ph",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -26796,7 +26857,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {},
-        "task_id": "tsk_q5010won31uy",
+        "task_id": "tsk_zsxpe4iu5err",
         "cancelled_tasks": 0
       }
     },
@@ -26806,9 +26867,9 @@
       "path": "/api/issues/quick-create",
       "status": 202,
       "body": {
-        "task_id": "tsk_mr804acwglzg",
+        "task_id": "tsk_c77isk189u85",
         "issue": {
-          "id": "iss_l30ikvaows9d",
+          "id": "iss_aw448dcq07dx",
           "workspace_id": "local",
           "number": 7,
           "identifier": "MUL-7",
@@ -26851,11 +26912,11 @@
     {
       "key": "issues-compat#005 POST /api/issues/:id/squad-evaluated",
       "route": "POST /api/issues/:id/squad-evaluated",
-      "path": "/api/issues/iss_7212d1hv48ko/squad-evaluated",
+      "path": "/api/issues/iss_ntqjp15rt1ph/squad-evaluated",
       "status": 201,
       "body": {
-        "id": "act_q98004mis9bx",
-        "issueId": "iss_7212d1hv48ko",
+        "id": "act_ee1nx8n37scg",
+        "issueId": "iss_ntqjp15rt1ph",
         "actorType": "agent",
         "actorId": "agt_snapshot",
         "type": "squad_leader_evaluated",
@@ -26867,7 +26928,7 @@
           "reason": "nothing to do"
         },
         "createdAt": "<timestamp>",
-        "issue_id": "iss_7212d1hv48ko",
+        "issue_id": "iss_ntqjp15rt1ph",
         "actor_type": "agent",
         "actor_id": "agt_snapshot",
         "created_at": "<timestamp>"
@@ -26898,7 +26959,7 @@
       "body": {
         "issue": {
           "runtimeWorkspaceId": null,
-          "id": "iss_7212d1hv48ko",
+          "id": "iss_ntqjp15rt1ph",
           "key": "MUL-6",
           "number": 6,
           "title": "Native issue",
@@ -27034,7 +27095,7 @@
         },
         "cancelled_tasks": 1,
         "task": {
-          "id": "tsk_piqp1rpc1xal",
+          "id": "tsk_q5010won31uy",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -27078,8 +27139,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_zsxpe4iu5err",
-          "assignment_event_id": "sevt_zsxpe4iu5err",
+          "assignmentEventId": "sevt_3gdnj5pggzmd",
+          "assignment_event_id": "sevt_3gdnj5pggzmd",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -27137,11 +27198,11 @@
       "path": "/api/multiremi/issues/quick-create",
       "status": 202,
       "body": {
-        "taskId": "tsk_4it58rkbvy1m",
-        "task_id": "tsk_4it58rkbvy1m",
+        "taskId": "tsk_mr804acwglzg",
+        "task_id": "tsk_mr804acwglzg",
         "issue": {
           "runtimeWorkspaceId": null,
-          "id": "iss_jez2ujdp6d5n",
+          "id": "iss_l30ikvaows9d",
           "key": "MUL-7",
           "number": 7,
           "title": "do the thing",
@@ -27177,7 +27238,7 @@
           "updatedAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_4it58rkbvy1m",
+          "id": "tsk_mr804acwglzg",
           "taskKind": "quick_create",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -27197,9 +27258,9 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_jez2ujdp6d5n",
-          "issueSessionId": "ises_aw448dcq07dx",
-          "issue_session_id": "ises_aw448dcq07dx",
+          "issueId": "iss_l30ikvaows9d",
+          "issueSessionId": "ises_4it58rkbvy1m",
+          "issue_session_id": "ises_4it58rkbvy1m",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
@@ -27221,8 +27282,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_c77isk189u85",
-          "assignment_event_id": "sevt_c77isk189u85",
+          "assignmentEventId": "sevt_rmh8s6lkcse1",
+          "assignment_event_id": "sevt_rmh8s6lkcse1",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -27310,7 +27371,7 @@
       "path": "/api/labels",
       "status": 201,
       "body": {
-        "id": "lbl_7212d1hv48ko",
+        "id": "lbl_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "compat-label",
         "color": "#ff0000",
@@ -27321,10 +27382,10 @@
     {
       "key": "labels#001 PUT /api/labels/:id",
       "route": "PUT /api/labels/:id",
-      "path": "/api/labels/lbl_7212d1hv48ko",
+      "path": "/api/labels/lbl_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "lbl_7212d1hv48ko",
+        "id": "lbl_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "compat-label-renamed",
         "color": "#00ff00",
@@ -27335,7 +27396,7 @@
     {
       "key": "labels#002 DELETE /api/labels/:id",
       "route": "DELETE /api/labels/:id",
-      "path": "/api/labels/lbl_7212d1hv48ko",
+      "path": "/api/labels/lbl_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -27346,7 +27407,7 @@
       "status": 201,
       "body": {
         "label": {
-          "id": "lbl_ntqjp15rt1ph",
+          "id": "lbl_ibk9if0740q3",
           "workspaceId": "local",
           "name": "native-label",
           "color": "#0000ff",
@@ -27533,7 +27594,7 @@
       "body": {
         "workspace_id": "local",
         "agent_id": "agt_default_local_claude_local",
-        "issue_id": "iss_ntqjp15rt1ph"
+        "issue_id": "iss_ibk9if0740q3"
       }
     },
     {
@@ -27543,7 +27604,7 @@
       "status": 200,
       "body": {
         "workspace_id": "local",
-        "issue_id": "iss_zsxpe4iu5err"
+        "issue_id": "iss_3gdnj5pggzmd"
       }
     },
     {
@@ -27553,7 +27614,7 @@
       "status": 201,
       "body": {
         "member": {
-          "id": "mem_7212d1hv48ko",
+          "id": "mem_ntqjp15rt1ph",
           "workspaceId": "local",
           "userId": null,
           "name": "Native member",
@@ -27606,7 +27667,7 @@
     {
       "key": "members-invitations#003 POST /api/invitations/:id/decline",
       "route": "POST /api/invitations/:id/decline",
-      "path": "/api/invitations/inv_m21cp1q6gys4/decline",
+      "path": "/api/invitations/inv_nwk7j7pg419m/decline",
       "status": 403,
       "body": {
         "error": "invitation does not belong to you"
@@ -27615,7 +27676,7 @@
     {
       "key": "members-invitations#004 POST /api/invitations/:id/accept",
       "route": "POST /api/invitations/:id/accept",
-      "path": "/api/invitations/inv_m21cp1q6gys4/accept",
+      "path": "/api/invitations/inv_nwk7j7pg419m/accept",
       "status": 403,
       "body": {
         "error": "invitation does not belong to you"
@@ -27627,7 +27688,7 @@
       "path": "/api/pins",
       "status": 201,
       "body": {
-        "id": "pin_7212d1hv48ko",
+        "id": "pin_ntqjp15rt1ph",
         "workspace_id": "local",
         "user_id": "local",
         "item_type": "issue",
@@ -27643,7 +27704,7 @@
       "status": 200,
       "body": [
         {
-          "id": "pin_7212d1hv48ko",
+          "id": "pin_ntqjp15rt1ph",
           "workspace_id": "local",
           "user_id": "local",
           "item_type": "issue",
@@ -27667,7 +27728,7 @@
       "status": 201,
       "body": {
         "pin": {
-          "id": "pin_ntqjp15rt1ph",
+          "id": "pin_ibk9if0740q3",
           "workspaceId": "local",
           "userId": "local",
           "itemType": "project",
@@ -27685,7 +27746,7 @@
       "body": {
         "pins": [
           {
-            "id": "pin_ntqjp15rt1ph",
+            "id": "pin_ibk9if0740q3",
             "workspaceId": "local",
             "userId": "local",
             "itemType": "project",
@@ -27713,7 +27774,7 @@
       "status": 201,
       "body": {
         "doc": {
-          "id": "pdoc_ntqjp15rt1ph",
+          "id": "pdoc_ibk9if0740q3",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -27734,7 +27795,7 @@
           "version": 1,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
-          "compilation_run_id": "krun_7212d1hv48ko"
+          "compilation_run_id": "krun_ntqjp15rt1ph"
         }
       }
     },
@@ -27745,7 +27806,7 @@
       "status": 200,
       "body": {
         "doc": {
-          "id": "pdoc_ntqjp15rt1ph",
+          "id": "pdoc_ibk9if0740q3",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -27766,7 +27827,7 @@
           "version": 2,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
-          "compilation_run_id": "krun_3gq3rlr8o45b"
+          "compilation_run_id": "krun_2ryujm2j4i6h"
         }
       }
     },
@@ -27785,7 +27846,7 @@
       "path": "/api/projects",
       "status": 201,
       "body": {
-        "id": "prj_7212d1hv48ko",
+        "id": "prj_ntqjp15rt1ph",
         "workspace_id": "local",
         "title": "Compat project",
         "description": "compat",
@@ -27812,10 +27873,10 @@
     {
       "key": "projects#001 PUT /api/projects/:id",
       "route": "PUT /api/projects/:id",
-      "path": "/api/projects/prj_7212d1hv48ko",
+      "path": "/api/projects/prj_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "prj_7212d1hv48ko",
+        "id": "prj_ntqjp15rt1ph",
         "workspace_id": "local",
         "title": "Compat project renamed",
         "description": "compat",
@@ -27842,11 +27903,11 @@
     {
       "key": "projects#002 POST /api/projects/:id/resources",
       "route": "POST /api/projects/:id/resources",
-      "path": "/api/projects/prj_7212d1hv48ko/resources",
+      "path": "/api/projects/prj_ntqjp15rt1ph/resources",
       "status": 201,
       "body": {
-        "id": "res_ntqjp15rt1ph",
-        "project_id": "prj_7212d1hv48ko",
+        "id": "res_ibk9if0740q3",
+        "project_id": "prj_ntqjp15rt1ph",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -27861,11 +27922,11 @@
     {
       "key": "projects#003 PUT /api/projects/:id/resources/:resourceId",
       "route": "PUT /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_7212d1hv48ko/resources/res_ntqjp15rt1ph",
+      "path": "/api/projects/prj_ntqjp15rt1ph/resources/res_ibk9if0740q3",
       "status": 200,
       "body": {
-        "id": "res_ntqjp15rt1ph",
-        "project_id": "prj_7212d1hv48ko",
+        "id": "res_ibk9if0740q3",
+        "project_id": "prj_ntqjp15rt1ph",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -27880,14 +27941,14 @@
     {
       "key": "projects#004 DELETE /api/projects/:id/resources/:resourceId",
       "route": "DELETE /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_7212d1hv48ko/resources/res_ntqjp15rt1ph",
+      "path": "/api/projects/prj_ntqjp15rt1ph/resources/res_ibk9if0740q3",
       "status": 204,
       "body": ""
     },
     {
       "key": "projects#005 DELETE /api/projects/:id",
       "route": "DELETE /api/projects/:id",
-      "path": "/api/projects/prj_7212d1hv48ko",
+      "path": "/api/projects/prj_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -27898,7 +27959,7 @@
       "status": 201,
       "body": {
         "project": {
-          "id": "prj_ibk9if0740q3",
+          "id": "prj_ic8dc9g1qpho",
           "workspaceId": "local",
           "title": "Native project",
           "description": null,
@@ -27962,7 +28023,7 @@
       "status": 201,
       "body": {
         "resource": {
-          "id": "res_ic8dc9g1qpho",
+          "id": "res_3gq3rlr8o45b",
           "projectId": "prj_snapshot",
           "workspaceId": "local",
           "resourceType": "github_repo",
@@ -28045,7 +28106,7 @@
       "status": 201,
       "body": {
         "runtime": {
-          "id": "rt_7212d1hv48ko",
+          "id": "rt_ntqjp15rt1ph",
           "name": "flow-runtime",
           "provider": "codex",
           "daemonId": null,
@@ -28074,7 +28135,7 @@
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
           "executionGroupIds": [
-            "eg_b4e2c1897e7844cbdfa15492413c2506"
+            "eg_68f1e11679793142b8f96c91e52bfcb5"
           ]
         }
       }
@@ -28216,7 +28277,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_ic8dc9g1qpho",
+        "id": "rml_3gq3rlr8o45b",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "models": [],
@@ -28233,7 +28294,7 @@
       "path": "/api/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_3gq3rlr8o45b",
+        "id": "rml_2ryujm2j4i6h",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -28247,7 +28308,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_2ryujm2j4i6h",
+        "id": "rds_piqp1rpc1xal",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -28268,7 +28329,7 @@
       "path": "/api/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_piqp1rpc1xal",
+        "id": "rds_q5010won31uy",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -28289,7 +28350,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_q5010won31uy",
+        "id": "rls_zsxpe4iu5err",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "skills": [],
@@ -28306,7 +28367,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_zsxpe4iu5err",
+        "id": "rls_3gdnj5pggzmd",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -28320,7 +28381,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_3gdnj5pggzmd",
+        "id": "rli_jez2ujdp6d5n",
         "runtimeId": "rt_snapshot",
         "skillKey": "snapshot-skill",
         "name": null,
@@ -28341,7 +28402,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_jez2ujdp6d5n",
+        "id": "rli_l30ikvaows9d",
         "runtime_id": "rt_snapshot",
         "skill_key": "snapshot-skill",
         "status": "pending",
@@ -28373,7 +28434,7 @@
       "path": "/api/runtimes/rt_snapshot/commands",
       "status": 202,
       "body": {
-        "id": "rcmd_l30ikvaows9d",
+        "id": "rcmd_aw448dcq07dx",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -28401,10 +28462,10 @@
     {
       "key": "runtimes#017 GET /api/runtimes/:id/commands/:requestId",
       "route": "GET /api/runtimes/:id/commands/:requestId",
-      "path": "/api/runtimes/rt_snapshot/commands/rcmd_l30ikvaows9d",
+      "path": "/api/runtimes/rt_snapshot/commands/rcmd_aw448dcq07dx",
       "status": 200,
       "body": {
-        "id": "rcmd_l30ikvaows9d",
+        "id": "rcmd_aw448dcq07dx",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -28615,7 +28676,7 @@
       "path": "/api/feedback",
       "status": 201,
       "body": {
-        "id": "fdb_7212d1hv48ko",
+        "id": "fdb_ntqjp15rt1ph",
         "created_at": "<timestamp>"
       }
     },
@@ -28626,7 +28687,7 @@
       "status": 201,
       "body": {
         "feedback": {
-          "id": "fdb_ntqjp15rt1ph",
+          "id": "fdb_ibk9if0740q3",
           "workspaceId": "local",
           "userId": "local",
           "memberId": null,
@@ -28668,7 +28729,7 @@
         "workspaceId": "local",
         "provider": "claude",
         "token": "mdt_0000000000004000800000000000000400000000000040008000000000000005",
-        "tokenId": "dtk_ibk9if0740q3",
+        "tokenId": "dtk_ic8dc9g1qpho",
         "daemonId": "dmn_00000000000040008000000000000003",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
@@ -28701,7 +28762,7 @@
       "path": "/api/skills",
       "status": 201,
       "body": {
-        "id": "skl_7212d1hv48ko",
+        "id": "skl_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "compat-skill",
         "description": "compat",
@@ -28716,10 +28777,10 @@
     {
       "key": "skills-compat#001 PUT /api/skills/:id",
       "route": "PUT /api/skills/:id",
-      "path": "/api/skills/skl_7212d1hv48ko",
+      "path": "/api/skills/skl_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "skl_7212d1hv48ko",
+        "id": "skl_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "compat-skill-renamed",
         "description": "compat",
@@ -28734,10 +28795,10 @@
     {
       "key": "skills-compat#002 PATCH /api/skills/:id",
       "route": "PATCH /api/skills/:id",
-      "path": "/api/skills/skl_7212d1hv48ko",
+      "path": "/api/skills/skl_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "skl_7212d1hv48ko",
+        "id": "skl_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "compat-skill-patched",
         "description": "compat",
@@ -28752,11 +28813,11 @@
     {
       "key": "skills-compat#003 PUT /api/skills/:id/files",
       "route": "PUT /api/skills/:id/files",
-      "path": "/api/skills/skl_7212d1hv48ko/files",
+      "path": "/api/skills/skl_ntqjp15rt1ph/files",
       "status": 200,
       "body": {
-        "id": "skf_ntqjp15rt1ph",
-        "skill_id": "skl_7212d1hv48ko",
+        "id": "skf_ibk9if0740q3",
+        "skill_id": "skl_ntqjp15rt1ph",
         "path": "extra.md",
         "content": "extra",
         "created_at": "<timestamp>",
@@ -28766,7 +28827,7 @@
     {
       "key": "skills-compat#004 DELETE /api/skills/:id/files/:fileId",
       "route": "DELETE /api/skills/:id/files/:fileId",
-      "path": "/api/skills/skl_7212d1hv48ko/files/skf_ntqjp15rt1ph",
+      "path": "/api/skills/skl_ntqjp15rt1ph/files/skf_ibk9if0740q3",
       "status": 204,
       "body": ""
     },
@@ -28782,7 +28843,7 @@
     {
       "key": "skills-compat#006 DELETE /api/skills/:id",
       "route": "DELETE /api/skills/:id",
-      "path": "/api/skills/skl_7212d1hv48ko",
+      "path": "/api/skills/skl_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -28793,7 +28854,7 @@
       "status": 201,
       "body": {
         "skill": {
-          "id": "skl_7212d1hv48ko",
+          "id": "skl_ntqjp15rt1ph",
           "workspaceId": "local",
           "name": "native-skill",
           "description": "",
@@ -28912,7 +28973,7 @@
       "path": "/api/squads",
       "status": 201,
       "body": {
-        "id": "sqd_7212d1hv48ko",
+        "id": "sqd_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "Compat squad",
         "description": "",
@@ -28927,8 +28988,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_ntqjp15rt1ph",
-            "squad_id": "sqd_7212d1hv48ko",
+            "id": "sqm_ibk9if0740q3",
+            "squad_id": "sqd_ntqjp15rt1ph",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -28940,10 +29001,10 @@
     {
       "key": "squads#001 PUT /api/squads/:id",
       "route": "PUT /api/squads/:id",
-      "path": "/api/squads/sqd_7212d1hv48ko",
+      "path": "/api/squads/sqd_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "sqd_7212d1hv48ko",
+        "id": "sqd_ntqjp15rt1ph",
         "workspace_id": "local",
         "name": "Compat squad renamed",
         "description": "",
@@ -28958,8 +29019,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_ntqjp15rt1ph",
-            "squad_id": "sqd_7212d1hv48ko",
+            "id": "sqm_ibk9if0740q3",
+            "squad_id": "sqd_ntqjp15rt1ph",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -28971,11 +29032,11 @@
     {
       "key": "squads#002 POST /api/squads/:id/members",
       "route": "POST /api/squads/:id/members",
-      "path": "/api/squads/sqd_7212d1hv48ko/members",
+      "path": "/api/squads/sqd_ntqjp15rt1ph/members",
       "status": 201,
       "body": {
-        "id": "sqm_ntqjp15rt1ph",
-        "squad_id": "sqd_7212d1hv48ko",
+        "id": "sqm_ibk9if0740q3",
+        "squad_id": "sqd_ntqjp15rt1ph",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -28985,11 +29046,11 @@
     {
       "key": "squads#003 PATCH /api/squads/:id/members/role",
       "route": "PATCH /api/squads/:id/members/role",
-      "path": "/api/squads/sqd_7212d1hv48ko/members/role",
+      "path": "/api/squads/sqd_ntqjp15rt1ph/members/role",
       "status": 200,
       "body": {
-        "id": "sqm_ntqjp15rt1ph",
-        "squad_id": "sqd_7212d1hv48ko",
+        "id": "sqm_ibk9if0740q3",
+        "squad_id": "sqd_ntqjp15rt1ph",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -28999,14 +29060,14 @@
     {
       "key": "squads#004 DELETE /api/squads/:id/members",
       "route": "DELETE /api/squads/:id/members",
-      "path": "/api/squads/sqd_7212d1hv48ko/members",
+      "path": "/api/squads/sqd_ntqjp15rt1ph/members",
       "status": 204,
       "body": ""
     },
     {
       "key": "squads#005 DELETE /api/squads/:id",
       "route": "DELETE /api/squads/:id",
-      "path": "/api/squads/sqd_7212d1hv48ko",
+      "path": "/api/squads/sqd_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -29017,7 +29078,7 @@
       "status": 201,
       "body": {
         "squad": {
-          "id": "sqd_ibk9if0740q3",
+          "id": "sqd_ic8dc9g1qpho",
           "workspaceId": "local",
           "name": "Native squad",
           "description": "",
@@ -29124,7 +29185,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_7212d1hv48ko",
+          "id": "tsk_ntqjp15rt1ph",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -29224,11 +29285,11 @@
     {
       "key": "tasks#001 POST /api/multiremi/tasks/:id/cancel",
       "route": "POST /api/multiremi/tasks/:id/cancel",
-      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/cancel",
+      "path": "/api/multiremi/tasks/tsk_ntqjp15rt1ph/cancel",
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_7212d1hv48ko",
+          "id": "tsk_ntqjp15rt1ph",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -29332,7 +29393,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_ntqjp15rt1ph",
+          "id": "tsk_ibk9if0740q3",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -29432,10 +29493,10 @@
     {
       "key": "tasks#003 POST /api/tasks/:id/cancel",
       "route": "POST /api/tasks/:id/cancel",
-      "path": "/api/tasks/tsk_ntqjp15rt1ph/cancel",
+      "path": "/api/tasks/tsk_ibk9if0740q3/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_ntqjp15rt1ph",
+        "id": "tsk_ibk9if0740q3",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -29562,7 +29623,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_ibk9if0740q3",
+          "id": "tsk_ic8dc9g1qpho",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -29606,8 +29667,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_3gq3rlr8o45b",
-          "assignment_event_id": "sevt_3gq3rlr8o45b",
+          "assignmentEventId": "sevt_2ryujm2j4i6h",
+          "assignment_event_id": "sevt_2ryujm2j4i6h",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -29662,10 +29723,10 @@
     {
       "key": "tasks#005 POST /api/issues/:id/tasks/:taskId/cancel",
       "route": "POST /api/issues/:id/tasks/:taskId/cancel",
-      "path": "/api/issues/iss_snapshot/tasks/tsk_ibk9if0740q3/cancel",
+      "path": "/api/issues/iss_snapshot/tasks/tsk_ic8dc9g1qpho/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_ibk9if0740q3",
+        "id": "tsk_ic8dc9g1qpho",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -29709,8 +29770,8 @@
         "parentTaskId": null,
         "continuedFromTaskId": null,
         "continued_from_task_id": null,
-        "assignmentEventId": "sevt_3gq3rlr8o45b",
-        "assignment_event_id": "sevt_3gq3rlr8o45b",
+        "assignmentEventId": "sevt_2ryujm2j4i6h",
+        "assignment_event_id": "sevt_2ryujm2j4i6h",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -29791,7 +29852,7 @@
       "path": "/api/issues/iss_snapshot/rerun",
       "status": 202,
       "body": {
-        "id": "tsk_q5010won31uy",
+        "id": "tsk_zsxpe4iu5err",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -29835,8 +29896,8 @@
         "parentTaskId": null,
         "continuedFromTaskId": null,
         "continued_from_task_id": null,
-        "assignmentEventId": "sevt_3gdnj5pggzmd",
-        "assignment_event_id": "sevt_3gdnj5pggzmd",
+        "assignmentEventId": "sevt_jez2ujdp6d5n",
+        "assignment_event_id": "sevt_jez2ujdp6d5n",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -29917,7 +29978,7 @@
       "path": "/api/tokens",
       "status": 201,
       "body": {
-        "id": "pat_7212d1hv48ko",
+        "id": "pat_ntqjp15rt1ph",
         "name": "compat token",
         "token_prefix": "mul_00000000",
         "expires_at": null,
@@ -29932,7 +29993,7 @@
       "path": "/api/tokens/current/renew",
       "status": 201,
       "body": {
-        "id": "pat_ntqjp15rt1ph",
+        "id": "pat_ibk9if0740q3",
         "workspaceId": "local",
         "daemonId": null,
         "taskId": null,
@@ -29955,7 +30016,7 @@
     {
       "key": "tokens#002 DELETE /api/tokens/:id",
       "route": "DELETE /api/tokens/:id",
-      "path": "/api/tokens/pat_7212d1hv48ko",
+      "path": "/api/tokens/pat_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     },
@@ -29966,7 +30027,7 @@
       "status": 201,
       "body": {
         "token": {
-          "id": "pat_ibk9if0740q3",
+          "id": "pat_ic8dc9g1qpho",
           "workspaceId": "local",
           "daemonId": null,
           "taskId": null,
@@ -30023,14 +30084,14 @@
     {
       "key": "webhooks#000 POST /api/webhooks/autopilots/:token",
       "route": "POST /api/webhooks/autopilots/:token",
-      "path": "/api/webhooks/autopilots/awt_1ut6x0i244sp2mewms",
+      "path": "/api/webhooks/autopilots/awt_2mewms2xbrsagogw63",
       "status": 200,
       "body": {
         "status": "accepted",
-        "delivery_id": "whd_7212d1hv48ko",
-        "run_id": "run_ntqjp15rt1ph",
+        "delivery_id": "whd_ntqjp15rt1ph",
+        "run_id": "run_ibk9if0740q3",
         "autopilot_id": "apl_snapshot",
-        "trigger_id": "trg_aunci5sv8e5p"
+        "trigger_id": "trg_1ut6x0i244sp"
       }
     },
     {
@@ -30050,7 +30111,7 @@
       "path": "/api/workspaces",
       "status": 201,
       "body": {
-        "id": "ws_7212d1hv48ko",
+        "id": "ws_ntqjp15rt1ph",
         "name": "Flow workspace",
         "slug": "flow-workspace",
         "description": null,
@@ -30068,10 +30129,10 @@
     {
       "key": "workspaces#001 PUT /api/workspaces/:id",
       "route": "PUT /api/workspaces/:id",
-      "path": "/api/workspaces/ws_7212d1hv48ko",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "ws_7212d1hv48ko",
+        "id": "ws_ntqjp15rt1ph",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": null,
@@ -30089,10 +30150,10 @@
     {
       "key": "workspaces#002 PATCH /api/workspaces/:id",
       "route": "PATCH /api/workspaces/:id",
-      "path": "/api/workspaces/ws_7212d1hv48ko",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph",
       "status": 200,
       "body": {
-        "id": "ws_7212d1hv48ko",
+        "id": "ws_ntqjp15rt1ph",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": "patched",
@@ -30110,12 +30171,12 @@
     {
       "key": "workspaces#003 POST /api/workspaces/:id/members",
       "route": "POST /api/workspaces/:id/members",
-      "path": "/api/workspaces/ws_7212d1hv48ko/members",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/members",
       "status": 201,
       "body": {
-        "id": "inv_ibk9if0740q3",
-        "workspaceId": "ws_7212d1hv48ko",
-        "workspace_id": "ws_7212d1hv48ko",
+        "id": "inv_ic8dc9g1qpho",
+        "workspaceId": "ws_ntqjp15rt1ph",
+        "workspace_id": "ws_ntqjp15rt1ph",
         "inviterId": "local",
         "inviter_id": "local",
         "inviteeEmail": "invitee@snapshot.invalid",
@@ -30164,14 +30225,14 @@
     {
       "key": "workspaces#006 DELETE /api/workspaces/:id/invitations/:invitationId",
       "route": "DELETE /api/workspaces/:id/invitations/:invitationId",
-      "path": "/api/workspaces/ws_7212d1hv48ko/invitations/inv_ibk9if0740q3",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/invitations/inv_ic8dc9g1qpho",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#007 PUT /api/workspaces/:id/relay-config/:engine",
       "route": "PUT /api/workspaces/:id/relay-config/:engine",
-      "path": "/api/workspaces/ws_7212d1hv48ko/relay-config/claude",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/relay-config/claude",
       "status": 200,
       "body": {
         "claude": {
@@ -30186,7 +30247,7 @@
     {
       "key": "workspaces#008 POST /api/workspaces/:id/relay-config/:engine/reveal",
       "route": "POST /api/workspaces/:id/relay-config/:engine/reveal",
-      "path": "/api/workspaces/ws_7212d1hv48ko/relay-config/claude/reveal",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/relay-config/claude/reveal",
       "status": 200,
       "body": {
         "token": ""
@@ -30195,7 +30256,7 @@
     {
       "key": "workspaces#009 PUT /api/workspaces/:id/relay-config/discovery",
       "route": "PUT /api/workspaces/:id/relay-config/discovery",
-      "path": "/api/workspaces/ws_7212d1hv48ko/relay-config/discovery",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/relay-config/discovery",
       "status": 200,
       "body": {
         "model_discovery": true
@@ -30204,7 +30265,7 @@
     {
       "key": "workspaces#010 POST /api/workspaces/:id/lark/install/begin",
       "route": "POST /api/workspaces/:id/lark/install/begin",
-      "path": "/api/workspaces/ws_7212d1hv48ko/lark/install/begin",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/lark/install/begin",
       "status": 202,
       "body": {
         "session_id": "local-lark-<timestamp>",
@@ -30220,14 +30281,14 @@
     {
       "key": "workspaces#011 DELETE /api/workspaces/:id/lark/installations/:installationId",
       "route": "DELETE /api/workspaces/:id/lark/installations/:installationId",
-      "path": "/api/workspaces/ws_7212d1hv48ko/lark/installations/inst_snapshot",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/lark/installations/inst_snapshot",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#012 POST /api/workspaces/:id/leave",
       "route": "POST /api/workspaces/:id/leave",
-      "path": "/api/workspaces/ws_7212d1hv48ko/leave",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph/leave",
       "status": 400,
       "body": {
         "error": "workspace must have at least one owner"
@@ -30236,7 +30297,7 @@
     {
       "key": "workspaces#013 DELETE /api/workspaces/:id",
       "route": "DELETE /api/workspaces/:id",
-      "path": "/api/workspaces/ws_7212d1hv48ko",
+      "path": "/api/workspaces/ws_ntqjp15rt1ph",
       "status": 204,
       "body": ""
     }

@@ -4602,7 +4602,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
   body: string;
   bodyOrigin: FeishuBotOutboundBodyOrigin;
   body_origin?: FeishuBotOutboundBodyOrigin;
-  /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
+  /** Base delivery key. Question cards derive a key per rotated credential. */
   idempotencyKey: string;
   idempotency_key?: string;
   /** Present only for stream-capable daemons; absent on topic seed messages. */
@@ -4617,8 +4617,8 @@ export interface MultiremiFeishuBotOutboundDelivery {
    * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
    * `decision_card` carries a server-built card in `body` and posts it as a
    * proactive thread reply; `decision_card_patch` edits the message named by
-   * `targetMessageId`; `decision_reminder` is a plain text nudge. C5 adds
-   * independent CoT, interaction, result and receipt handlers.
+   * `targetMessageId`; `decision_reminder` carries a rotated card and text nudge.
+   * C5 adds independent CoT, interaction, result and receipt handlers.
    */
   kind?: FeishuBotOutboundDeliveryKind;
   /** A receipt owns exactly one original inbound message and state transition. */
@@ -4629,11 +4629,11 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /**
    * The Task that asked. The host needs it to read and answer the request over
    * the existing task-scoped routes, including after it restarts and has to
-   * re-register a card it no longer remembers sending.
+   * route a click without any per-message registration.
    */
   humanRequestTaskId?: string;
   human_request_task_id?: string;
-  /** A decision patch target or the original inbound message a receipt updates. */
+  /** Card patch/reminder target or the original inbound message a receipt updates. */
   targetMessageId?: string;
   target_message_id?: string;
   /**

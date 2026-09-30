@@ -10,6 +10,7 @@
  * otherwise the shared bun:sqlite database (core Remi's ~/.remi/remi.db) is used.
  */
 import { getDb } from "@shared/db/index.js";
+import { markSqliteDialect } from "./sqlite.js";
 import {
   emitDbReplyRejected,
   emitLargeDbReply,
@@ -754,6 +755,5 @@ export function openMultiremiDatabase(): SqlDatabase {
   if (url && isPostgresConfigured()) return new PostgresSyncDatabase(url);
   // Bun's SQLite handle satisfies the interface structurally, so the marker is
   // attached here rather than by wrapping every statement.
-  const sqlite = getDb() as unknown as SqlDatabase;
-  return Object.assign(sqlite, { dialect: "sqlite" as const });
+  return markSqliteDialect(getDb()) as unknown as SqlDatabase;
 }

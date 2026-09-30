@@ -276,6 +276,10 @@
     "visibility_toast_updated": "公開範囲を {{visibility}} に設定しました",
     "visibility_toast_failed": "公開範囲を更新できませんでした",
     "delete_dialog": {
+      "workspaces": {
+        "warning": "次の Issue のワークスペースがこの Runtime に残っています。確認してから続行してください。",
+        "checkbox": "これらのワークスペースを放棄します。ローカルファイルは残り、今後のタスクは新しいワークスペースを使用する場合があることを理解しました。"
+      },
       "light": {
         "title": "ランタイムを削除しますか?",
         "description": "「{{name}}」を削除してもよろしいですか? この操作は元に戻せません。",

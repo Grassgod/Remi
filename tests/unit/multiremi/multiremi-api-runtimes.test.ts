@@ -652,7 +652,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       body: JSON.stringify({ expected_active_agent_ids: [agent.id] }),
     });
     expect(cascade.status).toBe(200);
-    expect(await cascade.json()).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2 });
+    expect(await cascade.json()).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2, issue_workspaces_abandoned: 0 });
     expect(store.getRuntime(runtime.id)).toBeNull();
     expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
     expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();

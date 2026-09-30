@@ -49,9 +49,10 @@ import {
   registerIssueDecisionCardInteraction,
   registerTaskInteraction,
   buildTaskInteractionCard,
+  registerQuestionCardClient,
 } from "@connectors/feishu/task-interaction.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
-import { DECISION_RECIPIENT_SENTINEL, decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { DECISION_RECIPIENT_SENTINEL, decodeDecisionCardBody, questionCardIdempotencyKey } from "@shared/feishu-task-card.js";
 import {
   FeishuConciergeError,
   type FeishuConciergeHost,
@@ -200,15 +201,12 @@ async function serve(options: CliOptions): Promise<void> {
   // await the 30s retry; a process that cannot take its lock exits non-zero, and
   // compose's `restart: unless-stopped` starts a fresh attempt. The local SQLite
   // arm has no cross-process fan-out, so the guard is a no-op there.
-  const roleConfiguration = resolveStartupApiRole(process.env);
-  const apiRole = roleConfiguration.role;
+  const apiRoleConfiguration = resolveStartupApiRole(process.env);
   const roleGuard = await startHubRoleGuard({
     databaseUrl: process.env.MULTIREMI_DATABASE_URL,
-    locks: locksForRole(apiRole, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
+    locks: locksForRole(apiRoleConfiguration.role, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
   });
-  const server = startMultiremiServer({
-    port, hostname: host, authToken: token, apiRoleConfiguration: roleConfiguration,
-  });
+  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRoleConfiguration });
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
   await waitForShutdown(async () => {
     server.stop(true);
@@ -597,6 +595,7 @@ export function controlPlaneConciergeHost(deps: {
   const boot = deps.boot ?? bootFeishuChannel;
   let noMentionChatIds = new Set<string>();
   let displayName = "Remi";
+  let stopQuestionCardClient: (() => void) | undefined;
   return {
     setNoMentionChatIds(chatIds) { noMentionChatIds = new Set(chatIds); },
     async start(assignment) {
@@ -613,6 +612,13 @@ export function controlPlaneConciergeHost(deps: {
         );
       }
       const { config, agent } = assignment;
+      stopQuestionCardClient?.();
+      stopQuestionCardClient = registerQuestionCardClient(config.app_id, {
+        getRequest: (taskId, requestId) => daemon.getFeishuBotHumanRequest(taskId, requestId),
+        respond: (taskId, requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
+        getDecision: (issueId, decisionId) => daemon.getFeishuIssueDecision(issueId, decisionId),
+        answer: (issueId, decisionId, answer, credential) => daemon.answerFeishuIssueDecision(issueId, decisionId, { answer, ...credential }),
+      });
       displayName = agent.name;
       const handle = await boot(
         async () => true,
@@ -652,6 +658,8 @@ export function controlPlaneConciergeHost(deps: {
       return { botName: agent.name };
     },
     async stop() {
+      stopQuestionCardClient?.();
+      stopQuestionCardClient = undefined;
       const handle = deps.current();
       deps.attach(null);
       deps.daemon()?.setBotMenuPublisher(null);
@@ -716,7 +724,8 @@ export function controlPlaneConciergeHost(deps: {
             taskId, displayName, sessionId: null, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
-            respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
+            prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(taskId, requestId, openId),
+            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
           }, {
             ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
@@ -782,23 +791,15 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
-    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
-    idempotencyKey: delivery.idempotencyKey })).messageId;
+    card: card!,
+    idempotencyKey: questionCardIdempotencyKey(card!, delivery.idempotencyKey) })).messageId;
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
-  const registration = registerTaskInteraction({ appId: handle.appId, chatId: delivery.chatId, messageId,
-    recipientOpenId, request, agentName, sessionId,
-    submit: async response => {
-      options.signal.throwIfAborted();
-      try { return await daemon.respondFeishuBotHumanRequest(taskId, requestId, response); }
-      catch (error) {
-        const latest = await daemon.getFeishuBotHumanRequest(taskId, requestId);
-        if (latest && latest.status !== "pending") return latest;
-        throw error;
-      }
-    } });
+  const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });
   try {
     while (request.status === "pending") {
       await sleep(750);
@@ -843,12 +844,14 @@ export async function sendDecisionLane(
     return { messageId: target };
   }
   if (delivery.kind === "decision_reminder") {
+    if (envelope && delivery.targetMessageId) await handle.updateProactiveCard(delivery.targetMessageId, envelope.card);
+    const body = envelope?.fallback_text ?? delivery.body;
     const mention = delivery.mention;
     const openId = cleanMentionOpenId(mention?.resolvedOpenId ?? mention?.openId);
     return handle.sendProactiveThreadReply({
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
-      body: openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${delivery.body}` : delivery.body,
+      body: openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${body}` : body,
       idempotencyKey: delivery.idempotencyKey,
     });
   }
@@ -878,7 +881,7 @@ export async function sendDecisionLane(
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
       card,
-      idempotencyKey: delivery.idempotencyKey,
+      idempotencyKey: questionCardIdempotencyKey(card, delivery.idempotencyKey),
     });
   } catch (error) {
     const failure = feishuTransportError("Decision card", error);
@@ -932,12 +935,14 @@ export async function sendIssueDecisionLane(
     return { messageId: target };
   }
   if (delivery.kind === "decision_reminder") {
+    if (envelope && delivery.targetMessageId) await handle.updateProactiveCard(delivery.targetMessageId, envelope.card);
+    const body = envelope?.fallback_text ?? delivery.body;
     const mention = delivery.mention;
     const openId = cleanMentionOpenId(mention?.resolvedOpenId ?? mention?.openId);
     return handle.sendProactiveThreadReply({
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
-      body: openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${delivery.body}` : delivery.body,
+      body: openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${body}` : body,
       idempotencyKey: delivery.idempotencyKey,
     });
   }
@@ -964,7 +969,7 @@ export async function sendIssueDecisionLane(
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
       card,
-      idempotencyKey: delivery.idempotencyKey,
+      idempotencyKey: questionCardIdempotencyKey(card, delivery.idempotencyKey),
     });
   } catch (error) {
     const failure = feishuTransportError("Decision card", error);
@@ -1032,9 +1037,7 @@ function registerDecisionCardClick(input: {
   const requestId = input.requestId?.trim();
   if (!daemon || !appId || !taskId || !requestId) return;
   registerDecisionCardInteraction({
-    appId, chatId, messageId, recipientOpenId,
-    getRequest: () => daemon.getFeishuBotHumanRequest(taskId, requestId),
-    submit: response => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
+    appId, messageId,
   });
 }
 
@@ -1058,9 +1061,7 @@ function registerIssueDecisionCardClick(input: {
   const decisionId = input.decisionId?.trim();
   if (!daemon || !appId || !issueId || !decisionId) return;
   registerIssueDecisionCardInteraction({
-    appId, chatId, messageId, recipientOpenId,
-    getDecision: () => daemon.getFeishuIssueDecision(issueId, decisionId),
-    submit: (answer, operatorOpenId) => daemon.answerFeishuIssueDecision(issueId, decisionId, { answer, operatorOpenId }),
+    appId, messageId,
   });
 }
 
@@ -1190,8 +1191,9 @@ export function createFeishuTaskHandler(
       displayName: submitted.agentName,
       sessionId: null,
       getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
-      respondHumanRequest: (requestId, response) =>
-        daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
+      prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(submitted.taskId, requestId, openId),
+      respondHumanRequest: (requestId, response, credential) =>
+        daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response, credential),
     });
   };
 }

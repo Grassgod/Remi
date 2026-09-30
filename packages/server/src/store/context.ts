@@ -164,6 +164,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "provider_auth",
   "provider_error",
   "queued_expired",
+  "queued_model_unavailable",
   "registration_failed",
   "runtime_offline",
   "runtime_recovery",
@@ -359,14 +360,7 @@ export interface IssuesSurface {
     activity: import("./repos/issues-repo.js").IssueMutationActivityContext,
     deferredEvents: CommitEventQueue,
   ): MultiremiIssueDependencyView;
-  /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
-  /**
-   * Post-commit E1/E2 hook. Every Issue transition the hook's own writes produce
-   * (the parent round can move that parent's status, which is a child event for
-   * ITS parent) is pushed into `collector`; the owner replays it after the next
-   * commit. Collector and queue are required so no call site can drop a
-   * transition by ignoring a return value, and no event escapes mid-transaction.
-   */
+  /** Post-commit automatic-start replay; required E1/E2/E3 writes use the transaction variant. */
   notifyChildStatusChange(
     previous: MultiremiIssue,
     issue: MultiremiIssue,
@@ -377,6 +371,17 @@ export interface IssuesSurface {
       dependencyCheckEventId?: string | null;
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
+    },
+  ): void;
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options?: {
+      taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      statusChangeEventId?: string | null;
     },
   ): void;
   restoreIssue(id: string): MultiremiIssue;
@@ -857,6 +862,7 @@ export interface FeishuBotSurface {
   getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
     decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
     issue: MultiremiIssue;
+    appId: string;
     chatId: string;
     messageId: string | null;
     recipientOpenId: string;
@@ -920,7 +926,15 @@ export interface TaskTracesSurface {
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
-export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+export interface InboxSurface {
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[];
+}
+
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface, InboxSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -1069,6 +1083,10 @@ export class StoreContext {
   }
 
   conversationLog(): ConversationLogSurface {
+    return this.resolveHost();
+  }
+
+  inbox(): InboxSurface {
     return this.resolveHost();
   }
 
