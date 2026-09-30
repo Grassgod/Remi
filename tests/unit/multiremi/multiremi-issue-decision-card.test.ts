@@ -21,6 +21,7 @@ import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteractio
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
@@ -371,13 +372,13 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(child.id).some(entry => entry.type === "decision_received")).toBe(true);
     const sourceOwnerTask = store.listTasksForIssue(child.id).find(item => item.status === "queued");
     expect(sourceOwnerTask).toBeTruthy();
-    expect(sourceOwnerTask!.prompt).toContain(decision.id);
+    expect(inboxReportBody(store, sourceOwnerTask!)).toContain(decision.id);
     expect(sourceOwnerTask).toMatchObject({
       delegationId: null,
       delegatedByAgentId: null,
       delegatedFromIssueSessionId: null,
       delegationSkipReason: null,
-      wakeSource: null,
+      wakeSource: "decision",
     });
     expect(store.listInboxItems(member.id)).toHaveLength(1);
     expect(store.listInboxItems(member.id)[0]).toMatchObject({

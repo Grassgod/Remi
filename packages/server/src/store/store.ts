@@ -123,6 +123,7 @@ import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
+  type RuntimeDeleteOptions,
 } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   DaemonProfilesRepo,
@@ -3070,15 +3071,16 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
-    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
+    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id, options);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
-    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
+    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds, options);
   }
 
   mergeRuntimeInto(
@@ -3447,6 +3449,10 @@ runMigrations(this.db);
     return this.issueWorkspaces.get(issueId);
   }
 
+  abandonIssueWorkspace(issueId: string, workspaceId: string) {
+    return this.issueWorkspaces.abandon(issueId, workspaceId);
+  }
+
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
     return this.issueWorkspaces.report(input);
   }
@@ -3730,6 +3736,17 @@ runMigrations(this.db);
     options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; dependencyCheckEventId?: string | null; seen?: Set<string> } = {},
   ): void {
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
+  }
+
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; statusChangeEventId?: string | null } = {},
+  ): void {
+    this.issues.notifyChildStatusChangeWithinTransaction(previous, issue, parentTaskId, collector, deferredEvents, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {

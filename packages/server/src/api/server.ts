@@ -71,14 +71,16 @@ import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import {
   createHub,
+  type HubFillReader,
   type HubImpl,
   type ObservableLiveHub,
 } from "./hub/hub-core.js";
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { createPeerHubTransport } from "./hub/peer-hub-transport.js";
 import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
-import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
+import { hubHealthPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -192,6 +194,15 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import {
+  createPostgresStreamAuthReader,
+  createStreamAuthReader,
+} from "@multiremi/api/hub/stream-auth.js";
+import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
+import { createReadPool } from "@multiremi/store/db/read-pool.js";
+import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import {
   createRealtimeFanout,
   type RealtimeFanout,
@@ -204,15 +215,6 @@ import {
   type PeerChannel,
 } from "./peer/peer-channel.js";
 import { registerPeerRoutes } from "./peer/peer-routes.js";
-import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
-import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
-import {
-  createPostgresStreamAuthReader,
-  createStreamAuthReader,
-} from "@multiremi/api/hub/stream-auth.js";
-import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
-import { createReadPool } from "@multiremi/store/db/read-pool.js";
-import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 
 let authDisabledWarningEmitted = false;
 
@@ -294,6 +296,8 @@ export interface MultiremiApiOptions {
   hub?: LiveHub | ObservableLiveHub | null;
   /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
   hubRingLimits?: Partial<HubRingLimits>;
+  /** B1 reader for log warm-up and peer reconciliation. */
+  hubFill?: HubFillReader | null;
   /**
    * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
@@ -338,12 +342,13 @@ export interface MultiremiApiOptions {
   readPool?: ReturnType<typeof createReadPool> | null;
 }
 
-function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole): LiveHub | null {
+function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole, peer: PeerChannel | null = options.peerChannel ?? null): LiveHub | null {
   if (options.liveHub !== undefined) return options.liveHub;
   if (options.hub !== undefined) return options.hub;
   return createHub({
-    transport: createLocalHubTransport(),
+    transport: peer?.enabled ? createPeerHubTransport({ peer }) : createLocalHubTransport(),
     role: apiRole,
+    fill: options.hubFill,
     ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
   });
 }
@@ -359,7 +364,7 @@ const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/he
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const platformUpdaterToken = options.platformUpdaterToken
     ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
     ?? "";
@@ -678,7 +683,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     ...extra,
   });
   app.get("/health", (c) => c.json(healthBody(hubHealthPayload(hub))));
-  app.get("/readyz", (c) => c.json(healthBody(hubReadyzPayload(hub))));
+  app.get("/readyz", (c) => c.json(healthBody()));
   app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
@@ -929,7 +934,16 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
-  const liveHub = resolveAppHub(options, effectiveApiRole);
+  // Create the shared channel before the Hub so both server subscriptions and
+  // the realtime fanout use the same process identity and queue.
+  const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
+    : options.peerChannel;
+  const liveHub = resolveAppHub(options, effectiveApiRole, peer);
   if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
@@ -990,7 +1004,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   if (backgroundJobs) store.startNotificationDeliverySweeper();
   bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
@@ -1003,13 +1017,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // `options.peerChannel` is the injection point the two-server tests use.
   // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
   // no sender, no subscriber, and the routes uniformly answer 401.
-  const peerUrl = resolvePeerUrl();
-  const peerSecret = options.peerSecret === undefined
-    ? resolvePeerSecret()
-    : (options.peerSecret ?? "");
-  const peer = options.peerChannel === undefined
-    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
-    : options.peerChannel;
   // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
   // resolved once by startup-env, including an injected role). Resolving it
   // again here from env would disagree with an injected `apiRole`: a process
@@ -1037,6 +1044,27 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
+  // A caller-supplied auth reader owns its pool; when this function builds the
+  // Postgres one, it also owns closing it at shutdown.
+  const ownedReadPool = options.streamAuth
+    ? null
+    : (options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
+      ? null
+      : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole })));
+  const streamAuth: StreamAuthReader = options.streamAuth
+    ?? (ownedReadPool
+      ? createPostgresStreamAuthReader(ownedReadPool)
+      : createStreamAuthReader(store, { role: effectiveApiRole }));
+  const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "log",
+  });
+  const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
+    hub: liveHub,
+    auth: streamAuth,
+    endpoint: "trace",
+  });
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
   // is exactly the two deliveries that used to live inline here.
@@ -1051,27 +1079,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       browserUser: browserUserWebSockets,
       browserScope: browserScopeWebSockets,
     },
-  });
-  // A caller-supplied auth reader owns its pool; when this function builds the
-  // Postgres one, it also owns closing it at shutdown.
-  const ownedReadPool = options.streamAuth
-    ? null
-    : (options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
-      ? null
-      : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole })));
-  const streamAuth: StreamAuthReader = options.streamAuth
-    ?? (ownedReadPool
-      ? createPostgresStreamAuthReader(ownedReadPool)
-      : createStreamAuthReader(store));
-  const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
-    hub: liveHub,
-    auth: streamAuth,
-    endpoint: "log",
-  });
-  const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
-    hub: liveHub,
-    auth: streamAuth,
-    endpoint: "trace",
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,

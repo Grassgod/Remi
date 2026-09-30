@@ -41,6 +41,7 @@ import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
+import { inboxReportEntry } from "./inbox-test-assertions.js";
 
 import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix } from "./chat-issue-migration-fixture.js";
 
@@ -2638,9 +2639,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
     store.updateAgent(agent.id, { runtimeId: null });
-    expect(store.deleteRuntime(newRuntime.id)).toBeTrue();
+    expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: newRuntime.id, status: "ready" });
+    expect(store.deleteRuntimeWithArchivedAgentCleanup(newRuntime.id, { abandonIssueWorkspaces: true })).toEqual({
+      status: "deleted", issueWorkspacesAbandoned: 1,
+    });
     expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
-    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "runtime_offline" });
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "cleaned" });
     for (const table of [
       "multiremi_agent_plugin_runtime_states",
       "multiremi_runtime_models",
@@ -3559,7 +3564,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(leaderReturns).toHaveLength(2);
     const terminalReturn = leaderReturns.find((task) => task.id !== fixture.explicitReturn.id)!;
     expect(terminalReturn.status).toBe("queued");
-    expect(terminalReturn.prompt).toContain("Final PG QA result after the explicit report was withdrawn.");
+    const terminalEntry = inboxReportEntry(store, terminalReturn, fixture.childTask.id);
+    expect(terminalEntry.body_md).toContain("Final PG QA result after the explicit report was withdrawn.");
+    expect(terminalReturn.prompt).toBe(`读收件箱\n\n${terminalReturn.issueSessionId}:${terminalEntry.seq} (${terminalEntry.id})`);
   });
 
   /**

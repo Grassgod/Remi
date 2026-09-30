@@ -9,7 +9,7 @@
  * PR-C (MUL-464) scales the same topology out to real child processes.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -269,8 +269,8 @@ describe("realtime fanout — two servers over one database", () => {
   } = {}): Promise<TwoServers> {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-two-"));
     const databasePath = join(directory, "shared.sqlite");
-    const dbA = new Database(databasePath, { create: true });
-    const dbB = new Database(databasePath, { create: true });
+    const dbA = openSqliteDatabase(databasePath, { create: true });
+    const dbB = openSqliteDatabase(databasePath, { create: true });
     const storeA = new MultiremiStore(dbA);
     const storeB = new MultiremiStore(dbB);
     storeA.ensureLocalWorkspace();
@@ -727,10 +727,13 @@ describe("realtime fanout — two servers over one database", () => {
     // Acceptance item 1: with no peer URL there is no sender and no subscriber,
     // the health route says so, and a local write still reaches a local socket.
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-off-"));
-    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
-    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    const server = startMultiremiServer({
+      store, scheduler: null, port: 0, hostname: "127.0.0.1",
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
     try {
       // QA item 2: with nothing configured this body must be exactly what main
       // returned, key set included — no `role`, no `peer_healthy`.

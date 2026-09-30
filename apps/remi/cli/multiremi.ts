@@ -201,15 +201,12 @@ async function serve(options: CliOptions): Promise<void> {
   // await the 30s retry; a process that cannot take its lock exits non-zero, and
   // compose's `restart: unless-stopped` starts a fresh attempt. The local SQLite
   // arm has no cross-process fan-out, so the guard is a no-op there.
-  const roleConfiguration = resolveStartupApiRole(process.env);
-  const apiRole = roleConfiguration.role;
+  const apiRoleConfiguration = resolveStartupApiRole(process.env);
   const roleGuard = await startHubRoleGuard({
     databaseUrl: process.env.MULTIREMI_DATABASE_URL,
-    locks: locksForRole(apiRole, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
+    locks: locksForRole(apiRoleConfiguration.role, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
   });
-  const server = startMultiremiServer({
-    port, hostname: host, authToken: token, apiRoleConfiguration: roleConfiguration,
-  });
+  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRoleConfiguration });
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
   await waitForShutdown(async () => {
     server.stop(true);
@@ -794,10 +791,12 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
-    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
-    idempotencyKey: delivery.idempotencyKey })).messageId;
+    card: card!,
+    idempotencyKey: questionCardIdempotencyKey(card!, delivery.idempotencyKey) })).messageId;
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
   const registration = registerTaskInteraction({ appId: handle.appId, messageId, agentName, sessionId });

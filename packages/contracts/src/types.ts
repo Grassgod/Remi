@@ -4633,7 +4633,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
    */
   humanRequestTaskId?: string;
   human_request_task_id?: string;
-  /** A decision patch target or the original inbound message a receipt updates. */
+  /** Card patch/reminder target or the original inbound message a receipt updates. */
   targetMessageId?: string;
   target_message_id?: string;
   /**

@@ -15,7 +15,8 @@ import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
-import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
+import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION,
+  preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -3443,6 +3444,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     backfillConversationLogWithinTransaction(db);
   });
   migrateTaskExecutionScope(db);
+  runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
+    preparePendingTurnConstraintsWithinTransaction(db);
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 

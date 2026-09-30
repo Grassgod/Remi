@@ -200,6 +200,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     return decision;
   }
 
+  // Three cold stores perform durable schema checks and two upgrades on real PG.
   it("upgrades the Postgres 828291b9 schema twice without losing existing rows", () => {
     const upgradeDb = new PostgresSyncDatabase(pgUrl(UPGRADE_DB));
     const baselineStore = new MultiremiStore(upgradeDb);
@@ -228,7 +229,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     ).all() as Array<{ indexname: string }>;
     expect(indexes.map(row => row.indexname)).toContain("idx_multiremi_feishu_bot_outbound_decision");
     upgradeDb.close();
-  });
+  }, 15_000);
 
   it("sends one card, then exactly one reminder inside the window", () => {
     const scope = scaffold();

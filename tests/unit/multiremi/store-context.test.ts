@@ -3,7 +3,8 @@
 // facade exposes (listener Sets, analytics buffers) and that its lazy host
 // getter resolves back into the store for cross-domain lookups.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
@@ -11,7 +12,7 @@ import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
 let db: Database | null = null;
 
 function createStore(): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
 }
 

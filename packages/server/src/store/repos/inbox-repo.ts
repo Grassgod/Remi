@@ -91,7 +91,14 @@ export class InboxRepo {
         ? { kind: "issue", issueSessionId: recipient.issueSessionId, agentId: recipient.agentId,
           executionScope: recipient.executionScope }
         : { kind: "chat", chatSessionId: recipient.chatSessionId!, agentId: recipient.agentId, issueId: recipient.issueId };
-      const reason = env.to.role === "relay" ? "relay" : `envelope:${env.kind}`;
+      const sourceIssue = env.source.issueId ? this.ctx.issues().getIssue(env.source.issueId) : null;
+      const reason = env.to.role === "relay" ? "relay"
+        : env.to.role === "delegator" ? "delegation_return"
+        : env.source.decisionId ? "decision"
+        : env.kind === "lifecycle" ? "dependency"
+        : sourceIssue && sourceIssue.id !== recipient.issueId
+          ? sourceIssue.parentIssueId === recipient.issueId ? "child_status" : "dependency"
+          : `envelope:${env.kind}`;
       const turn: EnsurePendingTurnResult = stored.deduplicated || env.wake === "inbox_only"
         ? { task: null, action: "none" }
         : this.ctx.tasks().ensurePendingTurnWithinTransaction({
@@ -103,13 +110,28 @@ export class InboxRepo {
               agentId: recipient.agentId, issueId: recipient.issueId, issueSessionId: recipient.issueSessionId,
               chatSessionId: recipient.chatSessionId, workspaceId: recipient.workspaceId,
               prompt: `读收件箱\n\n${sessionId}:${stored!.entry.seq} (${stored!.entry.id})`,
-              parentTaskId: null, wakeSource: reason, preserveIssueStatus: true,
+              parentTaskId: env.to.role === "delegator" ? sourceTask?.id ?? null : null,
+              wakeSource: reason, preserveIssueStatus: true,
               triggerCommentId: recipient.issueSessionId ? stored!.entry.id : null,
+              ...(env.to.role === "delegator" && sourceTask ? {
+                delegationId: sourceTask.delegationId,
+                delegatedByAgentId: recipient.agentId,
+                priority: sourceTask.priority,
+                assignmentAuthorType: "system" as const,
+                assignmentAuthorId: null,
+              } : {}),
               ...(lane.kind === "chat" ? { holdsWorkspace: false, requestingUserName: "Multiremi" } : {}),
             }, collector, deferredEvents, undefined, recipient.executionScope);
           },
         });
       if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
+      if (turn.action === "coalesced" && turn.task!.wakeSource === "re_ring") {
+        // Replace the recovery range with the concrete entry that just arrived.
+        this.ctx.db.run("UPDATE multiremi_tasks SET prompt = ? WHERE id = ? AND status = 'queued'", [
+          `读收件箱\n\n${sessionId}:${stored.entry.seq} (${stored.entry.id})`, turn.task!.id,
+        ]);
+        turn.task = this.ctx.tasks().getTask(turn.task!.id)!;
+      }
       deliveries.push({ recipient, entry: stored.entry, deduplicated: stored.deduplicated, ...turn });
     }
     return deliveries;
@@ -157,10 +179,11 @@ export class InboxRepo {
             AND agent_id <> delegated_by_agent_id ORDER BY created_at DESC, id DESC LIMIT 1`)
           .get(address.delegationId) as { id: string } | null)?.id;
         const source = sourceId ? this.ctx.tasks().getTask(sourceId) : null;
-        if (!source || source.delegationId !== address.delegationId || !source.delegatedByAgentId || !source.delegatedFromIssueSessionId) {
+        const sessionId = source?.delegatedFromIssueSessionId ?? source?.issueSessionId;
+        if (!source || source.delegationId !== address.delegationId || !source.delegatedByAgentId || !sessionId) {
           throw new Error("Envelope delegation has no return recipient");
         }
-        const session = this.ctx.issueSessions().getIssueSession(source.delegatedFromIssueSessionId);
+        const session = this.ctx.issueSessions().getIssueSession(sessionId);
         if (!session) throw new Error("Envelope delegation return session not found");
         const parent = source.parentTaskId ? this.ctx.tasks().getTask(source.parentTaskId) : null;
         const scope = parent?.agentId === source.delegatedByAgentId && parent.issueSessionId === session.id

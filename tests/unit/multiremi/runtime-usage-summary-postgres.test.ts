@@ -10,7 +10,8 @@
  * Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the configured role may CREATE DATABASE.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -185,7 +186,7 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     pg = new RecordingPostgresDb(url);
     pgStore = new MultiremiStore(pg);
     pgRuntimes = seed(pgStore, pg);
-    sqlite = new Database(":memory:");
+    sqlite = openSqliteDatabase(":memory:");
     sqliteStore = new MultiremiStore(sqlite);
     sqliteRuntimes = seed(sqliteStore, sqlite);
   }, 120_000);

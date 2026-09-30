@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,7 +59,7 @@ function assertContiguous(db: SqlDatabase): void {
 async function withSqlite(run: (db: Database, path: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mul426-sqlite-"));
   const path = join(dir, "test.sqlite");
-  const db = new Database(path);
+  const db = openSqliteDatabase(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 30000");
   new MultiremiStore(db);
   try { await run(db, path); } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
@@ -309,9 +310,9 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeStatus = store.getIssue(issue.id)?.status;
-  // MUL-406 S1 (ADR 0003): child status commits; the notification hook transaction rolls back in full.
+  // ADR 0012: state, system comment and pending turn roll back together.
   expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
-  expect(store.getIssue(child.id)?.status).toBe("done");
+  expect(store.getIssue(child.id)?.status).toBe(child.status);
   expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);
   expect(parentLog()).toEqual(beforeLog);

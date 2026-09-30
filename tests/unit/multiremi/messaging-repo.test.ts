@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -9,7 +10,7 @@ import { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 let db: Database | null = null;
 
 function createRepo(): MessagingRepo {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   const sqlDatabase = db as unknown as SqlDatabase;
   runMigrations(sqlDatabase);
   return new MessagingRepo({ db: sqlDatabase } as Pick<StoreContext, "db">);

@@ -33,7 +33,8 @@
 //   3. The fixture pins id generation, because two of the collisions are with
 //      generated member `user_id`s.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -90,7 +91,8 @@ function countingDatabase(raw: Database, counter: { statements: number }): SqlDa
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return {
+  return markSqliteDialect<SqlDatabase>({
+    get inTransaction() { return raw.inTransaction; },
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -103,11 +105,11 @@ function countingDatabase(raw: Database, counter: { statements: number }): SqlDa
     },
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
-  };
+  });
 }
 
 async function createHarness(): Promise<Harness> {
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   databases.push(raw);
   const counter = { statements: 0 };
   const store = new MultiremiStore(countingDatabase(raw, counter));

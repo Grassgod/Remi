@@ -2,6 +2,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 export const TASK_EXECUTION_SCOPE_MIGRATION = "20260929_tasks_execution_scope";
+export const PENDING_TURN_MIGRATION = "20260929_tasks_one_pending_turn";
 
 /** Historical derivation, used only when backfilling the stored lane key. */
 export function executionScopeSql(alias: string): string {
@@ -116,7 +117,7 @@ export function collapsePendingTurnsWithinTransaction(db: SqlDatabase): void {
   }
 }
 
-/** Stage three registers this operation under its own migration id. */
+/** Folding, verification and indexes share the caller's migration transaction. */
 export function preparePendingTurnConstraintsWithinTransaction(db: SqlDatabase): void {
   collapsePendingTurnsWithinTransaction(db);
   createPendingTurnIndexesWithinTransaction(db);

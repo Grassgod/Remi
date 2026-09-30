@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "../../../../packages/server/src/store/db/sqlite.ts";
 import { MultiremiStore } from "../../../../packages/server/src/store/store.ts";
 import { startMultiremiServer } from "../../../../packages/server/src/api/server.ts";
 
 const marker = process.env.MUL472_R4_FIXTURE_AUTH;
 if (!marker) throw new Error("MUL472_R4_FIXTURE_AUTH is required for the local fixture");
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 const workspace = store.ensureLocalWorkspace();
 const user = store.getCurrentUser();

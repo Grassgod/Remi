@@ -179,7 +179,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
       });
     }, 30_000);
 
-    test(`${backend}: legacy delegation coverage and claim coverage cancel a queued turn only once`, async () => {
+    test(`${backend}: a coalesced delegation return is skipped at claim only after its report is covered`, async () => {
       await withStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
         const runtime = store.registerRuntime({ name: "Return runtime", provider: "codex" });
@@ -197,9 +197,14 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           prompt: "Pending review", wakeSource: "child_status" });
         store.completeTask(source.id, { output: "Report", sessionId: "provider_delegate" });
         const oldSkips = db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'delegation_return_skipped'").all(issue.id) as Array<{ data: string }>;
-        expect(oldSkips.some(row => JSON.parse(row.data).reason === "covered_by_queued_task")).toBe(true);
+        expect(oldSkips).toHaveLength(0);
         expect(store.getTask(queued.id)?.status).toBe("queued");
+        expect(store.listTasksForIssue(issue.id).filter(task => task.status === "queued" && task.agentId === leader.id))
+          .toHaveLength(1);
+        const returnWakeSeq = Number(db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(queued.id).wake_seq);
+        expect(returnWakeSeq).toBeGreaterThan(0);
         const cursor = store.getConversationLogHead(session.id)!.headSeq;
+        expect(cursor).toBeGreaterThanOrEqual(returnWakeSeq);
         store.getOrCreateSessionAgentLane(session.id, leader.id);
         db.run("UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ?", [cursor, session.id, leader.id]);
         db.run("UPDATE multiremi_tasks SET wake_seq = ? WHERE id = ?", [cursor, queued.id]);
@@ -208,6 +213,30 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_skipped'").get(issue.id).n)).toBe(1);
         expect(store.claimTask(runtime.id)).toBeNull();
         expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_skipped'").get(issue.id).n)).toBe(1);
+      });
+    }, 30_000);
+
+    test(`${backend}: an unread delegation return remains claimable`, async () => {
+      await withStore(backend, (store, db) => {
+        store.ensureLocalWorkspace();
+        const runtime = store.registerRuntime({ name: "Return runtime", provider: "codex" });
+        const leader = store.createAgent({ name: "Leader", provider: "codex", runtimeId: runtime.id });
+        const worker = store.createAgent({ name: "Worker", provider: "codex", runtimeId: runtime.id });
+        const issue = store.createIssue({ title: "Unread return", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const source = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id,
+          prompt: "Delegated work", delegationId: "dlg_unread", delegatedByAgentId: leader.id,
+          delegatedFromIssueSessionId: session.id });
+        expect(store.claimTask(runtime.id)?.id).toBe(source.id);
+        daemonTaskClaimResponse(store, store.getTaskWithAgent(source.id)!);
+        store.startTask(source.id);
+        store.completeTask(source.id, { output: "Report", sessionId: "provider_delegate" });
+        const queued = store.listTasksForIssue(issue.id).filter(task => task.status === "queued" && task.agentId === leader.id);
+        expect(queued).toHaveLength(1);
+        expect(queued[0]!.wakeSource).toBe("delegation_return");
+        expect(store.claimTask(runtime.id)?.id).toBe(queued[0]!.id);
+        expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_skipped'").all(issue.id))
+          .toHaveLength(0);
       });
     }, 30_000);
   }

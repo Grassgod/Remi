@@ -34,6 +34,7 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createReadPool, type ReadPool } from "@multiremi/store/db/read-pool.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
+import type { ApiRole } from "@multiremi/config/api-role.js";
 
 /** The codes a refused `stream.subscribe` can carry (see the C0 contract). */
 export type StreamSubscribeDenialCode = "invalid_payload" | "forbidden" | "wrong_endpoint" | "unavailable";
@@ -293,11 +294,11 @@ export function createPostgresStreamAuthReader(pool: ReadPool): StreamAuthReader
  */
 export function createStreamAuthReader(
   store: MultiremiStore,
-  options: { pool?: ReadPool | null } = {},
+  options: { pool?: ReadPool | null; role?: ApiRole } = {},
 ): StreamAuthReader {
   if (process.env.NODE_ENV === "test") return createSqliteStreamAuthReader(store);
   if (!isPostgresConfigured()) return createSqliteStreamAuthReader(store);
-  const pool = options.pool ?? createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL });
+  const pool = options.pool ?? createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: options.role });
   return createPostgresStreamAuthReader(pool);
 }
 

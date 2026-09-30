@@ -126,9 +126,10 @@ this ADR owns only what the hub puts on it and what the receiver does with a
 pointer. There is no second peer link: 7/6's `/internal/hub`,
 `X-Peer-Secret`, `api/role.ts` and `EventBridge` are superseded by MUL-461/462. The
 head pointer is the whole payload, so the channel's ≤200ms budget is comfortable.
-MUL-462's receiver-side 「可能漏了」 signal is what makes the hub **reconcile**: on
-that signal a process re-reads the head of every stream it holds and fills the
-difference, which is also the recovery path after the channel reconnects.
+The Hub adapter detects loss with its own pre-enqueue sequence and sender epoch;
+MUL-462's batch sequence cannot reveal a queue eviction. A new epoch or a gap
+makes the process **reconcile**: it re-reads the head of every subscribed log stream and fills the
+difference. A link that reconnects with continuous sequence numbers needs no reconciliation.
 
 The role guard is an advisory lock **per role**, not one global lock: C1 takes
 `pg_try_advisory_lock(hashtext('remi:hub:ui'))` or
@@ -212,9 +213,9 @@ stream never enters it. Because the pointer is derived from the database rather
 than from a durable queue, a dropped or late pointer cannot lose data — the
 receiver's reconcile pass re-reads the head and fills the difference.
 
-Three implementation details deliberately stay out of this decision and land in
-the ADR when **C1 (MUL-436)** builds them: the peer adapter itself, the `/readyz`
-`hub.*` fields and the per-role read-pool sizes. C0 fixes the decision only.
+Hub peer counters and link state are reported in `/health.hub`; `/readyz` keeps
+the role response from main and does not depend on peer health. A silent peer
+link marks `peer_link=stale` after 15 seconds without forcing a reconciliation.
 
 ### 6. Close codes: four are terminal, everything else reconnects
 

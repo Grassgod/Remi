@@ -11,7 +11,7 @@
  * DATABASE.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   createReadPool,
   isReadOnlySelect,
@@ -29,6 +29,7 @@ import {
 } from "@multiremi/store/db/read-pool.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-calls.js";
+import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
 import {
   SQL_CONTEXTUAL_KEYWORD_HEADS,
   SQL_UNCONDITIONAL_KEYWORD_HEADS,
@@ -191,7 +192,7 @@ describe("read pool: the SELECT gate", () => {
   });
 
   it("rejects a write before it ever reaches a connection", async () => {
-    const sqlite = new SqliteReadPool(new Database(":memory:") as unknown as SqlDatabase);
+    const sqlite = new SqliteReadPool(openSqliteDatabase(":memory:") as unknown as SqlDatabase);
     await expect(sqlite.query("DELETE FROM multiremi_tasks")).rejects.toBeInstanceOf(
       ReadPoolNotSelectError,
     );
@@ -495,7 +496,7 @@ describe("read pool: error → status mapping", () => {
 
 describe("read pool: SQLite degradation", () => {
   it("reads through the synchronous handle and reports itself as non-Postgres", async () => {
-    const db = new Database(":memory:") as unknown as SqlDatabase;
+    const db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
     db.exec("CREATE TABLE probe (id INTEGER NOT NULL, name TEXT)");
     db.run("INSERT INTO probe (id, name) VALUES (?, ?)", 1, "one");
     db.run("INSERT INTO probe (id, name) VALUES (?, ?)", 2, "two");
@@ -524,7 +525,7 @@ describe("read pool: SQLite degradation", () => {
   });
 
   it("still refuses writes", async () => {
-    const db = new Database(":memory:") as unknown as SqlDatabase;
+    const db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
     db.exec("CREATE TABLE probe (id INTEGER NOT NULL)");
     const pool = createReadPool({ databaseUrl: "", sqliteDb: db });
     await expect(pool.query("INSERT INTO probe (id) VALUES (1)")).rejects.toBeInstanceOf(
@@ -546,6 +547,17 @@ describe("read pool: SQLite degradation", () => {
     expect(pool).toBeInstanceOf(PostgresReadPool);
     expect(pool.postgres).toBe(true);
     await pool.close();
+  });
+
+  it("uses each process's resolved role for capacity, independent of ambient role", async () => {
+    const url = "postgres://placeholder:placeholder@127.0.0.1:1/none";
+    const ui = createReadPool({ databaseUrl: url, role: resolveStartupApiRole({ MULTIREMI_API_ROLE: "ui" }).role });
+    const runtime = createReadPool({ databaseUrl: url, role: resolveStartupApiRole({ MULTIREMI_API_ROLE: "runtime" }).role });
+    const defaultPool = createReadPool({ databaseUrl: url });
+    expect((ui as PostgresReadPool).capacity).toEqual({ maxConnections: 4, queueLimit: 64 });
+    expect((runtime as PostgresReadPool).capacity).toEqual({ maxConnections: 2, queueLimit: 16 });
+    expect((defaultPool as PostgresReadPool).capacity).toEqual({ maxConnections: 4, queueLimit: 64 });
+    await Promise.all([ui.close(), runtime.close(), defaultPool.close()]);
   });
 });
 
