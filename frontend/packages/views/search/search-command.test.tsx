@@ -34,6 +34,7 @@ const {
   mockTheme,
   mockPathname,
   mockGetShareableUrl,
+  mockRecentQueryEnabledCalls,
   mockMembers,
   mockOpenModal,
   mockToastSuccess,
@@ -48,6 +49,7 @@ const {
   mockTheme: { current: "system" as "light" | "dark" | "system" },
   mockPathname: { current: "/ws-test/issues" as string },
   mockGetShareableUrl: vi.fn((p: string) => `https://app.multimira/${p}`),
+  mockRecentQueryEnabledCalls: vi.fn(),
   mockMembers: {
     current: [] as Array<{
       id: string;
@@ -148,8 +150,12 @@ vi.mock("@tanstack/react-query", () => ({
     if (opts.enabled === false) return { data: undefined };
     return { data: resolveIssue(key) };
   },
-  useQueries: (opts: { queries: Array<{ queryKey: readonly unknown[] }> }) =>
-    opts.queries.map((q) => ({ data: resolveIssue(q.queryKey) })),
+  useQueries: (opts: { queries: Array<{ queryKey: readonly unknown[]; enabled?: boolean }> }) => {
+    mockRecentQueryEnabledCalls(opts.queries.map((q) => q.enabled ?? true));
+    return opts.queries.map((q) => ({
+      data: q.enabled === false ? undefined : resolveIssue(q.queryKey),
+    }));
+  },
 }));
 
 vi.mock("../navigation", () => ({
@@ -183,6 +189,7 @@ describe("SearchCommand", () => {
     mockOpenModal.mockReset();
     mockToastSuccess.mockReset();
     mockClipboardWrite.mockReset().mockResolvedValue(undefined);
+    mockRecentQueryEnabledCalls.mockReset();
 
     // cmdk calls scrollIntoView on the first selected item, which jsdom doesn't implement
     Element.prototype.scrollIntoView = vi.fn();
@@ -392,6 +399,38 @@ describe("SearchCommand", () => {
 
     expect(mockPush).toHaveBeenCalledWith("/ws-test/members/user-1");
     expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("does not resolve recents until the panel is open (MUL-472 b)", () => {
+    mockRecentItems.current = [
+      { id: "issue-1", visitedAt: 2 },
+      { id: "issue-2", visitedAt: 1 },
+    ];
+    mockAllIssues.current = [
+      { id: "issue-1", identifier: "MUL-1", title: "One", status: "todo" },
+      { id: "issue-2", identifier: "MUL-2", title: "Two", status: "done" },
+    ];
+
+    // Closed: every recent-detail query is gated off.
+    act(() => {
+      useSearchStore.setState({ open: false });
+    });
+    mockRecentQueryEnabledCalls.mockClear();
+    const closed = render(<SearchCommand />, { wrapper: I18nWrapper });
+    const closedCalls = mockRecentQueryEnabledCalls.mock.calls.flat().flat();
+    expect(closedCalls.length).toBeGreaterThan(0);
+    expect(closedCalls.every((enabled) => enabled === false)).toBe(true);
+    closed.unmount();
+
+    // Open: the same queries are enabled.
+    mockRecentQueryEnabledCalls.mockClear();
+    act(() => {
+      useSearchStore.setState({ open: true });
+    });
+    renderSearch();
+    const openCalls = mockRecentQueryEnabledCalls.mock.calls.flat().flat();
+    expect(openCalls.length).toBeGreaterThan(0);
+    expect(openCalls.every((enabled) => enabled === true)).toBe(true);
   });
 
   it("renders recent issues from query cache joined with store visit records", () => {

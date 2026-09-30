@@ -660,7 +660,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect((await app.request(`/api/runtimes/${runtime.id}/activity`)).status).toBe(200);
     const deletedRuntime = await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" });
     expect(deletedRuntime.status).toBe(200);
-    expect(await deletedRuntime.json()).toEqual({ status: "ok" });
+    expect(await deletedRuntime.json()).toEqual({ status: "ok", issue_workspaces_abandoned: 0 });
 
     const removable = store.createWorkspace({ name: "Removable Team", slug: "removable-team" });
     expect((await app.request(`/api/workspaces/${removable.id}`, { method: "DELETE" })).status).toBe(204);
@@ -1323,7 +1323,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       body: JSON.stringify({ expected_active_agent_ids: [agent.id] }),
     });
     const cascadeBody = await cascade.json();
-    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2 });
+    expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2, issue_workspaces_abandoned: 0 });
     expect(store.getRuntime(runtime.id)).toBeNull();
     expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
     expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();

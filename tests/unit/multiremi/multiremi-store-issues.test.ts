@@ -6,6 +6,8 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
+import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -238,8 +240,8 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.agentId).toBe(agent.id);
     expect(tasks[0]?.triggerCommentId).toBe(comments[0]?.id);
-    // MUL-400 E2: the round states which ending it reports.
-    expect(tasks[0]?.prompt).toContain("A sub-issue under this issue reported is done.");
+    expect(inboxReportBody(store, tasks[0]!)).toContain("is done");
+    expect(tasks[0]?.prompt).not.toContain(comments[0]!.body);
     expect(comments[0]?.body).toContain("is done");
     expect(comments[0]?.body).not.toContain("read each sibling's description");
 
@@ -350,11 +352,12 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const coalescedTasks = store.listTasksForIssue(busyParent.id).filter((task) => task.status === "queued");
     expect(coalescedTasks).toHaveLength(1);
     expect(coalescedTasks[0]?.id).toBe(queuedRound.id);
-    expect(coalescedTasks[0]?.prompt).toContain("## Additional Sub-Issue Report");
-    expect(coalescedTasks[0]?.prompt).toContain("Outcome: blocked");
-    expect(coalescedTasks[0]?.prompt).toContain("Outcome: cancelled");
+    const body = inboxReportBody(store, coalescedTasks[0]!);
+    expect(body).toContain("is blocked");
+    expect(body).toContain("was cancelled");
+    expect(coalescedTasks[0]?.prompt).toBe(queuedRound.prompt);
     expect(store.listIssueActivity(busyParent.id)
-      .filter((activity) => activity.type === "child_status_parent_coalesced")).toHaveLength(2);
+      .filter((activity) => activity.type === "pending_turn_coalesced")).toHaveLength(2);
     const notifications = store.listIssueComments(busyParent.id)
       .filter((comment) => comment.authorType === "system" && comment.body.includes("Sibling"));
     expect(notifications).toHaveLength(2);
@@ -473,9 +476,8 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const activity = store.listIssueActivity(issue.id).filter((item) => item.type === "comment_assignee_triggered");
     expect(activity).toHaveLength(1);
 
-    // Each human comment dispatches individually — no batching.
     store.createIssueComment(issue.id, { body: "One more thing." });
-    expect(store.listTasks()).toHaveLength(2);
+    expect(store.listTasks()).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 2);
   });
 
   it("suppresses assignee auto-response when the comment addresses someone explicitly", () => {

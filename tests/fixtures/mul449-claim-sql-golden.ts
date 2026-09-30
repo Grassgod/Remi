@@ -102,6 +102,11 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
           AND project_device.daemon_id = ?
       )
     )
+    OR EXISTS (
+      SELECT 1 FROM multiremi_runtime_workspaces rw
+      WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+        AND rw.daemon_id = ? AND rw.archived_at IS NULL
+    )
   )
 )
            AND (
@@ -175,11 +180,7 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
                AND ((t.runtime_workspace_id IS NOT NULL AND active.runtime_workspace_id = t.runtime_workspace_id)
     OR (active.agent_id = t.agent_id AND (
     (t.issue_session_id IS NOT NULL AND active.issue_session_id = t.issue_session_id
-      AND (CASE WHEN t.delegated_by_agent_id IS NOT NULL
-    AND t.agent_id <> t.delegated_by_agent_id
-    THEN COALESCE(t.delegation_id, '') ELSE '' END) = (CASE WHEN active.delegated_by_agent_id IS NOT NULL
-    AND active.agent_id <> active.delegated_by_agent_id
-    THEN COALESCE(active.delegation_id, '') ELSE '' END))
+      AND t.execution_scope = active.execution_scope)
     OR (t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
     OR (t.issue_id IS NOT NULL AND t.issue_session_id IS NULL
       AND active.issue_id = t.issue_id AND active.issue_session_id IS NULL)

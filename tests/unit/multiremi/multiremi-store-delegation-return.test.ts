@@ -3,6 +3,8 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
 import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
+import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 
 const FEISHU_APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousFeishuEncryptionKey: string | undefined;
@@ -270,7 +272,10 @@ describe("task-level agent delegation return", () => {
     });
     const firstReturnId = fixture.store.getTask(fixture.childTask.id)!.delegationReturnTaskId!;
     expect(firstReturnId).toBeTruthy();
-    expect(fixture.store.getTask(firstReturnId)?.prompt).toContain("first result");
+    const firstReturn = fixture.store.getTask(firstReturnId)!;
+    const firstEntry = inboxReportEntry(fixture.store, firstReturn, fixture.childTask.id);
+    expect(firstEntry.body_md).toContain("first result");
+    expect(firstReturn.prompt).toBe(`读收件箱\n\n${firstReturn.issueSessionId}:${firstEntry.seq} (${firstEntry.id})`);
     expect(fixture.store.claimTask(fixture.leaderRuntime.id)?.id).toBe(firstReturnId);
     fixture.store.buildTaskSessionProjection(firstReturnId);
     fixture.store.startTask(firstReturnId);
@@ -293,7 +298,10 @@ describe("task-level agent delegation return", () => {
     const secondReturnId = fixture.store.getTask(continued.id)!.delegationReturnTaskId!;
     expect(secondReturnId).toBeTruthy();
     expect(secondReturnId).not.toBe(firstReturnId);
-    expect(fixture.store.getTask(secondReturnId)?.prompt).toContain("second result");
+    const secondReturn = fixture.store.getTask(secondReturnId)!;
+    const secondEntry = inboxReportEntry(fixture.store, secondReturn, continued.id);
+    expect(secondEntry.body_md).toContain("second result");
+    expect(secondReturn.prompt).toBe(`读收件箱\n\n${secondReturn.issueSessionId}:${secondEntry.seq} (${secondEntry.id})`);
     const duplicate = fixture.store.ensureDelegationWakeup({
       sourceTaskId: continued.id,
       requiredEventSeq: 1,
@@ -471,7 +479,7 @@ describe("task-level agent delegation return", () => {
     expect(qaTasks[0]!.continuedFromTaskId).toBeNull();
 
     const coalesced = store.listIssueActivity(issue.id)
-      .filter((activity) => activity.type === "comment_mention_coalesced");
+      .filter((activity) => activity.type === "pending_turn_coalesced");
     expect(coalesced).toHaveLength(1);
     expect(coalesced[0]!.data).toMatchObject({ commentId: summary.id, agentId: qa.id, taskId: qaTasks[0]!.id });
   });
@@ -508,7 +516,7 @@ describe("task-level agent delegation return", () => {
     expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id)).toHaveLength(2);
   });
 
-  it("dispatches every human rich mention individually without coalescing", () => {
+  it("human mentions follow the Q-B constant", () => {
     const store = createStore();
     const qa = store.createAgent({ name: "QA", provider: "claude" });
     const issue = store.createIssue({ title: "Human mentions" });
@@ -522,9 +530,11 @@ describe("task-level agent delegation return", () => {
       body: `And this too [@QA](mention://agent/${qa.id})`,
     });
 
-    expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id)).toHaveLength(2);
+    expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id))
+      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 2);
     expect(store.listIssueActivity(issue.id)
-      .filter((activity) => activity.type === "comment_mention_coalesced")).toHaveLength(0);
+      .filter((activity) => activity.type === "pending_turn_coalesced"))
+      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 0);
   });
 
   it("coalesces a later delegation report into the leader's unfrozen queued return", () => {
@@ -568,12 +578,12 @@ describe("task-level agent delegation return", () => {
     );
     expect(returns).toHaveLength(1);
     expect(returns[0]?.id).toBe(firstReturn.id);
-    expect(returns[0]?.prompt).toContain("First report is complete.");
-    expect(returns[0]?.prompt).toContain("Second report is complete.");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("First report is complete.");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("Second report is complete.");
     expect(fixture.store.getTask(secondTask.id)?.delegationReturnTaskId).toBe(firstReturn.id);
     expect(fixture.store.listIssueActivity(fixture.issue.id).some((activity) =>
-      activity.type === "delegation_return_skipped"
-      && (activity.data as Record<string, unknown>).reason === "coalesced_into_pending_return"
+      activity.type === "pending_turn_coalesced"
+      && (activity.data as Record<string, unknown>).task_id === firstReturn.id
     )).toBeTrue();
   });
 
@@ -623,7 +633,7 @@ describe("task-level agent delegation return", () => {
     );
     expect(returns).toHaveLength(2);
     const secondReturn = returns.find((task) => task.id !== firstReturn.id)!;
-    expect(secondReturn.prompt).toContain("Report after the frozen leader prompt.");
+    expect(inboxReportBody(fixture.store, secondReturn)).toContain("Report after the frozen leader prompt.");
     expect(fixture.store.getTask(secondTask.id)?.delegationReturnTaskId).toBe(secondReturn.id);
   });
 
@@ -643,8 +653,8 @@ describe("task-level agent delegation return", () => {
     expect(fixture.store.getTask(queuedLeaderTask.id)?.prompt).toBe("Keep this human-triggered prompt unchanged.");
     expect(fixture.store.getTask(fixture.childTask.id)?.delegationReturnTaskId).toBe(queuedLeaderTask.id);
     expect(fixture.store.listIssueActivity(fixture.issue.id).some((activity) =>
-      activity.type === "delegation_return_skipped"
-      && (activity.data as Record<string, unknown>).reason === "covered_by_queued_task"
+      activity.type === "pending_turn_coalesced"
+      && (activity.data as Record<string, unknown>).task_id === queuedLeaderTask.id
     )).toBeTrue();
 
     fixture.store.cancelTask(queuedLeaderTask.id);
@@ -653,7 +663,7 @@ describe("task-level agent delegation return", () => {
       && task.agentId === fixture.leader.id
       && task.delegatedByAgentId === fixture.leader.id
     )!;
-    expect(replacement.prompt).toContain("Report covered by another queued leader task.");
+    expect(inboxReportBody(fixture.store, replacement)).toContain("Report covered by another queued leader task.");
     expect(fixture.store.getTask(fixture.childTask.id)?.delegationReturnTaskId).toBe(replacement.id);
   });
 
@@ -688,8 +698,8 @@ describe("task-level agent delegation return", () => {
 
     const returns = leaderReturnTasks(fixture);
     expect(returns).toHaveLength(1);
-    expect(returns[0]?.prompt).toContain("First aggregated report.");
-    expect(returns[0]?.prompt).toContain("Second aggregated report.");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("First aggregated report.");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("Second aggregated report.");
     expect(fixture.store.getTask(fixture.firstTask.id)?.delegationReturnTaskId).toBe(returns[0]?.id);
     expect(fixture.store.getTask(fixture.secondTask.id)?.delegationReturnTaskId).toBe(returns[0]?.id);
     const triggered = fixture.store.listIssueActivity(fixture.issue.id).find((activity) =>
@@ -713,9 +723,9 @@ describe("task-level agent delegation return", () => {
 
     const returns = leaderReturnTasks(fixture);
     expect(returns).toHaveLength(1);
-    expect(returns[0]?.prompt).toContain("First delegate failed definitively.");
-    expect(returns[0]?.prompt).toContain("Status: failed");
-    expect(returns[0]?.prompt).toContain("Status: cancelled");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("First delegate failed definitively.");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("Status: failed");
+    expect(inboxReportBody(fixture.store, returns[0]!)).toContain("Status: cancelled");
     expect(fixture.store.getTask(fixture.firstTask.id)?.delegationReturnTaskId).toBe(returns[0]?.id);
     expect(fixture.store.getTask(fixture.secondTask.id)?.delegationReturnTaskId).toBe(returns[0]?.id);
   });
@@ -773,11 +783,13 @@ describe("task-level agent delegation return", () => {
       status: "queued",
       delegatedByAgentId: fixture.leader.id,
     });
-    expect(leaderReturn.prompt).toContain("QA completed a task you delegated");
-    expect(leaderReturn.prompt).toContain("QA passed; verified the permission boundary.");
-    expect(leaderReturn.prompt).toContain("other delegated tasks that are still queued or running");
-    expect(leaderReturn.prompt).toContain("one round delivery summary");
-    expect(leaderReturn.prompt).not.toContain("communicate the final outcome to the user");
+    const reportBody = inboxReportBody(fixture.store, leaderReturn);
+    expect(reportBody).toContain("QA completed a task you delegated");
+    expect(reportBody).toContain("QA passed; verified the permission boundary.");
+    expect(reportBody).toContain("other delegated tasks that are still queued or running");
+    expect(reportBody).toContain("one round delivery summary");
+    expect(reportBody).not.toContain("communicate the final outcome to the user");
+    expect(leaderReturn.prompt).not.toContain("QA passed; verified the permission boundary.");
     expect(fixture.store.getIssue(fixture.issue.id)?.status).toBe("todo");
 
     expect(fixture.store.claimTask(fixture.leaderRuntime.id)?.id).toBe(leaderReturn.id);
@@ -811,7 +823,7 @@ describe("task-level agent delegation return", () => {
     let returned = delegationTasks(fixture);
     expect(returned).toHaveLength(2);
     let leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
-    expect(leaderReturn.prompt).toContain("QA requested your attention");
+    expect(fixture.store.getConversationLogEntryById(report.id)!.body_md).toBe(report.body);
     expect(leaderReturn.triggerCommentId).toBe(report.id);
 
     fixture.store.createIssueComment(fixture.issue.id, {
@@ -822,8 +834,8 @@ describe("task-level agent delegation return", () => {
     });
     expect(delegationTasks(fixture)).toHaveLength(2);
     expect(fixture.store.listIssueActivity(fixture.issue.id)
-      .some((activity) => activity.type === "delegation_return_skipped"
-        && (activity.data as Record<string, unknown>).reason === "already_covered"))
+      .some((activity) => activity.type === "pending_turn_coalesced"
+        && (activity.data as Record<string, unknown>).task_id === leaderReturn.id))
       .toBeTrue();
 
     fixture.store.completeTask(fixture.childTask.id, {
@@ -835,8 +847,8 @@ describe("task-level agent delegation return", () => {
     returned = delegationTasks(fixture);
     expect(returned).toHaveLength(2);
     leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
-    expect(leaderReturn.prompt).toContain("QA finished successfully.");
-    expect(leaderReturn.triggerCommentId).toBe(report.id);
+    expect(inboxReportBody(fixture.store, leaderReturn)).toContain("QA finished successfully.");
+    expect(leaderReturn.triggerCommentId).toBeNull();
     fixture.store.updateIssueComment(report.id, { body: "QA found no blocker." });
     expect(fixture.store.getTask(leaderReturn.id)?.status).toBe("queued");
     expect(fixture.store.listIssueActivity(fixture.issue.id)
@@ -872,7 +884,7 @@ describe("task-level agent delegation return", () => {
     expect(leaderReturns).toHaveLength(2);
     const terminalReturn = leaderReturns.find((task) => task.id !== firstReturn.id)!;
     expect(terminalReturn).toMatchObject({ status: "queued", projectionToSeq: null });
-    expect(terminalReturn.prompt).toContain("Final QA report arrived after the leader prompt froze.");
+    expect(inboxReportBody(fixture.store, terminalReturn)).toContain("Final QA report arrived after the leader prompt froze.");
   });
 
   it("waits for the final infrastructure retry before returning failure to the leader", () => {
@@ -887,7 +899,7 @@ describe("task-level agent delegation return", () => {
       const returns = delegationTasks(fixture).filter((task) => task.agentId === fixture.leader.id);
       expect(returns).toHaveLength(expectedAttempt === 3 ? 1 : 0);
       if (expectedAttempt === 3) {
-        expect(returns[0]?.prompt).toContain("runtime failed on attempt 3");
+        expect(inboxReportBody(fixture.store, returns[0]!)).toContain("runtime failed on attempt 3");
         break;
       }
 
@@ -909,7 +921,7 @@ describe("task-level agent delegation return", () => {
     expect(fixture.store.cancelTask(fixture.childTask.id).status).toBe("cancelled");
     const leaderReturn = delegationTasks(fixture).find((task) => task.agentId === fixture.leader.id)!;
     expect(leaderReturn).toMatchObject({ status: "queued" });
-    expect(leaderReturn.prompt).toContain("A task you delegated to QA was cancelled");
+    expect(inboxReportBody(fixture.store, leaderReturn)).toContain("A task you delegated to QA was cancelled");
   });
 
   it("keeps child completion committed when the delegating agent was archived", () => {

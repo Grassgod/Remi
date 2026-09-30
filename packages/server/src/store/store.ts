@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -82,6 +83,20 @@ import {
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
+import { InboxRepo } from "@multiremi/store/repos/inbox-repo.js";
+import {
+  ConversationLogRepo,
+  type AppendConversationLogInput,
+  type ConversationLogQuery,
+  type ConversationLogWindowInput,
+  type UpdateConversationLogInput,
+} from "@multiremi/store/repos/conversation-log-repo.js";
+import type {
+  ConversationLogEntry,
+  ConversationLogListener,
+  ConversationLogLocation,
+  ConversationLogWindow,
+} from "@multiremi/contracts/conversation-log";
 import {
   IssuesRepo,
   type AnswerIssueDecisionOptions,
@@ -100,9 +115,15 @@ import {
   type SessionArchiveWorkspaceUsage,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
+  TaskTracesRepo,
+  type TaskTraceArchivePointer,
+} from "@multiremi/store/repos/task-traces-repo.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
+  type RuntimeDeleteOptions,
 } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   DaemonProfilesRepo,
@@ -153,6 +174,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelContextDecl,
   type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
@@ -161,6 +183,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelContextDecl,
   GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
@@ -175,6 +198,7 @@ import {
   type CommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
+  type HumanRequestListener,
   type TaskMessagesListener,
   type WorkspaceEventListener,
 } from "@multiremi/store/context.js";
@@ -289,6 +313,7 @@ import type {
   MultiremiIssueShare,
   MultiremiIssueSession,
   MultiremiSessionArchive,
+  MultiremiSessionArchiveSubjectKind,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
@@ -510,9 +535,12 @@ export class MultiremiStore {
   private knowledge: KnowledgeRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
+  private inbox: InboxRepo;
+  private conversationLog: ConversationLogRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
+  private taskTraces: TaskTracesRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
@@ -523,6 +551,8 @@ export class MultiremiStore {
   private tasks: TasksRepo;
 
   constructor(db?: SqlDatabase, options: {
+    /** Pointer reads can be routed to a read-only pool in the split topology. */
+    taskTraceQuery?: import("./repos/task-traces-repo.js").TaskTraceQuery;
     notificationSenders?: NotificationSenderRegistry;
     notificationMaxAttempts?: number;
     notificationRetryBaseDelayMs?: number;
@@ -573,12 +603,15 @@ export class MultiremiStore {
     this.knowledge = new KnowledgeRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
+    this.conversationLog = new ConversationLogRepo(this.ctx);
+    this.inbox = new InboxRepo(this.ctx);
     this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
       debounceMs: options.agentIssueUpdateDebounceMs,
     });
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
+    this.taskTraces = new TaskTracesRepo(this.ctx, options.taskTraceQuery);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -602,6 +635,20 @@ export class MultiremiStore {
     this.ctx.taskEventListeners.add(listener);
     return () => {
       this.ctx.taskEventListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to human-request transitions (MUL-403 §2 item 4).
+   *
+   * `humanRequestListeners` lives on the context beside the other realtime
+   * listener sets, so the hub's feed attaches and detaches exactly like the
+   * task/workspace listeners do.
+   */
+  onHumanRequest(listener: HumanRequestListener): () => void {
+    this.ctx.humanRequestListeners.add(listener);
+    return () => {
+      this.ctx.humanRequestListeners.delete(listener);
     };
   }
 
@@ -734,6 +781,13 @@ runMigrations(this.db);
     return this.sessionArchives.list(issueId);
   }
 
+  listSessionArchivesForSubject(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+  ): MultiremiSessionArchive[] {
+    return this.sessionArchives.listSubject(kind, subjectId);
+  }
+
   getSessionArchiveWorkspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
     return this.sessionArchives.workspaceUsage(workspaceId);
   }
@@ -746,17 +800,22 @@ runMigrations(this.db);
     return this.sessionArchives.status(issueId, sourceRevision, sha256);
   }
 
+  /** Same snapshot as {@link getSessionArchiveStatus}, for any archive subject. */
+  getSessionArchiveSubjectStatus(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+    sourceRevision?: string | null,
+    sha256?: string | null,
+  ): SessionArchiveStatusSnapshot {
+    return this.sessionArchives.subjectStatus(kind, subjectId, sourceRevision, sha256);
+  }
+
   initSessionArchive(input: InitSessionArchiveInput, id: string, relativePath: string): {
     archive: MultiremiSessionArchive;
     created: boolean;
   } {
     const initialized = this.sessionArchives.init(input, id, relativePath);
-    if (!initialized) {
-      throw Object.assign(
-        new Error("Issue is deleting or its workspace has already been cleaned"),
-        { code: "issue_archive_lifecycle_closed" },
-      );
-    }
+    if (!initialized) throw this.sessionArchiveNotWritable(input.subjectKind);
     return initialized;
   }
 
@@ -766,17 +825,41 @@ runMigrations(this.db);
     relativePath: string,
   ): { archive: MultiremiSessionArchive; created: boolean } {
     const reported = this.sessionArchives.reportFailure(input, id, relativePath);
-    if (!reported) {
-      throw Object.assign(
+    if (!reported) throw this.sessionArchiveNotWritable(input.subjectKind);
+    return reported;
+  }
+
+  /**
+   * The refusal a subject write gets when its lifecycle fence rejects it.
+   *
+   * Issue subjects keep the historical code and message because the daemon and
+   * the delete path both branch on it; Chat and Task subjects name their own
+   * owner instead, since there is no Issue workspace involved.
+   */
+  private sessionArchiveNotWritable(subjectKind: MultiremiSessionArchiveSubjectKind): Error {
+    if (subjectKind === "issue") {
+      return Object.assign(
         new Error("Issue is deleting or its workspace has already been cleaned"),
         { code: "issue_archive_lifecycle_closed" },
       );
     }
-    return reported;
+    return Object.assign(
+      new Error(
+        `${subjectKind} session archive is not writable: the Runtime no longer owns this subject`,
+      ),
+      { code: "session_archive_subject_not_writable" },
+    );
   }
 
   touchWritableSessionArchive(id: string, runtimeId: string): MultiremiSessionArchive | null {
     return this.sessionArchives.touchWritableArchive(id, runtimeId);
+  }
+
+  withLockedSessionArchiveSharedPaths<T>(
+    id: string, runtimeId: string, attemptCount: number,
+    mode: "promote" | "cleanup", action: (archive: MultiremiSessionArchive) => T,
+  ): T | null {
+    return this.sessionArchives.withLockedSharedPaths(id, runtimeId, attemptCount, mode, action);
   }
 
   claimSessionArchiveUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {
@@ -809,6 +892,22 @@ runMigrations(this.db);
     return this.sessionArchives.markReadyAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
   }
 
+  completeSessionArchiveWithTracePointers(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+    pointers: readonly TaskTraceArchivePointer[],
+  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+    return this.sessionArchives.completeWithTracePointers(
+      id,
+      runtimeId,
+      attemptCount,
+      uploadedSizeBytes,
+      pointers,
+    );
+  }
+
   markSessionArchiveFailedAttempt(
     id: string,
     runtimeId: string,
@@ -834,6 +933,34 @@ runMigrations(this.db);
     return this.sessionArchives.retry(id);
   }
 
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null {
+    return this.taskTraces.get(taskId);
+  }
+
+  markTaskTraceDaemon(taskId: string, runtimeId: string): void {
+    this.taskTraces.markDaemon(taskId, runtimeId);
+  }
+
+  markTaskTraceNone(taskId: string): void {
+    this.taskTraces.markNone(taskId);
+  }
+
+  markTaskTraceLost(taskId: string): void {
+    this.taskTraces.markLost(taskId);
+  }
+
+  listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {
+    return this.taskTraces.listForArchive(archiveId);
+  }
+
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number {
+    return this.taskTraces.writeArchivePointers(pointers);
+  }
+
+  clearTaskTraceArchivePointers(archiveId: string): number {
+    return this.taskTraces.clearArchivePointers(archiveId);
+  }
+
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }
   getExecutionGroup(id: string, workspaceId = "local") { return getExecutionGroup(this.db, id, workspaceId); }
 
@@ -845,7 +972,7 @@ runMigrations(this.db);
     return this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1423,6 +1550,24 @@ runMigrations(this.db);
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
   }
 
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    return this.workspaces.listGatewayModelContext(workspaceId, engine);
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    return this.workspaces.getGatewayModelContext(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string, engine: RelayEngine, input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    return this.workspaces.saveGatewayModelContext(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelContext(workspaceId, engine, modelId);
+  }
+
   listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
     return this.workspaces.listGatewayModelReasoning(workspaceId, engine);
   }
@@ -1529,9 +1674,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -1637,6 +1783,76 @@ runMigrations(this.db);
 
   retryNotificationDelivery(id: string): MultiremiNotificationDelivery | null {
     return this.notificationDispatcher.retry(id);
+  }
+
+  /**
+   * The table the `body_html` backfill reads and writes (MUL-439).
+   *
+   * The backfill task is built in the API process, where the store's own
+   * `SqlDatabase` is not reachable from outside this class. Rather than widen
+   * the store's surface with a general-purpose handle, these two methods give
+   * the task the one shape it needs: does the table exist with the columns B1
+   * owns, and what rows still need a render.
+   *
+   * The probe is the store's own `PRAGMA table_info`, which
+   * `translateSqliteToPg` maps to `information_schema.columns`, so it answers
+   * on both backends. `null` means the table is not there yet, which is the
+   * documented case where the backfill must not start.
+   */
+  conversationLogRenderColumns(): { body_html: boolean; render_version: boolean } | null {
+    let columns: Array<{ name?: unknown }>;
+    try {
+      columns = this.db
+        .query("PRAGMA table_info(multiremi_conversation_log)")
+        .all() as Array<{ name?: unknown }>;
+    } catch {
+      return null;
+    }
+    if (columns.length === 0) return null;
+    const names = new Set(columns.map((column) => String(column.name ?? "")));
+    return {
+      body_html: names.has("body_html"),
+      render_version: names.has("render_version"),
+    };
+  }
+
+  /**
+   * Conversation-log rows whose `body_html` is missing or was produced by a
+   * different `render_version`, oldest first.
+   *
+   * Returns an empty list when the table or either column is missing, so a
+   * caller can run this before B1 lands without special-casing.
+   */
+  listConversationLogRowsNeedingBodyHtml(
+    renderVersion: string,
+    limit: number,
+  ): Array<{ session_id: string; seq: number; body_md: string | null }> {
+    const columns = this.conversationLogRenderColumns();
+    if (!columns?.body_html || !columns.render_version) return [];
+    return this.db
+      .query(
+        `SELECT session_id, seq, body_md FROM multiremi_conversation_log
+         WHERE body_html IS NULL OR render_version IS NULL OR render_version <> ?
+         ORDER BY session_id, seq
+         LIMIT ?`,
+      )
+      .all(renderVersion, limit) as Array<{ session_id: string; seq: number; body_md: string | null }>;
+  }
+
+  /** Store one rendered body. Guarded by the table's primary key. */
+  setConversationLogBodyHtml(
+    sessionId: string,
+    seq: number,
+    html: string,
+    renderVersion: string,
+  ): number {
+    return this.db
+      .query(
+        `UPDATE multiremi_conversation_log
+         SET body_html = ?, render_version = ?
+         WHERE session_id = ? AND seq = ?`,
+      )
+      .run(html, renderVersion, sessionId, seq).changes;
   }
 
   startNotificationDeliverySweeper(): void {
@@ -2026,6 +2242,22 @@ runMigrations(this.db);
     this.feishuBot.upsertRoundPushDeliveryWithinTransaction(task, body);
   }
 
+  materializeFeishuTaskDeliveries(taskId: string): void {
+    this.feishuBot.materializeTaskDeliveries(taskId);
+  }
+
+  claimFeishuBotOutbounds(workspaceId: string, runtimeId: string, now?: string | Date): MultiremiFeishuBotOutboundDelivery[] {
+    const deliveries: MultiremiFeishuBotOutboundDelivery[] = [];
+    for (let count = 0; count < 16; count++) {
+      const delivery = this.feishuBot.claimOutbound(workspaceId, runtimeId, now, true, true, true, true);
+      if (!delivery) break;
+      deliveries.push(delivery);
+      // E5 and pre-C5 deliveries retain their existing one-row heartbeat cadence.
+      if (!delivery.kind || delivery.kind.startsWith("decision_")) break;
+    }
+    return deliveries;
+  }
+
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -2033,8 +2265,9 @@ runMigrations(this.db);
     supportsTaskStream = false,
     supportsNativeCot = false,
     supportsAttachments = false,
+    supportsKinds = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments, supportsKinds);
   }
 
   getFeishuBotOutboundAttachment(
@@ -2838,15 +3071,16 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
-    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
+    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id, options);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
-    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
+    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds, options);
   }
 
   mergeRuntimeInto(
@@ -3215,6 +3449,10 @@ runMigrations(this.db);
     return this.issueWorkspaces.get(issueId);
   }
 
+  abandonIssueWorkspace(issueId: string, workspaceId: string) {
+    return this.issueWorkspaces.abandon(issueId, workspaceId);
+  }
+
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
     return this.issueWorkspaces.report(input);
   }
@@ -3401,6 +3639,10 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    this.issues.replayDependencyAutoStart(event);
+  }
+
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -3442,6 +3684,7 @@ runMigrations(this.db);
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
@@ -3452,6 +3695,7 @@ runMigrations(this.db);
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -3489,9 +3733,20 @@ runMigrations(this.db);
     issue: MultiremiIssue,
     parentTaskId: string | null,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; dependencyCheckEventId?: string | null; seen?: Set<string> } = {},
   ): void {
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
+  }
+
+  notifyChildStatusChangeWithinTransaction(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; statusChangeEventId?: string | null } = {},
+  ): void {
+    this.issues.notifyChildStatusChangeWithinTransaction(previous, issue, parentTaskId, collector, deferredEvents, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -3522,8 +3777,8 @@ runMigrations(this.db);
     return this.issues.findGeneratedIssueByTitle(sourceIssueId, title);
   }
 
-  createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
-    return this.issues.createIssueComment(issueId, input);
+  createIssueComment(issueId: string, input: CreateIssueCommentInput, options: import("./context.js").CreateIssueCommentOptions = {}): MultiremiIssueComment {
+    return this.issues.createIssueComment(issueId, input, options);
   }
 
   createTaskFailureSystemComment(
@@ -3914,6 +4169,139 @@ runMigrations(this.db);
 
   listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
     return this.sessions.listSessionEvents(sessionId, input);
+  }
+
+  // ── conversation log (MUL-402 B1) ────────────────────────────────────────
+  // The read side of the v2 conversation storage. `window` and `locate` accept a
+  // `query(sql, params)` seam so MUL-403's read pool can be wired in without
+  // touching the SQL; both default to the primary handle.
+
+  /** Allocate the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number {
+    return this.conversationLog.nextSeqWithinTransaction(sessionId);
+  }
+
+  /** Insert one row at an allocated or explicit seq; the caller owns the transaction. */
+  appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.appendWithinTransaction(input);
+  }
+
+  /** Public append that opens its own transaction. */
+  appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.append(input);
+  }
+
+  /** In-place update with `revision++`; the caller owns the transaction. */
+  updateWithinTransaction(sessionId: string, seq: number, input: UpdateConversationLogInput): ConversationLogEntry | null {
+    return this.conversationLog.updateWithinTransaction(sessionId, seq, input);
+  }
+
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void {
+    this.conversationLog.touchSessionWithinTransaction(sessionId, at);
+  }
+
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input: { bodyMd: string; title?: string | null },
+  ): ConversationLogEntry {
+    return this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input);
+  }
+
+  /** Sync the `head` row of an Issue session, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): ConversationLogEntry {
+    return this.conversationLog.syncIssueHeadWithinTransaction(sessionId, issue, createdAt);
+  }
+
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(sessionId: string, title: string | null, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncChatHeadWithinTransaction(sessionId, title, createdAt);
+  }
+
+  /** The `turn` card of a task, if one exists. */
+  findTurnEntry(taskId: string): ConversationLogEntry | null {
+    return this.conversationLog.findTurnEntry(taskId);
+  }
+
+  /** Update a task's `turn` card in place, bumping `revision`. */
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
+  ): ConversationLogEntry | null {
+    return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
+  }
+
+  appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.append(input);
+  }
+
+  /** In-place update with `revision++`; the caller owns the transaction. */
+  updateConversationLogWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: UpdateConversationLogInput,
+  ): ConversationLogEntry | null {
+    return this.conversationLog.updateWithinTransaction(sessionId, seq, input);
+  }
+
+  getConversationLogEntry(sessionId: string, seq: number, query?: ConversationLogQuery | null): ConversationLogEntry | null {
+    return this.conversationLog.getEntry(sessionId, seq, query);
+  }
+
+  getConversationLogEntryById(id: string): ConversationLogEntry | null {
+    return this.conversationLog.getEntryById(id);
+  }
+
+  getConversationLogHead(sessionId: string, query?: ConversationLogQuery | null) {
+    return this.conversationLog.getHead(sessionId, query);
+  }
+
+  /** A window of shown entries; hidden markers never appear. */
+  conversationLogWindow(sessionId: string, input: ConversationLogWindowInput = {}): ConversationLogWindow {
+    return this.conversationLog.window(sessionId, input);
+  }
+
+  /** Locate one entry's seq by id, for deep links. */
+  locateConversationLogEntry(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
+    return this.conversationLog.locate(sessionId, id, query);
+  }
+
+  /** Shown entries in the inclusive seq range, oldest first. */
+  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+    return this.conversationLog.listShown(sessionId, input);
+  }
+
+  /** Sync the `head` row to the Issue title and description (one row per session). */
+  syncConversationLogIssueHead(sessionId: string, issue: { title: string; description?: string | null }, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncIssueHeadWithinTransaction(sessionId, issue, createdAt);
+  }
+
+  /** Sync a chat `head` row from the session title. */
+  syncConversationLogChatHead(sessionId: string, title: string | null, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncChatHeadWithinTransaction(sessionId, title, createdAt);
+  }
+
+  /** Every row including hidden markers, for projections and wake-up. */
+  listConversationLogEntries(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+    return this.conversationLog.listAll(sessionId, input);
+  }
+
+  listConversationLogEntriesByTask(taskId: string): ConversationLogEntry[] {
+    return this.conversationLog.listByTask(taskId);
+  }
+
+  /** The write hook C's Live Hub implements; B1 leaves it empty. */
+  setConversationLogListener(listener: ConversationLogListener | null): void {
+    this.conversationLog.setConversationLogListener(listener);
+  }
+
+  ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): ConversationLogEntry {
+    return this.ctx.db.transaction(() => this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input))();
   }
 
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
@@ -4481,7 +4869,7 @@ runMigrations(this.db);
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
     return this.autopilots.enqueueIssueStatusChangedEvent(input);
   }
 
@@ -4642,6 +5030,14 @@ runMigrations(this.db);
     return this.chat.listChatMessages(chatSessionId);
   }
 
+  listChatMessagesFromLog(chatSessionId: string): MultiremiChatMessage[] {
+    return this.chat.listChatMessagesFromLog(chatSessionId);
+  }
+
+  listChatMessagesPageFromLog(chatSessionId: string, limit: number, beforeId?: string | null, beforeCreatedAt?: string | null) {
+    return this.chat.listChatMessagesPageFromLog(chatSessionId, limit, beforeId, beforeCreatedAt);
+  }
+
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
     return this.chat.sendChatMessage(chatSessionId, input);
   }
@@ -4650,11 +5046,14 @@ runMigrations(this.db);
     return this.chat.appendChatMessageWithinTransaction(input);
   }
 
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(
+    chatSessionId: string, body: string,
+    options?: Parameters<ChatRepo["createPendingAgentIssueUpdateWithinTransaction"]>[2],
+  ): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   } {
-    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body);
+    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body, options);
   }
 
   preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
@@ -4696,6 +5095,30 @@ runMigrations(this.db);
     return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
+  createTaskWithinWorkspaceLock(
+    ...args: Parameters<TasksRepo["createTaskWithinWorkspaceLock"]>
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinWorkspaceLock(...args);
+  }
+
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult {
+    return this.tasks.ensurePendingTurnWithinTransaction(input);
+  }
+
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[] {
+    return this.inbox.sendEnvelopeWithinTransaction(env, collector, deferredEvents);
+  }
+
+  createSystemIssueCommentWithinTransaction(
+    ...args: Parameters<IssuesRepo["createSystemIssueCommentWithinTransaction"]>
+  ): MultiremiIssueComment {
+    return this.issues.createSystemIssueCommentWithinTransaction(...args);
+  }
+
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
@@ -4704,6 +5127,14 @@ runMigrations(this.db);
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean } {
     return this.tasks.ensureDelegationWakeup(input);
+  }
+
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): { task: MultiremiTask | null; created: boolean; covered: boolean } {
+    return this.tasks.ensureDelegationWakeupWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
@@ -4848,13 +5279,19 @@ runMigrations(this.db);
 
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
     const request = this.tasks.createTaskHumanRequest(input);
+    this.feishuBot.materializeTaskDeliveries(input.taskId);
     const wakeTask = this.feishuBot.prepareHumanRequestPush(request);
     if (wakeTask) this.ctx.notifyTaskEnqueued(wakeTask);
+    this.notifyHumanRequest("created", request);
     return request;
   }
 
   getTaskHumanRequest(requestId: string): MultiremiTaskHumanRequest | null {
     return this.tasks.getTaskHumanRequest(requestId);
+  }
+
+  prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
+    return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
   }
 
   listTaskHumanRequests(taskId: string): MultiremiTaskHumanRequest[] {
@@ -4863,21 +5300,47 @@ runMigrations(this.db);
 
   respondTaskHumanRequest(
     requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null },
+    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    if (request) this.notifyHumanRequest("responded", request);
     return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
     const request = this.tasks.expireTaskHumanRequest(requestId, status);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    // The store's terminal statuses are `timeout` and `cancelled`; the hub's event
+    // names are `expired` and `cancelled`. The mapping lives here rather than in the
+    // feed so a consumer never has to know the store's spelling.
+    if (request) this.notifyHumanRequest(status === "timeout" ? "expired" : "cancelled", request);
     return request;
+  }
+
+  /**
+   * Publish one human-request transition, resolving the owning task's workspace.
+   *
+   * The workspace is looked up here because the request row is keyed by task only,
+   * and a consumer (the hub's feed) would otherwise need a second read on the write
+   * path. A task that cannot be resolved simply publishes nothing: a transition
+   * without a workspace cannot be routed.
+   */
+  private notifyHumanRequest(
+    type: "created" | "responded" | "expired" | "cancelled",
+    request: MultiremiTaskHumanRequest,
+  ): void {
+    const task = this.tasks.getTask(request.taskId);
+    if (!task) return;
+    this.ctx.notifyHumanRequest({ type, request, workspaceId: task.workspaceId });
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     return this.tasks.createTaskSteerMessage(input);
+  }
+
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
   }
 
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
@@ -4978,7 +5441,7 @@ runMigrations(this.db);
       } else {
         const content = String(input.content ?? "").trim();
         if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
-        message = this.tasks.createTaskSteerMessage({
+        message = this.tasks.createTaskSteerMessageWithinTransaction({
           taskId: target.id,
           kind: input.action,
           content,
@@ -5009,7 +5472,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
+      }, { withinTransaction: true, deferredEvents, childStatusChanges });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -5027,7 +5490,6 @@ runMigrations(this.db);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     // The transaction committed: publish everything it deferred.
     this.ctx.emitCommitEvents(deferredEvents);
-    this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
 
@@ -5061,6 +5523,7 @@ runMigrations(this.db);
 
   completeTask(taskId: string, input: {
     output: string;
+    traceEventCount?: number;
     branchName?: string | null;
     sessionId?: string | null;
     workDir?: string | null;
@@ -5070,6 +5533,7 @@ runMigrations(this.db);
 
   failTask(taskId: string, input: {
     error: string;
+    traceEventCount?: number;
     sessionId?: string | null;
     workDir?: string | null;
     failureReason?: string | null;

@@ -18,7 +18,8 @@
  * registry — a and b below catch it.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import {
@@ -30,6 +31,10 @@ import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/h
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import * as apiRoleConfig from "@multiremi/config/api-role.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+
+const roleTestHub = () => createEmptyLiveHub(createLocalHubTransport());
 
 it("resolves the role once during a real server start and retains the unconfigured default", async () => {
   delete process.env.MULTIREMI_API_ROLE;
@@ -38,7 +43,7 @@ it("resolves the role once during a real server start and retains the unconfigur
   expect(resolveStartupApiRole({ MULTIREMI_API_ROLE: "all" })).toEqual({ role: "all", configured: true });
   const resolver = spyOn(apiRoleConfig, "resolveApiRole");
   const { store, db } = memoryStore();
-  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
+  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null, hub: roleTestHub() });
   try {
     expect(resolver).toHaveBeenCalledTimes(1);
     const base = `http://127.0.0.1:${server.port}`;
@@ -58,7 +63,7 @@ afterEach(() => {
 });
 
 function memoryStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   return { store: new MultiremiStore(db), db };
 }
 
@@ -158,6 +163,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: roleTestHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -198,6 +204,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       hostname: "127.0.0.1",
       authToken: null,
       apiRole: "runtime",
+      hub: roleTestHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {
@@ -220,7 +227,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
   it("behaves exactly like main when neither env nor apiRole is set", async () => {
     delete process.env[ROLE_ENV];
     const { store, db } = memoryStore();
-    const app = createMultiremiApp({ store, authToken: null });
+    const app = createMultiremiApp({ store, authToken: null, hub: null });
     const spy = roleSpy();
     const server = startMultiremiServer({
       store,
@@ -228,6 +235,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      hub: roleTestHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {

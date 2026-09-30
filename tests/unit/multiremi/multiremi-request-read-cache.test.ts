@@ -11,7 +11,7 @@
 //   2. invalidation — a store write must clear the rows it can change. A heartbeat writes its own
 //      Runtime row, so the read that follows inside the same request has to observe that write.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import {
@@ -194,7 +194,7 @@ describe("request-scoped read cache", () => {
     // heartbeat re-reads its Runtime row that way so a Runtime deleted by another connection is
     // reported gone. `raw` stands in for that other connection: the wrapper never sees its writes.
     function cachedTable() {
-      const raw = new Database(":memory:");
+      const raw = openSqliteDatabase(":memory:");
       raw.run("CREATE TABLE t (id TEXT PRIMARY KEY, v TEXT)");
       raw.run("INSERT INTO t VALUES ('a', 'before')");
       const wrapped = invalidatingDatabase(raw);
@@ -227,6 +227,57 @@ describe("request-scoped read cache", () => {
       // One read before the transaction, one inside it; the second read inside it and the one
       // after it are served from the cache.
       expect(reads()).toBe(2);
+    });
+
+    it("starts a fresh cache generation for a transaction opened after commit", () => {
+      const { raw, wrapped, read } = cachedTable();
+      try {
+        withRequestReadCache(() => {
+          wrapped.transaction(() => {
+            expect(read()).toBe("before");
+            (wrapped as unknown as SqlDatabase).afterCommit!(() => {
+              raw.run("UPDATE t SET v = 'after' WHERE id = 'a'");
+              expect(wrapped.transaction(() => read())()).toBe("after");
+            });
+          })();
+          expect(read()).toBe("after");
+        });
+      } finally {
+        raw.close();
+      }
+    });
+
+    it("drains native commit callbacks after the instrumented runner returns", () => {
+      const raw = openSqliteDatabase(":memory:");
+      const callbacks: Array<() => void> = [];
+      let runnerActive = false;
+      const native = new Proxy(raw, {
+        get(target, key) {
+          if (key === "afterCommit") return (fn: () => void) => callbacks.push(fn);
+          if (key === "transaction") return (fn: () => void) => () => {
+            runnerActive = true;
+            try {
+              target.transaction(fn)();
+              for (const callback of callbacks.splice(0)) callback();
+            } finally {
+              runnerActive = false;
+            }
+          };
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const wrapped = invalidatingDatabase(native) as unknown as SqlDatabase;
+      const observed: boolean[] = [];
+      try {
+        wrapped.transaction(() => {
+          wrapped.afterCommit!(() => observed.push(runnerActive));
+          expect(observed).toEqual([]);
+        })();
+        expect(observed).toEqual([false]);
+      } finally {
+        raw.close();
+      }
     });
 
     it("never serves a row read before a lock to a read after it", () => {

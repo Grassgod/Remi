@@ -118,7 +118,33 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
 
-8. **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
+8. **Guard decisions and child membership writes share the parent row lock.**
+   The API writer locks its Issue before guard A. The SCM effect locks the
+   linked Issue before reading child membership, unfinished-child count, grant
+   and A1, and retains that lock through the status/effect transaction. Child
+   creation, moving an Issue under a new parent (including a terminal child),
+   and reopening a `done`/`cancelled` child lock that same parent before writing.
+   This also covers Agent assignment's direct terminal-to-`todo` write, whose
+   locks and assignment update commit before task creation opens its transaction.
+   Lock order is workspace lifecycle (when required), existing child Issue,
+   then parent Issue; a parent's guarded decision reads children without locking
+   their rows. A write serialized after parent closure may still introduce an
+   unfinished child under that closed parent; the closed-parent policy above
+   remains in effect. The guarantee is a current count at the parent's decision,
+   not a prohibition on later child writes.
+   Re-derivation does not lock the parent before counting: its conditional
+   `in_review` → `in_progress` UPDATE locks the row and re-checks the status
+   after any wait; a child added or reopened after the count is a child event
+   of its own; closing a child never takes that lock, so an earlier lock would
+   not make the count more current. The old parent's re-parenting hook owns a
+   separate post-commit transaction.
+   [The two-connection regression](../../tests/unit/multiremi/multiremi-parent-status-race.test.ts)
+   exercises both orders 20 times for API/SCM and creation, attachment, and
+   reopening from each terminal status through PATCH or Agent assignment.
+   SQLite's writer lock can reject the
+   contender with `BUSY`; PostgreSQL waits on the parent row.
+
+   **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
    is a bare `BEGIN`/`COMMIT` with no savepoint support, so a nested
    `transaction()` inside an open one commits the outer transaction early,
    releases its row locks, and turns the outer `ROLLBACK` into a no-op. The
@@ -275,6 +301,32 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      report transaction — before it, committing separately — and only its
      returned readiness lines feed the report. Verified on a scratch merge of
      the two branches: the combined path still measures depth 1 on Postgres.
+
+   **MUL-483 / ADR 0012 supplement (2026-09-29).** The post-commit E1/E2
+   report policy above describes the earlier implementation. Under
+   [ADR 0012](0012-unified-inbox-and-single-pending-turn.md), E2 child endings,
+   both E3 notifications, E4 decisions, delegation reports and agent mentions
+   write their inbox entries and pending-turn changes in the transaction that
+   owns the triggering state change. `sendEnvelopeWithinTransaction` delegates
+   to `ensurePendingTurnWithinTransaction`; neither opens a nested transaction.
+   A failure before COMMIT rolls back the state, inbox entry and wake together.
+   This removes the earlier compensation gap for these required reports.
+
+   The collector and commit-event queue remain required. E1 derivation and
+   required parent reports run through `notifyChildStatusChangeWithinTransaction`
+   at depth 1; recursive parent changes use the same transaction. Only E3's
+   durable automatic-start replay and optional notifications remain after the
+   outer COMMIT. The transaction owner publishes realtime events and task
+   enqueue notifications after COMMIT, and drops them on rollback. Optional
+   work must not reintroduce a savepoint inside the required write transaction.
+
+   The SQLite and real PostgreSQL regressions instrument E2, E3 and E4's outer
+   transaction and every task INSERT: `maxDepth === 1`, and each INSERT must
+   occur while the original transaction is open. Crash probes cover the
+   boundary after the inbox INSERT, after the pending-turn write and after
+   COMMIT. Existing parent guards, continuation semantics and Chat user queues
+   keep their contracts; a human comment joins queued work only according to
+   the Q-B constant defined in ADR 0012.
 9. **A batch update is pre-flighted as a whole, then written row by row.** Before
    the first write, `batchUpdateIssues` evaluates guard A (A1 and A4 included)
    for every row and refuses the whole batch if any row would be rejected,

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, Globe, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@multiremi/core/api";
+import { RuntimeActiveIssueWorkspacesConflictSchema, type RuntimeIssueWorkspaceImpact } from "@multiremi/core/api/schemas";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multiremi/core/types";
 import {
   useDeleteRuntime,
@@ -98,6 +99,9 @@ export function DeleteRuntimeDialog({
   const cascade = planAgents.length > 0;
 
   const [confirmed, setConfirmed] = useState(false);
+  const [planIssues, setPlanIssues] = useState<RuntimeIssueWorkspaceImpact[]>([]);
+  const [abandonIssueWorkspaces, setAbandonIssueWorkspaces] = useState(false);
+  const openedRuntime = useRef<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // Server-issued message shown above the agent table on plan-changed —
   // tells the user "the list refreshed because something moved" without
@@ -109,18 +113,24 @@ export function DeleteRuntimeDialog({
   // previous plan-changed notice or a stale checkbox could survive across
   // open/close cycles and confuse the next attempt.
   useEffect(() => {
-    if (open) {
+    if (!open) {
+      openedRuntime.current = null;
+    } else if (openedRuntime.current !== runtime.id) {
+      openedRuntime.current = runtime.id;
       setPlanAgents(cachedActiveAgents);
       setConfirmed(false);
+      setPlanIssues([]);
+      setAbandonIssueWorkspaces(false);
       setSubmitting(false);
       setPlanChangedNotice(null);
     }
-  }, [open, cachedActiveAgents]);
+  }, [open, cachedActiveAgents, runtime.id]);
 
   const lightMutation = useDeleteRuntime(wsId);
   const cascadeMutation = useArchiveAgentsAndDeleteRuntime(wsId);
 
   const handleConfirm = async () => {
+    if ((cascade && !confirmed) || (planIssues.length > 0 && !abandonIssueWorkspaces) || submitting) return;
     // Defensive re-check of the self-healing rule — the affordance is
     // gated upstream, but a local daemon that came online while the
     // dialog was open should still block the action.
@@ -139,11 +149,12 @@ export function DeleteRuntimeDialog({
         await cascadeMutation.mutateAsync({
           runtimeId: runtime.id,
           expectedActiveAgentIds: planAgents.map((a) => a.id),
+          abandonIssueWorkspaces,
         });
         onDeleted();
       } else {
         try {
-          await lightMutation.mutateAsync(runtime.id);
+          await lightMutation.mutateAsync({ runtimeId: runtime.id, abandonIssueWorkspaces });
           onDeleted();
         } catch (err) {
           // The strict DELETE returns a structured 409 when active
@@ -167,6 +178,15 @@ export function DeleteRuntimeDialog({
         }
       }
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const workspaces = RuntimeActiveIssueWorkspacesConflictSchema.safeParse(err.body);
+        if (workspaces.success) {
+          setPlanIssues(workspaces.data.issues);
+          setAbandonIssueWorkspaces(false);
+          setConfirmed(false);
+          return;
+        }
+      }
       const daemonId = parseDaemonLastRuntimeConflict(err);
       if (daemonId) {
         onOpenChange(false);
@@ -205,6 +225,12 @@ export function DeleteRuntimeDialog({
     onOpenChange(next);
   };
 
+  const workspaceBlocked = planIssues.length > 0 && !abandonIssueWorkspaces;
+  const workspacePlan = planIssues.length > 0 ? (
+    <IssueWorkspacePlan issues={planIssues} confirmed={abandonIssueWorkspaces}
+      onConfirmedChange={setAbandonIssueWorkspaces} submitting={submitting} />
+  ) : null;
+
   // Light mode keeps the legacy short copy. Cascade mode mirrors the plan
   // 赵刚 wrote: destructive title with the count, a destructive warning
   // banner, the agent table, then a checkbox confirm whose label restates
@@ -214,8 +240,8 @@ export function DeleteRuntimeDialog({
       <AlertDialogContent
         className={
           cascade
-            ? "w-[calc(100vw-2rem)] !max-w-[640px] gap-0 overflow-hidden rounded-lg p-0"
-            : "w-[calc(100vw-2rem)] !max-w-[440px] gap-0 overflow-hidden rounded-lg p-0"
+            ? "w-[calc(100vw-2rem)] !max-w-[640px] max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto rounded-lg p-0"
+            : "w-[calc(100vw-2rem)] !max-w-[440px] max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto rounded-lg p-0"
         }
         onClick={(e) => e.stopPropagation()}
       >
@@ -232,6 +258,8 @@ export function DeleteRuntimeDialog({
             submitting={submitting}
             onCancel={() => handleOpenChange(false)}
             onConfirm={handleConfirm}
+            workspacePlan={workspacePlan}
+            workspaceBlocked={workspaceBlocked}
           />
         ) : (
           <LightBody
@@ -239,6 +267,8 @@ export function DeleteRuntimeDialog({
             submitting={submitting}
             onCancel={() => handleOpenChange(false)}
             onConfirm={handleConfirm}
+            workspacePlan={workspacePlan}
+            workspaceBlocked={workspaceBlocked}
           />
         )}
       </AlertDialogContent>
@@ -267,11 +297,15 @@ function LightBody({
   submitting,
   onCancel,
   onConfirm,
+  workspacePlan,
+  workspaceBlocked,
 }: {
   runtime: AgentRuntime;
   submitting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  workspacePlan: ReactNode;
+  workspaceBlocked: boolean;
 }) {
   const { t } = useT("runtimes");
   return (
@@ -285,6 +319,7 @@ function LightBody({
             name: runtime.name,
           })}
         </p>
+        {workspacePlan}
       </div>
       <div className="border-t bg-muted/25 px-5 py-3">
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -302,7 +337,7 @@ function LightBody({
             variant="destructive"
             className="w-full sm:w-auto"
             onClick={onConfirm}
-            disabled={submitting}
+            disabled={submitting || workspaceBlocked}
           >
             {submitting
               ? t(($) => $.detail.delete_dialog.light.submitting)
@@ -332,6 +367,8 @@ function CascadeBody({
   submitting,
   onCancel,
   onConfirm,
+  workspacePlan,
+  workspaceBlocked,
 }: {
   runtime: AgentRuntime;
   agents: Agent[];
@@ -344,6 +381,8 @@ function CascadeBody({
   submitting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  workspacePlan: ReactNode;
+  workspaceBlocked: boolean;
 }) {
   const { t } = useT("runtimes");
   const count = agents.length;
@@ -385,6 +424,7 @@ function CascadeBody({
           presenceMap={presenceMap}
           currentUserId={currentUserId}
         />
+        {workspacePlan}
       </div>
 
       <div className="border-t bg-muted/25 px-5 py-4">
@@ -414,7 +454,7 @@ function CascadeBody({
             variant="destructive"
             className="w-full sm:w-auto"
             onClick={onConfirm}
-            disabled={!confirmed || submitting}
+            disabled={!confirmed || submitting || workspaceBlocked}
           >
             {submitting
               ? t(($) => $.detail.delete_dialog.cascade.submitting)
@@ -423,6 +463,36 @@ function CascadeBody({
         </div>
       </div>
     </>
+  );
+}
+
+function IssueWorkspacePlan({ issues, confirmed, onConfirmedChange, submitting }: {
+  issues: RuntimeIssueWorkspaceImpact[];
+  confirmed: boolean;
+  onConfirmedChange: (next: boolean) => void;
+  submitting: boolean;
+}) {
+  const { t } = useT("runtimes");
+  return (
+    <div className="mt-4 min-w-0 space-y-3">
+      <p role="alert" className="text-sm text-destructive">
+        {t(($) => $.detail.delete_dialog.workspaces.warning)}
+      </p>
+      <ul className="max-h-40 space-y-2 overflow-y-auto text-xs">
+        {issues.map((issue) => (
+          <li key={issue.id} className="min-w-0 break-words">
+            <span className="font-medium">{issue.key}</span>{" "}
+            <span>{issue.title}</span>{" "}
+            <span className="text-muted-foreground">({issue.status})</span>
+          </li>
+        ))}
+      </ul>
+      <label className="flex cursor-pointer items-start gap-2 text-sm">
+        <Checkbox className="mt-0.5 shrink-0" checked={confirmed}
+          onCheckedChange={(next) => onConfirmedChange(next === true)} disabled={submitting} />
+        <span className="min-w-0 leading-5">{t(($) => $.detail.delete_dialog.workspaces.checkbox)}</span>
+      </label>
+    </div>
   );
 }
 

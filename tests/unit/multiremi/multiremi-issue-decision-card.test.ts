@@ -12,15 +12,16 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import {
   decisionInteractionMarker,
   handleIssueDecisionInteractionEvent,
-  registerIssueDecisionCardInteraction,
 } from "@connectors/feishu/task-interaction.js";
+import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteraction, resetQuestionCardHostFixtures } from "../connectors/question-card-host-fixture.js";
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
@@ -80,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetQuestionCardHostFixtures();
   if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
   if (previousPublicUrl === undefined) delete process.env.MULTIREMI_PUBLIC_URL;
@@ -185,6 +187,16 @@ function sendCard(store: MultiremiStore, messageId = "om_card", openId = CARD_OP
 
 function daemonToken(store: MultiremiStore, daemonId = "bot-host") {
   return store.createAccessToken({ name: daemonId, type: "daemon", workspaceId: "local", daemonId });
+}
+
+function cardAction(decisionId: string): Record<string, unknown> {
+  const row = db!.query("SELECT body FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ? AND kind = 'decision_card' ORDER BY created_at DESC LIMIT 1")
+    .get(decisionId) as { body: string } | null;
+  const card = row && decodeDecisionCardBody(row.body)?.card;
+  if (!card) throw new Error("fixture decision card missing");
+  const value = questionCardAction(card);
+  if (!value) throw new Error("fixture card action missing");
+  return value;
 }
 
 describe("MUL-412 issue decision cards", () => {
@@ -343,7 +355,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(answerPath, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes\n自定义回答：after CI", operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes\n自定义回答：after CI", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
     });
     stopWake();
     expect(response.status, await response.clone().text()).toBe(200);
@@ -360,13 +372,13 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(child.id).some(entry => entry.type === "decision_received")).toBe(true);
     const sourceOwnerTask = store.listTasksForIssue(child.id).find(item => item.status === "queued");
     expect(sourceOwnerTask).toBeTruthy();
-    expect(sourceOwnerTask!.prompt).toContain(decision.id);
+    expect(inboxReportBody(store, sourceOwnerTask!)).toContain(decision.id);
     expect(sourceOwnerTask).toMatchObject({
       delegationId: null,
       delegatedByAgentId: null,
       delegatedFromIssueSessionId: null,
       delegationSkipReason: null,
-      wakeSource: null,
+      wakeSource: "decision",
     });
     expect(store.listInboxItems(member.id)).toHaveLength(1);
     expect(store.listInboxItems(member.id)[0]).toMatchObject({
@@ -391,7 +403,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_somebody_else" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_somebody_else" }),
     });
     expect(response.status).toBe(403);
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
@@ -409,11 +421,11 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", operator_open_id: "ou_other_member" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_other_member" }),
       },
     );
     expect(notAddressed.status).toBe(403);
-    expect(await notAddressed.json()).toMatchObject({ code: "decision_operator_mismatch" });
+    expect(await notAddressed.json()).toMatchObject({ code: "recipient_mismatch" });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
   });
 
@@ -428,7 +440,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", operator_open_id: openId }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: openId }),
       },
     );
 
@@ -450,7 +462,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/issues/${bobIssue.id}/decisions/${bobDecision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", operator_open_id: "ou_bob" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(bobDecision.id).t, operator_open_id: "ou_bob" }),
       },
     );
     expect(archived.status).toBe(403);
@@ -466,6 +478,7 @@ describe("MUL-412 issue decision cards", () => {
     });
     db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET interaction_open_id = ? WHERE decision_id = ?",
       ["ou_agent_self", decision.id]);
+    db!.run("UPDATE multiremi_issue_decisions SET token_recipient = ? WHERE id = ?", ["ou_agent_self", decision.id]);
     const asAgent = await answer("ou_agent_self");
     expect(agentMember.id).toBe(agentId);
     expect(asAgent.status).toBe(403);
@@ -481,7 +494,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/issues/${stranger.id}/decisions/${strangerDecision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", operator_open_id: "ou_never_seen" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(strangerDecision.id).t, operator_open_id: "ou_never_seen" }),
       },
     );
     expect(unmapped.status).toBe(403);
@@ -526,7 +539,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_cross_app" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_cross_app" }),
     });
     stopWake();
     stopEvents();
@@ -566,7 +579,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
     });
     stopWake();
     stopEvents();
@@ -607,7 +620,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_same_app" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_same_app" }),
     });
     expect(response.status, await response.clone().text()).toBe(200);
     expect(store.getIssueDecision(parent.id, decision.id)!.answeredByMemberId).toBe(senderMember.id);
@@ -646,7 +659,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_ambiguous" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_ambiguous" }),
     });
     stopWake();
     stopEvents();
@@ -709,7 +722,7 @@ describe("MUL-412 issue decision cards", () => {
     const asTask = await app(store).request(writePath, {
       method: "POST",
       headers: { Authorization: `Bearer ${taskToken.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
     });
     expect(asTask.status).toBe(403);
 
@@ -720,7 +733,7 @@ describe("MUL-412 issue decision cards", () => {
     const write = await app(store).request(writePath, {
       method: "POST",
       headers: { Authorization: `Bearer ${other.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
     });
     expect(write.status).toBe(403);
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
@@ -747,7 +760,7 @@ describe("MUL-412 issue decision cards", () => {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
       body: JSON.stringify({
-        answer: "yes", operator_open_id: CARD_OPEN_ID,
+        answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID,
         answered_by_member_id: otherMember.id, answererId: otherMember.id, answerer_id: otherMember.id,
         answererType: "agent", memberId: otherMember.id,
       }),
@@ -770,14 +783,16 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: text, operator_open_id: CARD_OPEN_ID }),
+        body: JSON.stringify({ answer: text, token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
       },
     );
     // Two callbacks in flight at once, then the same callback replayed.
     const [first, second] = await Promise.all([answer("yes"), answer("yes")]);
-    expect([first.status, second.status]).toEqual([200, 200]);
+    expect([first.status, second.status].sort()).toEqual([200, 403]);
+    expect(await (first.status === 403 ? first : second).json()).toMatchObject({ code: "token_consumed" });
     const third = await answer("no");
-    expect(third.status).toBe(200);
+    expect(third.status).toBe(403);
+    expect(await third.json()).toMatchObject({ code: "token_consumed" });
     const settled = store.getIssueDecision(parent.id, decision.id)!;
     expect(settled.status).toBe("answered");
     // One write: one history entry, one activity pair, one delivery patch.
@@ -1157,13 +1172,16 @@ describe("MUL-412 issue decision cards", () => {
         );
         return response.ok ? (await response.json()).decision : null;
       },
-      answerFeishuIssueDecision: async (issueId: string, decisionId: string, input: { answer: string; operatorOpenId: string }) => {
+      answerFeishuIssueDecision: async (issueId: string, decisionId: string, input: { answer: string; operatorOpenId: string; token: string }) => {
         const response = await app(store).request(`/api/daemon/issues/${issueId}/decisions/${decisionId}/answer`, {
           method: "POST",
           headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-          body: JSON.stringify({ answer: input.answer, operator_open_id: input.operatorOpenId }),
+          body: JSON.stringify({ answer: input.answer, token: input.token, operator_open_id: input.operatorOpenId }),
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+          const error = await response.json();
+          throw Object.assign(new Error(String(error.code ?? "request failed")), { code: error.code, status: response.status });
+        }
         return (await response.json()).decision;
       },
     };
@@ -1171,13 +1189,13 @@ describe("MUL-412 issue decision cards", () => {
       appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId: "om_clickable",
       recipientOpenId: CARD_OPEN_ID,
       getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
-      submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(parent.id, decision.id, { answer, operatorOpenId }),
+      submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(parent.id, decision.id, { answer, operatorOpenId, token }),
     });
     const marker = decisionInteractionMarker(parent.id, decision.id);
     const wrongOperator = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
       operator: { open_id: "ou_somebody_else" },
       context: { open_message_id: "om_clickable", open_chat_id: "oc_issue_decision" },
-      action: { name: marker, form_value: { [`${marker}_answer`]: "yes" } },
+      action: { value: cardAction(decision.id), name: marker, form_value: { [`${marker}_answer`]: "yes" } },
     });
     expect(wrongOperator).toEqual({
       toast: { type: "error", content: OPERATOR_MISMATCH_TOAST },
@@ -1187,7 +1205,7 @@ describe("MUL-412 issue decision cards", () => {
     const click = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
       operator: { open_id: CARD_OPEN_ID },
       context: { open_message_id: "om_clickable", open_chat_id: "oc_issue_decision" },
-      action: { name: marker, form_value: { [`${marker}_answer`]: "自定义：先灰度" } },
+      action: { value: cardAction(decision.id), name: marker, form_value: { [`${marker}_answer`]: "自定义：先灰度" } },
     });
     expect(JSON.stringify(click)).toContain("已提交");
     const settled = store.getIssueDecision(parent.id, decision.id)!;
@@ -1240,14 +1258,14 @@ describe("MUL-412 issue decision cards", () => {
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
-            submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-              parent.id, decision.id, { answer, operatorOpenId },
+            submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+              parent.id, decision.id, { answer, operatorOpenId, token },
             ),
           });
           return handleIssueDecisionInteractionEvent("cli_issue_decision", {
             operator: { open_id: CARD_OPEN_ID },
             context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-            action: { name: `${marker}_o0`, form_value: {} },
+            action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
           });
         });
         expect(result?.toast).toEqual({
@@ -1296,14 +1314,14 @@ describe("MUL-412 issue decision cards", () => {
             before = decisionSideEffectCounts();
             return current;
           },
-          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-            parent.id, decision.id, { answer, operatorOpenId },
+          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId, token },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
           operator: { open_id: CARD_OPEN_ID },
           context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-          action: { name: `${marker}_o0`, form_value: {} },
+          action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
         });
       });
       expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
@@ -1337,14 +1355,14 @@ describe("MUL-412 issue decision cards", () => {
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(issueId, decisionId),
-            submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-              issueId, decisionId, { answer, operatorOpenId },
+            submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+              issueId, decisionId, { answer, operatorOpenId, token },
             ),
           });
           return handleIssueDecisionInteractionEvent("cli_issue_decision", {
             operator: { open_id: CARD_OPEN_ID },
             context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-            action: { name: marker, form_value: { [`${marker}_answer`]: "yes" } },
+            action: { value: { t: "missing-card-fixture", r: decisionId, issue_id: issueId }, name: marker, form_value: { [`${marker}_answer`]: "yes" } },
           });
         });
         expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
@@ -1380,14 +1398,14 @@ describe("MUL-412 issue decision cards", () => {
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
-          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-            parent.id, decision.id, { answer, operatorOpenId },
+          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId, token },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
           operator: { open_id: CARD_OPEN_ID },
           context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-          action: { name: `${marker}_o0`, form_value: {} },
+          action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
         });
       });
       expect(result?.toast).toEqual({ type: "info", content: DECISION_FINISHED_TOAST });
@@ -1399,7 +1417,7 @@ describe("MUL-412 issue decision cards", () => {
     }
   });
 
-  it("keeps an already-answered concurrent card callback idempotent", async () => {
+  it("rejects an already-answered concurrent callback and renders its receipt", async () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Answer race", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
@@ -1423,22 +1441,22 @@ describe("MUL-412 issue decision cards", () => {
             if (!raced) {
               raced = true;
               await client.answerFeishuIssueDecision(parent.id, decision.id, {
-                answer: "yes", operatorOpenId: CARD_OPEN_ID,
+                answer: "yes", operatorOpenId: CARD_OPEN_ID, token: String(cardAction(decision.id).t),
               });
             }
             return current;
           },
-          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-            parent.id, decision.id, { answer, operatorOpenId },
+          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId, token },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
           operator: { open_id: CARD_OPEN_ID },
           context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-          action: { name: `${marker}_o0`, form_value: {} },
+          action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
         });
       });
-      expect(result?.toast).toEqual({ type: "success", content: "已提交" });
+      expect(result?.toast).toEqual({ type: "info", content: DECISION_FINISHED_TOAST });
       expect(result).toHaveProperty("card");
       expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "answered" });
       expect(store.getIssueDecision(parent.id, decision.id)?.history).toHaveLength(1);
@@ -1458,7 +1476,7 @@ describe("MUL-412 issue decision cards", () => {
     const rows = [
       { name: "non-fd action", route: "ignored", expected: null, ignored: true },
       { name: "card not registered", route: "missing_entry", expected: { type: "info", content: CARD_RECOVERING_TOAST } },
-      { name: "local operator mismatch", route: "operator", expected: { type: "error", content: OPERATOR_MISMATCH_TOAST } },
+      { name: "server operator mismatch", route: "operator", expected: { type: "error", content: OPERATOR_MISMATCH_TOAST } },
       { name: "GET failure", route: "get_error", expected: { type: "error", content: "本次没有提交：提交失败，请稍后重试（错误码：handler_read_failed）。" } },
       { name: "GET null", route: "get_null", expected: { type: "info", content: CARD_RECOVERING_TOAST } },
       { name: "GET terminal", route: "get_answered", expected: { type: "info", content: DECISION_FINISHED_TOAST }, receipt: true },
@@ -1486,6 +1504,8 @@ describe("MUL-412 issue decision cards", () => {
           return Response.json({ decision: { ...decision, status, options } });
         }
         if (activeRoute === "post_error") return Response.json({ error: "decision not found" }, { status: 404 });
+        if (activeRoute === "operator") return Response.json({ code: "recipient_mismatch" }, { status: 403 });
+        if (activeRoute === "get_answered") return Response.json({ code: "token_consumed" }, { status: 403 });
         const status = activeRoute === "post_withdrawn"
           ? "withdrawn"
           : activeRoute === "post_escalated" ? "escalated" : "answered";
@@ -1502,8 +1522,8 @@ describe("MUL-412 issue decision cards", () => {
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
-          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-            parent.id, decision.id, { answer, operatorOpenId },
+          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId, token },
           ),
         }) : null;
         const actionName = row.route === "ignored"
@@ -1518,7 +1538,7 @@ describe("MUL-412 issue decision cards", () => {
           const result = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
             operator: { open_id: row.route === "operator" ? "ou_somebody_else" : CARD_OPEN_ID },
             context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-            action: { name: actionName, form_value: formValue },
+            action: { value: cardAction(decision.id), name: actionName, form_value: formValue },
           });
           if (row.expected === null) {
             expect(result, row.name).toBeNull();
@@ -1553,7 +1573,7 @@ describe("MUL-412 issue decision cards", () => {
     const action = (messageId: string) => ({
       operator: { open_id: CARD_OPEN_ID },
       context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
-      action: { name: `${marker}_o0`, form_value: {} },
+      action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
     });
     type Stage = "read" | "submit";
     const cases = [
@@ -1663,10 +1683,10 @@ describe("MUL-412 issue decision cards", () => {
           messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => readClient.getFeishuIssueDecision(parent.id, decision.id),
-          submit: (answer, operatorOpenId) => submitClient.answerFeishuIssueDecision(
+          submit: (answer, operatorOpenId, token) => submitClient.answerFeishuIssueDecision(
             parent.id,
             decision.id,
-            { answer, operatorOpenId },
+            { answer, operatorOpenId, token },
           ),
         });
         try {

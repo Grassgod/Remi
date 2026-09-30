@@ -37,7 +37,8 @@
  * preserved, fields are never dropped.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -60,6 +61,7 @@ export const SNAPSHOT_STATUS_ONLY_ROUTES = new Set([
   "GET /ws",
   "GET /api/daemon/ws",
   "GET /api/realtime/ws",
+  "GET /api/trace/ws",
 ]);
 
 const NORMALIZER_RULES = [
@@ -149,6 +151,7 @@ function installDeterminism(): () => void {
 
   setEnv("MULTIREMI_TOKEN", undefined); // auth middleware off: snapshot handler bodies
   setEnv("MULTIREMI_DATABASE_URL", undefined); // never touch a real Postgres
+  setEnv("MULTIREMI_API_ROLE", undefined); // capture the baseline without an inherited role
   setEnv("NODE_ENV", "test");
   setEnv("MULTIREMI_UPLOAD_DIR", UPLOAD_DIR);
   setEnv("MULTIREMI_RELEASE_DIR", RELEASE_DIR);
@@ -962,6 +965,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   provisionId: "runtimeProvisionId",
   squadId: "squadId",
   taskId: "taskId",
+  task_id: "taskId",
   triggerId: "triggerId",
   updateId: "runtimeUpdateRequestId",
   workspaceId: "workspaceId",
@@ -1159,7 +1163,7 @@ async function buildApp(
   // Declare the backend: the store runs migrations immediately, and an
   // inherited MULTIREMI_DATABASE_URL must not turn this SQLite fixture into a
   // Postgres migration (MUL-407).
-  db: Database = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }),
+  db: Database = openSqliteDatabase(":memory:"),
 ): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);
@@ -1174,7 +1178,7 @@ export const buildSnapshotApp = buildApp;
 // families
 // ---------------------------------------------------------------------------
 
-type Flow = (rec: Recorder, refs: SeedRefs) => Promise<void>;
+type Flow = (rec: Recorder, refs: SeedRefs, store: MultiremiStore) => Promise<void>;
 
 const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 
@@ -1816,6 +1820,18 @@ flow("feishu-bot", async (rec, refs) => {
 });
 
 // -- settings / misc --------------------------------------------------------
+flow("issue-topics-invalid-stored", async (rec, refs, store) => {
+  const workspace = store.getWorkspace(refs.workspaceId)!;
+  store.updateWorkspace(refs.workspaceId, { settings: { ...workspace.settings, issueTopics: {
+    enabled: true, chatId: "oc_snapshot_topics", notifyMode: "person",
+  } } });
+  const path = `/api/workspaces/${refs.workspaceId}/issue-topics`;
+  await rec.call("GET", path);
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics" });
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics", notify_mode: "none" });
+  await rec.call("GET", path);
+});
+
 flow("settings-misc", async (rec, refs) => {
   await rec.json("PUT", "/api/notification-preferences", { email_enabled: false });
   await rec.json("PUT", "/api/multiremi/notification-preferences", { emailEnabled: true });
@@ -1922,7 +1938,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
       resetDeterministicState();
       const boot = await buildApp();
       const recorder = new Recorder(boot.app, routes, name);
-      await run(recorder, boot.refs);
+      await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);
       boot.db.close();

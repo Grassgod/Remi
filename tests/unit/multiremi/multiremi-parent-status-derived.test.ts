@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -930,7 +931,8 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     expect(comments[0]?.body).toContain("failed");
     const rounds = store.listTasksForIssue(parent.id);
     expect(rounds).toHaveLength(1);
-    expect(rounds[0]?.prompt).toContain("reported failed");
+    expect(inboxReportBody(store, rounds[0]!)).toContain("failed");
+    expect(store.getConversationLogEntryById(comments[0]!.id)!.metadata.envelope?.outcome).toBe("failed");
   });
 });
 
@@ -983,12 +985,8 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       const latest = comments.at(-1)!;
       expect(latest.body, testCase.outcome).toContain(`mention://agent/${agent.id}`);
 
-      const notification = store.listIssueActivity(parent.id)
-        .filter((entry) => entry.type === "comment_created")
-        .map((entry) => entry.data as Record<string, unknown> | null)
-        .filter((data) => data?.outcome !== undefined)
-        .at(-1);
-      expect(notification, testCase.outcome).toMatchObject({ outcome: testCase.outcome });
+      const notification = store.getConversationLogEntryById(latest.id)!.metadata.envelope;
+      expect(notification, testCase.outcome).toMatchObject({ outcome: testCase.outcome === "done" ? "done" : testCase.outcome });
     }
 
     // Four reports, one pending round: the owner wakes once for the batch.
@@ -996,10 +994,11 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     expect(parentTasks).toHaveLength(1);
     expect(parentTasks[0]).toMatchObject({ agentId: agent.id, status: "queued" });
     expect(activityOf(store, parent.id, "child_done_parent_triggered")).toHaveLength(1);
-    expect(activityOf(store, parent.id, "child_status_parent_coalesced")).toHaveLength(3);
-    // The first report is the round's own subject; the rest append onto it.
-    expect(parentTasks[0]?.prompt).toContain("reported failed");
-    expect(parentTasks[0]?.prompt.match(/## Additional Sub-Issue Report/g)).toHaveLength(3);
+    expect(activityOf(store, parent.id, "pending_turn_coalesced")).toHaveLength(3);
+    const reports = store.listIssueComments(parent.id).filter(comment => comment.authorType === "system");
+    expect(reports).toHaveLength(4);
+    expect(inboxReportBody(store, parentTasks[0]!)).toContain("failed");
+    expect(parentTasks[0]?.prompt).not.toContain("failed");
   });
 
   it("files a child_issue_terminal inbox item for a member owner with the right severity", () => {
@@ -1170,15 +1169,13 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
     expect(queued[0]?.id).toBe(queuedAfterFirst[0]?.id);
-    expect(queued[0]?.prompt).toContain("## Additional Sub-Issue Report");
-    expect(queued[0]?.prompt).toContain("Outcome: blocked");
-    expect(activityOf(store, parent.id, "child_status_parent_coalesced")).toHaveLength(3);
+    expect(queued[0]?.prompt).toBe(queuedAfterFirst[0]!.prompt);
+    expect(inboxReportBody(store, queued[0]!)).toContain("is blocked");
+    expect(activityOf(store, parent.id, "pending_turn_coalesced")).toHaveLength(3);
 
     // Every report still reached the parent as its own notification comment.
-    const notifications = store.listIssueActivity(parent.id)
-      .filter((entry) => entry.type === "comment_created")
-      .map((entry) => entry.data as Record<string, unknown> | null)
-      .filter((data) => data?.outcome !== undefined);
+    const notifications = store.listIssueComments(parent.id).filter(comment =>
+      store.getConversationLogEntryById(comment.id)?.metadata.envelope?.outcome !== undefined);
     expect(notifications).toHaveLength(4);
   });
 

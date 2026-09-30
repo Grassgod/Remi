@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
@@ -37,7 +38,7 @@ function normalizeSql(sql: string): string {
 }
 
 function countingDatabase(): CountingDatabase {
-  const database = new Database(":memory:");
+  const database = openSqliteDatabase(":memory:");
   const counts = new Map<string, number>();
   const proxy = new Proxy(database, {
     get(target, key) {

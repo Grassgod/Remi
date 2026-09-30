@@ -372,6 +372,30 @@ describe("operations CLI contracts", () => {
     expect(requests.some((request) => request.method === "DELETE")).toBe(true);
   });
 
+  it("sends workspace abandonment only when explicitly requested on both deletion commands", async () => {
+    useCliEnv();
+    const strict = specById("runtime.delete");
+    const cascade = specById("runtime.archive-agents-and-delete");
+    const registry = registryFor([strict, cascade]);
+    const requests: Request[] = [];
+    const handler = (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/runtimes") return Response.json([{ id: "rt_delete", name: "Builder" }]);
+      if (url.pathname === "/api/agents") return Response.json({ agents: [] });
+      requests.push(request);
+      return Response.json({ status: "ok", issue_workspaces_abandoned: 1 });
+    };
+    globalThis.fetch = capabilityFetch(strict.id, handler);
+    await capture(() => registry.execute(["runtime", "delete", "rt_delete", "--yes", "--output", "json"]));
+    expect(new URL(requests[0]!.url).searchParams.has("abandon_issue_workspaces")).toBe(false);
+    await capture(() => registry.execute(["runtime", "delete", "rt_delete", "--yes", "--abandon-issue-workspaces", "--output", "json"]));
+    expect(new URL(requests[1]!.url).searchParams.get("abandon_issue_workspaces")).toBe("true");
+    globalThis.fetch = capabilityFetch(cascade.id, handler);
+    await capture(() => registry.execute(["runtime", "archive-agents-and-delete", "rt_delete", "--yes", "--abandon-issue-workspaces", "--output", "json"]));
+    expect(requests[2]!.method).toBe("POST");
+    expect(await requests[2]!.json()).toEqual({ abandon_issue_workspaces: true });
+  });
+
   it("runs a runtime command, waits for completion, and prints both output streams", async () => {
     useCliEnv();
     const spec = specById("runtime.command.run");

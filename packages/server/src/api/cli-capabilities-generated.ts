@@ -386,6 +386,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.relay.context-window.update": {
+      "command": "remi workspace relay context-window update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.context-window.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "auth": [
@@ -2282,6 +2295,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "session.log.window": {
+      "command": "remi session log window",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.window",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "session.log.locate": {
+      "command": "remi session log locate",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.locate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "session.message.create": {
       "command": "remi session message create",
       "auth": [
@@ -2523,6 +2562,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.workspace",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.workspace.abandon": {
+      "command": "remi issue workspace abandon",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.workspace.abandon",
       "output": [
         "table",
         "json",
@@ -3007,6 +3059,20 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "share.trace.read": {
+      "command": "remi share trace read",
+      "auth": [
+        "human",
+        "share",
+        "task"
+      ],
+      "capability": "share.trace.read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "label.list": {
       "command": "remi label list",
       "auth": [
@@ -3420,13 +3486,13 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "task.message.list": {
-      "command": "remi task message list",
+    "task.trace.read": {
+      "command": "remi task trace read",
       "auth": [
         "human",
         "task"
       ],
-      "capability": "task.message.list",
+      "capability": "task.trace.read",
       "output": [
         "table",
         "json",

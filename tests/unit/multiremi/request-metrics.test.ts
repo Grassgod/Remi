@@ -275,6 +275,10 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
     // Not even the query delimiter survives: the log carries no path at all.
     expect(raw).not.toContain("?token");
 
+    // The pid addition must not touch the response header this same request emits.
+    expect(response.headers.get("server-timing"))
+      .toMatch(/^total;dur=\d+\.\d, db;dur=9\.5, dbp;dur=\d+\.\d, dbq;desc="1", dbb;desc="4096"$/);
+
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     expect(parsed.event).toBe("api_slow_request");
     expect(parsed.method).toBe("POST");
@@ -286,8 +290,9 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
     expect(typeof parsed.total_ms).toBe("number");
     expect(typeof parsed.ts).toBe("string");
     // The exact field set is the contract the Issue fixed.
+    expect(parsed.pid).toBe(process.pid);
     expect(Object.keys(parsed).sort()).toEqual([
-      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "role", "route", "status", "total_ms", "ts",
+      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "pid", "role", "route", "status", "total_ms", "ts",
     ]);
     expect(parsed.role).toBe("all");
   });
@@ -471,6 +476,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
     expect(summary).toEqual({
       event: "api_minute_summary",
       ts: "2026-09-24T12:00:00.000Z",
+      pid: process.pid,
       window_ms: 60_000,
       requests: 0,
       status_5xx: 0,
@@ -547,9 +553,10 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     const summaryLines = lines.filter((line) => line.includes("api_minute_summary"));
     expect(summaryLines).toHaveLength(1);
     const summary = JSON.parse(summaryLines[0]!) as Record<string, unknown>;
+    expect(summary.pid).toBe(process.pid);
     expect(Object.keys(summary).sort()).toEqual([
       "db_busy_pct", "db_queries", "dropped", "event", "event_loop_lag_max_ms",
-      "peer", "requests", "role", "routes", "slow", "status_5xx", "ts", "window_ms",
+      "peer", "pid", "requests", "role", "routes", "slow", "status_5xx", "ts", "window_ms",
     ]);
     expect(summary.role).toBe("all");
     expect(summary.requests).toBe(1);

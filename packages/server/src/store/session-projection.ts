@@ -41,7 +41,8 @@ export interface BuildSessionProjectionInput {
  */
 export function buildSessionProjection(input: BuildSessionProjectionInput): MultiremiSessionProjection {
   const sorted = input.events
-    .filter((event) => input.toSeq === undefined || event.seq <= input.toSeq)
+    .map((event) => event.kind === "task_assigned" ? { ...event, kind: "turn" } : event)
+    .filter((event) => event.kind !== "head" && (input.toSeq === undefined || event.seq <= input.toSeq))
     .sort((left, right) => left.seq - right.seq);
   const toSeq = sorted.at(-1)?.seq ?? 0;
   const warm = input.perspectiveMode !== "inherited" && Boolean(input.providerSessionId) && input.cursorSeq > 0;
@@ -51,7 +52,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     : warm ? "delta" : "bootstrap";
   const projected = sorted.filter((event) => {
     if (event.seq <= fromSeq) return false;
-    if (input.currentTaskId && event.kind === "task_assigned" && event.taskId === input.currentTaskId) {
+    if (input.currentTaskId && event.kind === "turn" && event.taskId === input.currentTaskId) {
       return false;
     }
     if (input.perspectiveMode !== "inherited" && mode === "delta"
@@ -298,7 +299,7 @@ function eventLine(
   const line: Record<string, unknown> = {
     type: "session_event",
     seq: event.seq,
-    kind: event.kind,
+    kind: event.kind === "turn" ? "task_assigned" : event.kind,
     perspective,
     author_type: event.authorType,
     author_id: event.authorId,
@@ -309,7 +310,7 @@ function eventLine(
     line.body_truncated = true;
     line.body_omitted_chars = bodyOmittedChars;
   }
-  line.task_id = event.taskId;
+  line.task_id = event.sourceCommentId ? null : event.taskId;
   line.source_comment_id = event.sourceCommentId;
   line.metadata = metadata;
   line.created_at = event.createdAt;

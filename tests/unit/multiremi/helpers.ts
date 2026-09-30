@@ -20,7 +20,8 @@
  * `db!.run(...)` exactly as it did when the variable was file-local.
  */
 import { expect } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +43,7 @@ let uploadDir: string | null = null;
 let previousFetch: typeof globalThis.fetch | null = null;
 
 export function createStore(): MultiremiStore {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
 }
 
@@ -177,13 +178,15 @@ export function readyArchiveBinding(
   const sha256 = createHash("sha256").update(archiveId).digest("hex");
   const initialized = store.initSessionArchive({
     workspaceId: runtime.workspaceId ?? "local",
+    subjectKind: "issue",
+    subjectId: issueId,
     issueId,
     runtimeId,
     daemonId: runtime.daemonId ?? "test-daemon",
     sourceRevision,
     sha256,
     sizeBytes: 0,
-  }, archiveId, `tests/${archiveId}/sessions.tar.gz`).archive;
+  }, archiveId, `tests/${archiveId}/sessions.zip`).archive;
   const claimed = store.claimSessionArchiveUploadAttempt(initialized.id, runtimeId);
   if (!claimed) throw new Error("Failed to claim test Session archive");
   const uploading = store.beginSessionArchiveUploadAttempt(

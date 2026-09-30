@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile, rm, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
@@ -34,6 +34,43 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("requires confirmation for orphaned Issue workspace abandonment and preserves the read command", async () => {
+    useCliEnv();
+    const abandon = specById("issue.workspace.abandon");
+    const read = specById("issue.workspace");
+    const registry = registryFor([read, abandon]);
+    const requests: Request[] = [];
+    const handler = (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "ok", issue_workspaces_abandoned: 1 });
+    };
+    globalThis.fetch = capabilityFetch(abandon.id, handler);
+    await expect(registry.execute(["issue", "workspace", "abandon", "MUL-467"]))
+      .rejects.toThrow("requires --yes");
+    expect(requests).toHaveLength(0);
+    const result = await capture(() => registry.execute(["issue", "workspace", "abandon", "MUL-467", "--yes", "--output", "json"]));
+    expect(requests[0]!.method).toBe("POST");
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/issues/MUL-467/workspace/abandon");
+    expect(JSON.parse(result.stdout).issue_workspaces_abandoned).toBe(1);
+    globalThis.fetch = capabilityFetch(read.id, handler);
+    await capture(() => registry.execute(["issue", "workspace", "MUL-467", "--output", "json"]));
+    expect(requests[1]!.method).toBe("GET");
+    expect(new URL(requests[1]!.url).pathname).toBe("/api/issues/MUL-467/workspace");
+  });
+
+  it("issue grouped sends only the plural assignee type query parameter", async () => {
+    useCliEnv();
+    const spec = specById("issue.grouped");
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/issues/grouped");
+      expect(url.searchParams.get("assignee_types")).toBe("member");
+      expect(url.searchParams.has("assignee_type")).toBe(false);
+      return Response.json({ groups: [], total: 0 });
+    });
+    await capture(() => registryFor([spec]).execute([...spec.path, "--assignee-type", "member", "--output", "json"]));
+  });
+
   it("executes status-pages with list filters and optional archived total", async () => {
     useCliEnv();
     const spec = specById("issue.status-pages");
@@ -46,6 +83,7 @@ describe("native collaboration CLI contracts", () => {
         project_id: "prj_1", parent_id: "iss_parent", top_level_only: "true", limit: "50",
         metadata: '{"lane":1}', include_archived_total: "true",
       })) expect(url.searchParams.get(name)).toBe(value);
+      expect(url.searchParams.has("assignee_type")).toBe(false);
       return Response.json({ groups: { todo: { issues: [], total: 0, has_more: false } }, archived_total: 3 });
     });
     const output = await capture(() => registryFor([spec]).execute([
@@ -107,7 +145,7 @@ describe("native collaboration CLI contracts", () => {
   });
   it("runs the five decision commands through the real issue routes", async () => {
     useCliEnv();
-    const database = new Database(":memory:");
+    const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();
@@ -646,8 +684,9 @@ describe("native collaboration CLI contracts", () => {
     }
 
     const taskMessages = registry.resolve(["task", "messages", "tsk_1", "--since", "4"]);
-    expect(taskMessages?.spec.id).toBe("task.message.list");
+    expect(taskMessages?.spec.id).toBe("task.trace.read");
     expect(taskMessages?.options.since).toBe(4);
+    expect(registry.resolve(["task", "message", "list", "tsk_1"])?.spec.id).toBe("task.trace.read");
   });
 
   it("keeps issue list output byte-compatible with the legacy handler", async () => {
@@ -661,6 +700,25 @@ describe("native collaboration CLI contracts", () => {
     const nativeAdapter = specById("issue.list");
     const viaRegistry = await capture(() => registryFor([nativeAdapter]).execute(["issue", "list", "--output", "json"]));
     expect(viaRegistry).toEqual(direct);
+  });
+
+  it("issue list sends plural assignee types through both Registry and legacy paths", async () => {
+    useCliEnv();
+    const queries: URLSearchParams[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      expect(url.pathname).toBe("/api/issues");
+      queries.push(url.searchParams);
+      return Response.json({ issues: [], total: 0 });
+    }) as typeof fetch;
+    const args = ["issue", "list", "--assignee-type", "member", "--output", "json"];
+    await capture(() => runMultiremi(args));
+    await capture(() => registryFor([specById("issue.list")]).execute(args));
+    expect(queries).toHaveLength(2);
+    for (const query of queries) {
+      expect(query.get("assignee_types")).toBe("member");
+      expect(query.has("assignee_type")).toBe(false);
+    }
   });
 
   it("keeps the dependency CLI aligned with the legacy issue handler", async () => {

@@ -1,23 +1,24 @@
 /**
- * MUL-400 S1 on real PostgreSQL: the same transaction-depth ceiling the SQLite
- * suite asserts, plus the two cases that only a second connection can produce —
- * the E2 hook's own atomicity and the "two children end while the owner is
- * busy" coalescing contract.
+ * MUL-400 S1 on real PostgreSQL: one outer BEGIN/COMMIT, with nested operations
+ * isolated by SAVEPOINT since B1 (MUL-426).
  *
- * The depth counter wraps the `PostgresSyncDatabase` the store was built with,
- * so it measures the real BEGIN/COMMIT nesting. Anything above 1 means an inner
- * COMMIT ended the outer transaction early (there are no savepoints).
+ * Per MUL-402 cmt_78bx01xhb75x section 2, count outer transaction ownership
+ * separately from savepoints and record the actual SQL for every entry point.
+ * Before the outer COMMIT, no second BEGIN or premature COMMIT is allowed;
+ * nested layers may only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT.
+ * The existing post-commit hook, atomicity, rollback and event checks remain.
  *
  * Skipped (not failed) when Postgres is unreachable, matching the other PG
  * suites. Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the
  * configured role may CREATE DATABASE.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
+import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -47,23 +48,107 @@ if (!pgAvailable) {
   );
 }
 
-interface DepthCounter { max: number; reset(): void }
+interface TransactionControl {
+  sql: string;
+  invocationDepth: number;
+  callbackDepth: number;
+  inTransaction: boolean;
+}
+
+interface DepthCounter {
+  maxTopLevel: number;
+  maxNested: number;
+  controls: TransactionControl[];
+  taskInserts: TransactionControl[];
+  reset(): void;
+  assertTransactionControl(label?: string): void;
+}
 
 /** Wrap `transaction()` on the real handle; the store's proxy forwards to it. */
 function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const original = database.transaction.bind(database);
-  const counter: DepthCounter = { max: 0, reset() { counter.max = 0; } };
-  let depth = 0;
+  const counter: DepthCounter = {
+    maxTopLevel: 0,
+    maxNested: 0,
+    controls: [],
+    taskInserts: [],
+    reset() {
+      counter.assertTransactionControl("before the next entry point");
+      counter.maxTopLevel = 0;
+      counter.maxNested = 0;
+      counter.controls = [];
+      counter.taskInserts = [];
+    },
+    assertTransactionControl(label = "PG transaction control") {
+      let outerOpen = false;
+      const savepoints: string[] = [];
+      for (const control of counter.controls) {
+        const detail = `${label}: ${control.sql}`;
+        if (control.sql === "BEGIN") {
+          expect(outerOpen, detail).toBe(false);
+          expect(control.inTransaction, detail).toBe(false);
+          expect(control.invocationDepth, detail).toBe(1);
+          expect(control.callbackDepth, detail).toBe(0);
+          outerOpen = true;
+        } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+          expect(outerOpen, detail).toBe(true);
+          expect(control.inTransaction, detail).toBe(true);
+          expect(control.invocationDepth, detail).toBe(1);
+          expect(control.callbackDepth, detail).toBe(0);
+          expect(savepoints, detail).toHaveLength(0);
+          outerOpen = false;
+        } else {
+          expect(outerOpen, detail).toBe(true);
+          expect(control.inTransaction, detail).toBe(true);
+          expect(control.invocationDepth, detail).toBeGreaterThan(1);
+          expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+          const name = control.sql.split(" ").at(-1)!;
+          if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+          else {
+            expect(savepoints.at(-1), detail).toBe(name);
+            if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+          }
+        }
+      }
+      expect(outerOpen, label).toBe(false);
+      expect(savepoints, label).toHaveLength(0);
+    },
+  };
+  let topLevelDepth = 0;
+  let nestedDepth = 0;
+  let invocationDepth = 0;
+  let callbackDepth = 0;
+  // Observe statements at the bridge boundary and retain callback ownership.
+  const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+  const execute = target.execute.bind(database);
+  target.execute = (sql, params) => {
+    const command = sql.trim().toUpperCase();
+    if (/INSERT\s+INTO\s+MULTIREMI_TASKS\b/.test(command)) {
+      counter.taskInserts.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+    }
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+      counter.controls.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+    }
+    return execute(sql, params);
+  };
   (database as unknown as { transaction: unknown }).transaction =
     (fn: (...args: never[]) => unknown) => {
-      const run = original(fn as never) as (...args: unknown[]) => unknown;
+      const run = original((...args: never[]) => {
+        callbackDepth += 1;
+        try { return fn(...args); }
+        finally { callbackDepth -= 1; }
+      }) as (...args: unknown[]) => unknown;
       return (...args: unknown[]) => {
-        depth += 1;
-        counter.max = Math.max(counter.max, depth);
+        const nested = database.inTransaction;
+        invocationDepth += 1;
+        if (nested) counter.maxNested = Math.max(counter.maxNested, ++nestedDepth);
+        else counter.maxTopLevel = Math.max(counter.maxTopLevel, ++topLevelDepth);
         try {
           return run(...args);
         } finally {
-          depth -= 1;
+          invocationDepth -= 1;
+          if (nested) nestedDepth -= 1;
+          else topLevelDepth -= 1;
         }
       };
     };
@@ -125,6 +210,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     await admin?.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin?.end();
   });
+
+  beforeEach(() => counter.reset());
+  afterEach(() => counter.assertTransactionControl());
 
   /** A fresh workspace per case, so issue numbering and locks stay isolated. */
   function freshWorkspace(): { workspaceId: string; agent: string; runtime: string } {
@@ -312,10 +400,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
-    expect(counter.max).toBe(1);
+    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toHaveLength(1);
+    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
-    expect(queued[0]?.prompt).toContain("reported is done");
+    expect(store.listIssueComments(parent.id).filter(comment => comment.authorType === "system")[0]!.body)
+      .toContain("is done");
   });
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner free: fresh round)", () => {
@@ -336,9 +428,24 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
-    expect(counter.max).toBe(1);
+    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.maxNested).toBe(0);
+    expect(counter.taskInserts).toHaveLength(1);
+    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
   });
+
+  for (const scenario of ["e3", "e4"] as const) {
+    it(`inserts the ${scenario} pending turn inside its state transaction at depth 1 on Postgres`, () => {
+      const flow = inboxFlowFixture(store, scenario);
+      counter.reset();
+      triggerInboxFlow(store, flow);
+      expect(counter.maxTopLevel).toBe(1);
+      expect(counter.maxNested).toBe(0);
+      expect(counter.taskInserts).toHaveLength(1);
+      expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
+    });
+  }
 
   /**
    * MUL-457 QA round 1, blocker 1: on real Postgres the status write and its
@@ -611,7 +718,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     // terminal call hid it.
     counter.reset();
     const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "lifecycle" });
-    expect(counter.max, "createTask").toBe(1);
+    expect(counter.maxTopLevel, "createTask").toBe(1);
     // The child parked at todo, as createTask's own derivation requires.
     expect(store.getIssue(child.id)?.status).toBe("todo");
 
@@ -620,12 +727,12 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(claimed?.id).toBe(task.id);
     counter.reset();
     store.startTask(task.id);
-    expect(counter.max, "startTask").toBe(1);
+    expect(counter.maxTopLevel, "startTask").toBe(1);
     expect(store.getIssue(child.id)?.status).toBe("in_progress");
 
     counter.reset();
     store.completeTask(task.id, { output: "lifecycle done" });
-    expect(counter.max, "completeTask").toBe(1);
+    expect(counter.maxTopLevel, "completeTask").toBe(1);
   });
 
   it("keeps a comment-triggered automatic dispatch at depth 1 (Postgres)", () => {
@@ -656,7 +763,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       authorId: "local",
       body: `[@${agent}](mention://agent/${agent}) please continue`,
     });
-    expect(counter.max).toBe(1);
+    expect(counter.maxTopLevel).toBe(1);
   });
 
   it("keeps completeTask, failTask and cancelTask at depth 1 on Postgres", () => {
@@ -687,7 +794,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     claimAndStart(completing.id);
     counter.reset();
     store.completeTask(completing.id, { output: "finished" });
-    expect(counter.max, "completeTask").toBe(1);
+    expect(counter.maxTopLevel, "completeTask").toBe(1);
 
     const failingChild = store.createIssue({
       title: "PG failing child",
@@ -701,13 +808,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     claimAndStart(failing.id);
     counter.reset();
     store.failTask(failing.id, { error: "boom" });
-    expect(counter.max, "failTask").toBe(1);
+    expect(counter.maxTopLevel, "failTask").toBe(1);
     expect(store.getIssue(failingChild.id)?.status).toBe("blocked");
 
     const cancelling = store.createTask({ agentId: agent, issueId: parent.id, prompt: "cancel me" });
     counter.reset();
     store.cancelTask(cancelling.id);
-    expect(counter.max, "cancelTask").toBe(1);
+    expect(counter.maxTopLevel, "cancelTask").toBe(1);
   });
 
   it("commits the child ending and rolls nothing back when the hook throws (Postgres)", () => {
@@ -760,9 +867,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       // them — and it left no round behind either.
       expect(otherStore.getTask(task.id)?.status).toBe("failed");
       expect(otherStore.getIssue(child.id)?.status).toBe("blocked");
-      expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(0);
+      expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(1);
       expect(otherStore.listIssueComments(parent.id).filter((comment) => comment.authorType === "system"))
-        .toHaveLength(0);
+        .toHaveLength(1);
     } finally {
       other.close();
     }
@@ -809,7 +916,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     } finally {
       unsubscribe();
     }
-    expect(counter.max, "PG chain depth").toBe(1);
+    expect(counter.maxTopLevel, "PG chain depth").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.getIssue(grandparent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_derived"))
@@ -908,6 +1015,170 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("publishes the self-transactional system-comment activity after its outer COMMIT (Postgres)", () => {
+    const { workspaceId } = freshWorkspace();
+    const issue = store.createIssue({ title: "PG wrapper issue", workspaceId, status: "in_progress" });
+    const events: Array<{ action: string; inTransaction: boolean; lastControl: string | undefined }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") {
+        events.push({
+          action: entry?.action ?? "",
+          inTransaction: db.inTransaction,
+          lastControl: counter.controls.at(-1)?.sql,
+        });
+      }
+    });
+    // MUL-402 12:20 ruling (a): the main wrapper owns its COMMIT, not a savepoint.
+    counter.reset();
+    try {
+      store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper", "PG wrapper body");
+    } finally {
+      unsubscribe();
+    }
+    expect(counter.maxTopLevel).toBe(1);
+    counter.assertTransactionControl("createTaskFailureSystemComment COMMIT");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(1);
+    expect(events).toEqual([{ action: "comment_created", inTransaction: false, lastControl: "COMMIT" }]);
+
+    const rollbackEvents: string[] = [];
+    const unsubscribeRollback = store.onWorkspaceEvent((event) => { rollbackEvents.push(event.type); });
+    const original = StoreContext.prototype.appendIssueActivity;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      ...args: Parameters<StoreContext["appendIssueActivity"]>
+    ) {
+      const result = original.apply(this, args);
+      if (args[1].type === "comment_created") throw new Error("PG wrapper rollback injection");
+      return result;
+    };
+    counter.reset();
+    try {
+      expect(() => store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper_2", "PG rollback body"))
+        .toThrow("PG wrapper rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribeRollback();
+    }
+    counter.assertTransactionControl("createTaskFailureSystemComment ROLLBACK");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(0);
+    expect(counter.controls.filter((control) => control.sql === "ROLLBACK")).toHaveLength(1);
+    expect(rollbackEvents).toHaveLength(0);
+    expect(store.listIssueComments(issue.id).filter((comment) => comment.body === "PG rollback body")).toHaveLength(0);
+  });
+
+  it("records actual PG transaction control for the remaining SQLite-suite entry points", () => {
+    let observed = 0;
+    const check = (label: string, action: () => void) => {
+      counter.reset();
+      action();
+      counter.assertTransactionControl(label);
+      observed += counter.controls.length;
+    };
+
+    for (const status of ["blocked", "cancelled"] as const) {
+      for (const busy of [false, true]) {
+        const { workspaceId, agent } = freshWorkspace();
+        const parent = store.createIssue({
+          title: `PG ${status} parent ${busy}`, workspaceId, status: "in_progress",
+          assigneeType: "agent", assigneeId: agent,
+        });
+        if (busy) {
+          const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
+          db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+        }
+        const child = store.createIssue({ title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+        check(`updateIssue ${status}, busy=${busy}`, () => { store.updateIssue(child.id, { status }); });
+      }
+    }
+
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const parent = store.createIssue({ title: "PG remaining parent", workspaceId, status: "in_review" });
+    let child!: ReturnType<MultiremiStore["createIssue"]>;
+    check("createIssue re-derivation", () => {
+      child = store.createIssue({ title: "PG new child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+    });
+    const second = store.createIssue({ title: "PG second parent", workspaceId, status: "in_review" });
+    check("updateIssue re-parent", () => { store.updateIssue(child.id, { parentIssueId: second.id }); });
+
+    const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "PG ask" });
+    let claimed = store.claimTask(runtime);
+    while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime);
+    if (!claimed) throw new Error("PG human request task was not claimed");
+    store.startTask(task.id);
+    let request!: ReturnType<MultiremiStore["createTaskHumanRequest"]>;
+    check("createTaskHumanRequest", () => {
+      request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "PG choice?" } });
+    });
+    check("respondTaskHumanRequest", () => { store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } }); });
+    request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "PG expiry?" } });
+    check("expireTaskHumanRequest", () => { store.expireTaskHumanRequest(request.id, "timeout"); });
+    store.cancelTask(task.id);
+
+    const comment = store.createIssueComment(child.id, { authorType: "member", authorId: "local", body: "PG trigger" });
+    store.createTask({ agentId: agent, issueId: child.id, runtimeId: runtime, triggerCommentId: comment.id, prompt: "PG triggered" });
+    check("cancelTasksByTriggerComments", () => { store.cancelTasksByTriggerComments(workspaceId, [comment.id]); });
+    const orphan = store.createTask({ agentId: agent, issueId: child.id, runtimeId: runtime, prompt: "PG orphan" });
+    claimed = store.claimTask(runtime);
+    while (claimed && claimed.id !== orphan.id) claimed = store.claimTask(runtime);
+    if (!claimed) throw new Error("PG orphan task was not claimed");
+    check("recoverOrphans", () => { store.recoverOrphans(runtime); });
+
+    const supervisor = store.createAgent({ name: "PG controls organizer", provider: "claude", workspaceId, role: "supervisor" });
+    const worker = store.createAgent({ name: "PG controls worker", provider: "claude", workspaceId });
+    const patrol = store.createIssue({ title: "PG controls patrol", workspaceId });
+    const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "PG patrol" });
+    store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
+    for (const action of ["cancel", "redispatch"] as const) {
+      const target = store.createTask({ agentId: worker.id, issueId: child.id, prompt: `PG ${action}` });
+      check(`performOrganizerAction ${action}`, () => {
+        store.performOrganizerAction({
+          supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisor.id,
+          targetTaskId: target.id, action, reason: "PG controls probe",
+        });
+      });
+    }
+
+    const originalKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const repositoryId = `repo_pg_controls_${workspaceCounter}`;
+      store.updateWorkspace(workspaceId, {
+        repos: [{ id: repositoryId, name: "widgets", url: "git@github.com:acme/widgets.git", source: "github", default_branch: "main" }],
+        settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+      });
+      const connection = store.createScmConnection({
+        workspaceId, name: "PG controls SCM", provider: "github", mode: "hybrid",
+        accessToken: "ghp_depth_token", webhookSecret: "depth-webhook-secret", repositoryIds: [repositoryId],
+      });
+      for (const hasOpenChildren of [true, false]) {
+        const mergedIssue = store.createIssue({ title: "PG SCM controls", workspaceId, status: "in_progress" });
+        const scmChild = store.createIssue({ title: "PG SCM child", workspaceId, parentIssueId: mergedIssue.id, status: "in_progress" });
+        if (!hasOpenChildren) store.updateIssue(scmChild.id, { status: "done" });
+        const externalId = hasOpenChildren ? "42" : "43";
+        store.advanceScmEntitySnapshot({
+          connectionId: connection.id, repositoryId, entityType: "change_request", externalId,
+          revisionAt: "2026-08-21T10:00:00.000Z", revision: `v-${externalId}`, contentHash: `change-${externalId}`,
+          payload: { number: Number(externalId), title: `${mergedIssue.key}: deliver`, state: "merged", source_branch: "agent/depth", url: `https://github.com/acme/widgets/pull/${externalId}` },
+        });
+        check(`recordScmCanonicalEvent held=${hasOpenChildren}`, () => {
+          store.recordScmCanonicalEvent({
+            workspaceId, connectionId: connection.id, repositoryId, type: "change.merged",
+            subjectType: "change_request", subjectId: externalId, logicalKey: `change.merged:${externalId}:controls`, fidelity: "inferred",
+            payload: { id: `provider-change-${externalId}`, number: Number(externalId), branch: "main", mergeSha: "abc" },
+            evidence: { source: "poll", dedupeKey: `poll:${externalId}`, providerEventId: null },
+          });
+        });
+      }
+    } finally {
+      if (originalKey === undefined) delete process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_SCM_ENCRYPTION_KEY = originalKey;
+    }
+    expect(observed, "actual PG transaction control statements were recorded").toBeGreaterThan(0);
+  });
+
   it("coalesces two children ending concurrently into one queued round (Postgres)", async () => {
     const { workspaceId, agent } = freshWorkspace();
     const parent = store.createIssue({
@@ -948,11 +1219,10 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
-    // Both reports are in the one round: the first one is the round's subject,
-    // the second is appended as an additional report.
-    expect(queued[0]?.prompt).toMatch(/reported is (blocked|done)/);
-    expect(queued[0]?.prompt).toContain("## Additional Sub-Issue Report");
     const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(2);
+    expect(comments.map(comment => comment.body).join("\n")).toContain("is blocked");
+    expect(comments.map(comment => comment.body).join("\n")).toContain("is done");
+    expect(comments.every(comment => store.getConversationLogEntryById(comment.id)!.metadata.envelope)).toBe(true);
   }, 90_000);
 });

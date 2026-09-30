@@ -22,7 +22,7 @@
  * HTTP-level `GET /api/issues?assignee_id=…` answer, because the route's `total`
  * and id list are what a regression in this resolver actually breaks.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -50,7 +50,7 @@ export interface AssigneeRefGolden {
 
 export async function captureAssigneeRefGolden(source: string): Promise<AssigneeRefGolden> {
   const restoreIds = installAssigneeRefIds();
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   try {
     const store = new MultiremiStore(db);
     const fixture = seedAssigneeRefFixture(store);

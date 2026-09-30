@@ -242,6 +242,7 @@ export type PromptContent =
 
 export interface PromptResult {
   stopReason: StopReason;
+  _meta?: Record<string, unknown>;
   /**
    * Token usage reported when `session/prompt` settles. The scope is
    * provider-specific: claude-agent-acp reports the whole prompt turn, while
@@ -473,6 +474,7 @@ export interface ConfigOptionUpdate {
 export interface SessionInfoUpdate {
   sessionUpdate: "session_info_update";
   title?: string;
+  _meta?: Record<string, unknown>;
 }
 
 export interface AvailableCommandsUpdate {
@@ -534,6 +536,7 @@ export interface LoadSessionParams {
   cwd: string;
   mcpServers: McpServerConfig[];
   additionalDirectories?: string[];
+  _meta?: NewSessionMeta;
 }
 
 export interface CloseSessionParams {

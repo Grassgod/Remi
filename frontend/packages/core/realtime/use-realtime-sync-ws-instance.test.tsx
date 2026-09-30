@@ -23,6 +23,7 @@ function createMockWs(): WSClient {
     on: vi.fn(() => () => {}),
     onAny: vi.fn(() => () => {}),
     onReconnect: vi.fn(() => () => {}),
+    onResync: vi.fn(() => () => {}),
   } as unknown as WSClient;
 }
 
@@ -54,6 +55,24 @@ describe("useRealtimeSync — ws instance change", () => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     stores = createStores();
     invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+  });
+
+  it("re-runs the reconnect invalidation when the server broadcasts resync (MUL-438)", () => {
+    const ws = createMockWs();
+    const resyncCallbacks = new Set<() => void>();
+    (ws.onResync as unknown as ReturnType<typeof vi.fn>).mockImplementation((cb: () => void) => {
+      resyncCallbacks.add(cb);
+      return () => resyncCallbacks.delete(cb);
+    });
+    renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+
+    expect(resyncCallbacks.size).toBe(1);
+    invalidateSpy.mockClear();
+    for (const cb of resyncCallbacks) cb();
+
+    // The same workspace-scoped invalidation a reconnect runs — the two paths
+    // share one implementation, so a `resync` cannot recover less than a drop.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["issues", "ws-1"] });
   });
 
   it("skips invalidation on first non-null ws instance", () => {

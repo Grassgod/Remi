@@ -18,6 +18,7 @@
     "./issues/utils/filter": "./issues/utils/filter.ts",
     "./issues/utils/sort": "./issues/utils/sort.ts",
     "./common/task-transcript": "./common/task-transcript/index.ts",
+    "./common/session-log": "./common/session-log/index.ts",
     "./projects/components": "./projects/components/index.ts",
     "./repositories": "./repositories/index.ts",
     "./autopilots/components": "./autopilots/components/index.ts",

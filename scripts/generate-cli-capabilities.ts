@@ -184,6 +184,8 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
+    "GET /api/sessions/:sessionId/log": "session.log.window",
+    "GET /api/sessions/:sessionId/log/locate": "session.log.locate",
     "GET /api/issues/children": "issue.children",
     "GET /api/multiremi/issues/children": "issue.children",
     "GET /api/issues/child-progress": "issue.child-progress",
@@ -254,6 +256,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/workspaces\/:id\/relay-config\/:engine\/probe$/, "workspace.relay.probe"],
     [/^GET \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.get"],
     [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.update"],
+    [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/context-window$/, "workspace.relay.context-window.update"],
     [/^GET \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.get"],
     [/^PUT \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.update"],
     [/^POST \/api\/workspaces\/:id\/bot-menu\/publish$/, "workspace.bot-menu.publish"],
@@ -354,6 +357,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/issues\/:id\/task-runs$/, "issue.task-runs"],
     [/^GET \/api\/issues\/:id\/usage$/, "issue.usage"],
     [/^GET \/api\/issues\/:id\/workspace$/, "issue.workspace"],
+    [/^POST \/api\/issues\/:id\/workspace\/abandon$/, "issue.workspace.abandon"],
     [/^POST \/api\/issues\/:id\/rerun$/, "issue.rerun"],
     [/^POST \/api\/issues\/:id\/tasks\/:taskId\/cancel$/, "issue.cancel"],
     [/^POST \/api\/issues\/:id\/squad-evaluated$/, "issue.squad-evaluated"],
@@ -416,6 +420,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/issues\/:id\/share\/extend$/, "share.extend"],
     [/^DELETE \/api\/issues\/:id\/share$/, "share.delete"],
     [/^GET \/api\/shares\/:token$/, "share.view"],
+    [/^GET \/api\/shares\/:token\/tasks\/:task_id\/trace$/, "share.trace.read"],
     [/^GET \/api\/shares\/:token\/attachments\/:attachmentId\/content$/, "share.view"],
     [/^GET \/api\/(?:multiremi\/)?labels\/:id$/, "label.get"],
     [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?labels\/:id$/, "label.update"],
@@ -446,7 +451,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/(?:multiremi\/)?tasks\/:id\/steer$/, "task.steer"],
     [/^GET \/api\/(?:multiremi\/)?tasks\/:id\/steer$/, "task.steer.list"],
     [/^GET \/api\/(?:multiremi\/)?tasks\/:id\/inspection$/, "task.inspect"],
-    [/^GET \/api\/(?:multiremi\/tasks\/:id|tasks\/:taskId)\/messages$/, "task.message.list"],
+    [/^GET \/api\/tasks\/:id\/trace$/, "task.trace.read"],
+    [/^GET \/api\/(?:multiremi\/tasks\/:id|tasks\/:taskId)\/messages$/, "task.trace.read"],
     [/^GET \/api\/tasks\/:taskId\/prompt$/, "task.prompt"],
     [/^GET \/api\/(?:multiremi\/)?tasks\/:id\/human-requests$/, "task.request.list"],
     [/^POST \/api\/(?:multiremi\/)?tasks\/:id\/human-requests\/:requestId\/respond$/, "task.request.respond"],
@@ -749,7 +755,12 @@ function exemptRoute(route: string): CliManifestRoute | null {
     category,
     reason,
   });
-  if (path === "/ws" || path === "/api/daemon/ws" || path === "/api/realtime/ws") {
+  if (
+    path === "/ws"
+    || path === "/api/daemon/ws"
+    || path === "/api/realtime/ws"
+    || path === "/api/trace/ws"
+  ) {
     return exempt("websocket_transport", "Long-lived WebSocket transport is outside the CLI command surface.");
   }
   // MUL-462: the split-API peer channel lives off the dashboard surface —

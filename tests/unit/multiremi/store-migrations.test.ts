@@ -4,7 +4,8 @@
 // three legacy migrations that MUST run on every startup (8f20d1c8: losing them
 // breaks old-database upgrades).
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase, deserializeSqliteDatabase, markSqliteDialect } from "@multiremi/store/db/sqlite.js";
 import { resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -16,7 +17,7 @@ import {
 let db: Database | null = null;
 
 function freshDb(): Database {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   return db;
 }
 
@@ -44,6 +45,31 @@ afterEach(() => {
 });
 
 describe("store migrations", () => {
+  it("upgrades gateway context declarations with no presets and preserves them across restarts", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP TABLE multiremi_gateway_model_context;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260928_gateway_model_context';
+    `);
+    migrate(database);
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_gateway_model_context").get()).toEqual({ count: 0 });
+    database.run(
+      "INSERT INTO multiremi_gateway_model_context VALUES (?, ?, ?, ?, ?, ?)",
+      ["local", "claude", "claude-opus-5", "1m", "local", "2026-09-28T00:00:00.000Z"],
+    );
+    migrate(database);
+    migrate(database);
+    expect(database.query("SELECT model_id, context_window FROM multiremi_gateway_model_context").all())
+      .toEqual([{ model_id: "claude-opus-5", context_window: "1m" }]);
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
+      .get("20260928_gateway_model_context")).toEqual({ count: 1 });
+    expect(() => database.run(
+      "INSERT INTO multiremi_gateway_model_context VALUES (?, ?, ?, ?, ?, ?)",
+      ["local", "codex", "gpt-5", "1m", null, "2026-09-28T00:00:00.000Z"],
+    )).toThrow();
+  });
+
   it("adds provider-default metadata to existing runtime model tables idempotently", () => {
     const database = freshDb();
     migrate(database);
@@ -185,6 +211,8 @@ describe("store migrations", () => {
   it("adds continuation lineage to an existing task table idempotently without losing rows", () => {
     const database = freshDb();
     migrate(database);
+    database.exec("DROP INDEX idx_multiremi_tasks_one_pending_turn_session");
+    database.exec("DROP INDEX idx_multiremi_tasks_one_pending_turn_chat");
     database.exec("ALTER TABLE multiremi_tasks DROP COLUMN continued_from_task_id");
     const timestamp = "2026-09-18T00:00:00.000Z";
     database.run(
@@ -1702,7 +1730,7 @@ describe("store migrations", () => {
     const backup = database.serialize();
     migrate(database);
     expect(columnNames(database, "multiremi_chat_sessions")).not.toContain("issue_id");
-    const restored = Database.deserialize(backup);
+    const restored = deserializeSqliteDatabase(backup);
     try {
       expect(columnNames(restored, "multiremi_chat_sessions")).toContain("issue_id");
       expect(restored.query("SELECT issue_id, session_id, work_dir FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get())
@@ -2724,7 +2752,7 @@ describe("MUL-407 human-request push table rebuild", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as unknown as SqlDatabase & { dialect: "sqlite" };
-    Object.assign(counted, { dialect: "sqlite" as const });
+    markSqliteDialect(counted);
 
     // `runMigrations` takes the `SqlDatabase` surface, which is exactly what the
     // proxy above pretends to be (`migrate()` is the `Database`-typed helper).
@@ -2920,7 +2948,7 @@ describe("MUL-407 human-request push table rebuild", () => {
     // query fails for an unrelated reason. The resolver now consults only
     // declared facts, so it issues no statement — this counts them.
     const statements: string[] = [];
-    const handle = new Proxy(new Database(":memory:"), {
+    const handle = new Proxy(openSqliteDatabase(":memory:"), {
       get(target, key) {
         const value = Reflect.get(target, key, target);
         if ((key === "query" || key === "prepare" || key === "run" || key === "exec") && typeof value === "function") {
@@ -2929,14 +2957,14 @@ describe("MUL-407 human-request push table rebuild", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as unknown as SqlDatabase & { dialect: "sqlite" };
-    Object.assign(handle, { dialect: "sqlite" as const });
+    markSqliteDialect(handle);
 
     expect(resolveSqlDialect(handle)).toBe("sqlite");
     expect(resolveSqlDialect(handle, "postgres")).toBe("postgres");
     expect(resolveSqlDialect(handle, "sqlite")).toBe("sqlite");
-    // A wrapper that forgot to forward its marker, with no explicit dialect, is
-    // resolved from configuration — never by asking the database.
-    const anonymous = new Proxy(new Database(":memory:"), {
+    // A second proxy forwards the factory's marker without an explicit dialect
+    // or any database query.
+    const anonymous = new Proxy(openSqliteDatabase(":memory:"), {
       get(target, key) {
         const value = Reflect.get(target, key, target);
         if ((key === "query" || key === "prepare" || key === "run" || key === "exec") && typeof value === "function") {
@@ -2954,7 +2982,7 @@ describe("MUL-407 human-request push table rebuild", () => {
     // `runMigrations(db, { dialect })` is how a caller that already knows says
     // so — the seam the Postgres wrappers use, and why a wrapper that forgets to
     // forward `dialect` is no longer a correctness problem.
-    const sqlite = new Database(":memory:");
+    const sqlite = openSqliteDatabase(":memory:");
     runMigrations(sqlite as unknown as SqlDatabase, { dialect: "sqlite" });
     // A SQLite handle asked to migrate as Postgres would try `ALTER COLUMN … DROP
     // NOT NULL`; the explicit value must win and keep it on the SQLite path.

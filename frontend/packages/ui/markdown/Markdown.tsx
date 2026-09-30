@@ -79,7 +79,13 @@ export interface MarkdownProps {
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
 // and Multiremi's internal mention/slash protocols.
-const sanitizeSchema = {
+//
+// Exported so the server renderer's copy can be held to this one by a test
+// (`tests/unit/multiremi/render-markdown-parity.test.ts`). The two cannot share
+// the literal: `packages/server` is not allowed to import this package (see the
+// workspace-alias allowlist in `tests/arch/package-boundaries.test.ts`), so the
+// server carries a copy and the test asserts they stay equal.
+export const sanitizeSchema: typeof defaultSchema = {
   ...defaultSchema,
   protocols: {
     ...defaultSchema.protocols,

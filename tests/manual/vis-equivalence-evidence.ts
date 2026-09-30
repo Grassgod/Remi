@@ -3,14 +3,14 @@
  * several authorization rules, so the same fixture can be run on the parent
  * commit and on the change and diffed byte for byte.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 
 const out = process.argv[2] ?? "/tmp/vis.json";
-const store = new MultiremiStore(new Database(":memory:"));
+const store = new MultiremiStore(openSqliteDatabase(":memory:"));
 store.ensureLocalWorkspace();
 store.createWorkspace({ id: "ws_other", name: "Other", slug: "other", issuePrefix: "OTH" });
 const shared = store.createAgent({ id: "agt_shared", name: "Shared", provider: "codex", workspaceId: "local", visibility: "workspace" });
