@@ -200,6 +200,55 @@ async function verifyCursorDeliveryAcrossScopes(
   }
 }
 
+async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "session" | "agent"): Promise<void> {
+  const recipient = store.createAgent({ name: "Lane isolation recipient", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Lane isolation", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this entry" });
+  const entry = store.getConversationLogEntryById(comment.id)!;
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
+    fields: { metadata: { ...entry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "agent", agentId: recipient.id, issueSessionId: session.id }, source: {},
+    } } },
+  }))();
+
+  let otherSessionId = session.id;
+  let otherAgentId = recipient.id;
+  if (otherLane === "session") {
+    const otherIssue = store.createIssue({ title: "Other lane session", workspaceId: "local" });
+    otherSessionId = store.getOrCreateDefaultIssueSession(otherIssue.id).id;
+    store.createIssueComment(otherIssue.id, { issueSessionId: otherSessionId, body: "Unrelated entry" });
+  } else {
+    otherAgentId = store.createAgent({ name: "Other lane agent", provider: "codex", visibility: "workspace" }).id;
+  }
+  store.getOrCreateSessionAgentLane(otherSessionId, otherAgentId, "dlg_other");
+  (store as any).db.run(
+    "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+    [entry.seq, otherSessionId, otherAgentId, "dlg_other"],
+  );
+  const app = createMultiremiApp({ store });
+  const assertDelivered = async (delivered: boolean) => {
+    for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+      const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).delivered).toBe(delivered);
+    }
+  };
+
+  await assertDelivered(false);
+  expect(store.getSessionAgentMaxCursorSeq(session.id, recipient.id)).toBe(0);
+  if (otherLane === "agent") {
+    store.getOrCreateSessionAgentLane(session.id, recipient.id, "dlg_recipient");
+    (store as any).db.run(
+      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      [entry.seq, session.id, recipient.id, "dlg_recipient"],
+    );
+    expect(store.getSessionAgentMaxCursorSeq(session.id, recipient.id)).toBe(entry.seq);
+    await assertDelivered(true);
+  }
+}
+
 async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "MUL485 chat", provider: "codex", visibility: "workspace" });
   const runtime = store.registerRuntime({ name: "MUL485 runtime", provider: "codex" });
@@ -337,6 +386,14 @@ describe("MUL-485 SQLite", () => {
     ], false);
   });
 
+  it("ignores a read lane for the same agent in another session", async () => {
+    await verifyDeliveryLaneIsolation(createStore(), "session");
+  });
+
+  it("ignores another agent's read lane until the recipient reads", async () => {
+    await verifyDeliveryLaneIsolation(createStore(), "agent");
+  });
+
   it("reports unknown delivery for a legacy entry without a recipient", async () => {
     await verifyLegacyDeliveryUnknown(createStore());
   });
@@ -469,6 +526,14 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
     await verifyCursorDeliveryAcrossScopes(store, [
       { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
     ], false);
+  });
+
+  it("ignores a read lane for the same agent in another session on real PostgreSQL", async () => {
+    await verifyDeliveryLaneIsolation(store, "session");
+  });
+
+  it("ignores another agent's read lane until the recipient reads on real PostgreSQL", async () => {
+    await verifyDeliveryLaneIsolation(store, "agent");
   });
 
   it("reports unknown delivery for a legacy entry without a recipient on real PostgreSQL", async () => {
