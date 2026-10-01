@@ -95,6 +95,11 @@ export function publishIssueUpdated(
   input: UpdateIssueInput,
   response: Record<string, unknown> = issueCompatibilityResponse(issue),
 ): void {
+  // Cross-workspace moves publish their committed source removal and target
+  // update in the store, including batch/native writers. An explicit target
+  // owner may dispatch after that update, so retain its final HTTP frame.
+  if (previous.workspaceId !== issue.workspaceId && (!issue.assigneeId
+    || !hasRequestField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id"))) return;
   const assigneeChanged = hasRequestField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id") &&
     (previous.assigneeType !== issue.assigneeType || previous.assigneeId !== issue.assigneeId);
   const statusChanged = hasRequestField(input, "status") && previous.status !== issue.status;

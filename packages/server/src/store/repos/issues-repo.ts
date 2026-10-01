@@ -2628,6 +2628,10 @@ export class IssuesRepo {
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     const moving = nextWorkspaceId !== current.workspaceId;
+    const hasAssigneeField = hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id");
+    // Only inherited references are cleared. Explicit inputs keep their normal
+    // target-workspace validation, including rejection of source IDs.
+    const moveCleared: Array<{ field: "assignee" | "project" | "label"; name: string; assignee_type?: MultiremiAssigneeType }> = [];
     // The Issue moved while this transaction waited, so the number lock it did
     // not take is now needed; it is never taken after an Issue row.
     if (moving && numberLockWorkspaceId !== nextWorkspaceId) throw new IssueLockSetStaleError();
@@ -2668,10 +2672,25 @@ export class IssuesRepo {
       ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
       : current.contextRefs;
 
+    if (moving && !hasAssigneeField && nextAssigneeId) {
+      const owner = nextAssigneeType === "agent" ? this.ctx.agents().getAgent(nextAssigneeId)
+        : nextAssigneeType === "member" ? this.ctx.workspaces().getWorkspaceMember(nextAssigneeId)
+          : nextAssigneeType === "squad" ? this.ctx.squads().getSquad(nextAssigneeId) : null;
+      if (!owner || owner.workspaceId !== nextWorkspaceId) {
+        moveCleared.push({ field: "assignee", name: owner?.name ?? "?", ...(nextAssigneeType ? { assignee_type: nextAssigneeType } : {}) });
+        nextAssigneeType = null;
+        nextAssigneeId = null;
+      }
+    }
     if (nextProjectId) {
       const project = this.ctx.projects().getProject(nextProjectId);
-      if (!project) throw new Error(`Project not found: ${nextProjectId}`);
-      if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
+      if (moving && !hasAnyField(input, "projectId", "project_id") && (!project || project.workspaceId !== nextWorkspaceId)) {
+        moveCleared.push({ field: "project", name: project?.title ?? "?" });
+        nextProjectId = null;
+      } else {
+        if (!project) throw new Error(`Project not found: ${nextProjectId}`);
+        if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
+      }
     }
     if (nextParentIssueId && hasAnyField(input, "parentIssueId", "parent_issue_id")) {
       const parent = this.getIssue(nextParentIssueId);
@@ -2679,7 +2698,7 @@ export class IssuesRepo {
       if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
       this.validateIssueParent(id, nextParentIssueId);
     }
-    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
+    if (hasAssigneeField) {
       const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
         ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
         : hasAnyField(input, "assigneeId", "assignee_id")
@@ -2791,6 +2810,42 @@ export class IssuesRepo {
       ],
     );
     if (moving) {
+      const foreignLabels = this.listLabelsForExistingIssue(id).filter(label => label.workspaceId !== nextWorkspaceId);
+      for (const label of foreignLabels) {
+        this.ctx.db.run("DELETE FROM multiremi_issue_to_labels WHERE issue_id = ? AND label_id = ?", [id, label.id]);
+        moveCleared.push({ field: "label", name: label.name });
+      }
+      const sessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(id, null).id;
+      for (const data of moveCleared) {
+        this.ctx.appendIssueActivity(id, {
+          actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
+          type: "workspace_move_cleared", body: data.name, data,
+        }, deferredEvents);
+        // GFM re-links even backslash-escaped email text. A raw HTML paragraph
+        // with entity-escaped punctuation keeps names literal in both renderers,
+        // including Markdown, legacy mentions, URLs and HTML-looking names.
+        const name = data.name.replace(/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/g,
+          char => `&#${char.charCodeAt(0)};`).replace(/[\r\n]/g, " ");
+        const body = data.field === "label"
+          ? `<p>Removed label "${name}" when moving to another workspace.</p>`
+          : `<p>Cleared ${data.field} "${name}" when moving to another workspace.</p>`;
+        const comment = this.createSystemIssueCommentWithinTransaction(id, body,
+          { type: "workspace_move_cleared", ...data }, deferredEvents, null, sessionId);
+        deferredEvents.workspace.push({
+          type: "comment:created", workspaceId: nextWorkspaceId,
+          actorType: "system", actorId: comment.authorId, payload: { comment },
+        });
+      }
+      if (foreignLabels.length) {
+        deferredEvents.workspace.push({
+          type: "issue_labels:changed", workspaceId: nextWorkspaceId,
+          actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
+          payload: { issue_id: id, labels: this.listLabelsForExistingIssue(id).map(label => ({
+            id: label.id, workspace_id: label.workspaceId, name: label.name, color: label.color,
+            created_at: label.createdAt, updated_at: label.updatedAt,
+          })) },
+        });
+      }
       this.ctx.db.run(
         `UPDATE multiremi_issue_workspaces
          SET workspace_id = ?, issue_key = ?, runtime_id = NULL, root_path = '', branch_name = '',
@@ -2818,6 +2873,31 @@ export class IssuesRepo {
       }, collector, deferredEvents);
     }
     const next = this.getIssue(id)!;
+    if (moving) {
+      // Store-owned events cover native, batch and direct writers alike. Remove
+      // the inaccessible source cache entry and refresh the destination using
+      // the existing partial issue-update shape (position invalidates lists).
+      deferredEvents.workspace.push({
+        type: "issue:deleted", workspaceId: current.workspaceId,
+        actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
+        payload: { issue_id: id },
+      }, {
+        type: "issue:updated", workspaceId: nextWorkspaceId,
+        actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
+        payload: { issue: {
+          id, workspace_id: nextWorkspaceId, identifier: next.key, number: next.number,
+          title: next.title, description: next.description, status: next.status, priority: next.priority,
+          assignee_type: next.assigneeType, assignee_id: next.assigneeId,
+          project_id: next.projectId, runtime_workspace_id: next.runtimeWorkspaceId ?? null, position: next.position,
+          start_date: next.startDate, due_date: next.dueDate, completed_at: next.completedAt, archived_at: next.archivedAt,
+          labels: next.labels.map(label => ({
+            id: label.id, workspace_id: label.workspaceId, name: label.name, color: label.color,
+            created_at: label.createdAt, updated_at: label.updatedAt,
+          })),
+          updated_at: next.updatedAt,
+        } },
+      });
+    }
     this.linkReferencedAttachmentsToIssue(id, next.description);
     if ((input.title !== undefined && input.title !== current.title)
       || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {

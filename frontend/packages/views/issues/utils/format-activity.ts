@@ -132,6 +132,15 @@ export function formatActivity(
       if (details.from_id && !details.to_id) return t(($) => $.activity.removed_assignee);
       return t(($) => $.activity.changed_assignee);
     }
+    case "workspace_move_cleared": {
+      const name = details.name ?? "?";
+      switch (details.field) {
+        case "assignee": return t(($) => $.activity.workspace_move_cleared_assignee, { name });
+        case "project": return t(($) => $.activity.workspace_move_cleared_project, { name });
+        case "label": return t(($) => $.activity.workspace_move_cleared_label, { name });
+        default: return t(($) => $.activity.workspace_move_cleared);
+      }
+    }
     case "start_date_changed": {
       if (!details.to) return t(($) => $.activity.start_date_removed);
       const formatted = formatDateOnly(details.to, { month: "short", day: "numeric" }, "en-US");

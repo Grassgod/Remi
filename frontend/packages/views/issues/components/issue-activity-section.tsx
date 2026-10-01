@@ -16,6 +16,7 @@ import { useT } from "../../i18n";
 import { useResolvedThreads } from "../hooks/use-resolved-threads";
 import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
+import { formatActivity } from "../utils/format-activity";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -143,7 +144,10 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
       const row = SessionLogEntrySchema.parse(entry);
       if (row.seq === 0) return <IssueLogHead issueId={issueId} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
       if (row.kind !== "message" || row.author_type === "system") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
-        <EntryHtml html={row.body_html} markdown={row.body_md} fallback={<ReadonlyContent content={row.body_md} />} />
+        {row.metadata.type === "workspace_move_cleared"
+          ? formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
+            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)
+          : <EntryHtml html={row.body_html} markdown={row.body_md} fallback={<ReadonlyContent content={row.body_md} />} />}
       </div>;
       const comment = logRowToComment(row);
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;

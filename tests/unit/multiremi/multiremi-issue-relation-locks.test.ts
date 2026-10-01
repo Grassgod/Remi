@@ -263,7 +263,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       assertNoForeignEdges();
     });
 
-    it("PG-L8d (MUL-480 known residual): a move between assignment and task creation leaves a stale assignee and no task", () => {
+    it("PG-L8d (MUL-480): a move between assignment and task creation clears the assignee and rejects the source task", () => {
       const f = fixture();
       const createTask = TasksRepo.prototype.createTask;
       let moved = false;
@@ -278,7 +278,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const child = store.getIssue(f.child.id)!;
       expect(moved).toBe(true);
       expect(child.workspaceId).toBe(f.target);
-      expect(child.assigneeId).toBe(f.agent.id);
+      expect(child.assigneeType).toBeNull();
+      expect(child.assigneeId).toBeNull();
       expect(child.status).toBe("todo");
       expect(taskIds(f.child.id)).toEqual([]);
     });
