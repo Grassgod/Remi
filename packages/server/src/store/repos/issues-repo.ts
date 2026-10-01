@@ -4343,8 +4343,12 @@ export class IssuesRepo {
       for (let parentId = reopenedChildParent; parentId;) {
         if (assignmentRows.has(parentId)) throw new Error("Issue parent cycle detected");
         assignmentRows.add(parentId);
-        const parentHint = this.ctx.db.query("SELECT parent_issue_id FROM multiremi_issues WHERE id = ?").get(parentId) as Row | null;
-        parentId = parentHint?.parent_issue_id ? String(parentHint.parent_issue_id) : null;
+        const parentHint = this.ctx.db.query(
+          "SELECT parent_issue_id FROM multiremi_issues WHERE id = ? AND workspace_id = ?",
+        ).get(parentId, current.workspaceId) as Row | null;
+        // A missing or foreign ancestor must not silently end the lock chain.
+        if (!parentHint) throw new Error(`Parent issue not found in workspace: ${parentId}`);
+        parentId = parentHint.parent_issue_id ? String(parentHint.parent_issue_id) : null;
       }
       const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [...assignmentRows]);
       if (!lockedRows.get(id)) throw new Error(`Issue not found: ${id}`);

@@ -4,6 +4,38 @@ import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/
 
 describe("agent assignment rederives reopened child parents", () => {
   for (const backend of ["sqlite", "pg"] as const) {
+    it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(`${backend}: a cross-workspace parent or ancestor rejects assignment without reopening`, async () => {
+      await withConversationLogStore(backend, (store, db) => {
+        store.ensureLocalWorkspace();
+        const agent = store.createAgent({ name: "Workspace-bound worker", provider: "claude" });
+        for (const level of ["parent", "ancestor"] as const) {
+          const foreignWorkspace = store.createWorkspace({ name: "Foreign ancestor", slug: `foreign-${backend}-${level}` });
+          const foreign = store.createIssue({ title: "Foreign parent", status: "in_review", workspaceId: foreignWorkspace.id });
+          const parent = store.createIssue({ title: "Local parent", status: "in_review" });
+          const child = store.createIssue({ title: "Settled child", parentIssueId: parent.id, status: "done" });
+          // API writes reject this relation. Simulate corrupt persisted data to
+          // prove ancestor discovery cannot silently walk into another workspace.
+          db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?",
+            [foreign.id, level === "parent" ? child.id : parent.id]);
+          const received: string[] = [];
+          const unsubscribe = store.onWorkspaceEvent(event => received.push(event.type));
+          try {
+            expect(() => store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id }))
+              .toThrow("Parent issue not found in workspace");
+          } finally { unsubscribe(); }
+          expect(store.getIssue(child.id)?.status).toBe("done");
+          expect(store.getIssue(child.id)?.assigneeId).toBeNull();
+          expect(store.listTasksForIssue(child.id)).toHaveLength(0);
+          for (const issue of [parent, foreign]) {
+            expect(store.getIssue(issue.id)?.status).toBe("in_review");
+            expect(store.listIssueActivity(issue.id).filter(a => a.type === "parent_status_derived")).toHaveLength(0);
+          }
+          expect(received).toHaveLength(0);
+          expect(db.inTransaction).toBe(false);
+        }
+      });
+    }, 30_000);
+
     it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(`${backend}: recursive derivation locks the complete ancestor set once in id order`, async () => {
       await withConversationLogStore(backend, (store) => {
         store.ensureLocalWorkspace();
