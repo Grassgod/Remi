@@ -4326,7 +4326,7 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
-    const writeAssignment = () => {
+    const writeAssignment = (assignmentChanges: ChildStatusChangeCollector, assignmentEvents: CommitEventQueue) => {
       if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       // Agent assignment also reopens a settled Issue, independently of PATCH.
       // ADR 0003 #8: a fresh unlocked hint (not `current`, read before the
@@ -4336,7 +4336,17 @@ export class IssuesRepo {
         : null;
       const reopenedChildParent = hint?.parent_issue_id && isTerminalIssueStatus(String(hint.status))
         ? String(hint.parent_issue_id) : null;
-      const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [id, reopenedChildParent]);
+      // Re-derivation can propagate through in_review ancestors. Discover that
+      // relation chain before taking D, then lock every possible written row
+      // once in id order; an altered chain is a stale set, never a late lock.
+      const assignmentRows = new Set<string>([id]);
+      for (let parentId = reopenedChildParent; parentId;) {
+        if (assignmentRows.has(parentId)) throw new Error("Issue parent cycle detected");
+        assignmentRows.add(parentId);
+        const parentHint = this.ctx.db.query("SELECT parent_issue_id FROM multiremi_issues WHERE id = ?").get(parentId) as Row | null;
+        parentId = parentHint?.parent_issue_id ? String(parentHint.parent_issue_id) : null;
+      }
+      const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [...assignmentRows]);
       if (!lockedRows.get(id)) throw new Error(`Issue not found: ${id}`);
       const locked = this.getIssue(id)!;
       // The Issue moved while this waited: resolve the assignee where it now
@@ -4345,8 +4355,14 @@ export class IssuesRepo {
         this.ctx.squads().resolveAssigneeRef(assigneeType, assigneeId, locked.workspaceId);
       }
       if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
-        if (!lockedRows.has(locked.parentIssueId)) throw new IssueLockSetStaleError();
-        if (!lockedRows.get(locked.parentIssueId)) throw new Error(`Parent issue not found: ${locked.parentIssueId}`);
+        const checked = new Set<string>([id]);
+        for (let parentId: string | null = locked.parentIssueId; parentId;) {
+          if (checked.has(parentId)) throw new Error("Issue parent cycle detected");
+          checked.add(parentId);
+          if (!lockedRows.has(parentId)) throw new IssueLockSetStaleError();
+          if (!lockedRows.get(parentId)) throw new Error(`Parent issue not found: ${parentId}`);
+          parentId = this.getIssue(parentId)!.parentIssueId;
+        }
       }
       this.ctx.db.run(
         `UPDATE multiremi_issues
@@ -4354,10 +4370,24 @@ export class IssuesRepo {
          WHERE id = ?`,
         [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
       );
+      if (taskAgent && isTerminalIssueStatus(locked.status)) {
+        this.notifyChildStatusChangeWithinTransaction(
+          locked, this.getIssue(id)!, resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+          assignmentChanges, assignmentEvents,
+        );
+      }
     };
     // Only the transaction owner can roll back a stale lock set and retry once.
-    if (this.ctx.db.inTransaction) writeAssignment();
-    else retryOnceOnStaleLockSet(() => this.ctx.db.transaction(writeAssignment)());
+    const assignWithinTransaction = () => {
+      const assignmentChanges: ChildStatusChangeCollector = [];
+      const assignmentEvents = createCommitEventQueue();
+      writeAssignment(assignmentChanges, assignmentEvents);
+      return { assignmentChanges, assignmentEvents };
+    };
+    const assignment = this.ctx.db.inTransaction ? assignWithinTransaction()
+      : retryOnceOnStaleLockSet(() => this.ctx.db.transaction(assignWithinTransaction)());
+    this.ctx.emitCommitEvents(assignment.assignmentEvents);
+    afterCommit(this.ctx.db, () => this.ctx.tasks().runCollectedChildStatusChanges(assignment.assignmentChanges));
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {
