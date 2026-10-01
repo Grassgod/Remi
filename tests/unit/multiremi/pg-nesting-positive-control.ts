@@ -25,6 +25,8 @@ test("PG scanner positive control: five channels, connection ownership and nesti
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Classification control", provider: "claude" });
     const issue = store.createIssue({ title: "Tail caller classification control" });
+    const autopilot = store.createAutopilot({ title: "Exception mismatch control",
+      assigneeId: agent.id, executionMode: "create_issue", status: "active" });
     const other = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
     const otherCtx = new StoreContext(other, () => ({} as StoreContextHost));
     installProbes(otherCtx);
@@ -62,6 +64,20 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       // frame, transaction(fn)'s construction site must identify the product.
       db.transaction(() => store.createIssueSession(issue.id, { title: "Tail caller" }))();
       expect(snapshot().nesting.productPath.total).toBe(3);
+      // The same product transaction at ANOTHER test location is not the
+      // precisely reviewed mul405 failure-isolation signature. Keep its raw hit.
+      expect(() => db.transaction(() => {
+        store.runAutopilot(autopilot.id);
+        throw new Error("positive control outer rollback");
+      })()).toThrow("positive control outer rollback");
+      const mismatches = snapshot().nesting.productPath.signatures.filter(
+        (item: { stack: string }) => item.stack.includes("/repos/autopilots-repo.ts:1375:29"));
+      expect(mismatches).toHaveLength(1);
+      expect(mismatches[0].count).toBe(1);
+      expect(mismatches[0].stack).toContain("/pg-nesting-positive-control.ts:");
+      expect(snapshot().nesting.productPath.total).toBe(4);
+      expect(snapshot().nesting.reviewedExceptions.total).toBe(0);
+      expect(snapshot().nesting.productGate.total).toBe(4);
       const observations: boolean[] = [];
       db.transaction(() => {
         afterCommit(db, () => {
@@ -72,7 +88,7 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       })();
       expect(observations).toEqual([false, true]);
       expect(snapshot().event_in_transaction.total).toBe(5);
-      expect(snapshot().nested_transaction.total).toBe(5);
+      expect(snapshot().nested_transaction.total).toBe(6);
       expect(snapshot().nesting.unclassified.total).toBe(0);
       positiveControlPassed();
     }); } finally { other.close(); }

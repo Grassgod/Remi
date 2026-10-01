@@ -31,7 +31,8 @@ function scanCounts(): { product: number; events: number; failures: number } | n
   if (!report) return null;
   const parsed = JSON.parse(report());
   return {
-    product: parsed.nesting.productPath.total + parsed.nesting.unclassified.total,
+    product: parsed.nesting.productPath.total - parsed.nesting.reviewedExceptions.total
+      + parsed.nesting.unclassified.total,
     events: parsed.emissionTotal,
     failures: parsed.reportFailures,
   };

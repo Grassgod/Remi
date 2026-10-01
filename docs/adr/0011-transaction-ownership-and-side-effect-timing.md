@@ -60,6 +60,16 @@ would invalidate. A savepoint is a safety net for a caller that cannot know
 whether it is already inside a transaction — not a general-purpose wrapper for
 helpers that are called from a transaction they did not open.
 
+`AutopilotsRepo.runAutopilot` also retains its own transaction, which becomes a
+savepoint when nested. No current production caller invokes it inside an open
+transaction. The `mul405-nested-rollback.test.ts` case "captured inner failure
+leaves the outer transaction usable" pins the savepoint's failure isolation:
+the caller can catch an inner failure and still commit its own work. Any future
+production caller that invokes it inside a transaction requires a new review
+(MUL-482 ruling `cmt_ur542tq7q53w`). The diagnostic scanner retains all raw
+nesting and exempts only that reviewed inner transaction and exact test call
+site; another nested `runAutopilot` call still counts against the product gate.
+
 Helpers that may be reached from inside a caller's transaction check
 `db.inTransaction` and pick the flavour accordingly (`db.inTransaction ?
 withinTx() : db.transaction(withinTx)()`), so the outside-the-transaction case
