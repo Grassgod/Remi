@@ -45,6 +45,9 @@ export class InboxRepo {
     };
     for (const recipient of recipients) {
       const sessionId = recipient.issueSessionId ?? recipient.chatSessionId!;
+      if (recipient.issueSessionId) {
+        this.ctx.issueSessions().getOrCreateSessionAgentLane(sessionId, recipient.agentId, recipient.executionScope);
+      }
       const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
         ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
           this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,

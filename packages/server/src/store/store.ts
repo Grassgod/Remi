@@ -645,7 +645,10 @@ export class MultiremiStore {
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
-    this.taskCapabilityMonitor = new TaskCapabilityMonitor(now => this.tasks.refreshQueuedCapabilityWaitReasons(now));
+    this.taskCapabilityMonitor = new TaskCapabilityMonitor([
+      now => this.tasks.refreshQueuedCapabilityWaitReasons(now),
+      now => this.tasks.sweepIdleIssueLanes(now),
+    ]);
     this.migrate();
   }
 
@@ -5515,6 +5518,10 @@ runMigrations(this.db);
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     return this.tasks.refreshQueuedCapabilityWaitReasons(now);
+  }
+
+  sweepIdleIssueLanes(now = Date.now(), limits?: { lanes?: number; entries?: number }): import("./re-ring-sweep.js").ReRingSweepResult {
+    return this.tasks.sweepIdleIssueLanes(now, limits);
   }
 
   /**

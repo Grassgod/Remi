@@ -13,6 +13,11 @@ try {
   writeFileSync(process.argv[2]!, "ready");
   const input = JSON.parse(await Bun.stdin.text());
   db.resetTransactionDepthStats();
+  if (input.operation === "sweep") {
+    console.log(JSON.stringify(store.sweepIdleIssueLanes(input.now)));
+    db.close();
+    process.exit(0);
+  }
   const wrapped = (store as unknown as { db: SqlDatabase }).db;
   let entryId: string | null = null;
   const result = wrapped.transaction(() => {

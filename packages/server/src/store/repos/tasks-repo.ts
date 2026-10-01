@@ -8,6 +8,9 @@ import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget, RELAY_EXECU
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
+import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
+import { reRingSweepEnabled, RE_RING_SWEEP_CANDIDATES_SQL, RE_RING_SWEEP_PAGE_SQL, RE_RING_SWEEP_LANE_LIMIT,
+  RE_RING_SWEEP_ENTRY_LIMIT, RE_RING_SWEEP_MIN_AGE_MS, type ReRingSweepResult } from "@multiremi/store/re-ring-sweep.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import { sanitizeTraceEventFields } from "@shared/trace-sanitize.js";
@@ -6317,7 +6320,11 @@ ${placementAfter.sql}
 
   private unreadNowEnvelopeSeq(sessionId: string, agentId: string, executionScope: string, cursorSeq: number): number | null {
     const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
-    const addressed = entries.filter(entry => {
+    return this.addressedNowEnvelopes(entries, sessionId, agentId, executionScope).at(-1)?.seq ?? null;
+  }
+
+  private addressedNowEnvelopes(entries: ConversationLogEntry[], sessionId: string, agentId: string, executionScope: string): ConversationLogEntry[] {
+    return entries.filter(entry => {
       if (entry.author_id === agentId || entry.metadata.envelope?.wake !== "now") return false;
       const { to, recipient_agent_id: recipientAgentId } = entry.metadata.envelope;
       if (recipientAgentId && recipientAgentId !== agentId) return false;
@@ -6344,7 +6351,97 @@ ${placementAfter.sql}
       if (!issue.assigneeType || !issue.assigneeId) return false;
       return this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id === agentId;
     });
-    return addressed.at(-1)?.seq ?? null;
+  }
+
+  sweepIdleIssueLanes(now = Date.now(), limits: { lanes?: number; entries?: number } = {}): ReRingSweepResult {
+    const stats: ReRingSweepResult = { lanes: 0, examined: 0, rang: 0, coalesced: 0, errors: 0 };
+    if (!reRingSweepEnabled()) return stats;
+    const laneLimit = Math.max(1, Math.min(RE_RING_SWEEP_LANE_LIMIT, Math.floor(limits.lanes ?? RE_RING_SWEEP_LANE_LIMIT)));
+    const entryLimit = Math.max(1, Math.min(RE_RING_SWEEP_ENTRY_LIMIT, Math.floor(limits.entries ?? RE_RING_SWEEP_ENTRY_LIMIT)));
+    type Candidate = { session_id: string; agent_id: string; execution_scope: string; cursor_seq: number;
+      swept_to_seq: number; last_task_id: string | null; head_seq: number; issue_id: string; workspace_id: string };
+    const candidates = this.ctx.db.query(RE_RING_SWEEP_PAGE_SQL).all(laneLimit) as Candidate[];
+    for (const candidate of candidates) {
+      const events = createCommitEventQueue();
+      const changes: ChildStatusChange[] = [];
+      try {
+        const outcome = this.ctx.db.transaction(() => {
+          this.ctx.lockWorkspaceRuntimeLifecycle(candidate.workspace_id);
+          this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_at = ?
+            WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+            [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+          const lane = this.ctx.db.query(`${RE_RING_SWEEP_CANDIDATES_SQL}
+            AND l.session_id = ? AND l.agent_id = ? AND l.execution_scope = ?`).get(
+              candidate.session_id, candidate.agent_id, candidate.execution_scope) as Candidate | null;
+          if (!lane) return null;
+          const from = Math.max(Number(lane.cursor_seq), Number(lane.swept_to_seq));
+          const head = Number(lane.head_seq);
+          const entries = this.ctx.conversationLog().listConversationLogShown(lane.session_id, {
+            sinceSeq: from, toSeq: head, limit: entryLimit,
+          });
+          const youngAt = entries.findIndex(entry => Date.parse(entry.created_at) > now - RE_RING_SWEEP_MIN_AGE_MS);
+          const mature = youngAt < 0 ? entries : entries.slice(0, youngAt);
+          // When the bounded window is exhausted, advance over hidden/deleted
+          // tails too. Never step over the first entry that is still too young.
+          const to = youngAt < 0 && entries.length < entryLimit ? head : mature.at(-1)?.seq ?? from;
+          const seq = this.addressedNowEnvelopes(mature, lane.session_id, lane.agent_id, lane.execution_scope).at(-1)?.seq;
+          let action: EnsurePendingTurnResult["action"] = "none";
+          if (seq !== undefined) {
+            const lastId = lane.last_task_id ?? (this.ctx.db.query(`SELECT id FROM multiremi_tasks
+              WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ?
+              ORDER BY created_at DESC, id DESC LIMIT 1`).get(lane.session_id, lane.agent_id, lane.execution_scope) as { id: string } | null)?.id;
+            const last = lastId ? this.getTask(lastId) : null;
+            const result = this.ensurePendingTurnWithinTransaction({
+              lane: { kind: "issue", issueSessionId: lane.session_id, agentId: lane.agent_id, executionScope: lane.execution_scope },
+              wake: { reason: "re_ring", seq },
+              create: () => this.createTaskWithinWorkspaceLock({
+                agentId: lane.agent_id, issueId: lane.issue_id, issueSessionId: lane.session_id, workspaceId: lane.workspace_id,
+                prompt: `读收件箱\n\n${lane.session_id}: (${lane.cursor_seq}, ${seq}]`,
+                wakeSource: "re_ring", preserveIssueStatus: true, triggerCommentId: null,
+                assignmentAuthorType: "system", assignmentAuthorId: null,
+                ...(lane.execution_scope && last ? { delegationId: last.delegationId,
+                  delegatedByAgentId: last.delegatedByAgentId, delegatedFromIssueSessionId: last.delegatedFromIssueSessionId,
+                  priority: last.priority } : {}),
+              }, changes, events, undefined, lane.execution_scope),
+            });
+            action = result.action;
+            if (result.action === "created") events.enqueuedTasks.push(result.task!);
+            if (result.task) appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
+              origin: "periodic_sweep", action, seq, cursor_seq: Number(lane.cursor_seq), swept_from_seq: from, head_seq: head,
+            });
+          }
+          this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_to_seq = ?, swept_at = ?
+            WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+            [to, new Date(now).toISOString(), lane.session_id, lane.agent_id, lane.execution_scope]);
+          return { examined: mature.length, action };
+        })();
+        if (outcome) {
+          stats.lanes++;
+          stats.examined += outcome.examined;
+          if (outcome.action === "created") stats.rang++;
+          if (outcome.action === "coalesced") stats.coalesced++;
+        }
+        this.runChildStatusChanges(changes);
+        this.ctx.emitCommitEvents(events);
+      } catch (error) {
+        stats.errors++;
+        log.warn("idle issue lane sweep failed", { sessionId: candidate.session_id, agentId: candidate.agent_id });
+        // SQL failures have rolled back their lane transaction. Audit in a
+        // fresh frame, and keep an audit failure from aborting other lanes.
+        try {
+          this.ctx.db.transaction(() => {
+            this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_at = ?
+              WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+              [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+            appendPendingTurnAuditWithinTransaction(this.ctx.db,
+            { id: candidate.last_task_id ?? "", issueId: candidate.issue_id, workspaceId: candidate.workspace_id },
+            "pending_turn_skipped", { origin: "periodic_sweep", reason: "sweep_error", error: String(error).slice(0, 1000) });
+          })();
+        } catch { /* the warning above still records the failure */ }
+      }
+    }
+    if (candidates.length) log.info("idle issue lane sweep", stats);
+    return stats;
   }
 
   private reRingUnreadIssueLane(
@@ -6377,7 +6474,7 @@ ${placementAfter.sql}
     if (!result.task) return;
     if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task);
     appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
-      action: result.action, wake_source: "re_ring", seq,
+      origin: "turn_end", action: result.action, wake_source: "re_ring", seq,
     });
   }
 

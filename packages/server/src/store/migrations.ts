@@ -3465,6 +3465,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, PENDING_TURN_MIGRATION, () => {
     preparePendingTurnConstraintsWithinTransaction(db);
   });
+  runMigrationOnce(db, "20261001_lane_rering_sweep", () => {
+    addColumnIfMissing(db, "multiremi_session_agent_lanes", "swept_to_seq INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "multiremi_session_agent_lanes", "swept_at TEXT");
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_lanes_sweep_order
+      ON multiremi_session_agent_lanes(COALESCE(swept_at, ''), session_id, agent_id, execution_scope)
+      WHERE status = 'active' AND substr(execution_scope, 1, 6) <> 'relay:'`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_lane_active
+      ON multiremi_tasks(issue_session_id, agent_id, execution_scope)
+      WHERE status IN ('queued','dispatched','running','waiting_local_directory','awaiting_human')
+        AND issue_session_id IS NOT NULL`);
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
