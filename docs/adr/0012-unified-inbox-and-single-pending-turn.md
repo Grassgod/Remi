@@ -131,7 +131,10 @@ notification wakes to this decision.
    writes advance only the resolved recipient lane's `wake_hint_seq` in the same
    transaction. Lanes without pending hints incur no locks or writes; recovery
    latency depends on pending lanes, not total historical lanes. The upgrade
-   conservatively hints heads beyond the existing cursor/watermark once.
+   conservatively hints heads beyond the existing cursor/watermark once, only
+   for active non-relay lanes in active sessions with a non-archived agent in
+   the same workspace. Sweep summaries distinguish visited and eligible lanes;
+   a full page signals possible backlog without counting all pending lanes.
    Under W, each lane transaction rereads head, agent/session availability and
    tasks. Cursor-covered hints and permanently unavailable recipients (archived
    agents/sessions or relay scopes) advance the watermark to the hint and leave
@@ -148,7 +151,12 @@ notification wakes to this decision.
    envelope transaction, including first delivery. Recovery goes through
    `ensurePendingTurnWithinTransaction` and normal route derivation, inheriting
    delegation lineage for nonempty scopes from the last task (or the newest task
-   in that lane). It preserves Issue status and dependency-gate wake exemptions.
+   in that lane). Periodic, terminal and comment-change recovery share the same
+   lineage extraction, including the original `parentTaskId` for scoped
+   delegations. That upstream link resolves the return scope; the recovered
+   round is not made a child of its replaced round. Unscoped/non-delegated
+   parent behavior stays unchanged. It preserves Issue status and
+   dependency-gate wake exemptions.
    W plus the existing pending-turn unique index arbitrate multiple instances;
    no extra lease, advisory lock or leader election is added for the sweep.
    `wakeSource` stays `re_ring`, with audit `origin: periodic_sweep`; ordinary

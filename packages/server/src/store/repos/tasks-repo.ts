@@ -5003,8 +5003,7 @@ ${placementAfter.sql}
           workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
           prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
           wakeSource: "re_ring", preserveIssueStatus: true,
-          delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
-          delegatedFromIssueSessionId: task.delegatedFromIssueSessionId,
+          ...reRingDelegationLineage(task, executionScope),
           assignmentAuthorType: "system", assignmentAuthorId: null,
         }, childStatusChanges, deferredEvents, undefined, executionScope),
       });
@@ -6384,13 +6383,16 @@ ${placementAfter.sql}
   }
 
   sweepIdleIssueLanes(now = Date.now(), limits: { lanes?: number; entries?: number } = {}): ReRingSweepResult {
-    const stats: ReRingSweepResult = { lanes: 0, examined: 0, rang: 0, coalesced: 0, errors: 0 };
+    const stats: ReRingSweepResult = { visited: 0, eligible: 0, pageFull: false,
+      lanes: 0, examined: 0, rang: 0, coalesced: 0, errors: 0 };
     if (!reRingSweepEnabled()) return stats;
     const laneLimit = Math.max(1, Math.min(RE_RING_SWEEP_LANE_LIMIT, Math.floor(limits.lanes ?? RE_RING_SWEEP_LANE_LIMIT)));
     const entryLimit = Math.max(1, Math.min(RE_RING_SWEEP_ENTRY_LIMIT, Math.floor(limits.entries ?? RE_RING_SWEEP_ENTRY_LIMIT)));
     type Candidate = { session_id: string; agent_id: string; execution_scope: string; cursor_seq: number;
       swept_to_seq: number; wake_hint_seq: number; last_task_id: string | null; head_seq: number; issue_id: string; workspace_id: string };
     const candidates = this.ctx.db.query(RE_RING_SWEEP_PAGE_SQL).all(laneLimit) as Candidate[];
+    stats.visited = candidates.length;
+    stats.pageFull = candidates.length === laneLimit;
     for (const candidate of candidates) {
       const events = createCommitEventQueue();
       const changes: ChildStatusChange[] = [];
@@ -6426,6 +6428,7 @@ ${placementAfter.sql}
             AND l.session_id = ? AND l.agent_id = ? AND l.execution_scope = ?`).get(
               candidate.session_id, candidate.agent_id, candidate.execution_scope) as Candidate | null;
           if (!lane) return null;
+          stats.eligible++;
           const from = Math.max(Number(lane.cursor_seq), Number(lane.swept_to_seq));
           const head = Number(lane.head_seq);
           const entries = this.ctx.conversationLog().listConversationLogShown(lane.session_id, {
@@ -6451,8 +6454,7 @@ ${placementAfter.sql}
                 prompt: `读收件箱\n\n${lane.session_id}: (${lane.cursor_seq}, ${seq}]`,
                 wakeSource: "re_ring", preserveIssueStatus: true, triggerCommentId: null,
                 assignmentAuthorType: "system", assignmentAuthorId: null,
-                ...(lane.execution_scope && last ? { delegationId: last.delegationId,
-                  delegatedByAgentId: last.delegatedByAgentId, delegatedFromIssueSessionId: last.delegatedFromIssueSessionId,
+                ...(lane.execution_scope && last ? { ...reRingDelegationLineage(last, lane.execution_scope),
                   priority: last.priority } : {}),
               }, changes, events, undefined, lane.execution_scope),
             });
@@ -6523,8 +6525,7 @@ ${placementAfter.sql}
         wakeSource: "re_ring",
         triggerCommentId: null,
         preserveIssueStatus: true,
-        delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
-        delegatedFromIssueSessionId: task.delegatedFromIssueSessionId, priority: task.priority,
+        ...reRingDelegationLineage(task, executionScope), priority: task.priority,
         assignmentAuthorType: "system", assignmentAuthorId: null,
       }, childStatusChanges, deferredEvents, null, executionScope),
     });
@@ -7257,6 +7258,19 @@ export function resolveHumanRequestTimeoutMs(value: unknown): number {
   const requested = Number(value);
   if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_HUMAN_REQUEST_TIMEOUT_MS;
   return Math.min(Math.max(Math.floor(requested), 60_000), 24 * 60 * 60 * 1000);
+}
+
+/** Recover the same delegation, including the link used to resolve its
+ * upstream scope. Keep unscoped and non-delegated rounds' parent behavior. */
+function reRingDelegationLineage(source: MultiremiTask, executionScope: string): Pick<CreateTaskInput,
+  "delegationId" | "delegatedByAgentId" | "delegatedFromIssueSessionId" | "parentTaskId"> {
+  return {
+    delegationId: source.delegationId,
+    delegatedByAgentId: source.delegatedByAgentId,
+    delegatedFromIssueSessionId: source.delegatedFromIssueSessionId,
+    ...(executionScope && source.delegationId && source.delegatedByAgentId
+      ? { parentTaskId: source.parentTaskId } : {}),
+  };
 }
 
 function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {

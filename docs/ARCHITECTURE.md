@@ -89,7 +89,8 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 人的评论按 Q-B 常量并入 queued；延后评论派发及编辑/删除恢复在原事务留下 system event intent，
 提交后原子消费，逾期由既有调度器重放（按认领次数 fencing）。Issue `now` 信封事务更新收件 lane 的 `wake_hint_seq`；
 现有维护周期仅按部分索引轮转未扫提示，用 `swept_to_seq` 增量判定到龄 envelope 并补种 `re_ring`。
-无待查的历史 lane 不取锁或写行；归档与 relay 提示清掉，活动任务阻挡保留提示；Chat/relay 不补轮。实现和迁移入口见
+无待查的历史 lane 不取锁或写行；归档与 relay 提示清掉，活动任务阻挡保留提示；Chat/relay 不补轮。
+委派 lane 的周期、轮末和评论变更恢复继承原上游父任务，完成回报保持上游 scope。实现和迁移入口见
 [pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。

@@ -59,7 +59,7 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
     it(`10: leaves ${status} lanes and their watermarks untouched`, () => {
       const f = setup();
       f.db.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, f.delivery.task!.id]);
-      expect(f.store.sweepIdleIssueLanes(f.now).rang).toBe(0);
+      expect(f.store.sweepIdleIssueLanes(f.now)).toMatchObject({ visited: 1, eligible: 0, rang: 0 });
       expect(watermark(f)).toBe(0);
       expect(pending(f)).toHaveLength(1);
       expect(f.store.listTasksForIssue(f.issue.id)).toHaveLength(1);
@@ -118,7 +118,8 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
       return original.call(this, sql, params);
     };
     try {
-      expect(f.store.sweepIdleIssueLanes(f.now, { lanes: 2 }).rang).toBe(1);
+      expect(f.store.sweepIdleIssueLanes(f.now, { lanes: 2 }))
+        .toMatchObject({ visited: 1, eligible: 1, pageFull: false, rang: 1 });
       expect(queued(f)).toHaveLength(1);
       expect(locks).toBeGreaterThan(0);
       expect(Number(f.db.query(`SELECT COUNT(*) AS n FROM multiremi_session_agent_lanes
@@ -126,7 +127,8 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
         .get()!.n)).toBe(0);
       locks = 0;
       laneWrites = 0;
-      f.store.sweepIdleIssueLanes(f.now + 60_000, { lanes: 2 });
+      expect(f.store.sweepIdleIssueLanes(f.now + 60_000, { lanes: 2 }))
+        .toMatchObject({ visited: 0, eligible: 0, pageFull: false });
       expect(locks).toBe(0);
       expect(laneWrites).toBe(0);
     } finally { f.db.run = original; }
@@ -162,8 +164,15 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
       [f.store.getConversationLogHead(swept.session.id)!.headSeq, swept.session.id]);
     f.db.exec(`DROP INDEX idx_multiremi_lanes_sweep_pending;
       ALTER TABLE multiremi_session_agent_lanes DROP COLUMN wake_hint_seq;
+      CREATE INDEX idx_multiremi_lanes_sweep_order
+        ON multiremi_session_agent_lanes(COALESCE(swept_at, ''), session_id, agent_id, execution_scope)
+        WHERE status = 'active' AND substr(execution_scope, 1, 6) <> 'relay:';
       DELETE FROM multiremi_schema_migrations WHERE id = '20261001_lane_rering_wake_hint';`);
     runMigrations(f.db);
+    const oldIndex = backend === "PostgreSQL"
+      ? f.db.query("SELECT indexname FROM pg_indexes WHERE indexname = 'idx_multiremi_lanes_sweep_order'").all()
+      : f.db.query("SELECT name FROM sqlite_master WHERE name = 'idx_multiremi_lanes_sweep_order'").all();
+    expect(oldIndex).toHaveLength(0);
     expect(pending(unread)).toHaveLength(1);
     expect(pending(covered)).toHaveLength(0);
     expect(pending(swept)).toHaveLength(0);
@@ -173,11 +182,36 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
     expect(f.store.sweepIdleIssueLanes(Date.now() + 121_000).rang).toBe(0);
   });
 
+  it("07: does not backfill permanently unavailable history into the pending index", () => {
+    const archivedAgent = setup();
+    const archivedSession = setup();
+    const relay = setup();
+    const inactive = setup();
+    const foreignWorkspace = setup();
+    const f = fixture();
+    f.db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), archivedAgent.agent.id]);
+    f.db.run("UPDATE multiremi_issue_sessions SET status = 'archived' WHERE id = ?", [archivedSession.session.id]);
+    f.db.run("UPDATE multiremi_session_agent_lanes SET execution_scope = 'relay:history' WHERE session_id = ?", [relay.session.id]);
+    f.db.run("UPDATE multiremi_session_agent_lanes SET status = 'archived' WHERE session_id = ?", [inactive.session.id]);
+    const elsewhere = f.store.createWorkspace({ name: "Elsewhere" });
+    f.db.run("UPDATE multiremi_agents SET workspace_id = ? WHERE id = ?", [elsewhere.id, foreignWorkspace.agent.id]);
+    f.db.exec(`DROP INDEX idx_multiremi_lanes_sweep_pending;
+      ALTER TABLE multiremi_session_agent_lanes DROP COLUMN wake_hint_seq;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20261001_lane_rering_wake_hint';`);
+    runMigrations(f.db);
+    expect(f.db.query("SELECT wake_hint_seq FROM multiremi_session_agent_lanes").all())
+      .toEqual(Array.from({ length: 5 }, () => ({ wake_hint_seq: 0 })));
+    expect(f.store.sweepIdleIssueLanes(Date.now() + 61_000))
+      .toMatchObject({ visited: 0, eligible: 0, pageFull: false, rang: 0 });
+  });
+
   it("11: rotates lanes fairly and consumes large tails in bounded windows", () => {
     const lanes = [setup(), setup(), setup()];
     const now = Date.now() + 61_000;
-    expect(fixture().store.sweepIdleIssueLanes(now, { lanes: 2 }).rang).toBe(2);
-    expect(fixture().store.sweepIdleIssueLanes(now + 60_000, { lanes: 2 }).rang).toBe(1);
+    expect(fixture().store.sweepIdleIssueLanes(now, { lanes: 2 }))
+      .toMatchObject({ visited: 2, eligible: 2, pageFull: true, rang: 2 });
+    expect(fixture().store.sweepIdleIssueLanes(now + 60_000, { lanes: 2 }))
+      .toMatchObject({ visited: 1, eligible: 1, pageFull: false, rang: 1 });
     expect(lanes.map(f => queued(f).length)).toEqual([1, 1, 1]);
     const f = lanes[0]!;
     f.db.run("UPDATE multiremi_tasks SET status = 'cancelled' WHERE issue_id = ?", [f.issue.id]);

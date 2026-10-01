@@ -40,6 +40,12 @@ SELECT p.*, s.issue_id, s.workspace_id FROM lane_page p
 JOIN multiremi_issue_sessions s ON s.id = p.session_id`;
 
 export interface ReRingSweepResult {
+  /** Pending-hint page entries visited, including unavailable/blocked lanes. */
+  visited: number;
+  /** Visited lanes eligible for a log window, including failed attempts. */
+  eligible: number;
+  /** A full page suggests backlog; no unbounded COUNT is needed. */
+  pageFull: boolean;
   lanes: number;
   examined: number;
   rang: number;

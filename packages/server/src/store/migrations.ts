@@ -3468,9 +3468,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, "20261001_lane_rering_sweep", () => {
     addColumnIfMissing(db, "multiremi_session_agent_lanes", "swept_to_seq INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing(db, "multiremi_session_agent_lanes", "swept_at TEXT");
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_lanes_sweep_order
-      ON multiremi_session_agent_lanes(COALESCE(swept_at, ''), session_id, agent_id, execution_scope)
-      WHERE status = 'active' AND substr(execution_scope, 1, 6) <> 'relay:'`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_lane_active
       ON multiremi_tasks(issue_session_id, agent_id, execution_scope)
       WHERE status IN ('queued','dispatched','running','waiting_local_directory','awaiting_human')
@@ -3478,12 +3475,18 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   });
   runMigrationOnce(db, "20261001_lane_rering_wake_hint", () => {
     addColumnIfMissing(db, "multiremi_session_agent_lanes", "wake_hint_seq INTEGER NOT NULL DEFAULT 0");
-    // One conservative upgrade scan; recipient semantics remain in the shared
-    // log predicate. Subsequent writes hint only the resolved recipient lane.
+    // One conservative upgrade scan of runnable Issue lanes; unavailable
+    // history must not delay fresh hints. Recipient semantics stay in the
+    // shared log predicate. Later writes hint only the resolved recipient.
     db.exec(`UPDATE multiremi_session_agent_lanes SET wake_hint_seq = (
       SELECT h.head_seq FROM multiremi_conversation_heads h
       WHERE h.session_id = multiremi_session_agent_lanes.session_id)
-      WHERE EXISTS (SELECT 1 FROM multiremi_conversation_heads h
+      WHERE status = 'active' AND substr(execution_scope, 1, 6) <> 'relay:'
+        AND EXISTS (SELECT 1 FROM multiremi_issue_sessions s
+          JOIN multiremi_agents a ON a.id = multiremi_session_agent_lanes.agent_id
+            AND a.archived_at IS NULL AND a.workspace_id = s.workspace_id
+          WHERE s.id = multiremi_session_agent_lanes.session_id AND s.status = 'active')
+        AND EXISTS (SELECT 1 FROM multiremi_conversation_heads h
         WHERE h.session_id = multiremi_session_agent_lanes.session_id
           AND h.head_seq > CASE WHEN cursor_seq > swept_to_seq THEN cursor_seq ELSE swept_to_seq END
           AND h.head_seq > wake_hint_seq)`);
