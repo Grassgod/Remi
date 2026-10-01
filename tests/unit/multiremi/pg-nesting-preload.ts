@@ -21,6 +21,8 @@
  * accepting a clean scan. The manual fixture is not automatically discovered.
  * Raw nesting is never filtered: product callers and tests directly exercising
  * the DB primitive are reported separately (MUL-482 ruling cmt_kexlr6zs2ras).
+ * Construction and invocation stacks are both retained: a tail-called runner
+ * can omit its product frame from Bun's invocation stack.
  * Unknown caller locations fail the product gate; ADR reuse is not auto-exempt.
  *
  * Reports append incrementally, surviving crashes even if Bun omits exit hooks.
@@ -81,8 +83,9 @@ function signature(label: string): string {
   return `${label}\n${frames.join("\n")}`;
 }
 
-function record(kind: HitKind, label: string): void {
-  const stack = signature(label);
+function record(kind: HitKind, label: string, transactionOrigin?: string): void {
+  const invocationStack = signature(label);
+  const stack = transactionOrigin ? `${invocationStack}\n${transactionOrigin}` : invocationStack;
   const map = (controlDepth ? controls : hits)[kind];
   map.set(stack, (map.get(stack) ?? 0) + 1);
   if (kind === "nested_transaction") {
@@ -91,7 +94,7 @@ function record(kind: HitKind, label: string): void {
     // inspect the inner invocation chain before that boundary. A test's depth
     // counter may forward run(...args) before the actual packages caller; it
     // must not disguise a product call as a DB-primitive test.
-    const frames = stack.split("\n").slice(1);
+    const frames = invocationStack.split("\n").slice(1);
     const outer = frames.findIndex(line => line.includes("/store/db/postgres.ts:"));
     const invocation = (outer < 0 ? frames : frames.slice(0, outer))
       .filter(line => !line.includes("/store/request-read-cache.ts:"));
@@ -104,6 +107,12 @@ function record(kind: HitKind, label: string): void {
         && !line.includes("/store/db/postgres.ts:") && !line.includes("/store/request-read-cache.ts:"));
       if (caller) invocation.push(caller);
     }
+    // Bun can tail-call the runner and erase the packages frame entirely.
+    // The construction stack still identifies transaction(fn)'s owner.
+    const originFrames = transactionOrigin?.split("\n").slice(1) ?? [];
+    const originOuter = originFrames.findIndex(line => line.includes("/store/db/postgres.ts:"));
+    invocation.push(...(originOuter < 0 ? originFrames : originFrames.slice(0, originOuter))
+      .filter(line => !line.includes("/store/request-read-cache.ts:")));
     classified.set(stack, invocation.some(line => line.includes("/packages/")) ? "product_path"
       : invocation.some(line => line.includes("/tests/")) ? "test_direct" : "unclassified");
   }
@@ -129,10 +138,11 @@ const pgProto = PostgresSyncDatabase.prototype;
 const transaction = pgProto.transaction;
 pgProto.transaction = function<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
   handles.add(this);
+  const origin = signature("transaction_origin");
   const run = transaction.call(this, fn) as (...args: any[]) => T;
   return (...args: any[]): T => {
     // Check before calling the runner, not while its post-commit callbacks drain.
-    if (this.inTransaction) record("nested_transaction", "nested_transaction");
+    if (this.inTransaction) record("nested_transaction", "nested_transaction", origin);
     callDepth += 1;
     try { return run(...args); }
     finally { callDepth -= 1; }
@@ -206,5 +216,5 @@ export function withPositiveControl(fn: () => void): void {
 }
 
 export function positiveControlPassed(): void {
-  append({ kind: "positive_control_passed", eventHits: 5, nestedHits: 4, productPathHits: 2, testDirectHits: 2, afterCommitInTransaction: false });
+  append({ kind: "positive_control_passed", eventHits: 5, nestedHits: 5, productPathHits: 3, testDirectHits: 2, afterCommitInTransaction: false });
 }

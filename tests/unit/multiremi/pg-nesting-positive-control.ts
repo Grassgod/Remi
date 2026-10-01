@@ -24,6 +24,7 @@ test("PG scanner positive control: five channels, connection ownership and nesti
     installProbes(ctx);
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Classification control", provider: "claude" });
+    const issue = store.createIssue({ title: "Tail caller classification control" });
     const other = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
     const otherCtx = new StoreContext(other, () => ({} as StoreContextHost));
     installProbes(otherCtx);
@@ -57,6 +58,10 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       db.transaction(() => store.updateAgent(agent.id, { name: "Instrumented caller" }))();
       db.transaction = transaction;
       expect(snapshot().nesting.productPath.total).toBe(2);
+      // This wrapper tail-calls its runner. Even if Bun omits the execution
+      // frame, transaction(fn)'s construction site must identify the product.
+      db.transaction(() => store.createIssueSession(issue.id, { title: "Tail caller" }))();
+      expect(snapshot().nesting.productPath.total).toBe(3);
       const observations: boolean[] = [];
       db.transaction(() => {
         afterCommit(db, () => {
@@ -67,7 +72,7 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       })();
       expect(observations).toEqual([false, true]);
       expect(snapshot().event_in_transaction.total).toBe(5);
-      expect(snapshot().nested_transaction.total).toBe(4);
+      expect(snapshot().nested_transaction.total).toBe(5);
       expect(snapshot().nesting.unclassified.total).toBe(0);
       positiveControlPassed();
     }); } finally { other.close(); }
