@@ -3766,7 +3766,8 @@ export class FeishuBotRepo {
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> } = {},
   ): MultiremiFeishuBotAuditEntry {
-    return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
+    const write = () => this.recordAuditWithinTransaction(workspaceId, action, input);
+    return this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
   }
 
   /** Transactional callers take W then N before domain writes; re-taking them here is free. */

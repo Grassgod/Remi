@@ -460,6 +460,7 @@ describe("MUL-405 per-path lock order", () => {
     clear(recorder);
     store.setFeishuBotSenderAllowed("local", sender.id, true, "local");
     assertPath("setSenderAllowed", recorder, ["W", "N", "D"]);
+    assertFrames("setSenderAllowed", recorder, [["W", "N", "D"]]);
   });
 
   it("recordAudit standalone: W -> N", () => {
@@ -469,6 +470,7 @@ describe("MUL-405 per-path lock order", () => {
     // QA round 3: this case used to assert monotonicity only, so deleting the W
     // from recordAuditWithinTransaction left all eleven cases green.
     assertPath("recordFeishuBotAudit", recorder, ["W", "N", "D"]);
+    assertFrames("recordFeishuBotAudit", recorder, [["W", "N", "D"]]);
   });
 
   it("claimOutbound exhausted receipt: W -> N -> D in one transaction", () => {
