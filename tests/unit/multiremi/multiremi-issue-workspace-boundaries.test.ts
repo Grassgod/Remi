@@ -163,6 +163,103 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     for (const reverse of [false, true]) {
       const direction = reverse ? "B -> A" : "A -> B";
 
+      async function moveFixture(assigneeType: "agent" | "member" | "squad" = "agent", withProject = true) {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const agent = store.createAgent({ name: "Original owner", provider: "codex", workspaceId: source });
+        const squad = store.createSquad({ name: "Original squad", leaderId: agent.id, workspaceId: source });
+        const owner = assigneeType === "agent" ? agent : assigneeType === "squad" ? squad : store.getWorkspaceMember(auth.sourceMember)!;
+        const project = store.createProject({ title: "Original project", workspaceId: source });
+        const labels = ["Original label 1", "Original label 2"].map(name => store.createLabel({ name, color: "#123456", workspaceId: source }));
+        const created = store.createIssue({ title: "Movable leaf", workspaceId: source,
+          assigneeType, assigneeId: owner.id, ...(withProject ? { projectId: project.id } : {}) });
+        for (const label of labels) store.attachLabelToIssue(created.id, label.id);
+        const issue = store.getIssue(created.id)!;
+        return { source, target, auth, owner, assigneeType, project, labels, issue };
+      }
+
+      function cleared(issueId: string) {
+        return store.listIssueActivity(issueId).filter(row => row.type === "workspace_move_cleared");
+      }
+
+      for (const assigneeType of ["agent", "member", "squad"] as const) {
+        it(`${direction}: MUL-480 clears inherited ${assigneeType}, project and each label with name-only audit`, async () => {
+          const f = await moveFixture(assigneeType);
+          // Same names in the target must never be used to remap inherited IDs.
+          store.createAgent({ name: f.owner.name, provider: "codex", workspaceId: f.target });
+          store.createProject({ title: f.project.title, workspaceId: f.target });
+          for (const label of f.labels) store.createLabel({ name: label.name, color: "#654321", workspaceId: f.target });
+          const next = store.updateIssue(f.issue.id, { workspace_id: f.target, actorType: "member", actorId: f.auth.targetMember });
+          expect(next).toMatchObject({ workspaceId: f.target, assigneeType: null, assigneeId: null, projectId: null });
+          expect(store.listLabelsForIssue(f.issue.id)).toEqual([]);
+          const rows = cleared(f.issue.id);
+          expect(rows).toHaveLength(4);
+          expect(rows.map(row => row.data)).toEqual([
+            { field: "assignee", name: f.owner.name, assignee_type: assigneeType },
+            { field: "project", name: f.project.title },
+            ...f.labels.map(label => ({ field: "label", name: label.name })),
+          ]);
+          for (const row of rows) {
+            expect(row.body).toBe((row.data as { name: string }).name);
+            expect(row).toMatchObject({ actorType: "member", actorId: f.auth.targetMember });
+          }
+        });
+      }
+
+      it(`${direction}: MUL-480 reproduces owner and label leftovers without a project`, async () => {
+        const f = await moveFixture("agent", false);
+        const next = store.updateIssue(f.issue.id, { workspaceId: f.target });
+        expect(next.assigneeId).toBeNull();
+        expect(store.listLabelsForIssue(f.issue.id)).toEqual([]);
+        expect(cleared(f.issue.id)).toHaveLength(3);
+        expect(cleared(f.issue.id).every(row => row.actorType === "system" && row.actorId === null)).toBe(true);
+      });
+
+      it(`${direction}: MUL-480 preserves explicit target owners and project in both input spellings`, async () => {
+        for (const camel of [false, true]) {
+          const f = await moveFixture();
+          const owner = store.createAgent({ name: "Target owner", provider: "codex", workspaceId: f.target });
+          const project = store.createProject({ title: "Target project", workspaceId: f.target });
+          const next = store.updateIssue(f.issue.id, camel
+            ? { workspaceId: f.target, assigneeType: "agent", assigneeId: owner.id, projectId: project.id }
+            : { workspace_id: f.target, assignee_type: "agent", assignee_id: owner.id, project_id: project.id });
+          expect(next).toMatchObject({ workspaceId: f.target, assigneeType: "agent", assigneeId: owner.id, projectId: project.id });
+          expect(cleared(f.issue.id).map(row => (row.data as { field: string }).field)).toEqual(["label", "label"]);
+        }
+      });
+
+      it(`${direction}: MUL-480 rejects explicit source values and leaves all fields and audits untouched`, async () => {
+        for (const field of ["agent", "member", "squad", "project"] as const) {
+          const f = await moveFixture(field === "project" ? "agent" : field);
+          const before = store.listIssueActivity(f.issue.id);
+          expect(() => store.updateIssue(f.issue.id, { workspace_id: f.target,
+            ...(field === "project" ? { project_id: f.project.id } : { assignee_type: field, assignee_id: f.owner.id }) })).toThrow();
+          expect(store.getIssue(f.issue.id)).toEqual(f.issue);
+          expect(store.listLabelsForIssue(f.issue.id).map(row => row.id)).toEqual(f.labels.map(row => row.id));
+          expect(store.listIssueActivity(f.issue.id)).toEqual(before);
+        }
+      });
+
+      it(`${direction}: MUL-480 empty moves and same-workspace updates do not write clearing audits`, async () => {
+        const { source, target } = workspaces(reverse);
+        const empty = store.createIssue({ title: "Empty", workspaceId: source });
+        store.updateIssue(empty.id, { workspaceId: target });
+        expect(cleared(empty.id)).toEqual([]);
+        const f = await moveFixture();
+        const next = store.updateIssue(f.issue.id, { title: "Edited", workspaceId: f.source });
+        expect(next).toMatchObject({ assigneeId: f.owner.id, projectId: f.project.id });
+        expect(store.listLabelsForIssue(f.issue.id).map(row => row.id)).toEqual(f.labels.map(row => row.id));
+        expect(cleared(f.issue.id)).toEqual([]);
+      });
+
+      it(`${direction}: MUL-480 batch moves clear inherited fields too`, async () => {
+        const f = await moveFixture("squad");
+        store.batchUpdateIssues({ issue_ids: [f.issue.id], updates: { workspace_id: f.target } });
+        expect(store.getIssue(f.issue.id)).toMatchObject({ workspaceId: f.target, assigneeType: null, assigneeId: null, projectId: null });
+        expect(store.listLabelsForIssue(f.issue.id)).toEqual([]);
+        expect(cleared(f.issue.id)).toHaveLength(4);
+      });
+
       it(`${direction}: IW1 uncleaned Issue workspaces block HTTP moves without exposing foreign records`, async () => {
         const { source, target } = workspaces(reverse);
         const auth = await credentials(source, target);
