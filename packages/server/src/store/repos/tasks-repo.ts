@@ -2934,7 +2934,8 @@ export class TasksRepo {
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
     const excludedAgentIds = new Set<string>();
     const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();
-    const claimWithinTransaction = (deferredEvents: CommitEventQueue) => this.ctx.db.transaction(() => {
+    const ownsTransaction = !this.ctx.db.inTransaction;
+    const claimWithinTransaction = (deferredEvents: CommitEventQueue) => {
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
       // Serialize concurrent claims per workspace. Postgres evaluates each
@@ -3048,14 +3049,18 @@ export class TasksRepo {
         throw new BinarySkillFilesUnsupportedError(task.agentId);
       }
       return { task, dispatched: !stale };
-    });
+    };
     let unsupported: BinarySkillFilesUnsupportedError | null = null;
     for (;;) {
       const deferredEvents = createCommitEventQueue();
-      let result: ReturnType<ReturnType<typeof claimWithinTransaction>>;
+      let result: ReturnType<typeof claimWithinTransaction>;
       try {
-        result = claimWithinTransaction(deferredEvents)();
+        const claim = () => claimWithinTransaction(deferredEvents);
+        result = ownsTransaction ? this.ctx.db.transaction(claim)() : claim();
       } catch (error) {
+        // Retrying requires rolling back this candidate's writes. A caller
+        // owning the transaction must receive the error and roll back itself.
+        if (!ownsTransaction) throw error;
         // Roll back the candidate's dispatch and snapshot, then try another
         // Agent so a binary Skill does not block later text-only tasks.
         if (error instanceof BinarySkillFilesUnsupportedError && !excludedAgentIds.has(error.agentId)) {
@@ -4165,7 +4170,7 @@ ${placementAfter.sql}
   startTask(taskId: string): MultiremiTask {
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
-    const task = this.ctx.db.transaction(() => {
+    const startWithinTransaction = () => {
       const current = this.getTask(taskId);
       if (current) this.getTaskChatExecutionKind(current);
       const now = nowIso();
@@ -4187,9 +4192,10 @@ ${placementAfter.sql}
         deferredEvents,
       });
       return started;
-    })();
+    };
+    const task = this.ctx.db.inTransaction ? startWithinTransaction() : this.ctx.db.transaction(startWithinTransaction)();
     this.ctx.notifyTaskEvent("task:running", task);
-    this.runChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
     this.ctx.emitCommitEvents(deferredEvents);
     return task;
   }
@@ -4726,7 +4732,7 @@ ${placementAfter.sql}
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const terminal = this.ctx.db.transaction(() => {
+    const completeWithinTransaction = () => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
       if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -4765,19 +4771,22 @@ ${placementAfter.sql}
       const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
       return { task: completed, followUps };
-    })();
+    };
+    const terminal = this.ctx.db.inTransaction ? completeWithinTransaction() : this.ctx.db.transaction(completeWithinTransaction)();
     const task = terminal.task;
     // Chat's turn card is the assistant reply, so it exists only after the
     // terminal transaction. Issue turn cards already receive their receipt at claim.
-    this.recordChatInboxDeliveryAfterReply(task);
-    this.runChildStatusChanges(childStatusChanges);
-    this.ctx.emitCommitEvents(deferredEvents);
-    this.postAgentReplyComment(task, input.output);
-    for (const delegationReturn of terminal.followUps.delegationReturns) {
-      this.ctx.notifyTaskEnqueued(delegationReturn);
-    }
-    for (const roundPushTask of terminal.followUps.roundPushTasks) this.ctx.notifyTaskEnqueued(roundPushTask);
-    this.ctx.notifyTaskEvent("task:completed", task);
+    afterCommit(this.ctx.db, () => {
+      this.recordChatInboxDeliveryAfterReply(task);
+      this.runChildStatusChanges(childStatusChanges);
+      this.ctx.emitCommitEvents(deferredEvents);
+      this.postAgentReplyComment(task, input.output);
+      for (const delegationReturn of terminal.followUps.delegationReturns) {
+        this.ctx.notifyTaskEnqueued(delegationReturn);
+      }
+      for (const roundPushTask of terminal.followUps.roundPushTasks) this.ctx.notifyTaskEnqueued(roundPushTask);
+      this.ctx.notifyTaskEvent("task:completed", task);
+    });
     return task;
   }
 
@@ -4794,7 +4803,7 @@ ${placementAfter.sql}
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const terminal = this.ctx.db.transaction(() => {
+    const failWithinTransaction = () => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
       if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -4823,30 +4832,33 @@ ${placementAfter.sql}
       const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges, deferredEvents);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
       return { task: failed, followUps };
-    })();
-    this.runChildStatusChanges(childStatusChanges);
-    this.ctx.emitCommitEvents(deferredEvents);
-    if (
-      !terminal.followUps.retry
-      && terminal.task.issueId
-      && terminal.task.failureReason === "agent_error.context_overflow"
-    ) {
-      this.postContextOverflowSystemComment(terminal.task);
-    }
-    if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
-    for (const delegationReturn of terminal.followUps.delegationReturns) {
-      this.ctx.notifyTaskEnqueued(delegationReturn);
-    }
+    };
+    const terminal = this.ctx.db.inTransaction ? failWithinTransaction() : this.ctx.db.transaction(failWithinTransaction)();
+    afterCommit(this.ctx.db, () => {
+      this.runChildStatusChanges(childStatusChanges);
+      this.ctx.emitCommitEvents(deferredEvents);
+      if (
+        !terminal.followUps.retry
+        && terminal.task.issueId
+        && terminal.task.failureReason === "agent_error.context_overflow"
+      ) {
+        this.postContextOverflowSystemComment(terminal.task);
+      }
+      if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
+      for (const delegationReturn of terminal.followUps.delegationReturns) {
+        this.ctx.notifyTaskEnqueued(delegationReturn);
+      }
+      this.ctx.notifyTaskEvent("task:failed", terminal.task);
+    });
     const task = terminal.task;
-    this.ctx.notifyTaskEvent("task:failed", task);
     return task;
   }
 
   cancelTask(taskId: string): MultiremiTask {
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const terminal = this.ctx.db.transaction(() =>
-      this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents))();
+    const cancelWithinTransaction = () => this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+    const terminal = this.ctx.db.inTransaction ? cancelWithinTransaction() : this.ctx.db.transaction(cancelWithinTransaction)();
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });

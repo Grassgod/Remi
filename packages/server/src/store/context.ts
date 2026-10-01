@@ -1245,13 +1245,15 @@ export class StoreContext {
 
   notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
     if (messages.length === 0) return;
-    for (const listener of [...this.taskMessagesListeners]) {
-      try {
-        listener({ task, messages });
-      } catch {
-        // Realtime broadcast is best-effort and must not roll back the append.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.taskMessagesListeners]) {
+        try {
+          listener({ task, messages });
+        } catch {
+          // Realtime broadcast is best-effort and must not roll back the append.
+        }
       }
-    }
+    });
   }
 
   /**
@@ -1272,17 +1274,19 @@ export class StoreContext {
   }
 
   notifyTaskEvent(type: string, task: MultiremiTask): void {
-    if (["task:running", "task:awaiting_human", "task:completed", "task:failed", "task:cancelled"].includes(type)) {
-      try { this.feishuBot().materializeFeishuTaskDeliveries(task.id); }
-      catch (error) { log.warn(`Feishu task delivery materialization failed for ${task.id}; background claim will retry`); }
-    }
-    for (const listener of [...this.taskEventListeners]) {
-      try {
-        listener({ type, task });
-      } catch {
-        // Realtime listeners are best-effort and must not roll back task state.
+    afterCommit(this.db, () => {
+      if (["task:running", "task:awaiting_human", "task:completed", "task:failed", "task:cancelled"].includes(type)) {
+        try { this.feishuBot().materializeFeishuTaskDeliveries(task.id); }
+        catch (error) { log.warn(`Feishu task delivery materialization failed for ${task.id}; background claim will retry`); }
       }
-    }
+      for (const listener of [...this.taskEventListeners]) {
+        try {
+          listener({ type, task });
+        } catch {
+          // Realtime listeners are best-effort and must not roll back task state.
+        }
+      }
+    });
   }
 
   recordAnalyticsEvent(
@@ -1612,22 +1616,26 @@ export class StoreContext {
   }
 
   private fanOutInboxItem(item: MultiremiInboxItem): void {
-    try {
-      const routes = this.host.matchNotificationRoutes(
-        item.workspaceId,
-        item.memberId,
-        item.type,
-        item.severity,
-      );
-      for (const route of routes) {
-        const delivery = this.host.recordPendingNotificationDelivery(item, route);
-        queueMicrotask(() => void this.host.dispatchNotificationDelivery(delivery.id));
+    // Optional SQL must run outside the inbox writer's transaction: swallowing
+    // its failure there would leave PostgreSQL's outer transaction aborted.
+    afterCommit(this.db, () => {
+      try {
+        const routes = this.host.matchNotificationRoutes(
+          item.workspaceId,
+          item.memberId,
+          item.type,
+          item.severity,
+        );
+        for (const route of routes) {
+          const delivery = this.host.recordPendingNotificationDelivery(item, route);
+          queueMicrotask(() => void this.host.dispatchNotificationDelivery(delivery.id));
+        }
+      } catch (error) {
+        log.warn(
+          `notification fan-out skipped for inbox item ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-    } catch (error) {
-      log.warn(
-        `notification fan-out skipped for inbox item ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    });
   }
 
   resolveWorkspaceMemberForNotification(workspaceId: string, idOrUserId: string): MultiremiWorkspaceMember | null {

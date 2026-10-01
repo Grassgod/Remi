@@ -294,7 +294,7 @@ export class FeishuBotRepo {
   }
 
   setSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null): FeishuBotSender | null {
-    return this.ctx.db.transaction(() => {
+    const setWithinTransaction = () => {
       // Global lock order (MUL-405): W then N before the sender row UPDATE and
       // the audit row it writes. The audit seq is allocated under the number
       // lock, so taking it here keeps D after both.
@@ -314,7 +314,8 @@ export class FeishuBotRepo {
         });
       }
       return toSender({ ...row, allowed: allowed ? 1 : 0 });
-    })();
+    };
+    return this.ctx.db.inTransaction ? setWithinTransaction() : this.ctx.db.transaction(setWithinTransaction)();
   }
 
   /** Chat history and delegated tasks retain their input's current authority.

@@ -71,6 +71,13 @@ keeps its own atomic unit and the inside case adds no frame:
 - `createIssueComment`, whose body also writes the session event through
   `appendSessionEventWithinTransaction` rather than opening a second frame.
 
+MUL-482 applies the same ownership rule to task claim/start/complete/fail/cancel,
+Issue updates and system comments, and sender allow-list changes. Claim retries
+that require candidate rollback are only performed by the transaction owner;
+when claim joins an existing unit, errors propagate to its owner instead of
+retrying partially written state. Comment edit/delete/resolve/unresolve append
+their hidden Session markers with `appendSessionEventWithinTransaction`.
+
 ### 3. Best-effort side effects run after COMMIT, not inside a savepoint
 
 Work that must not fail the caller's mutation is queued with
@@ -82,6 +89,17 @@ broadcast) is not wrapped at all: with B1's bridge-failure classification
 (`abortsTransaction`) a failed bridge reply no longer aborts the surrounding
 transaction, so what is left reaching the `catch` is a real SQL error — a broken
 schema — which should fail the write.
+
+Task event subscribers and Feishu task-delivery materialization, task-message
+subscribers, and optional Inbox channel fan-out also use `afterCommit` (MUL-482).
+Inbox route matching and pending channel-delivery insertion run after commit;
+the existing microtask schedules only the subsequent asynchronous dispatch.
+Rolled-back Inbox items therefore cannot dispatch a channel notification, and
+optional fan-out SQL failures cannot abort the Inbox writer. Pending channel
+delivery insertion remains best-effort: a process exit between the Inbox commit
+and that insertion can lose an external notification. The committed Inbox item
+remains available. Task terminal automatic replies and collected child follow-up
+work likewise wait for the outermost commit.
 
 Inbox envelopes and pending turns are part of the mutation itself, not §3 side effects.
 Comment dispatch transaction ownership is classified by who can receive an error
