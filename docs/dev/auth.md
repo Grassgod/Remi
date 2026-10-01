@@ -35,6 +35,8 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 跨工作区移动时，请求未显式提供的经办人（Agent、成员、小组）、项目及标签按原 ID 核验目标工作区归属；不存在或不属于目标的经办人和项目清空，外部标签关联移除，不按名称映射。每项清空各写一条 `workspace_move_cleared` 活动，与移动共用事务，内容只含字段、原名字及经办人类型，不附带来源对象 ID、颜色或邮箱；移动前的历史活动保持原样。显式提供的经办人和项目沿用校验，目标值保留，来源值报错，显式清空不写移动清空活动；单个和批量更新遵循同一规则，CLI 可用 `remi issue batch-update --data` 传单个或多个 ID（MUL-480）。提交后沿用来源 `issue:deleted`、目标 `issue:updated` 及 `issue_labels:changed` 事件刷新工作区列表、详情和标签缓存，活动事件同样只在提交后发出。
 
+每个移动清空项还在默认 Session 写入一条系统评论，同事务镜像为 v2 conversation log 的 `kind=system` 行；metadata 仅含 `type/field/name` 和经办人的 `assignee_type`。英文 Markdown body 对名称转义，当前详情按 metadata 渲染本地化纯文本；目标工作区的 `comment:created` 在提交后触发刷新，不产生任务或 pending turn。旧时间线保留活动、系统评论及其 `comment_created` 审计，不去重。此写入不迁移默认 Session 的工作区归属，Log 读取仍遵循 Session 的既有权限边界。
+
 [IssuesRepo](../../packages/server/src/store/repos/issues-repo.ts)的父子和依赖内容读取只认可同工作区关系，依赖行自身的 `workspace_id` 也必须与两端一致。旧的跨工作区关系在详情、列表、收件箱、分享、决策、父单状态推导和依赖自动开工中视为不存在；子单序列化仍保留不透明的 `parent_issue_id`，不附带对方标题、key 或状态。旧的跨工作区子单因此不再阻止父单结束；本规则不修改或迁移存量关系。
 
 飞书 Issue 决策卡片沿用同一限定：决策行、来源 Issue 和目标 Issue 的工作区必须一致。按决策 ID 读取、卡片入队、回执补丁、消息领取、重启恢复和提醒均过滤失效关系；回调包括终态回放都返回 404；目标 Issue 已移出时，bot host 的 daemon 访问本工作区记录的该决策同样返回 404，其他外部 Issue 仍返回 403。已有出站行不迁移，领取时过滤且不阻塞后面的有效消息；旧消息已发到飞书时无法撤回其既有内容。回执与提醒还要求原始卡片、绑定和目标 Issue 属于决策工作区。

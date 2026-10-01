@@ -182,6 +182,12 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         return store.listIssueActivity(issueId).filter(row => row.type === "workspace_move_cleared");
       }
 
+      function moveLog(issueId: string) {
+        const session = store.getOrCreateDefaultIssueSession(issueId);
+        return store.listConversationLogEntries(session.id).filter(row => row.kind === "system"
+          && row.metadata.type === "workspace_move_cleared");
+      }
+
       for (const assigneeType of ["agent", "member", "squad"] as const) {
         it(`${direction}: MUL-480 clears inherited ${assigneeType}, project and each label with name-only audit`, async () => {
           const f = await moveFixture(assigneeType);
@@ -203,8 +209,53 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             expect(row.body).toBe((row.data as { name: string }).name);
             expect(row).toMatchObject({ actorType: "member", actorId: f.auth.targetMember });
           }
+          const log = moveLog(f.issue.id);
+          expect(log).toHaveLength(4);
+          expect(log.map(row => row.metadata)).toEqual(rows.map(row => ({ type: "workspace_move_cleared",
+            ...(row.data as { field: string; name: string; assignee_type?: string }) })));
+          for (const row of log) {
+            expect(row).toMatchObject({ kind: "system", author_type: "system", task_id: null, parent_id: null });
+            for (const privateValue of [f.owner.id, f.project.id, f.source, ...f.labels.map(label => label.id), "#123456"])
+              expect(JSON.stringify(row.metadata)).not.toContain(privateValue);
+          }
+          // System audit rows are display-only: no task, including a pending turn.
+          expect(store.listTasksForIssue(f.issue.id)).toEqual([]);
+          store.updateIssue(f.issue.id, { workspaceId: f.target });
+          expect(moveLog(f.issue.id)).toEqual(log);
         });
       }
+
+      it(`${direction}: MUL-480 system log escapes names as text, including links and mentions`, async () => {
+        const { source, target } = workspaces(reverse);
+        const names = ["**Bold** _italic_ `code` $math$", "[x](mention://agent/fake)", '[@ id="fake" label="x"]',
+          "https://example.test/path", "a@example.test <b>x</b>", "line one\n# heading\n- item"];
+        const issue = store.createIssue({ title: "Literal names", workspaceId: source });
+        for (const name of names) store.attachLabelToIssue(issue.id, store.createLabel({ name, color: "#123456", workspaceId: source }).id);
+        store.updateIssue(issue.id, { workspaceId: target });
+        const log = moveLog(issue.id);
+        expect(log).toHaveLength(names.length);
+        expect(log.map(row => row.metadata)).toEqual(expect.arrayContaining(names.map(name => ({ type: "workspace_move_cleared", field: "label", name }))));
+        for (const row of log) {
+          expect(row.body_md).not.toContain("mention://");
+          expect(row.body_md).not.toContain("https://");
+          expect(row.body_html).not.toMatch(/<(?:a|strong|em|code|b|h[1-6]|ul|li)\b/);
+        }
+        expect(log.find(row => row.metadata.name === names[0])!.body_md).toContain("&#42;&#42;Bold&#42;&#42;");
+        expect(log.find(row => row.metadata.name === names[0])!.body_html).toContain(names[0]!);
+        expect(log.find(row => row.metadata.name === names[1])!.body_md).toContain("&#91;x&#93;&#40;mention&#58;&#47;&#47;agent&#47;fake&#41;");
+        expect(store.listTasksForIssue(issue.id)).toEqual([]);
+      });
+
+      it(`${direction}: MUL-480 empty moves and repeated moves add no system log rows`, () => {
+        const { source, target } = workspaces(reverse);
+        const issue = store.createIssue({ title: "No inherited values", workspaceId: source });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const before = store.listConversationLogEntries(session.id);
+        store.updateIssue(issue.id, { workspaceId: target });
+        store.updateIssue(issue.id, { workspaceId: target });
+        expect(store.listConversationLogEntries(session.id)).toEqual(before);
+        expect(store.listTasksForIssue(issue.id)).toEqual([]);
+      });
 
       it(`${direction}: MUL-480 reproduces owner and label leftovers without a project`, async () => {
         const f = await moveFixture("agent", false);
@@ -309,6 +360,10 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`${direction}: MUL-480 rollback after cleanup restores fields, labels and audit without emitting success`, async () => {
         const f = await moveFixture();
         const before = store.listIssueActivity(f.issue.id);
+        const session = store.getOrCreateDefaultIssueSession(f.issue.id);
+        const logBefore = store.listConversationLogEntries(session.id);
+        const commentsBefore = store.listIssueComments(f.issue.id);
+        const sessionEventsBefore = store.listSessionEvents(session.id);
         const events: string[] = [];
         const stop = store.onWorkspaceEvent(event => events.push(event.type));
         const run = db.run.bind(db);
@@ -320,6 +375,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             expect(store.getIssue(f.issue.id)?.workspaceId).toBe(f.target);
             expect(store.listLabelsForIssue(f.issue.id)).toEqual([]);
             expect(cleared(f.issue.id)).toHaveLength(4);
+            expect(moveLog(f.issue.id)).toHaveLength(4);
             expect(events).toEqual([]);
             throw new Error("MUL-480 injected failure after clearing");
           }
@@ -332,6 +388,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.getIssue(f.issue.id)).toEqual(f.issue);
         expect(store.listLabelsForIssue(f.issue.id).map(row => row.id)).toEqual(f.labels.map(row => row.id));
         expect(store.listIssueActivity(f.issue.id)).toEqual(before);
+        expect(store.listConversationLogEntries(session.id)).toEqual(logBefore);
+        expect(store.listIssueComments(f.issue.id)).toEqual(commentsBefore);
+        expect(store.listSessionEvents(session.id)).toEqual(sessionEventsBefore);
         expect(events).toEqual([]);
       });
 
@@ -359,6 +418,13 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const text = JSON.stringify(row.payload);
           for (const privateValue of [f.owner.id, f.project.id, f.source, ...f.labels.map(label => label.id), "#123456"]) expect(text).not.toContain(privateValue);
         }
+        const commentEvents = events.filter(row => row.type === "comment:created");
+        expect(commentEvents).toHaveLength(4);
+        for (const row of commentEvents) {
+          expect(row.workspaceId).toBe(f.target);
+          const comment = (row.payload as { comment: { id: string } }).comment;
+          expect(moveLog(f.issue.id).some(entry => entry.id === comment.id)).toBe(true);
+        }
       });
 
       it(`${direction}: MUL-480 authenticated target HTTP reads clear fields and expose name-only new activities`, async () => {
@@ -374,12 +440,21 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           expect(detail).toMatchObject({ assignee_type: null, assignee_id: null, project_id: null, labels: [] });
           expect(await read(f.auth, f.auth.targetOnly, `/api/issues/${f.issue.id}/labels`)).toEqual({ labels: [] });
           const timeline = await read(f.auth, f.auth.targetOnly, `/api/issues/${f.issue.id}/timeline`);
+          const session = store.getOrCreateDefaultIssueSession(f.issue.id);
+          // Default Session ownership stays in the source (reported separately).
+          // The moving actor can read its v2 Log through membership in both workspaces.
+          const log = await read(f.auth, f.auth.both, `/api/sessions/${session.id}/log`);
+          const systemRows = log.entries.filter((row: { kind: string; metadata: { type?: string } }) =>
+            row.kind === "system" && row.metadata.type === "workspace_move_cleared");
+          expect(systemRows).toHaveLength(4);
+          expect(systemRows.map((row: { metadata: unknown }) => row.metadata)).toEqual(moveLog(f.issue.id).map(row => row.metadata));
           const newActivities = timeline.filter((row: { action?: string }) => row.action === "workspace_move_cleared");
           expect(newActivities).toHaveLength(4);
           for (const privateValue of [f.owner.id, f.project.id, f.source, ...f.labels.map(label => label.id), "#123456",
             store.getWorkspaceMember(f.auth.sourceMember)!.email!]) {
             expect(JSON.stringify(detail)).not.toContain(privateValue);
             expect(JSON.stringify(newActivities)).not.toContain(privateValue);
+            expect(JSON.stringify(systemRows.map((row: { metadata: unknown }) => row.metadata))).not.toContain(privateValue);
           }
           // Scope decision cmt_ve0mfxj4iab4: existing audit rows remain intact.
           expect(timeline.find((row: { action?: string }) => row.action === "issue_created").details.projectId).toBe(f.project.id);

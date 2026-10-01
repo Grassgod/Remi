@@ -2812,11 +2812,26 @@ export class IssuesRepo {
         this.ctx.db.run("DELETE FROM multiremi_issue_to_labels WHERE issue_id = ? AND label_id = ?", [id, label.id]);
         moveCleared.push({ field: "label", name: label.name });
       }
+      const sessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(id, null).id;
       for (const data of moveCleared) {
         this.ctx.appendIssueActivity(id, {
           actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
           type: "workspace_move_cleared", body: data.name, data,
         }, deferredEvents);
+        // GFM re-links even backslash-escaped email text. A raw HTML paragraph
+        // with entity-escaped punctuation keeps names literal in both renderers,
+        // including Markdown, legacy mentions, URLs and HTML-looking names.
+        const name = data.name.replace(/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/g,
+          char => `&#${char.charCodeAt(0)};`).replace(/[\r\n]/g, " ");
+        const body = data.field === "label"
+          ? `<p>Removed label "${name}" when moving to another workspace.</p>`
+          : `<p>Cleared ${data.field} "${name}" when moving to another workspace.</p>`;
+        const comment = this.createSystemIssueCommentWithinTransaction(id, body,
+          { type: "workspace_move_cleared", ...data }, deferredEvents, null, sessionId);
+        deferredEvents.workspace.push({
+          type: "comment:created", workspaceId: nextWorkspaceId,
+          actorType: "system", actorId: comment.authorId, payload: { comment },
+        });
       }
       if (foreignLabels.length) {
         deferredEvents.workspace.push({

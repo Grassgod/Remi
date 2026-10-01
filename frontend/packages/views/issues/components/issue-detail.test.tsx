@@ -4,12 +4,15 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { MemorySessionReplica } from "@multiremi/core/replica";
+import { useWSEvent } from "@multiremi/core/realtime";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
+import zhCommon from "../../locales/zh-Hans/common.json";
+import zhIssues from "../../locales/zh-Hans/issues.json";
 
-const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
+const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues }, "zh-Hans": { common: zhCommon, issues: zhIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockNavigationReplace = vi.hoisted(() => vi.fn());
@@ -557,10 +560,11 @@ function renderIssueDetail(
   issueId = "issue-1",
   initialIssueSessionId?: string,
   onIssueSessionChange?: (sessionId: string) => void,
+  locale: "en" | "zh-Hans" = "en",
 ) {
   const queryClient = createTestQueryClient();
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+    <I18nProvider locale={locale} resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
         <IssueDetail
           issueId={issueId}
@@ -631,7 +635,7 @@ describe("IssueDetail (shared)", () => {
         session_id: sessionId, id: item.id, seq: index + 1, kind: item.type === "comment" ? "message" : "system",
         revision: 1, visibility: "shown", author_type: item.actor_type ?? "system", author_id: item.actor_id ?? null,
         task_id: item.task_id ?? null, parent_id: item.parent_id ?? null, body_md: item.content ?? "", body_html: null,
-        render_version: null, metadata: { attachments: item.attachments ?? [], reactions: item.reactions ?? [] },
+        render_version: null, metadata: { ...item.details, attachments: item.attachments ?? [], reactions: item.reactions ?? [] },
         resolved_at: item.resolved_at ?? null, resolved_by_type: item.resolved_by_type ?? null,
         resolved_by_id: item.resolved_by_id ?? null, created_at: item.created_at ?? "", updated_at: item.updated_at ?? "",
         deleted_at: null,
@@ -2124,6 +2128,45 @@ describe("IssueDetail (shared)", () => {
       await waitForReveal();
       expect(screen.getByPlaceholderText("Comment in Main…")).toBeInTheDocument();
     });
+  });
+
+  it.each(["en", "zh-Hans"] as const)("renders workspace move system log rows in %s with literal names", async (locale) => {
+    const name = '**x** [x](mention://agent/fake) <b>x</b>';
+    mockApiObj.listTimeline.mockResolvedValue(["assignee", "project", "label"].map((field, index) => ({
+      type: "activity", id: `move-${field}`, actor_type: "system", actor_id: "",
+      content: "Server fallback body", details: { type: "workspace_move_cleared", field, name },
+      created_at: `2026-01-01T00:00:0${index}Z`, updated_at: `2026-01-01T00:00:0${index}Z`,
+    })));
+    renderIssueDetail("issue-1", undefined, undefined, locale);
+
+    const messages = locale === "en"
+      ? [`cleared assignee “${name}” when moving workspaces`, `cleared project “${name}” when moving workspaces`, `removed label “${name}” when moving workspaces`]
+      : [`移动工作区时清空了经办人「${name}」`, `移动工作区时清空了项目「${name}」`, `移动工作区时移除了标签「${name}」`];
+    await screen.findByText(messages[0]!);
+    for (const message of messages) expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByText("Server fallback body")).not.toBeInTheDocument();
+    for (const row of document.querySelectorAll("[data-log-kind='system']")) {
+      expect(row.querySelector("a, strong, b")).toBeNull();
+    }
+  });
+
+  it("refreshes workspace move system log rows on the committed comment event", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([]);
+    renderIssueDetail();
+    await screen.findByText("Add JWT auth to the backend");
+    await waitForReveal();
+    expect(screen.queryByText("cleared project “Original project” when moving workspaces")).not.toBeInTheDocument();
+    mockApiObj.listTimeline.mockResolvedValue([{
+      type: "activity", id: "move-project", actor_type: "system", actor_id: "",
+      content: "Server fallback body", details: { type: "workspace_move_cleared", field: "project", name: "Original project" },
+      created_at: "2026-01-01T00:00:01Z", updated_at: "2026-01-01T00:00:01Z",
+    }]);
+    const callbacks = vi.mocked(useWSEvent).mock.calls.filter(([event]) => event === "comment:created");
+    expect(callbacks.length).toBeGreaterThan(0);
+    await act(async () => {
+      for (const [, handler] of callbacks) handler({ comment: { id: "move-project", issue_id: "issue-1", issue_session_id: "session-main" } });
+    });
+    expect(await screen.findByText("cleared project “Original project” when moving workspaces")).toBeInTheDocument();
   });
 
   it("renders system log rows in seq order without folding or truncating the tail", async () => {
