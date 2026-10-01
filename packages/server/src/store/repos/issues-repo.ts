@@ -4346,8 +4346,9 @@ export class IssuesRepo {
         const parentHint = this.ctx.db.query(
           "SELECT parent_issue_id FROM multiremi_issues WHERE id = ? AND workspace_id = ?",
         ).get(parentId, current.workspaceId) as Row | null;
-        // A missing or foreign ancestor must not silently end the lock chain.
-        if (!parentHint) throw new Error(`Parent issue not found in workspace: ${parentId}`);
+        // Keep this id in the lock set and decide missing rows after locking.
+        // Foreign ancestors stop discovery: sameWorkspaceParent never writes them.
+        if (!parentHint) break;
         parentId = parentHint.parent_issue_id ? String(parentHint.parent_issue_id) : null;
       }
       const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [...assignmentRows]);
@@ -4364,8 +4365,13 @@ export class IssuesRepo {
           if (checked.has(parentId)) throw new Error("Issue parent cycle detected");
           checked.add(parentId);
           if (!lockedRows.has(parentId)) throw new IssueLockSetStaleError();
-          if (!lockedRows.get(parentId)) throw new Error(`Parent issue not found: ${parentId}`);
-          parentId = this.getIssue(parentId)!.parentIssueId;
+          if (!lockedRows.get(parentId)) {
+            if (parentId === locked.parentIssueId) throw new Error(`Parent issue not found: ${parentId}`);
+            break;
+          }
+          const parent: MultiremiIssue = this.getIssue(parentId)!;
+          if (parent.workspaceId !== locked.workspaceId) break;
+          parentId = parent.parentIssueId;
         }
       }
       this.ctx.db.run(

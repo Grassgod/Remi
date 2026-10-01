@@ -132,6 +132,13 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `parent_status_derived` activity, before the new task is created. The possible
    ancestor re-derivation chain joins the initial sorted lock set; its relations
    are re-read under those locks and a changed chain retries as a stale set.
+   Assignment and PATCH reopening retain the same legacy-relation contract:
+   a missing direct parent rejects with `Parent issue not found: <id>`, while
+   a parent in another workspace is ignored. Re-derivation stops at a missing
+   or foreign higher ancestor and never writes outside the child's workspace.
+   Assignment's workspace-scoped discovery still includes that boundary id in
+   its lock set. If a foreign ancestor moves back before locking, its newly
+   reachable ancestors must already be locked or the set is stale.
    Hook failure rolls back the assignment, parent statuses and audit together;
    broadcasts and collected follow-ups wait for the assignment's commit.
    Lock order is workspace lifecycle (when required) and, for creation and for
