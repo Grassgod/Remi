@@ -231,7 +231,8 @@ export class ConversationLogRepo {
   }
 
   append(input: AppendConversationLogInput): ConversationLogEntry {
-    return this.ctx.db.transaction(() => this.appendWithinTransaction(input))();
+    const appendWithinTransaction = () => this.appendWithinTransaction(input);
+    return this.ctx.db.inTransaction ? appendWithinTransaction() : this.ctx.db.transaction(appendWithinTransaction)();
   }
 
   /** Allocate seq and insert. The caller already owns the transaction. */

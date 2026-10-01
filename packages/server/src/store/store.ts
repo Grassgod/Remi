@@ -4468,9 +4468,9 @@ runMigrations(this.db);
     return this.conversationLog.appendWithinTransaction(input);
   }
 
-  /** Public append that opens its own transaction. */
+  /** Insert one row; the caller owns the transaction. */
   appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
-    return this.conversationLog.append(input);
+    return this.conversationLog.appendWithinTransaction(input);
   }
 
   /** In-place update with `revision++`; the caller owns the transaction. */

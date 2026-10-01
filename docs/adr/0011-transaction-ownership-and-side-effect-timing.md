@@ -79,6 +79,9 @@ that require candidate rollback are only performed by the transaction owner;
 when claim joins an existing unit, errors propagate to its owner instead of
 retrying partially written state. Comment edit/delete/resolve/unresolve append
 their hidden Session markers with `appendSessionEventWithinTransaction`.
+The Store's `appendConversationLogWithinTransaction` facade forwards to the
+within variant; public Conversation Log append likewise joins an existing
+transaction so its row, sequence allocation and notification share that owner.
 
 ### 3. Best-effort side effects run after COMMIT, not inside a savepoint
 
