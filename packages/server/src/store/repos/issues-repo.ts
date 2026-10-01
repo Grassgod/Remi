@@ -2529,19 +2529,22 @@ export class IssuesRepo {
     // {@link updateIssueWithinTransaction} so the SCM merge effect can join the
     // same transaction and roll the status back together with its bookkeeping.
     // A stale lock set rolls back and retries once with fresh queues.
-    const { result, collector, deferredEvents } = retryOnceOnStaleLockSet(() => {
+    const ownsTransaction = !this.ctx.db.inTransaction;
+    const update = () => {
       const collector: ChildStatusChangeCollector = [];
       const deferredEvents = createCommitEventQueue();
-      const result = this.ctx.db.transaction(() => this.updateIssueWithinTransaction(
+      const write = () => this.updateIssueWithinTransaction(
         id,
         input,
         options,
         collector,
         deferredEvents,
-      ))();
+      );
+      const result = ownsTransaction ? this.ctx.db.transaction(write)() : write();
       return { result, collector, deferredEvents };
-    });
-    this.runIssueUpdatePostCommit(result, input, collector, deferredEvents);
+    };
+    const { result, collector, deferredEvents } = ownsTransaction ? retryOnceOnStaleLockSet(update) : update();
+    afterCommit(this.ctx.db, () => this.runIssueUpdatePostCommit(result, input, collector, deferredEvents));
     return result;
   }
 
@@ -4187,12 +4190,11 @@ export class IssuesRepo {
     taskId: string | null = null,
     issueSessionId: string | null = null,
   ): MultiremiIssueComment {
-    // The wrapper owns the only transaction here, so it must also own the
-    // queue: the `comment_created` activity and the `comment:created` push are
-    // published after this transaction commits (MUL-400 S1, QA round 4).
+    // Join a caller-owned transaction without adding a frame; both forms own
+    // a queue whose publication waits for the outermost COMMIT.
     const deferredEvents = createCommitEventQueue();
-    const comment = this.ctx.db.transaction(() =>
-      this.createSystemIssueCommentWithinTransaction(issueId, body, data, deferredEvents, taskId, issueSessionId))();
+    const write = () => this.createSystemIssueCommentWithinTransaction(issueId, body, data, deferredEvents, taskId, issueSessionId);
+    const comment = this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
     // Same live-update contract as createIssueComment — system comments are
     // store-internal and never pass through the HTTP layer. Best-effort, and
     // only after the row is committed.
@@ -4404,7 +4406,7 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
-    const writeAssignment = () => {
+    const writeAssignment = (assignmentChanges: ChildStatusChangeCollector, assignmentEvents: CommitEventQueue) => {
       if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       // Agent assignment also reopens a settled Issue, independently of PATCH.
       // ADR 0003 #8: a fresh unlocked hint (not `current`, read before the
@@ -4414,7 +4416,22 @@ export class IssuesRepo {
         : null;
       const reopenedChildParent = hint?.parent_issue_id && isTerminalIssueStatus(String(hint.status))
         ? String(hint.parent_issue_id) : null;
-      const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [id, reopenedChildParent]);
+      // Re-derivation can propagate through in_review ancestors. Discover that
+      // relation chain before taking D, then lock every possible written row
+      // once in id order; an altered chain is a stale set, never a late lock.
+      const assignmentRows = new Set<string>([id]);
+      for (let parentId = reopenedChildParent; parentId;) {
+        if (assignmentRows.has(parentId)) throw new Error("Issue parent cycle detected");
+        assignmentRows.add(parentId);
+        const parentHint = this.ctx.db.query(
+          "SELECT parent_issue_id FROM multiremi_issues WHERE id = ? AND workspace_id = ?",
+        ).get(parentId, current.workspaceId) as Row | null;
+        // Keep this id in the lock set and decide missing rows after locking.
+        // Foreign ancestors stop discovery: sameWorkspaceParent never writes them.
+        if (!parentHint) break;
+        parentId = parentHint.parent_issue_id ? String(parentHint.parent_issue_id) : null;
+      }
+      const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [...assignmentRows]);
       if (!lockedRows.get(id)) throw new Error(`Issue not found: ${id}`);
       const locked = this.getIssue(id)!;
       // The Issue moved while this waited: resolve the assignee where it now
@@ -4423,8 +4440,19 @@ export class IssuesRepo {
         this.ctx.squads().resolveAssigneeRef(assigneeType, assigneeId, locked.workspaceId);
       }
       if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
-        if (!lockedRows.has(locked.parentIssueId)) throw new IssueLockSetStaleError();
-        if (!lockedRows.get(locked.parentIssueId)) throw new Error(`Parent issue not found: ${locked.parentIssueId}`);
+        const checked = new Set<string>([id]);
+        for (let parentId: string | null = locked.parentIssueId; parentId;) {
+          if (checked.has(parentId)) throw new Error("Issue parent cycle detected");
+          checked.add(parentId);
+          if (!lockedRows.has(parentId)) throw new IssueLockSetStaleError();
+          if (!lockedRows.get(parentId)) {
+            if (parentId === locked.parentIssueId) throw new Error(`Parent issue not found: ${parentId}`);
+            break;
+          }
+          const parent: MultiremiIssue = this.getIssue(parentId)!;
+          if (parent.workspaceId !== locked.workspaceId) break;
+          parentId = parent.parentIssueId;
+        }
       }
       this.ctx.db.run(
         `UPDATE multiremi_issues
@@ -4432,10 +4460,24 @@ export class IssuesRepo {
          WHERE id = ?`,
         [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
       );
+      if (taskAgent && isTerminalIssueStatus(locked.status)) {
+        this.notifyChildStatusChangeWithinTransaction(
+          locked, this.getIssue(id)!, resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+          assignmentChanges, assignmentEvents,
+        );
+      }
     };
     // Only the transaction owner can roll back a stale lock set and retry once.
-    if (this.ctx.db.inTransaction) writeAssignment();
-    else retryOnceOnStaleLockSet(() => this.ctx.db.transaction(writeAssignment)());
+    const assignWithinTransaction = () => {
+      const assignmentChanges: ChildStatusChangeCollector = [];
+      const assignmentEvents = createCommitEventQueue();
+      writeAssignment(assignmentChanges, assignmentEvents);
+      return { assignmentChanges, assignmentEvents };
+    };
+    const assignment = this.ctx.db.inTransaction ? assignWithinTransaction()
+      : retryOnceOnStaleLockSet(() => this.ctx.db.transaction(assignWithinTransaction)());
+    this.ctx.emitCommitEvents(assignment.assignmentEvents);
+    afterCommit(this.ctx.db, () => this.ctx.tasks().runCollectedChildStatusChanges(assignment.assignmentChanges));
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {
@@ -5026,7 +5068,7 @@ export class IssuesRepo {
           },
         },
       });
-      this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
+      this.ctx.issueSessions().appendSessionEventWithinTransaction(current.issueSessionId, {
         authorType: "system",
         authorId: null,
         kind: "message_edited",
@@ -5085,7 +5127,7 @@ export class IssuesRepo {
           },
         });
       }
-      this.ctx.issueSessions().appendSessionEvent(comment.issueSessionId, {
+      this.ctx.issueSessions().appendSessionEventWithinTransaction(comment.issueSessionId, {
         authorType: "system",
         authorId: null,
         kind: "message_deleted",
@@ -5136,7 +5178,7 @@ export class IssuesRepo {
           updated_at: now,
         },
       });
-      this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
+      this.ctx.issueSessions().appendSessionEventWithinTransaction(current.issueSessionId, {
         authorType: input.actorType ?? "member",
         authorId: input.actorId ?? "local",
         kind: "thread_resolved",
@@ -5183,7 +5225,7 @@ export class IssuesRepo {
           updated_at: now,
         },
       });
-      this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
+      this.ctx.issueSessions().appendSessionEventWithinTransaction(current.issueSessionId, {
         authorType: "system",
         authorId: null,
         kind: "thread_unresolved",

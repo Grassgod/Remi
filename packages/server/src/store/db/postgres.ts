@@ -95,11 +95,11 @@ export interface SqlDatabase {
    * ROLLBACK. Handing the event to the outermost transaction's queue is what
    * makes "publish after COMMIT" true at every nesting depth.
    *
-   * The callback must not touch the database through the same connection: it
-   * runs after the transaction ended, so a deferred event's readers (listener
-   * registries, not queries) are the intended work. Outside any transaction the
-   * callback runs immediately, which keeps callers that never opened one (and
-   * SQLite, whose writers hold the file lock) on the old path.
+   * The original transaction has ended when the callback runs. SQL issued by
+   * the callback, including through this connection, belongs to a separate
+   * commit unit. A callback failure cannot roll back already committed data:
+   * this is best-effort work, not a way to guarantee database consistency or
+   * delivery. Outside any transaction the callback runs immediately.
    *
    * Optional for the same structural-typing reason as the advisory locks: a raw
    * bun:sqlite handle does not implement it, and the helper below falls back to
@@ -173,6 +173,11 @@ export function withSavepoint<T>(db: SqlDatabase, fn: () => T): T {
  * cannot queue (a raw \`bun:sqlite\` handle passed straight to a repo by a test)
  * runs the callback immediately: outside a transaction the two are the same.
  *
+ * The original transaction is over when a queued callback runs. SQL may use
+ * the same connection, but its writes are separate from that committed unit.
+ * Callback failure cannot undo the original commit; use this for best-effort
+ * work, never to guarantee consistency across the two units.
+ *
  * Error semantics differ by when the callback runs, and that is intentional:
  *
  *   - outside a transaction it runs inline, so a throw propagates to the caller.
@@ -183,8 +188,9 @@ export function withSavepoint<T>(db: SqlDatabase, fn: () => T): T {
  *     `runAfterCommitCallbacks`) so one bad listener cannot roll back a
  *     committed write or suppress the callbacks behind it.
  *
- * Realtime publication is best-effort by contract. `afterCommit` orders a push
- * after the commit; it does not promise delivery.
+ * Realtime publication and optional post-commit writes are best-effort by
+ * contract. `afterCommit` orders them after the commit; it does not promise
+ * delivery or atomicity with the original mutation.
  */
 export function afterCommit(db: SqlDatabase, fn: () => void): void {
   if (typeof db.afterCommit === "function") db.afterCommit(fn);
