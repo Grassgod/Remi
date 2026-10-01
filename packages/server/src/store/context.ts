@@ -776,6 +776,7 @@ export interface ConversationLogSurface {
   conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
   locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
   listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null; limit?: number }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  hasInboxReceiptCovering(sessionId: string, agentId: string, seq: number): boolean;
   listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
   setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;

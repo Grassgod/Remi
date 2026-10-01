@@ -4589,6 +4589,10 @@ runMigrations(this.db);
     return this.conversationLog.locate(sessionId, id, query);
   }
 
+  hasInboxReceiptCovering(sessionId: string, agentId: string, seq: number): boolean {
+    return this.conversationLog.hasInboxReceiptCovering(sessionId, agentId, seq);
+  }
+
   /** Shown entries in the inclusive seq range, oldest first. */
   listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null; limit?: number } = {}): ConversationLogEntry[] {
     return this.conversationLog.listShown(sessionId, input);
