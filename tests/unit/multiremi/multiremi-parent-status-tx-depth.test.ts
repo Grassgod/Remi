@@ -1353,15 +1353,14 @@ describe("MUL-400 E2 hook atomicity", () => {
     // Fail exactly where QA asked: after the round is inserted, before its
     // audit activity is appended. `appendIssueActivity` on the store context is
     // the writer both the round and the coalesced branch use.
-    type ActivityInput = { type: string };
     const ctx = (store as unknown as {
-      ctx: { appendIssueActivity: (issueId: string, input: ActivityInput) => void };
+      ctx: import("@multiremi/store/context.js").StoreContext;
     }).ctx;
     const original = ctx.appendIssueActivity.bind(ctx);
     const failOn = ["child_done_parent_triggered", "child_status_parent_coalesced"];
-    ctx.appendIssueActivity = (issueId: string, input: ActivityInput) => {
-      if (failOn.includes(input.type)) throw new Error("injected hook failure");
-      original(issueId, input);
+    ctx.appendIssueActivity = (...args) => {
+      if (failOn.includes(args[1].type)) throw new Error("injected hook failure");
+      original(...args);
     };
 
     let thrown: Error | null = null;

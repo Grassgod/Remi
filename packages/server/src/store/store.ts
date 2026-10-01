@@ -4475,9 +4475,9 @@ runMigrations(this.db);
     return this.conversationLog.appendWithinTransaction(input);
   }
 
-  /** Public append that opens its own transaction. */
+  /** Insert one row; the caller owns the transaction. */
   appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
-    return this.conversationLog.append(input);
+    return this.conversationLog.appendWithinTransaction(input);
   }
 
   /** In-place update with `revision++`; the caller owns the transaction. */
@@ -4594,6 +4594,10 @@ runMigrations(this.db);
   /** Locate one entry's seq by id, for deep links. */
   locateConversationLogEntry(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
     return this.conversationLog.locate(sessionId, id, query);
+  }
+
+  hasInboxReceiptCovering(sessionId: string, agentId: string, seq: number): boolean {
+    return this.conversationLog.hasInboxReceiptCovering(sessionId, agentId, seq);
   }
 
   /** Shown entries in the inclusive seq range, oldest first. */

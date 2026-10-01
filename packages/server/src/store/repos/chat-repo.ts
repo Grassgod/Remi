@@ -571,7 +571,7 @@ export class ChatRepo {
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
-    return this.ctx.db.transaction(() => {
+    const projectWithinTransaction = () => {
       const task = this.ctx.tasks().getTask(taskId);
       if (!task?.chatSessionId) return null;
       const topicIssueId = this.ctx.feishuBot().getFeishuIssueIdForChatSession(task.chatSessionId);
@@ -644,7 +644,8 @@ export class ChatRepo {
         );
       }
       return projection;
-    })();
+    };
+    return this.ctx.db.inTransaction ? projectWithinTransaction() : this.ctx.db.transaction(projectWithinTransaction)();
   }
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {

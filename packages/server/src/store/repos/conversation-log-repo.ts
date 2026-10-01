@@ -231,7 +231,8 @@ export class ConversationLogRepo {
   }
 
   append(input: AppendConversationLogInput): ConversationLogEntry {
-    return this.ctx.db.transaction(() => this.appendWithinTransaction(input))();
+    const appendWithinTransaction = () => this.appendWithinTransaction(input);
+    return this.ctx.db.inTransaction ? appendWithinTransaction() : this.ctx.db.transaction(appendWithinTransaction)();
   }
 
   /** Allocate seq and insert. The caller already owns the transaction. */
@@ -594,6 +595,33 @@ export class ConversationLogRepo {
       delivered_at: new Date().toISOString(),
       task_id: taskId,
     } });
+  }
+
+  /** A recipient's shown turn receipt may cover an envelope newer than the turn. */
+  hasInboxReceiptCovering(sessionId: string, agentId: string, seq: number): boolean {
+    // CASE guards both parsing and conversion: WHERE predicate order is not
+    // guaranteed, and SQLite otherwise compares JSON strings above numbers.
+    // PG deployments and CI use PG 17; pg_input_is_valid also rejects text
+    // that is valid JSON but cannot be represented as jsonb.
+    const deliveredToSeq = this.ctx.db.dialect === "postgres"
+      ? `CASE WHEN pg_input_is_valid(log.metadata, 'jsonb') THEN
+           CASE WHEN jsonb_typeof(log.metadata::jsonb #> '{inbox,delivered_to_seq}') = 'number'
+             THEN (log.metadata::jsonb #>> '{inbox,delivered_to_seq}')::numeric END
+         END`
+      : `CASE WHEN json_valid(log.metadata) THEN
+           CASE WHEN json_type(log.metadata, '$.inbox.delivered_to_seq') IN ('integer', 'real')
+             THEN json_extract(log.metadata, '$.inbox.delivered_to_seq') END
+         END`;
+    return Boolean(this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_conversation_log log
+       WHERE log.session_id = ? AND log.kind = 'turn'
+         AND log.visibility = 'shown' AND log.deleted_at IS NULL
+         AND (log.author_id = ? OR (log.author_id IS NULL AND EXISTS (
+           SELECT 1 FROM multiremi_tasks task WHERE task.id = log.task_id AND task.agent_id = ?
+         )))
+         AND ${deliveredToSeq} >= ?
+       LIMIT 1`,
+    ).get(sessionId, agentId, agentId, seq));
   }
 
   /** Shown rows in the inclusive seq range, oldest first. */

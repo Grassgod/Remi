@@ -12,7 +12,7 @@ import { nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
+import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
@@ -354,7 +354,7 @@ export class MessagingOutcomeService {
     // `createIssueWithinTransaction` takes. Whether an Issue is created is only
     // known inside the transaction, so both locks are taken unconditionally at
     // the top; they are per workspace and held only for this call.
-    const result = this.ctx.db.transaction(() => {
+    const createWithinTransaction = () => {
       this.lockWorkspace(input.workspaceId);
       this.lockIssueNumber(input.workspaceId);
       return this.createIssueWithinTransaction(ref, {
@@ -363,10 +363,11 @@ export class MessagingOutcomeService {
         taskId: cleanText(input.taskId),
         createdBy: cleanText(input.createdBy),
       }, childStatusChanges, deferredEvents);
-    })();
+    };
+    const result = this.ctx.db.inTransaction ? createWithinTransaction() : this.ctx.db.transaction(createWithinTransaction)();
 
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    afterCommit(this.ctx.db, () => this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges));
     return result;
   }
 
