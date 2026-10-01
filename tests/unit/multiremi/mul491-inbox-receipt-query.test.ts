@@ -183,6 +183,12 @@ describe("MUL-491 bounded inbox receipt reads", () => {
         }
         // An invalid candidate must not poison a later valid receipt.
         db.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", ['{"inbox":', candidate.id]);
+        const later = f.store.appendConversationLog({ sessionId: f.session.id, kind: "turn",
+          authorType: "agent", authorId: f.recipient.id,
+          metadata: { inbox: { delivered_to_seq: f.entry.seq } } });
+        expect(later.seq).toBeGreaterThan(candidate.seq);
+        expect((await f.get()).delivered).toBe(true);
+        db.run("DELETE FROM multiremi_conversation_log WHERE id = ?", [later.id]);
         db.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?",
           [metadata(f.entry.seq), f.earlyTurn.id]);
         expect(f.earlyTurn.seq).toBeLessThan(f.entry.seq);
