@@ -86,7 +86,9 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 [InboxRepo](../packages/server/src/store/repos/inbox-repo.ts)将 E2、E3 通知、E4 和委派回报写成接收会话的系统评论，
 `metadata.envelope` 保留寻址与去重信息。状态、日志条目与 `wake_seq` 在同一深度 1 的事务提交；评论 @ 复用原日志条目。
 平台种下的 queued 行由部分唯一索引约束，人的 Chat 队列、评论轮和续接排除在索引外；
-人的评论按 Q-B 常量并入 queued，编辑触发评论时在同一事务补种 `re_ring`。实现和迁移入口见
+人的评论按 Q-B 常量并入 queued；延后评论派发及编辑/删除恢复在原事务留下 system event intent，
+提交后原子消费，逾期由既有调度器重放（按认领次数 fencing）。现有维护周期还按索引轮转有界扫描 idle Issue lane，
+用 `swept_to_seq` 增量判定到龄 envelope 并补种 `re_ring`；Chat/relay lane 不参加。实现和迁移入口见
 [pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。

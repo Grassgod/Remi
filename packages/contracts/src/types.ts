@@ -4091,8 +4091,8 @@ export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" 
 export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
-  resource: "issue" | "feishu_source";
-  event: "status_changed" | "messages_ingested" | "dependency_auto_start_check";
+  resource: "issue" | "feishu_source" | "issue_comment";
+  event: "status_changed" | "messages_ingested" | "dependency_auto_start_check" | "comment_dispatch" | "trigger_comment_changed";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;

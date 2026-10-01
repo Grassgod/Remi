@@ -25,13 +25,15 @@ import {
   toInboxItem,
   toIssueComment,
 } from "@multiremi/store/context.js";
-import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo.js";
+import type { ChildStatusChange, ChildStatusChangeCollector, TriggerCommentRecoveryLane } from "./tasks-repo.js";
 import type { Envelope } from "@multiremi/contracts/inbox.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction, lockIssueRowsWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { COMMENT_DISPATCH_REPLAY_DELAY_MS, COMMENT_DISPATCH_REPLAY_MAX_AGE_MS,
+  commentDispatchReplayEnabled } from "@multiremi/store/re-ring-sweep.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
@@ -4627,7 +4629,7 @@ export class IssuesRepo {
     // including standalone comments. Automatic replies defer mention dispatch
     // until after COMMIT (402 F1), keeping the reply on dispatch failure; the
     // split assignee auto-response and member notifications also follow COMMIT.
-    // The automatic-reply and split-assignee commit gaps remain follow-ups.
+    // Deferred dispatch leaves a durable intent before the comment commits.
     // Realtime pushes always follow the owning COMMIT.
     //
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
@@ -4668,7 +4670,7 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: { deferAgentMentionDispatch?: boolean } = {},
   ): void {
-    const { issue, comment, body, authorType, issueSessionId, sessionEventSeq } = created;
+    const { issue, comment, body, authorType, issueSessionId } = created;
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(
       issue,
@@ -4680,8 +4682,7 @@ export class IssuesRepo {
       { comment_id: comment.id, issue_session_id: issueSessionId },
     );
     if (options.deferAgentMentionDispatch || created.dispatchHandled) return;
-    const mentionTasks = this.triggerCommentMentions(issue, comment, sessionEventSeq);
-    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
+    if (created.dispatchIntentId) this.consumeCommentDispatchIntent(created.dispatchIntentId);
   }
 
   createIssueCommentWithinTransaction(
@@ -4807,7 +4808,11 @@ export class IssuesRepo {
       && this.resolveCommentMentionTargets(body, issue.workspaceId).length === 0
       && mentionedMemberIds.length === 0;
     if (options.deferAgentMentionDispatch || options.deferDispatch || splitAssigneeDispatch) {
-      return { issue, comment, body, authorType, issueSessionId, sessionEventSeq: commentEvent.seq, dispatchHandled: false };
+      const dispatchIntentId = this.enqueueCommentDispatchIntent(issue, comment.id, "comment_dispatch", {
+        commentId: comment.id, issueId: issue.id, issueSessionId,
+      }, Date.parse(now));
+      return { issue, comment, body, authorType, issueSessionId, sessionEventSeq: commentEvent.seq,
+        dispatchHandled: false, dispatchIntentId };
     }
     const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq, options.deferredEvents, childStatusChanges);
     this.triggerAssigneeAutoResponse(
@@ -4834,7 +4839,101 @@ export class IssuesRepo {
        ORDER BY seq DESC LIMIT 1`,
     ).get(comment.issueSessionId, comment.id) as { seq: number } | null;
     if (!event) throw new Error(`Session event not found for comment: ${comment.id}`);
-    return this.triggerCommentMentions(issue, comment, Number(event.seq));
+    const intent = this.ctx.db.query(`SELECT id FROM multiremi_system_events
+      WHERE resource = 'issue_comment' AND event = 'comment_dispatch' AND resource_id = ?
+      ORDER BY created_at DESC, id DESC LIMIT 1`).get(commentId) as { id: string } | null;
+    return intent ? this.consumeCommentDispatchIntent(intent.id) : [];
+  }
+
+  private enqueueCommentDispatchIntent(issue: MultiremiIssue, commentId: string,
+    event: "comment_dispatch" | "trigger_comment_changed", payload: Record<string, unknown>, now: number): string {
+    if (!this.ctx.db.inTransaction) throw new Error("Comment dispatch intent requires an open transaction");
+    const id = createId("evt");
+    this.ctx.db.run(`INSERT INTO multiremi_system_events
+      (id, workspace_id, resource, event, resource_id, project_id, payload, status, attempt_count, available_at, created_at)
+      VALUES (?, ?, 'issue_comment', ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+      [id, issue.workspaceId, event, commentId, issue.projectId, toJson(payload),
+        new Date(now + COMMENT_DISPATCH_REPLAY_DELAY_MS).toISOString(), new Date(now).toISOString()]);
+    return id;
+  }
+
+  private enqueueTriggerCommentChangedIntent(issueId: string, commentIds: string[], now: number): string {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const placeholders = commentIds.map(() => "?").join(", ");
+    const lanes = this.ctx.db.query(`SELECT id AS "taskId", agent_id AS "agentId", issue_session_id AS "issueSessionId",
+      execution_scope AS "executionScope", trigger_comment_id AS "commentId", wake_seq AS "wakeSeq" FROM multiremi_tasks
+      WHERE workspace_id = ? AND trigger_comment_id IN (${placeholders})
+        AND status NOT IN ('completed','failed','cancelled')`).all(issue.workspaceId, ...commentIds);
+    return this.enqueueCommentDispatchIntent(issue, commentIds[0]!, "trigger_comment_changed", {
+      commentId: commentIds[0], commentIds, issueId, lanes,
+    }, now);
+  }
+
+  replayCommentDispatchEvent(event: MultiremiSystemEvent, now = Date.now()): MultiremiTask[] {
+    return this.consumeCommentDispatchIntent(event.id, event, now);
+  }
+
+  /** W -> conditional intent consumption -> dispatch -> COMMIT -> events.
+   * attempt_count fences a worker whose lease was reclaimed while it paused.
+   */
+  private consumeCommentDispatchIntent(id: string, claimed?: MultiremiSystemEvent, now = Date.now()): MultiremiTask[] {
+    const events = createCommitEventQueue();
+    const changes: ChildStatusChangeCollector = [];
+    const tasks = this.ctx.db.transaction(() => {
+      // The pre-lock read only locates W. All authoritative state is reread
+      // under W; SQLite already owns its writer lock at BEGIN IMMEDIATE.
+      const initial = this.ctx.db.query("SELECT workspace_id FROM multiremi_system_events WHERE id = ?").get(id) as { workspace_id: string } | null;
+      if (!initial) return [];
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspace_id);
+      const consumed = claimed
+        ? this.ctx.db.run(`UPDATE multiremi_system_events SET status = 'processed', processed_at = ?, lease_until = NULL
+          WHERE id = ? AND status = 'processing' AND attempt_count = ?`, [new Date(now).toISOString(), id, claimed.attemptCount])
+        : this.ctx.db.run(`UPDATE multiremi_system_events SET status = 'processed', processed_at = ?, lease_until = NULL
+          WHERE id = ? AND status = 'pending'`, [new Date(now).toISOString(), id]);
+      if (consumed.changes === 0) return [];
+      const event = this.ctx.autopilots().getSystemEvent(id)!;
+      if (event.resource !== "issue_comment") throw new Error("Invalid comment dispatch intent resource");
+      const issueId = cleanOptionalString(event.payload.issueId);
+      const issue = issueId ? this.getIssue(issueId) : null;
+      let result: MultiremiTask[] = [];
+      if (event.event === "trigger_comment_changed") {
+        // Deleted comments are expected: cancellation locates tasks using the
+        // persisted ids, while the conversation log keeps their tombstones.
+        const ids = Array.isArray(event.payload.commentIds) ? event.payload.commentIds.filter((x): x is string => typeof x === "string") : [];
+        if (!ids.length) throw new Error("Trigger comment recovery intent has no commentIds");
+        const snapshot = Array.isArray(event.payload.lanes) ? event.payload.lanes : [];
+        const recovery = snapshot.filter((lane): lane is TriggerCommentRecoveryLane =>
+          lane !== null && typeof lane === "object" && ["taskId", "commentId", "agentId", "issueSessionId", "executionScope"]
+            .every(key => typeof (lane as Record<string, unknown>)[key] === "string"));
+        this.ctx.tasks().cancelTasksByTriggerCommentsWithinTransaction(event.workspaceId, ids, changes, events, recovery);
+        result = [...events.enqueuedTasks];
+      } else if (event.event === "comment_dispatch") {
+        const comment = this.getIssueComment(event.resourceId);
+        const skip = claimed && !commentDispatchReplayEnabled() ? "replay_disabled"
+          : claimed && now - Date.parse(event.createdAt) > COMMENT_DISPATCH_REPLAY_MAX_AGE_MS ? "expired"
+          : !comment || !issue ? "comment_missing" : null;
+        if (skip) {
+          this.ctx.db.run("UPDATE multiremi_system_events SET last_error = ? WHERE id = ?", [skip, id]);
+          return [];
+        }
+        const seq = this.commentLogSeq(comment!.id);
+        const mentionTasks = this.triggerCommentMentions(issue!, comment!, seq, events, changes);
+        const mentionedMembers = this.resolveCommentMemberMentionTargets(comment!.body, issue!.workspaceId);
+        const assigneeTask = this.triggerAssigneeAutoResponse(issue!, comment!, mentionTasks.length > 0 || mentionedMembers.length > 0, events, changes);
+        result = [...mentionTasks, ...(assigneeTask ? [assigneeTask] : [])];
+      } else throw new Error("Invalid comment dispatch intent event");
+      this.ctx.db.run("UPDATE multiremi_system_events SET last_error = NULL WHERE id = ?", [id]);
+      if (claimed && issue) this.ctx.appendIssueActivity(issue.id, {
+        actorType: "system", actorId: null, type: "comment_dispatch_replayed", body: null,
+        data: { commentId: event.resourceId, eventId: id, attempt: claimed.attemptCount,
+          taskIds: [...new Set(result.map(task => task.id))] },
+      }, events);
+      return result;
+    })();
+    this.ctx.tasks().runCollectedChildStatusChanges(changes);
+    this.ctx.emitCommitEvents(events);
+    return tasks;
   }
 
   /**
@@ -4906,17 +5005,17 @@ export class IssuesRepo {
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
     const deferredEvents = createCommitEventQueue();
-    const { comment, changed, issueId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input, deferredEvents))();
+    const { comment, changed, dispatchIntentId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input, deferredEvents))();
     this.ctx.emitCommitEvents(deferredEvents);
     // Keep the comment and its log revision atomic. Trigger cancellation can
     // wait on a workspace lock, so it follows that commit rather than holding
     // the comment row invisible for the entire wait.
-    if (changed) this.cancelTasksByTriggerComments(issueId, [id]);
+    if (changed && dispatchIntentId) this.consumeCommentDispatchIntent(dispatchIntentId);
     return comment;
   }
 
   private updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput, deferredEvents: CommitEventQueue): {
-    comment: MultiremiIssueComment; changed: boolean; issueId: string;
+    comment: MultiremiIssueComment; changed: boolean; issueId: string; dispatchIntentId?: string;
   } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
@@ -4962,17 +5061,19 @@ export class IssuesRepo {
       body,
       data: { commentId: id },
     }, deferredEvents);
-    return { comment: this.getIssueComment(id)!, changed: current.body !== body, issueId: current.issueId };
+    const dispatchIntentId = current.body !== body
+      ? this.enqueueTriggerCommentChangedIntent(current.issueId, [id], Date.parse(now)) : undefined;
+    return { comment: this.getIssueComment(id)!, changed: current.body !== body, issueId: current.issueId, dispatchIntentId };
   }
 
   deleteIssueComment(id: string): void {
     const deferredEvents = createCommitEventQueue();
-    const { issueId, commentIds } = this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id, deferredEvents))();
+    const { dispatchIntentId } = this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id, deferredEvents))();
     this.ctx.emitCommitEvents(deferredEvents);
-    this.cancelTasksByTriggerComments(issueId, commentIds);
+    this.consumeCommentDispatchIntent(dispatchIntentId);
   }
 
-  private deleteIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): { issueId: string; commentIds: string[] } {
+  private deleteIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): { issueId: string; commentIds: string[]; dispatchIntentId: string } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const ids = this.collectCommentTreeIds(id);
@@ -4980,6 +5081,8 @@ export class IssuesRepo {
       .map((commentId) => this.ctx.getRawIssueComment(commentId))
       .filter((comment): comment is MultiremiIssueComment => comment !== null);
     const now = nowIso();
+    // Capture task/lane coordinates before deletion can detach trigger ids.
+    const dispatchIntentId = this.enqueueTriggerCommentChangedIntent(current.issueId, ids, Date.parse(now));
     for (const commentId of ids) {
       this.ctx.db.run("DELETE FROM multiremi_comment_reactions WHERE comment_id = ?", [commentId]);
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE comment_id = ?", [commentId]);
@@ -5022,7 +5125,7 @@ export class IssuesRepo {
       body: current.body,
       data: { commentId: id, deletedCommentIds: ids },
     }, deferredEvents);
-    return { issueId: current.issueId, commentIds: ids };
+    return { issueId: current.issueId, commentIds: ids, dispatchIntentId };
   }
 
   resolveIssueComment(id: string, input: { actorType?: string; actorId?: string | null } = {}): MultiremiIssueComment {

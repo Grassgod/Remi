@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { pendingTurnBackendTests, type PendingTurnTestFixture } from "./pending-turn-test-backends.js";
+import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 
 async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -71,6 +72,36 @@ pendingTurnBackendTests("MUL-492 wake recovery concurrency", (fixture, backend) 
     expect(tasks.filter(t => t.status === "queued")).toHaveLength(1);
     expect(f.store.listIssueActivity(issue.id).filter(a => a.type === "re_ring")).toHaveLength(1);
     f.store.sweepIdleIssueLanes(Date.now() + 121_000);
+    expect(f.store.listTasksForIssue(issue.id)).toHaveLength(before + 1);
+  }, 40_000);
+
+  for (const kind of ["comment_dispatch", "trigger_comment_changed"] as const) it(`14: two independent ${kind} claims dispatch only once`, async () => {
+    const f = fixture();
+    const agent = f.store.createAgent({ name: "Replay race owner", provider: "codex" });
+    const issue = f.store.createIssue({ title: "Concurrent replay", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const repo = (f.store as unknown as { issues: IssuesRepo }).issues;
+    const input = { authorType: "member", authorId: "local", body: "Continue" };
+    let eventId: string;
+    if (kind === "comment_dispatch") {
+      const created = f.transaction(() => repo.createIssueCommentWithinTransaction(issue.id, input,
+        { deferDispatch: true, deferredEvents: createCommitEventQueue() }));
+      eventId = created.dispatchIntentId!;
+    } else {
+      const comment = f.store.createIssueComment(issue.id, input);
+      f.transaction(() => f.store.sendEnvelopeWithinTransaction({ to: { role: "issue_owner", issueId: issue.id },
+        kind: "report", wake: "now", body: "Surviving work", source: {} }, [], createCommitEventQueue()));
+      const mutable = repo as unknown as { deleteIssueCommentWithinTransaction(id: string, events: ReturnType<typeof createCommitEventQueue>): { dispatchIntentId: string } };
+      eventId = f.transaction(() => mutable.deleteIssueCommentWithinTransaction(comment.id, createCommitEventQueue())).dispatchIntentId;
+    }
+    const now = Date.parse(f.store.getSystemEvent(eventId)!.availableAt);
+    const before = f.store.listTasksForIssue(issue.id).length;
+    await race(f, "replay", { now }, tx => tx`UPDATE multiremi_system_events SET available_at = available_at WHERE id = ${eventId}`);
+    const tasks = f.store.listTasksForIssue(issue.id);
+    expect(tasks).toHaveLength(before + 1);
+    expect(tasks.filter(t => t.status === "queued")).toHaveLength(1);
+    expect(f.store.listIssueActivity(issue.id).filter(a => a.type === "comment_dispatch_replayed")).toHaveLength(1);
+    expect(f.store.getSystemEvent(eventId)!.status).toBe("processed");
+    f.store.dispatchPendingSystemEvents(new Date(now + 60_000));
     expect(f.store.listTasksForIssue(issue.id)).toHaveLength(before + 1);
   }, 40_000);
 });

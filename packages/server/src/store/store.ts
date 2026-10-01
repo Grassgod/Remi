@@ -4061,6 +4061,10 @@ runMigrations(this.db);
     this.issues.runIssueCommentPostCommit(created, input);
   }
 
+  replayCommentDispatchEvent(event: import("@multiremi/contracts/types.js").MultiremiSystemEvent, now = Date.now()): MultiremiTask[] {
+    return this.issues.replayCommentDispatchEvent(event, now);
+  }
+
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,
@@ -5957,6 +5961,13 @@ runMigrations(this.db);
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
     return this.tasks.cancelTasksByTriggerComments(workspaceId, commentIds);
+  }
+
+  cancelTasksByTriggerCommentsWithinTransaction(workspaceId: string, commentIds: string[],
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+    recovery?: readonly import("./repos/tasks-repo.js").TriggerCommentRecoveryLane[]): import("./repos/tasks-repo.js").CancelTaskResult[] {
+    return this.tasks.cancelTasksByTriggerCommentsWithinTransaction(workspaceId, commentIds, childStatusChanges, deferredEvents, recovery);
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {

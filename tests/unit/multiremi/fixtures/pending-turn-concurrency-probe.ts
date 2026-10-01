@@ -18,6 +18,12 @@ try {
     db.close();
     process.exit(0);
   }
+  if (input.operation === "replay") {
+    store.dispatchPendingSystemEvents(new Date(input.now));
+    console.log(JSON.stringify({ depth: db.maxTransactionDepth }));
+    db.close();
+    process.exit(0);
+  }
   const wrapped = (store as unknown as { db: SqlDatabase }).db;
   let entryId: string | null = null;
   const result = wrapped.transaction(() => {

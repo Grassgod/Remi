@@ -1,6 +1,6 @@
 # ADR 0012: Unified inbox on the conversation log, one pending turn per lane, wakes commit with state
 
-- Status: accepted (MUL-404, 2026-09-28; supersedes the per-path coalescing in ADR 0005 decisions 3–6 and amends ADR 0003 decision 8)
+- Status: accepted (MUL-404, 2026-09-28; amended by MUL-492; supersedes the per-path coalescing in ADR 0005 decisions 3–6 and amends ADR 0003 decision 8)
 - Deciders: 贺华杰 (scope), Senior大哥 (design), 带头大哥 (split)
 
 ## Context
@@ -40,9 +40,10 @@ notification wakes to this decision.
 2. **`sendEnvelopeWithinTransaction` is the only writer.** It resolves the
    role address, dedupes by a deterministic entry id under the session head lock
    (no seq is allocated for a duplicate), appends the entry, and calls
-   `ensurePendingTurnWithinTransaction`. The five wake paths (E2, E3 failure
-   notice, E3 readiness notice, E4, delegation return, mention) call it and
-   nothing else. Message content is never appended to a task prompt.
+   `ensurePendingTurnWithinTransaction`. E2, E3 failure/readiness notices, E4 and
+   delegation returns call this writer. Comment mentions reuse the original
+   comment's sequence and call `ensurePendingTurnWithinTransaction` directly;
+   they do not create an envelope. Message content is never appended to a task prompt.
 3. **The pending turn the platform plants is the queued `multiremi_tasks` row
    with a non-null `wake_source`, one per lane.** `multiremi_tasks.execution_scope`
    becomes a stored column. Two partial unique indexes enforce at most one
@@ -58,12 +59,12 @@ notification wakes to this decision.
 4. **Platform wakes commit with the state change.** `ensurePendingTurn` asserts it is
    inside the caller's transaction. ADR 0003 decision 8 ("every guarded path runs
    at transaction depth 1") stands; what changes is what may remain post-commit:
-   only pushes (`emitCommitEvents`, `notifyTaskEnqueued`) and the E3 automatic
-   start, which must lock a second Issue and is replayed by MUL-452. Crash
+   pushes (`emitCommitEvents`, `notifyTaskEnqueued`), the E3 automatic
+   start (replayed by MUL-452), and deferred comments (decision 8). Crash
    injection before the turn write, after it, and after commit must observe
    either nothing or everything, on PostgreSQL and SQLite.
    Standalone comments and caller-owned comments (including Organizer audit
-   comments) write mention envelopes and non-split assignee wakes in the
+   comments) reuse the comment log sequence for mentions and non-split assignee wakes in the
    comment's frame. A failed wake rolls back the comment and its queued events.
    Classify comment dispatch by who can receive an error and retry, rather than
    by caller name. HTTP/CLI clients, Organizer action callers, delegation terminal
@@ -77,7 +78,7 @@ notification wakes to this decision.
    one warning. If automatic replies move into the `task.complete` report with
    outbox retries, switch them back to D1. The split assignee auto-response also
    opens its own transaction after COMMIT. A process exit between the two commits
-   can lose either wake; both accepted gaps remain follow-ups. Member
+   previously could lose either wake; decision 8 closes these gaps. Member
    notifications and realtime pushes also remain after COMMIT.
 5. **`wake` has three meanings.** `now`: ensure a pending turn; if the turn ends
    with such entries still unread, ring again (re-ring). `next_turn`: no turn is
@@ -102,6 +103,53 @@ notification wakes to this decision.
    `envelopePriority(entry)`; bodies over the fold threshold are summarised
    deterministically (head + heading outline) with an expand command instead of
    being cut.
+8. **Deferred comment dispatch has a durable replay owner (MUL-492).** The
+   comment transaction writes an `issue_comment / comment_dispatch` system event
+   before COMMIT, available after 60 seconds. Normal post-commit dispatch takes
+   W and consumes only a `pending` intent, then dispatches all targets in that
+   same transaction. The existing 30-second system-events scheduler replays
+   overdue intents using its lease, backoff and eight-attempt cap. Replay takes
+   W and conditionally consumes `processing AND attempt_count = claimedAttempt`;
+   zero changed rows mean no dispatch. Consumption, all turns and the success
+   activity commit together; events follow COMMIT. A stale lease owner cannot
+   dispatch or alter a newer attempt's retry state. Recipient resolution reuses
+   the normal mention/assignee paths and never repeats member notifications.
+
+   Edits and deletes persist `trigger_comment_changed` intents with comment ids
+   and affected task/lane coordinates. They replay cancellation and recovery
+   using those ids even when the original comment has been deleted. The
+   `comment_missing`, 24-hour expiry and `MULTIREMI_COMMENT_DISPATCH_REPLAY`
+   discard rules apply only to `comment_dispatch`; disabling replay does not
+   suppress normal dispatch or stop intent writes. Discarded dispatch intents
+   stay processed if the switch is re-enabled. Recovery records
+   `re_ring { origin: trigger_comment_changed }`; replay success records
+   `comment_dispatch_replayed { commentId, eventId, attempt, taskIds }`.
+9. **Idle Issue lanes get a bounded periodic safety sweep (MUL-492).** The
+   existing 60-second capability monitor runs independent jobs. Discovery first
+   visits at most 50 active non-relay lanes through the `swept_at` ordering
+   index, before eligibility joins; every visited lane rotates, including those
+   blocked by an active task. Under W, each lane transaction rereads head,
+   agent/session availability and tasks, skips archived sessions/agents and
+   queued/dispatched/running/waiting-local-directory/awaiting-human lanes, then
+   reads at most 500 shown entries in `(max(cursor_seq, swept_to_seq), head_seq]`.
+   The recipient predicate is shared with turn-end re-ring. Only entries at
+   least 60 seconds old are judged; the first young entry stops the watermark.
+   Judged entries advance `swept_to_seq`, independent of cursor resets, preventing
+   repeated wakes for a poison envelope while allowing new work to ring.
+
+   Issue envelope delivery creates its recipient lane in the envelope
+   transaction, including first delivery. Recovery goes through
+   `ensurePendingTurnWithinTransaction` and normal route derivation, inheriting
+   delegation lineage for nonempty scopes from the last task (or the newest task
+   in that lane). It preserves Issue status and dependency-gate wake exemptions.
+   W plus the existing pending-turn unique index arbitrate multiple instances;
+   no extra lease, advisory lock or leader election is added for the sweep.
+   `wakeSource` stays `re_ring`, with audit `origin: periodic_sweep`; ordinary
+   terminal re-ring uses `origin: turn_end`. Lane SQL failures roll back before
+   a separate diagnostic transaction; other lanes continue. Chat and relay
+   lanes are excluded. `MULTIREMI_RE_RING_SWEEP` defaults on, as does the comment
+   replay switch; `0/false/off/disabled` disables either. Additive columns and
+   indexes can remain when rolling back the code.
 
 ## Consequences
 

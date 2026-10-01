@@ -628,6 +628,14 @@ export interface CancelTaskResult {
   followUps: TaskTerminalFollowUps;
 }
 
+export interface TriggerCommentRecoveryLane {
+  taskId: string;
+  commentId: string;
+  agentId: string;
+  issueSessionId: string;
+  executionScope: string;
+}
+
 export interface RedispatchTaskResult {
   cancelled: MultiremiTask;
   replacement: MultiremiTask;
@@ -4934,62 +4942,82 @@ ${placementAfter.sql}
   }
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
-    const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
-    if (!uniqueCommentIds.length) return 0;
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const terminals = this.ctx.db.transaction(() => {
-      // Terminal delegation handling uses this same lock to detach an explicit
-      // @Leader return from its source comment. Re-read only after acquiring
-      // the lock so a stale pre-lock task id cannot cancel the upgraded return.
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const placeholders = uniqueCommentIds.map(() => "?").join(", ");
-      const rows = this.ctx.db.query(
-        `SELECT * FROM multiremi_tasks
-         WHERE workspace_id = ?
-           AND trigger_comment_id IN (${placeholders})
-           AND status NOT IN ('completed', 'failed', 'cancelled')
-           AND NOT EXISTS (
-             SELECT 1 FROM multiremi_tasks delegation_source
-             WHERE delegation_source.delegation_return_task_id = multiremi_tasks.id
-           )
-         ORDER BY created_at ASC, id ASC`,
-      ).all(workspaceId, ...uniqueCommentIds) as Row[];
-      const tasks = rows.map(toTask);
-      this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
-      return tasks.map((task, index) => {
-        const wakeSeq = Number(rows[index]!.wake_seq ?? 0);
-        const executionScope = task.execution_scope ?? "";
-        const terminal = this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents);
-        const trigger = task.triggerCommentId
-          ? this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId) : null;
-        if (!task.issueSessionId || !task.issueId || !trigger || wakeSeq <= 0 || wakeSeq <= trigger.seq) return terminal;
-        const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
-        const result = this.ensurePendingTurnWithinTransaction({
-          lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId,
-            executionScope },
-          wake: { reason: "re_ring", seq: wakeSeq },
-          create: () => this.createTaskWithinWorkspaceLock({
-            agentId: task.agentId, issueId: task.issueId, issueSessionId: task.issueSessionId,
-            workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
-            prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
-            wakeSource: "re_ring", preserveIssueStatus: true,
-            delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
-            delegatedFromIssueSessionId: task.delegatedFromIssueSessionId,
-            assignmentAuthorType: "system", assignmentAuthorId: null,
-          }, childStatusChanges, deferredEvents, undefined, executionScope),
-        });
-        if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
-        return terminal;
-      });
-    })();
+    const terminals = this.ctx.db.transaction(() => this.cancelTasksByTriggerCommentsWithinTransaction(
+      workspaceId, commentIds, childStatusChanges, deferredEvents))();
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
-      this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
+    return terminals.length;
+  }
+
+  cancelTasksByTriggerCommentsWithinTransaction(workspaceId: string, commentIds: string[],
+    childStatusChanges: ChildStatusChangeCollector, deferredEvents: CommitEventQueue,
+    recovery: readonly TriggerCommentRecoveryLane[] = []): CancelTaskResult[] {
+    if (!this.ctx.db.inTransaction) throw new Error("Trigger comment cancellation requires an open transaction");
+    const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
+    if (!uniqueCommentIds.length) return [];
+    // Terminal delegation handling uses this same lock to detach an explicit
+    // @Leader return from its source comment. Re-read only after acquiring
+    // the lock so a stale pre-lock task id cannot cancel the upgraded return.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    const placeholders = uniqueCommentIds.map(() => "?").join(", ");
+    const recovered = new Map(recovery.filter(lane => uniqueCommentIds.includes(lane.commentId)).map(lane => [lane.taskId, lane]));
+    const recoveryIds = [...recovered.keys()];
+    this.ctx.db.run(`UPDATE multiremi_system_events SET status = 'processed', processed_at = ?, lease_until = NULL
+      WHERE workspace_id = ? AND resource = 'issue_comment' AND event = 'trigger_comment_changed'
+        AND resource_id IN (${placeholders}) AND status = 'pending'`, [nowIso(), workspaceId, ...uniqueCommentIds]);
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_tasks
+       WHERE workspace_id = ?
+           AND (trigger_comment_id IN (${placeholders})${recoveryIds.length ? ` OR id IN (${recoveryIds.map(() => "?").join(", ")})` : ""})
+         AND status NOT IN ('completed', 'failed', 'cancelled')
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_tasks delegation_source
+           WHERE delegation_source.delegation_return_task_id = multiremi_tasks.id
+         )
+       ORDER BY created_at ASC, id ASC`,
+    ).all(workspaceId, ...uniqueCommentIds, ...recoveryIds) as Row[];
+    const tasks = rows.map(toTask).filter(task => {
+      const snapshot = recovered.get(task.id);
+      return !snapshot || snapshot.agentId === task.agentId && snapshot.issueSessionId === task.issueSessionId
+        && snapshot.executionScope === taskExecutionScope(task);
+    });
+    this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
+    const terminals = tasks.map(task => {
+      const wakeSeq = Number(rows.find(row => row.id === task.id)!.wake_seq ?? 0);
+      const executionScope = task.execution_scope ?? "";
+      const terminal = this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents, "trigger_comment_changed");
+      const triggerId = task.triggerCommentId ?? recovered.get(task.id)?.commentId;
+      const trigger = triggerId ? this.ctx.conversationLog().getConversationLogEntryById(triggerId) : null;
+      if (!task.issueSessionId || !task.issueId || !trigger || wakeSeq <= 0 || wakeSeq <= trigger.seq) return terminal;
+      const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
+      const result = this.ensurePendingTurnWithinTransaction({
+        lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId,
+          executionScope },
+        wake: { reason: "re_ring", seq: wakeSeq },
+        create: () => this.createTaskWithinWorkspaceLock({
+          agentId: task.agentId, issueId: task.issueId, issueSessionId: task.issueSessionId,
+          workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
+          prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
+          wakeSource: "re_ring", preserveIssueStatus: true,
+          delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
+          delegatedFromIssueSessionId: task.delegatedFromIssueSessionId,
+          assignmentAuthorType: "system", assignmentAuthorId: null,
+        }, childStatusChanges, deferredEvents, undefined, executionScope),
+      });
+      if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
+      // Terminal cancellation may already have rung for a surviving now
+      // envelope. Only add the fallback audit when it created the turn.
+      if (result.action === "created") appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task!, "re_ring", {
+        origin: "trigger_comment_changed", action: result.action, seq: wakeSeq,
+      });
+      return terminal;
     });
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
-    this.ctx.emitCommitEvents(deferredEvents);
-    return terminals.length;
+    return terminals;
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {
@@ -5750,6 +5778,7 @@ ${placementAfter.sql}
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    reRingOrigin = "turn_end",
   ): TaskTerminalFollowUps {
     const now = nowIso();
     this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
@@ -5949,7 +5978,7 @@ ${placementAfter.sql}
           this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
         } else if (status === "cancelled") {
           // Redispatch creates a replacement in this transaction that covers the unread lane.
-          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents, reRingOrigin);
         } else if (status === "failed" && !retry) {
           if (!RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
             && this.promoteSessionAgentLane(task)) {
@@ -6187,6 +6216,7 @@ ${placementAfter.sql}
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    reRingOrigin = "turn_end",
   ): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
@@ -6217,7 +6247,7 @@ ${placementAfter.sql}
     }
     const cancelled = this.getTask(current.id)!;
     const followUps = this.afterTaskTerminal(
-      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
+      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents, reRingOrigin,
     );
     if (redrain) followUps.delegationReturns.push(...redrain.createdTasks);
     return {
@@ -6448,6 +6478,7 @@ ${placementAfter.sql}
     task: MultiremiTask,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    origin = "turn_end",
   ): void {
     if (!task.issueSessionId || !task.issueId || task.chatSessionId) return;
     const executionScope = taskExecutionScope(task);
@@ -6469,12 +6500,16 @@ ${placementAfter.sql}
         prompt: `读收件箱。Session ${task.issueSessionId}，从 seq ${cursorSeq + 1} 读取。`,
         wakeSource: "re_ring",
         triggerCommentId: null,
+        preserveIssueStatus: true,
+        delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
+        delegatedFromIssueSessionId: task.delegatedFromIssueSessionId, priority: task.priority,
+        assignmentAuthorType: "system", assignmentAuthorId: null,
       }, childStatusChanges, deferredEvents, null, executionScope),
     });
     if (!result.task) return;
     if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task);
     appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
-      origin: "turn_end", action: result.action, wake_source: "re_ring", seq,
+      origin, action: result.action, wake_source: "re_ring", seq,
     });
   }
 

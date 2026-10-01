@@ -95,8 +95,10 @@ retry owner (currently only the two call sites of `postAgentReplyComment`),
 while mention dispatch and member notifications run after COMMIT. A dispatch SQL
 failure keeps the reply, completes the task and logs one warning. If automatic
 replies move into the `task.complete` report with outbox retries, switch them
-back to D1. Like the split assignee auto-response, a process exit between the
-two commits can lose that wake; both gaps remain follow-ups.
+back to D1. Best-effort post-commit work that plants a wake must leave a durable
+intent before COMMIT; MUL-492 closes the automatic-reply, split-assignee and
+comment edit/delete gaps with atomic consumption and replay, as specified in
+[ADR 0012 decision 8](0012-unified-inbox-and-single-pending-turn.md).
 
 ### 4. A swallowed statement failure must surface before COMMIT
 
