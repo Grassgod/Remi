@@ -96,6 +96,31 @@ describe("formatActivity", () => {
     ).toBe("activity.removed_assignee");
   });
 
+  it.each(["assignee", "project", "label"])("renders workspace move clearing for %s using only the stored name", (field) => {
+    expect(formatActivity(activity("workspace_move_cleared", { details: { field, name: "Original name" } }), t,
+      () => { throw new Error("Clearing activity must not resolve source IDs"); }))
+      .toBe(`activity.workspace_move_cleared_${field} {"name":"Original name"}`);
+  });
+
+  it("handles missing names and unknown clearing fields", () => {
+    expect(formatActivity(activity("workspace_move_cleared", { details: { field: "label" } }), t))
+      .toBe('activity.workspace_move_cleared_label {"name":"?"}');
+    expect(formatActivity(activity("workspace_move_cleared", { details: { field: "future" } }), t))
+      .toBe("activity.workspace_move_cleared");
+  });
+
+  it("ships workspace move clearing copy in all supported locales", async () => {
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"), import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"), import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) {
+      const copy = bundle.default.activity as Record<string, string>;
+      expect(copy.workspace_move_cleared).toBeTruthy();
+      for (const field of ["assignee", "project", "label"]) expect(copy[`workspace_move_cleared_${field}`]).toContain("{{name}}");
+    }
+  });
+
   it("degrades to a generic assignee change when nothing resolves", () => {
     expect(
       formatActivity(activity("assignee_changed", { details: {} }), t),
