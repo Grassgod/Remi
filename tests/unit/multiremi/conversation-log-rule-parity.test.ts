@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { MultiremiSessionEvent } from "@multiremi/contracts/types.js";
 import type { StoreContext } from "@multiremi/store/context.js";
-import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
 import { backfillConversationLogWithinTransaction, reconcileConversationLog } from "@multiremi/store/conversation-log-backfill.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
@@ -74,6 +74,8 @@ describe("MUL-427: unchanged rules with legacy and log readers", () => {
                 });
           }
           const rollback = new Error("parity fixture rollback");
+          const topicBefore = db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(topic.task.id);
+          if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
           try {
             db.transaction(() => {
               store.createIssueComment(issue.id, { authorType: "agent", authorId: leader.id,
@@ -115,6 +117,10 @@ describe("MUL-427: unchanged rules with legacy and log readers", () => {
             sessions.projectionEvents = project;
             log.listConversationLogEntries = listEntries;
           }
+          // Projection diagnostics belong to the caller's rollback boundary;
+          // reading both legacy/log inputs must not add an inner transaction.
+          expect(db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(topic.task.id)).toEqual(topicBefore);
+          if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
         }
         expect(snapshots[1]).toEqual(snapshots[0]);
       });

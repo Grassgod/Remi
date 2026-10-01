@@ -72,7 +72,9 @@ keeps its own atomic unit and the inside case adds no frame:
   `appendSessionEventWithinTransaction` rather than opening a second frame.
 
 MUL-482 applies the same ownership rule to task claim/start/complete/fail/cancel,
-Issue updates and system comments, messaging outcome Issue creation, and sender allow-list changes. Claim retries
+Issue updates and system comments, messaging outcome Issue creation, task Session
+projection builds, and sender allow-list changes. Projection row locks and
+diagnostic writes stay in the caller's transaction and roll back with it. Claim retries
 that require candidate rollback are only performed by the transaction owner;
 when claim joins an existing unit, errors propagate to its owner instead of
 retrying partially written state. Comment edit/delete/resolve/unresolve append
