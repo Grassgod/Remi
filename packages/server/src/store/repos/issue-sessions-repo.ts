@@ -566,7 +566,7 @@ export class IssueSessionsRepo {
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
-    return this.ctx.db.transaction(() => {
+    const projectWithinTransaction = () => {
       const task = this.ctx.tasks().getTask(taskId);
       if (!task?.issueSessionId) return null;
       // Match bulk lifecycle lock ordering, including the parent row used by
@@ -721,7 +721,8 @@ export class IssueSessionsRepo {
         );
       }
       return projection;
-    })();
+    };
+    return this.ctx.db.inTransaction ? projectWithinTransaction() : this.ctx.db.transaction(projectWithinTransaction)();
   }
 
   /**

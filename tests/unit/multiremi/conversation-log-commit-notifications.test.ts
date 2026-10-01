@@ -41,11 +41,13 @@ describe("conversation log notifications after commit", () => {
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let rolledSeq = -1;
+        if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
         expect(() => db.transaction(() => {
           rolledSeq = store.appendConversationLogWithinTransaction({ sessionId, kind: "message", authorType: "system", bodyMd: "rolled back" }).seq;
           expect(received).toHaveLength(0);
           throw new Error("rollback");
         })()).toThrow("rollback");
+        if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
         expect(received).toHaveLength(0);
         const committed = store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "committed" });
         expect(committed.seq).toBe(rolledSeq);
@@ -61,16 +63,39 @@ describe("conversation log notifications after commit", () => {
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let firstSeq = -1;
         let secondSeq = -1;
+        if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
         db.transaction(() => {
           firstSeq = store.appendConversationLogWithinTransaction({ sessionId, kind: "message", authorType: "system", bodyMd: "first" }).seq;
           secondSeq = store.appendConversationLogWithinTransaction({ sessionId, kind: "message", authorType: "system", bodyMd: "second" }).seq;
           store.updateConversationLogWithinTransaction(sessionId, firstSeq, { fields: { body_md: "edited" } });
           expect(received).toHaveLength(0);
         })();
+        if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
         expect(received).toHaveLength(3);
         expect(received[0]).toMatchObject({ seq: firstSeq, body_md: "first" });
         expect(received[1]).toMatchObject({ seq: secondSeq, body_md: "second" });
         expect(received[2]).toMatchObject({ target_seq: firstSeq, fields: { body_md: "edited" } });
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: public append joins its caller and rolls back both row and notification`, async () => {
+      await withStore(backend, (store, db) => {
+        const sessionId = "ises_public_append_rollback";
+        const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
+        store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
+        if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
+        expect(() => db.transaction(() => {
+          store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "discard" });
+          expect(received).toHaveLength(0);
+          throw new Error("public append rollback");
+        })()).toThrow("public append rollback");
+        if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
+        expect(store.listConversationLogEntries(sessionId)).toEqual([]);
+        expect(received).toHaveLength(0);
+        const committed = store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "keep" });
+        expect(committed.seq).toBe(1);
+        expect(received).toHaveLength(1);
+        expect(received[0]).toMatchObject({ seq: 1, body_md: "keep" });
       });
     }, 30_000);
   }

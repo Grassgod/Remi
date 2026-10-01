@@ -60,6 +60,16 @@ would invalidate. A savepoint is a safety net for a caller that cannot know
 whether it is already inside a transaction — not a general-purpose wrapper for
 helpers that are called from a transaction they did not open.
 
+`AutopilotsRepo.runAutopilot` also retains its own transaction, which becomes a
+savepoint when nested. No current production caller invokes it inside an open
+transaction. The `mul405-nested-rollback.test.ts` case "captured inner failure
+leaves the outer transaction usable" pins the savepoint's failure isolation:
+the caller can catch an inner failure and still commit its own work. Any future
+production caller that invokes it inside a transaction requires a new review
+(MUL-482 ruling `cmt_ur542tq7q53w`). The diagnostic scanner retains all raw
+nesting and exempts only that reviewed inner transaction and exact test call
+site; another nested `runAutopilot` call still counts against the product gate.
+
 Helpers that may be reached from inside a caller's transaction check
 `db.inTransaction` and pick the flavour accordingly (`db.inTransaction ?
 withinTx() : db.transaction(withinTx)()`), so the outside-the-transaction case
@@ -70,6 +80,18 @@ keeps its own atomic unit and the inside case adds no frame:
   `childDoneReturnSessionId`);
 - `createIssueComment`, whose body also writes the session event through
   `appendSessionEventWithinTransaction` rather than opening a second frame.
+
+MUL-482 applies the same ownership rule to task claim/start/complete/fail/cancel,
+Issue updates and system comments, messaging outcome Issue creation, task Session
+projection builds, and sender allow-list changes. Projection row locks and
+diagnostic writes stay in the caller's transaction and roll back with it. Claim retries
+that require candidate rollback are only performed by the transaction owner;
+when claim joins an existing unit, errors propagate to its owner instead of
+retrying partially written state. Comment edit/delete/resolve/unresolve append
+their hidden Session markers with `appendSessionEventWithinTransaction`.
+The Store's `appendConversationLogWithinTransaction` facade forwards to the
+within variant; public Conversation Log append likewise joins an existing
+transaction so its row, sequence allocation and notification share that owner.
 
 ### 3. Best-effort side effects run after COMMIT, not inside a savepoint
 
@@ -82,6 +104,25 @@ broadcast) is not wrapped at all: with B1's bridge-failure classification
 (`abortsTransaction`) a failed bridge reply no longer aborts the surrounding
 transaction, so what is left reaching the `catch` is a real SQL error — a broken
 schema — which should fail the write.
+
+When a queued callback runs, the original transaction has ended. It may issue
+SQL through the same connection, but those writes belong to a separate commit
+unit. Callback failure cannot roll back the original committed data. This
+best-effort ordering does not guarantee delivery or consistency across those
+units. Outside a transaction the callback runs immediately and its errors
+propagate to that caller; a queued callback's errors are isolated so later
+callbacks can still run.
+
+Task event subscribers and Feishu task-delivery materialization, task-message
+subscribers, and optional Inbox channel fan-out also use `afterCommit` (MUL-482).
+Inbox route matching and pending channel-delivery insertion run after commit;
+the existing microtask schedules only the subsequent asynchronous dispatch.
+Rolled-back Inbox items therefore cannot dispatch a channel notification, and
+optional fan-out SQL failures cannot abort the Inbox writer. Pending channel
+delivery insertion remains best-effort: a process exit between the Inbox commit
+and that insertion can lose an external notification. The committed Inbox item
+remains available. Task terminal automatic replies and collected child follow-up
+work likewise wait for the outermost commit.
 
 Inbox envelopes and pending turns are part of the mutation itself, not §3 side effects.
 Comment dispatch transaction ownership is classified by who can receive an error
