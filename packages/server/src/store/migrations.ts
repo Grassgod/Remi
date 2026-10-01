@@ -3476,6 +3476,22 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       WHERE status IN ('queued','dispatched','running','waiting_local_directory','awaiting_human')
         AND issue_session_id IS NOT NULL`);
   });
+  runMigrationOnce(db, "20261001_lane_rering_wake_hint", () => {
+    addColumnIfMissing(db, "multiremi_session_agent_lanes", "wake_hint_seq INTEGER NOT NULL DEFAULT 0");
+    // One conservative upgrade scan; recipient semantics remain in the shared
+    // log predicate. Subsequent writes hint only the resolved recipient lane.
+    db.exec(`UPDATE multiremi_session_agent_lanes SET wake_hint_seq = (
+      SELECT h.head_seq FROM multiremi_conversation_heads h
+      WHERE h.session_id = multiremi_session_agent_lanes.session_id)
+      WHERE EXISTS (SELECT 1 FROM multiremi_conversation_heads h
+        WHERE h.session_id = multiremi_session_agent_lanes.session_id
+          AND h.head_seq > CASE WHEN cursor_seq > swept_to_seq THEN cursor_seq ELSE swept_to_seq END
+          AND h.head_seq > wake_hint_seq)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_lanes_sweep_pending
+      ON multiremi_session_agent_lanes(COALESCE(swept_at, ''), session_id, agent_id, execution_scope)
+      WHERE status = 'active' AND wake_hint_seq > swept_to_seq`);
+    db.exec("DROP INDEX IF EXISTS idx_multiremi_lanes_sweep_order");
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 

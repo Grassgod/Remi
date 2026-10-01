@@ -126,19 +126,26 @@ notification wakes to this decision.
    `comment_dispatch_replayed { commentId, eventId, attempt, taskIds }`.
 9. **Idle Issue lanes get a bounded periodic safety sweep (MUL-492).** The
    existing 60-second capability monitor runs independent jobs. Discovery first
-   visits at most 50 active non-relay lanes through the `swept_at` ordering
-   index, before eligibility joins; every visited lane rotates, including those
-   blocked by an active task. Under W, each lane transaction rereads head,
-   agent/session availability and tasks, skips archived sessions/agents and
+   visits at most 50 lanes through a partial ordering index containing only
+   `status = active AND wake_hint_seq > swept_to_seq`. Issue `now` envelope
+   writes advance only the resolved recipient lane's `wake_hint_seq` in the same
+   transaction. Lanes without pending hints incur no locks or writes; recovery
+   latency depends on pending lanes, not total historical lanes. The upgrade
+   conservatively hints heads beyond the existing cursor/watermark once.
+   Under W, each lane transaction rereads head, agent/session availability and
+   tasks. Cursor-covered hints and permanently unavailable recipients (archived
+   agents/sessions or relay scopes) advance the watermark to the hint and leave
+   the index. Lanes blocked by an active task rotate without advancing their
+   watermark, preserving pending work. Eligible lanes exclude
    queued/dispatched/running/waiting-local-directory/awaiting-human lanes, then
-   reads at most 500 shown entries in `(max(cursor_seq, swept_to_seq), head_seq]`.
+   read at most 500 shown entries in `(max(cursor_seq, swept_to_seq), head_seq]`.
    The recipient predicate is shared with turn-end re-ring. Only entries at
    least 60 seconds old are judged; the first young entry stops the watermark.
    Judged entries advance `swept_to_seq`, independent of cursor resets, preventing
    repeated wakes for a poison envelope while allowing new work to ring.
 
-   Issue envelope delivery creates its recipient lane in the envelope
-   transaction, including first delivery. Recovery goes through
+   Issue envelope delivery creates its recipient lane and writes its hint in the
+   envelope transaction, including first delivery. Recovery goes through
    `ensurePendingTurnWithinTransaction` and normal route derivation, inheriting
    delegation lineage for nonempty scopes from the last task (or the newest task
    in that lane). It preserves Issue status and dependency-gate wake exemptions.

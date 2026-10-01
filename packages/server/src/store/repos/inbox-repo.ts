@@ -102,6 +102,14 @@ export class InboxRepo {
         }
         entries.set(sessionId, stored);
       }
+      if (recipient.issueSessionId && stored.entry.metadata.envelope?.wake === "now") {
+        // Persist the addressed lane's discovery hint with the envelope. A
+        // deduplicated delivery must never move the hint backwards.
+        this.ctx.db.run(`UPDATE multiremi_session_agent_lanes
+          SET wake_hint_seq = CASE WHEN wake_hint_seq < ? THEN ? ELSE wake_hint_seq END
+          WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+          [stored.entry.seq, stored.entry.seq, sessionId, recipient.agentId, recipient.executionScope]);
+      }
       const lane: PendingTurnLane = recipient.issueSessionId
         ? { kind: "issue", issueSessionId: recipient.issueSessionId, agentId: recipient.agentId,
           executionScope: recipient.executionScope }

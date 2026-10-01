@@ -6389,7 +6389,7 @@ ${placementAfter.sql}
     const laneLimit = Math.max(1, Math.min(RE_RING_SWEEP_LANE_LIMIT, Math.floor(limits.lanes ?? RE_RING_SWEEP_LANE_LIMIT)));
     const entryLimit = Math.max(1, Math.min(RE_RING_SWEEP_ENTRY_LIMIT, Math.floor(limits.entries ?? RE_RING_SWEEP_ENTRY_LIMIT)));
     type Candidate = { session_id: string; agent_id: string; execution_scope: string; cursor_seq: number;
-      swept_to_seq: number; last_task_id: string | null; head_seq: number; issue_id: string; workspace_id: string };
+      swept_to_seq: number; wake_hint_seq: number; last_task_id: string | null; head_seq: number; issue_id: string; workspace_id: string };
     const candidates = this.ctx.db.query(RE_RING_SWEEP_PAGE_SQL).all(laneLimit) as Candidate[];
     for (const candidate of candidates) {
       const events = createCommitEventQueue();
@@ -6397,6 +6397,28 @@ ${placementAfter.sql}
       try {
         const outcome = this.ctx.db.transaction(() => {
           this.ctx.lockWorkspaceRuntimeLifecycle(candidate.workspace_id);
+          const current = this.ctx.db.query(`SELECT l.cursor_seq, l.swept_to_seq, l.wake_hint_seq, l.status,
+            s.status AS session_status, a.id AS agent_id, a.archived_at, a.workspace_id AS agent_workspace_id
+            FROM multiremi_session_agent_lanes l
+            JOIN multiremi_issue_sessions s ON s.id = l.session_id
+            LEFT JOIN multiremi_agents a ON a.id = l.agent_id
+            WHERE l.session_id = ? AND l.agent_id = ? AND l.execution_scope = ?`).get(
+              candidate.session_id, candidate.agent_id, candidate.execution_scope) as {
+                cursor_seq: number; swept_to_seq: number; wake_hint_seq: number; status: string;
+                session_status: string; agent_id: string | null; archived_at: string | null; agent_workspace_id: string | null;
+              } | null;
+          if (!current || Number(current.wake_hint_seq) <= Number(current.swept_to_seq)) return null;
+          const permanent = current.status !== "active" || current.session_status !== "active"
+            || candidate.execution_scope.startsWith("relay:") || !current.agent_id || current.archived_at !== null
+            || current.agent_workspace_id !== candidate.workspace_id;
+          if (permanent || Number(current.cursor_seq) >= Number(current.wake_hint_seq)) {
+            this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_to_seq = wake_hint_seq, swept_at = ?
+              WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+              [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+            return null;
+          }
+          // Active-task and age blockers rotate without consuming the hint or
+          // advancing the watermark. They remain discoverable once unblocked.
           this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_at = ?
             WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
             [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
