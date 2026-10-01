@@ -1697,16 +1697,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null);
     const delivered: boolean | null = agentId === null ? null : (
       store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
-      || store.listConversationLogShown(sessionId).some((turn) => {
-        if (turn.kind !== "turn") return false;
-        const receipt = turn.metadata.inbox;
-        if (receipt === null || typeof receipt !== "object"
-          || !(Number((receipt as Record<string, unknown>).delivered_to_seq) >= entry.seq)) return false;
-        // A queued turn may predate a coalesced envelope. An explicit author
-        // owns its receipt; only an unauthored mirror falls back to its task.
-        return turn.author_id !== null ? turn.author_id === agentId
-          : turn.task_id !== null && store.getTask(turn.task_id)?.agentId === agentId;
-      })
+      || store.hasInboxReceiptCovering(sessionId, agentId, entry.seq)
     );
     return c.json({ ...entry, delivered });
   });
