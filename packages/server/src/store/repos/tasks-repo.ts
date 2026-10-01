@@ -634,6 +634,7 @@ export interface TriggerCommentRecoveryLane {
   agentId: string;
   issueSessionId: string;
   executionScope: string;
+  triggerSummary?: string | null;
 }
 
 export interface RedispatchTaskResult {
@@ -4982,8 +4983,19 @@ ${placementAfter.sql}
     ).all(workspaceId, ...uniqueCommentIds, ...recoveryIds) as Row[];
     const tasks = rows.map(toTask).filter(task => {
       const snapshot = recovered.get(task.id);
-      return !snapshot || snapshot.agentId === task.agentId && snapshot.issueSessionId === task.issueSessionId
-        && snapshot.executionScope === taskExecutionScope(task);
+      if (snapshot && (snapshot.agentId !== task.agentId || snapshot.issueSessionId !== task.issueSessionId
+        || snapshot.executionScope !== taskExecutionScope(task))) return false;
+      if (task.triggerCommentId) return uniqueCommentIds.includes(task.triggerCommentId);
+      if (!snapshot || !task.triggerSummary) return false;
+      // A deleted comment's FK may clear only trigger_comment_id. Its
+      // tombstone and retained trigger summary prove comment ownership after
+      // W; terminal-return promotion clears the summary as well. A snapshot
+      // id alone must never cancel a return detached while we waited for W.
+      const trigger = this.ctx.conversationLog().getConversationLogEntryById(snapshot.commentId);
+      const summary = snapshot.triggerSummary === undefined
+        ? normalizeTriggerSummary(trigger?.metadata.deleted_body) // pre-upgrade intents
+        : snapshot.triggerSummary;
+      return Boolean(trigger?.deleted_at) && task.triggerSummary === summary;
     });
     this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
     const terminals = tasks.map(task => {

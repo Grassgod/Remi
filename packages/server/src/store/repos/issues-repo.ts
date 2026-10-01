@@ -4862,7 +4862,8 @@ export class IssuesRepo {
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const placeholders = commentIds.map(() => "?").join(", ");
     const lanes = this.ctx.db.query(`SELECT id AS "taskId", agent_id AS "agentId", issue_session_id AS "issueSessionId",
-      execution_scope AS "executionScope", trigger_comment_id AS "commentId", wake_seq AS "wakeSeq" FROM multiremi_tasks
+      execution_scope AS "executionScope", trigger_comment_id AS "commentId", trigger_summary AS "triggerSummary",
+      wake_seq AS "wakeSeq" FROM multiremi_tasks
       WHERE workspace_id = ? AND trigger_comment_id IN (${placeholders})
         AND status NOT IN ('completed','failed','cancelled')`).all(issue.workspaceId, ...commentIds);
     return this.enqueueCommentDispatchIntent(issue, commentIds[0]!, "trigger_comment_changed", {

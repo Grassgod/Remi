@@ -88,7 +88,8 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     expect(replayActivities(f)).toHaveLength(1);
   });
 
-  for (const kind of ["edit", "delete"] as const) it(`04: ${kind} recovery uses persisted ids, cancels once and preserves a merged report`, () => {
+  for (const { kind, legacy } of [{ kind: "edit", legacy: false }, { kind: "delete", legacy: false },
+    { kind: "delete", legacy: true }] as const) it(`04: ${kind}${legacy ? " pre-upgrade intent" : ""} recovery uses persisted ids, cancels once and preserves a merged report`, () => {
     const f = setup();
     const comment = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: f.member.id,
       body: `[@Replay owner](mention://agent/${f.agent.id}) Work` });
@@ -105,6 +106,10 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const event = intent(f, changed.dispatchIntentId);
     expect(event.payload.commentIds).toEqual([comment.id]);
     expect(event.payload.lanes).toEqual([expect.objectContaining({ agentId: f.agent.id, issueSessionId: f.session.id, executionScope: "" })]);
+    if (legacy) {
+      const payload = { ...event.payload, lanes: (event.payload.lanes as Record<string, unknown>[]).map(({ triggerSummary, ...lane }) => lane) };
+      f.db.run("UPDATE multiremi_system_events SET payload = ? WHERE id = ?", [JSON.stringify(payload), event.id]);
+    }
     if (kind === "delete") f.db.run("UPDATE multiremi_tasks SET trigger_comment_id = NULL WHERE id = ?", [original.id]);
     expect(f.store.getTask(original.id)!.status).toBe("queued");
     if (kind === "delete") expect(f.store.getIssueComment(comment.id)).toBeNull();
@@ -125,6 +130,60 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     expect(f.store.listTasksForIssue(f.issue.id).map(t => t.id).sort()).toEqual(tasks.map(t => t.id).sort());
     expect(replayActivities(f)).toHaveLength(1);
   });
+
+  for (const kind of ["edit", "delete"] as const) for (const mode of ["normal", "replay"] as const)
+    for (const ownership of ["detached return", "another comment"] as const)
+      it(`04: ${mode} ${kind} rechecks ownership before cancelling a task now belonging to ${ownership}`, () => {
+        const f = setup();
+        const comment = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: f.member.id,
+          body: `[@Replay owner](mention://agent/${f.agent.id}) Work` });
+        const original = f.store.listTasksForIssue(f.issue.id)[0]!;
+        f.transaction(() => f.store.sendEnvelopeWithinTransaction({ to: { role: "issue_owner", issueId: f.issue.id },
+          kind: "report", wake: "now", source: {}, body: "Merged work must not ring a detached return" }, [], createCommitEventQueue()));
+        const other = f.store.createIssueComment(f.issue.id, { authorType: "system", body: "Another comment" });
+        const ids = f.store.listTasksForIssue(f.issue.id).map(task => task.id);
+        const mutable = f.repo as unknown as {
+          consumeCommentDispatchIntent(id: string): unknown;
+          updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput, events: CommitEventQueue): { dispatchIntentId: string };
+          deleteIssueCommentWithinTransaction(id: string, events: CommitEventQueue): { dispatchIntentId: string };
+        };
+        const detach = () => f.db.run(`UPDATE multiremi_tasks
+          SET trigger_comment_id = ?, trigger_summary = ?, prompt = ? WHERE id = ?`,
+        [ownership === "another comment" ? other.id : null, ownership === "another comment" ? other.body : null,
+          "Terminal return retained", original.id]);
+        let eventId: string;
+        if (mode === "normal") {
+          const consume = mutable.consumeCommentDispatchIntent;
+          mutable.consumeCommentDispatchIntent = id => {
+            eventId = id;
+            // The change and snapshot have committed; promotion wins before
+            // the post-commit consumer gets W, just like the PG lock fixture.
+            expect(f.db.inTransaction).toBe(false);
+            detach();
+            return consume.call(f.repo, id);
+          };
+          try {
+            if (kind === "edit") f.store.updateIssueComment(comment.id, { body: "Edited" });
+            else f.store.deleteIssueComment(comment.id);
+          } finally { mutable.consumeCommentDispatchIntent = consume; }
+        } else {
+          const changed = f.transaction(() => kind === "edit"
+            ? mutable.updateIssueCommentWithinTransaction(comment.id, { body: "Edited" }, createCommitEventQueue())
+            : mutable.deleteIssueCommentWithinTransaction(comment.id, createCommitEventQueue()));
+          eventId = changed.dispatchIntentId;
+          detach();
+          f.store.dispatchPendingSystemEvents(new Date(Date.parse(intent(f, eventId).availableAt)));
+        }
+        expect(f.store.getTask(original.id)).toMatchObject({ status: "queued", prompt: "Terminal return retained",
+          triggerCommentId: ownership === "another comment" ? other.id : null });
+        expect(f.store.listTasksForIssue(f.issue.id).map(task => task.id)).toEqual(ids);
+        expect(f.store.listIssueActivity(f.issue.id).filter(activity => activity.type === "re_ring")).toHaveLength(0);
+        expect(intent(f, eventId!).status).toBe("processed");
+        expect(replayActivities(f).map(activity => (activity.data as { taskIds: string[] }).taskIds))
+          .toEqual(mode === "replay" ? [[]] : []);
+        f.store.dispatchPendingSystemEvents(new Date(Date.parse(intent(f, eventId!).availableAt) + 60_000));
+        expect(f.store.listTasksForIssue(f.issue.id).map(task => task.id)).toEqual(ids);
+      });
 
   it("05/07: normal post-commit consumption is depth one and broadcasts only after COMMIT", () => {
     const f = setup();
