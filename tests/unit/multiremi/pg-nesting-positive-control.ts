@@ -42,6 +42,9 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       expect(snapshot().event_in_transaction.total).toBe(5);
       expect(snapshot().nesting.testDirect.total).toBe(1);
       expect(snapshot().nesting.productPath.total).toBe(0);
+      // Bun may omit the inline inner-call frame; this is still a raw DB test.
+      db.transaction(() => db.transaction(() => {})())();
+      expect(snapshot().nesting.testDirect.total).toBe(2);
       // Outer test frame around a product entry point must remain a product hit.
       db.transaction(() => store.updateAgent(agent.id, { name: "Product caller" }))();
       expect(snapshot().nesting.productPath.total).toBe(1);
@@ -64,10 +67,9 @@ test("PG scanner positive control: five channels, connection ownership and nesti
       })();
       expect(observations).toEqual([false, true]);
       expect(snapshot().event_in_transaction.total).toBe(5);
-      expect(snapshot().nested_transaction.total).toBe(3);
+      expect(snapshot().nested_transaction.total).toBe(4);
       expect(snapshot().nesting.unclassified.total).toBe(0);
       positiveControlPassed();
     }); } finally { other.close(); }
   });
 }, 30_000);
-

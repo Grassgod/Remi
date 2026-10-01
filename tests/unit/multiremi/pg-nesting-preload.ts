@@ -93,7 +93,17 @@ function record(kind: HitKind, label: string): void {
     // must not disguise a product call as a DB-primitive test.
     const frames = stack.split("\n").slice(1);
     const outer = frames.findIndex(line => line.includes("/store/db/postgres.ts:"));
-    const invocation = outer < 0 ? frames : frames.slice(0, outer);
+    const invocation = (outer < 0 ? frames : frames.slice(0, outer))
+      .filter(line => !line.includes("/store/request-read-cache.ts:"));
+    // Bun can omit the inline inner invocation entirely (e.g. () => db.tx()
+    // in the depth-counter controls). With no invocation frame, use the first
+    // remaining caller after removing DB/proxy infrastructure, as in the
+    // original caller-origin ruling. Full raw evidence is still retained.
+    if (invocation.length === 0) {
+      const caller = frames.find(line => /\/(packages|tests)\//.test(line)
+        && !line.includes("/store/db/postgres.ts:") && !line.includes("/store/request-read-cache.ts:"));
+      if (caller) invocation.push(caller);
+    }
     classified.set(stack, invocation.some(line => line.includes("/packages/")) ? "product_path"
       : invocation.some(line => line.includes("/tests/")) ? "test_direct" : "unclassified");
   }
@@ -196,6 +206,5 @@ export function withPositiveControl(fn: () => void): void {
 }
 
 export function positiveControlPassed(): void {
-  append({ kind: "positive_control_passed", eventHits: 5, nestedHits: 3, productPathHits: 2, testDirectHits: 1, afterCommitInTransaction: false });
+  append({ kind: "positive_control_passed", eventHits: 5, nestedHits: 4, productPathHits: 2, testDirectHits: 2, afterCommitInTransaction: false });
 }
-
