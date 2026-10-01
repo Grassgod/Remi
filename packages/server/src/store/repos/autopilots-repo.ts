@@ -943,6 +943,10 @@ export class AutopilotsRepo {
     const runs: MultiremiAutopilotRun[] = [];
     for (const event of this.claimPendingSystemEvents(now, limit)) {
       try {
+        if (event.resource === "issue_comment") {
+          this.ctx.issues().replayCommentDispatchEvent(event, now.getTime());
+          continue;
+        }
         if (event.event === "dependency_auto_start_check") {
           this.ctx.issues().replayDependencyAutoStart(event);
           this.ctx.db.run(
@@ -993,9 +997,13 @@ export class AutopilotsRepo {
         this.ctx.db.run(
           `UPDATE multiremi_system_events
            SET status = ?, available_at = ?, lease_until = NULL, last_error = ?
-           WHERE id = ? AND status = 'processing'`,
-          [terminal ? "failed" : "pending", new Date(Date.now() + delayMs).toISOString(), message, event.id],
+           WHERE id = ? AND status = 'processing'${event.resource === "issue_comment" ? " AND attempt_count = ?" : ""}`,
+          [terminal ? "failed" : "pending", new Date(now.getTime() + delayMs).toISOString(), message, event.id,
+            ...(event.resource === "issue_comment" ? [event.attemptCount] : [])],
         );
+        if (event.resource === "issue_comment") console.warn("comment dispatch replay failed", {
+          eventId: event.id, attempt: event.attemptCount, terminal,
+        });
       }
     }
     return runs;

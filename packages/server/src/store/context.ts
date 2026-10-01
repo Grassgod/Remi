@@ -236,6 +236,7 @@ export interface CreatedIssueComment {
   issueSessionId: string;
   sessionEventSeq: number;
   dispatchHandled?: boolean;
+  dispatchIntentId?: string;
 }
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
@@ -373,6 +374,7 @@ export interface IssuesSurface {
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
   replayDependencyAutoStart(event: MultiremiSystemEvent): void;
+  replayCommentDispatchEvent(event: MultiremiSystemEvent, now?: number): MultiremiTask[];
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -555,6 +557,7 @@ export interface ProjectsSurface {
 }
 
 export interface AutopilotsSurface {
+  getSystemEvent(id: string): MultiremiSystemEvent | null;
   getAutopilot(id: string): MultiremiAutopilot | null;
   listAutopilots(workspaceId?: string | null): MultiremiAutopilot[];
   listAutopilotTriggers(autopilotId: string): MultiremiAutopilotTrigger[];
@@ -656,6 +659,9 @@ export interface TasksSurface {
     seen?: Set<string>,
   ): void;
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number;
+  cancelTasksByTriggerCommentsWithinTransaction(workspaceId: string, commentIds: string[],
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue, recovery?: readonly import("./repos/tasks-repo.js").TriggerCommentRecoveryLane[]): import("./repos/tasks-repo.js").CancelTaskResult[];
   listAgentTasks(agentId: string): MultiremiTask[];
 }
 

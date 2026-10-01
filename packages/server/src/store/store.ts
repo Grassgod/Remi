@@ -645,7 +645,10 @@ export class MultiremiStore {
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
-    this.taskCapabilityMonitor = new TaskCapabilityMonitor(now => this.tasks.refreshQueuedCapabilityWaitReasons(now));
+    this.taskCapabilityMonitor = new TaskCapabilityMonitor([
+      now => this.tasks.refreshQueuedCapabilityWaitReasons(now),
+      now => this.tasks.sweepIdleIssueLanes(now),
+    ]);
     this.migrate();
   }
 
@@ -4058,6 +4061,10 @@ runMigrations(this.db);
     this.issues.runIssueCommentPostCommit(created, input);
   }
 
+  replayCommentDispatchEvent(event: import("@multiremi/contracts/types.js").MultiremiSystemEvent, now = Date.now()): MultiremiTask[] {
+    return this.issues.replayCommentDispatchEvent(event, now);
+  }
+
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,
@@ -5521,6 +5528,10 @@ runMigrations(this.db);
     return this.tasks.refreshQueuedCapabilityWaitReasons(now);
   }
 
+  sweepIdleIssueLanes(now = Date.now(), limits?: { lanes?: number; entries?: number }): import("./re-ring-sweep.js").ReRingSweepResult {
+    return this.tasks.sweepIdleIssueLanes(now, limits);
+  }
+
   /**
    * Read-only: the claim's own structural placement verdict for every
    * registered Runtime, so operators and tests can see WHY a queued task
@@ -5954,6 +5965,13 @@ runMigrations(this.db);
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
     return this.tasks.cancelTasksByTriggerComments(workspaceId, commentIds);
+  }
+
+  cancelTasksByTriggerCommentsWithinTransaction(workspaceId: string, commentIds: string[],
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+    recovery?: readonly import("./repos/tasks-repo.js").TriggerCommentRecoveryLane[]): import("./repos/tasks-repo.js").CancelTaskResult[] {
+    return this.tasks.cancelTasksByTriggerCommentsWithinTransaction(workspaceId, commentIds, childStatusChanges, deferredEvents, recovery);
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {

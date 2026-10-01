@@ -87,4 +87,14 @@ describe("task capability monitor lifecycle", () => {
     monitor.sweep();
     expect(calls).toBe(2);
   });
+
+  it("runs other maintenance jobs when one throws", () => {
+    const calls: number[] = [];
+    const monitor = new TaskCapabilityMonitor([
+      () => { throw new Error("capability unavailable"); },
+      now => calls.push(now),
+    ]);
+    monitor.sweep();
+    expect(calls).toHaveLength(1);
+  });
 });

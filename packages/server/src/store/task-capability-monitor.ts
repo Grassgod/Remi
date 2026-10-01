@@ -7,7 +7,7 @@ export class TaskCapabilityMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private sweeping = false;
 
-  constructor(private readonly refresh: (now: number) => unknown) {}
+  constructor(private readonly refresh: ((now: number) => unknown) | readonly ((now: number) => unknown)[]) {}
 
   start(): void {
     if (this.timer) return;
@@ -25,9 +25,11 @@ export class TaskCapabilityMonitor {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
-      this.refresh(Date.now());
-    } catch {
-      log.warn("queued task capability sweep failed");
+      const now = Date.now();
+      for (const job of typeof this.refresh === "function" ? [this.refresh] : this.refresh) {
+        try { job(now); }
+        catch { log.warn("task maintenance sweep failed"); }
+      }
     } finally {
       this.sweeping = false;
     }

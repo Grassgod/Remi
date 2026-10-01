@@ -45,6 +45,9 @@ export class InboxRepo {
     };
     for (const recipient of recipients) {
       const sessionId = recipient.issueSessionId ?? recipient.chatSessionId!;
+      if (recipient.issueSessionId) {
+        this.ctx.issueSessions().getOrCreateSessionAgentLane(sessionId, recipient.agentId, recipient.executionScope);
+      }
       const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
         ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
           this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
@@ -98,6 +101,14 @@ export class InboxRepo {
           stored = { entry, deduplicated: false };
         }
         entries.set(sessionId, stored);
+      }
+      if (recipient.issueSessionId && stored.entry.metadata.envelope?.wake === "now") {
+        // Persist the addressed lane's discovery hint with the envelope. A
+        // deduplicated delivery must never move the hint backwards.
+        this.ctx.db.run(`UPDATE multiremi_session_agent_lanes
+          SET wake_hint_seq = CASE WHEN wake_hint_seq < ? THEN ? ELSE wake_hint_seq END
+          WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+          [stored.entry.seq, stored.entry.seq, sessionId, recipient.agentId, recipient.executionScope]);
       }
       const lane: PendingTurnLane = recipient.issueSessionId
         ? { kind: "issue", issueSessionId: recipient.issueSessionId, agentId: recipient.agentId,

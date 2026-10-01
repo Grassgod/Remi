@@ -391,9 +391,33 @@ describe("MUL-427 merge rulings", () => {
         const repo = (store as unknown as { issues: IssuesRepo }).issues;
         const dispatch = repo as unknown as { triggerCommentMentions: (...args: any[]) => unknown };
         const originalDispatch = dispatch.triggerCommentMentions.bind(repo);
-        const dispatchFrames: boolean[] = [];
+        // Track the transaction that committed BOTH the reply and final entry,
+        // rather than treating a later intent-consumption transaction as the
+        // reply's still-open transaction. Running dispatch inside the reply
+        // frame would observe no committedReplyFrame and fail this probe.
+        const transaction = db.transaction;
+        let nextFrame = 0;
+        let activeFrame = 0;
+        let committedReplyFrame: number | null = null;
+        db.transaction = (<T>(fn: (...args: any[]) => T) => {
+          const frame = ++nextFrame;
+          const run = transaction.call(db, (...args: any[]) => {
+            const previous = activeFrame;
+            activeFrame = frame;
+            try { return fn(...args); } finally { activeFrame = previous; }
+          });
+          return (...args: any[]) => {
+            const result = run(...args);
+            if (!db.inTransaction && committedReplyFrame === null) {
+              const reply = store.listIssueComments(issue.id).find(comment => comment.taskId === task.id);
+              if (reply && store.findTurnEntry(task.id)?.metadata.final_entry_id === reply.id) committedReplyFrame = frame;
+            }
+            return result;
+          };
+        }) as typeof db.transaction;
+        const dispatchFrames: Array<{ frame: number; committedReplyFrame: number | null }> = [];
         dispatch.triggerCommentMentions = (...args) => {
-          dispatchFrames.push(db.inTransaction === true);
+          dispatchFrames.push({ frame: activeFrame, committedReplyFrame });
           return originalDispatch(...args);
         };
         const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
@@ -409,10 +433,16 @@ describe("MUL-427 merge rulings", () => {
           expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
             .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
           expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
-          expect(dispatchFrames).toEqual([false]);
+          expect(dispatchFrames).toHaveLength(1);
+          expect(dispatchFrames[0]!.committedReplyFrame).not.toBeNull();
+          expect(dispatchFrames[0]!.frame).toBeGreaterThan(dispatchFrames[0]!.committedReplyFrame!);
           expect(events.map((event) => event.type)).toContain("comment:created");
           expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
-        } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
+        } finally {
+          db.transaction = transaction;
+          dispatch.triggerCommentMentions = originalDispatch;
+          for (const unsubscribe of unsubscribers) unsubscribe();
+        }
       });
     }, 30_000);
 

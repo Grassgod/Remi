@@ -8,6 +8,9 @@ import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget, RELAY_EXECU
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
+import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
+import { reRingSweepEnabled, RE_RING_SWEEP_CANDIDATES_SQL, RE_RING_SWEEP_PAGE_SQL, RE_RING_SWEEP_LANE_LIMIT,
+  RE_RING_SWEEP_ENTRY_LIMIT, RE_RING_SWEEP_MIN_AGE_MS, type ReRingSweepResult } from "@multiremi/store/re-ring-sweep.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import { sanitizeTraceEventFields } from "@shared/trace-sanitize.js";
@@ -623,6 +626,15 @@ interface TaskTerminalFollowUps {
 export interface CancelTaskResult {
   task: MultiremiTask;
   followUps: TaskTerminalFollowUps;
+}
+
+export interface TriggerCommentRecoveryLane {
+  taskId: string;
+  commentId: string;
+  agentId: string;
+  issueSessionId: string;
+  executionScope: string;
+  triggerSummary?: string | null;
 }
 
 export interface RedispatchTaskResult {
@@ -4943,62 +4955,92 @@ ${placementAfter.sql}
   }
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
-    const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
-    if (!uniqueCommentIds.length) return 0;
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const terminals = this.ctx.db.transaction(() => {
-      // Terminal delegation handling uses this same lock to detach an explicit
-      // @Leader return from its source comment. Re-read only after acquiring
-      // the lock so a stale pre-lock task id cannot cancel the upgraded return.
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const placeholders = uniqueCommentIds.map(() => "?").join(", ");
-      const rows = this.ctx.db.query(
-        `SELECT * FROM multiremi_tasks
-         WHERE workspace_id = ?
-           AND trigger_comment_id IN (${placeholders})
-           AND status NOT IN ('completed', 'failed', 'cancelled')
-           AND NOT EXISTS (
-             SELECT 1 FROM multiremi_tasks delegation_source
-             WHERE delegation_source.delegation_return_task_id = multiremi_tasks.id
-           )
-         ORDER BY created_at ASC, id ASC`,
-      ).all(workspaceId, ...uniqueCommentIds) as Row[];
-      const tasks = rows.map(toTask);
-      this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
-      return tasks.map((task, index) => {
-        const wakeSeq = Number(rows[index]!.wake_seq ?? 0);
-        const executionScope = task.execution_scope ?? "";
-        const terminal = this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents);
-        const trigger = task.triggerCommentId
-          ? this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId) : null;
-        if (!task.issueSessionId || !task.issueId || !trigger || wakeSeq <= 0 || wakeSeq <= trigger.seq) return terminal;
-        const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
-        const result = this.ensurePendingTurnWithinTransaction({
-          lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId,
-            executionScope },
-          wake: { reason: "re_ring", seq: wakeSeq },
-          create: () => this.createTaskWithinWorkspaceLock({
-            agentId: task.agentId, issueId: task.issueId, issueSessionId: task.issueSessionId,
-            workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
-            prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
-            wakeSource: "re_ring", preserveIssueStatus: true,
-            delegationId: task.delegationId, delegatedByAgentId: task.delegatedByAgentId,
-            delegatedFromIssueSessionId: task.delegatedFromIssueSessionId,
-            assignmentAuthorType: "system", assignmentAuthorId: null,
-          }, childStatusChanges, deferredEvents, undefined, executionScope),
-        });
-        if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
-        return terminal;
-      });
-    })();
+    const terminals = this.ctx.db.transaction(() => this.cancelTasksByTriggerCommentsWithinTransaction(
+      workspaceId, commentIds, childStatusChanges, deferredEvents))();
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
-      this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
+    return terminals.length;
+  }
+
+  cancelTasksByTriggerCommentsWithinTransaction(workspaceId: string, commentIds: string[],
+    childStatusChanges: ChildStatusChangeCollector, deferredEvents: CommitEventQueue,
+    recovery: readonly TriggerCommentRecoveryLane[] = []): CancelTaskResult[] {
+    if (!this.ctx.db.inTransaction) throw new Error("Trigger comment cancellation requires an open transaction");
+    const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
+    if (!uniqueCommentIds.length) return [];
+    // Terminal delegation handling uses this same lock to detach an explicit
+    // @Leader return from its source comment. Re-read only after acquiring
+    // the lock so a stale pre-lock task id cannot cancel the upgraded return.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    const placeholders = uniqueCommentIds.map(() => "?").join(", ");
+    const recovered = new Map(recovery.filter(lane => uniqueCommentIds.includes(lane.commentId)).map(lane => [lane.taskId, lane]));
+    const recoveryIds = [...recovered.keys()];
+    this.ctx.db.run(`UPDATE multiremi_system_events SET status = 'processed', processed_at = ?, lease_until = NULL
+      WHERE workspace_id = ? AND resource = 'issue_comment' AND event = 'trigger_comment_changed'
+        AND resource_id IN (${placeholders}) AND status = 'pending'`, [nowIso(), workspaceId, ...uniqueCommentIds]);
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_tasks
+       WHERE workspace_id = ?
+           AND (trigger_comment_id IN (${placeholders})${recoveryIds.length ? ` OR id IN (${recoveryIds.map(() => "?").join(", ")})` : ""})
+         AND status NOT IN ('completed', 'failed', 'cancelled')
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_tasks delegation_source
+           WHERE delegation_source.delegation_return_task_id = multiremi_tasks.id
+         )
+       ORDER BY created_at ASC, id ASC`,
+    ).all(workspaceId, ...uniqueCommentIds, ...recoveryIds) as Row[];
+    const tasks = rows.map(toTask).filter(task => {
+      const snapshot = recovered.get(task.id);
+      if (snapshot && (snapshot.agentId !== task.agentId || snapshot.issueSessionId !== task.issueSessionId
+        || snapshot.executionScope !== taskExecutionScope(task))) return false;
+      if (task.triggerCommentId) return uniqueCommentIds.includes(task.triggerCommentId);
+      if (!snapshot || !task.triggerSummary) return false;
+      // A deleted comment's FK may clear only trigger_comment_id. Its
+      // tombstone and retained trigger summary prove comment ownership after
+      // W; terminal-return promotion clears the summary as well. A snapshot
+      // id alone must never cancel a return detached while we waited for W.
+      const trigger = this.ctx.conversationLog().getConversationLogEntryById(snapshot.commentId);
+      const summary = snapshot.triggerSummary === undefined
+        ? normalizeTriggerSummary(trigger?.metadata.deleted_body) // pre-upgrade intents
+        : snapshot.triggerSummary;
+      return Boolean(trigger?.deleted_at) && task.triggerSummary === summary;
+    });
+    this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
+    const terminals = tasks.map(task => {
+      const wakeSeq = Number(rows.find(row => row.id === task.id)!.wake_seq ?? 0);
+      const executionScope = task.execution_scope ?? "";
+      const terminal = this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents, "trigger_comment_changed");
+      const triggerId = task.triggerCommentId ?? recovered.get(task.id)?.commentId;
+      const trigger = triggerId ? this.ctx.conversationLog().getConversationLogEntryById(triggerId) : null;
+      if (!task.issueSessionId || !task.issueId || !trigger || wakeSeq <= 0 || wakeSeq <= trigger.seq) return terminal;
+      const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
+      const result = this.ensurePendingTurnWithinTransaction({
+        lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId,
+          executionScope },
+        wake: { reason: "re_ring", seq: wakeSeq },
+        create: () => this.createTaskWithinWorkspaceLock({
+          agentId: task.agentId, issueId: task.issueId, issueSessionId: task.issueSessionId,
+          workspaceId: task.workspaceId, priority: task.priority, triggerCommentId: null,
+          prompt: `读收件箱\n\n${task.issueSessionId}: (${lane.cursorSeq}, ${wakeSeq}]`,
+          wakeSource: "re_ring", preserveIssueStatus: true,
+          ...reRingDelegationLineage(task, executionScope),
+          assignmentAuthorType: "system", assignmentAuthorId: null,
+        }, childStatusChanges, deferredEvents, undefined, executionScope),
+      });
+      if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task!);
+      // Terminal cancellation may already have rung for a surviving now
+      // envelope. Only add the fallback audit when it created the turn.
+      if (result.action === "created") appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task!, "re_ring", {
+        origin: "trigger_comment_changed", action: result.action, seq: wakeSeq,
+      });
+      return terminal;
     });
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
-    this.ctx.emitCommitEvents(deferredEvents);
-    return terminals.length;
+    return terminals;
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {
@@ -5759,6 +5801,7 @@ ${placementAfter.sql}
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    reRingOrigin = "turn_end",
   ): TaskTerminalFollowUps {
     const now = nowIso();
     this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
@@ -5958,7 +6001,7 @@ ${placementAfter.sql}
           this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
         } else if (status === "cancelled") {
           // Redispatch creates a replacement in this transaction that covers the unread lane.
-          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents, reRingOrigin);
         } else if (status === "failed" && !retry) {
           if (!RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
             && this.promoteSessionAgentLane(task)) {
@@ -6196,6 +6239,7 @@ ${placementAfter.sql}
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    reRingOrigin = "turn_end",
   ): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
@@ -6226,7 +6270,7 @@ ${placementAfter.sql}
     }
     const cancelled = this.getTask(current.id)!;
     const followUps = this.afterTaskTerminal(
-      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
+      cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents, reRingOrigin,
     );
     if (redrain) followUps.delegationReturns.push(...redrain.createdTasks);
     return {
@@ -6329,7 +6373,11 @@ ${placementAfter.sql}
 
   private unreadNowEnvelopeSeq(sessionId: string, agentId: string, executionScope: string, cursorSeq: number): number | null {
     const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
-    const addressed = entries.filter(entry => {
+    return this.addressedNowEnvelopes(entries, sessionId, agentId, executionScope).at(-1)?.seq ?? null;
+  }
+
+  private addressedNowEnvelopes(entries: ConversationLogEntry[], sessionId: string, agentId: string, executionScope: string): ConversationLogEntry[] {
+    return entries.filter(entry => {
       if (entry.author_id === agentId || entry.metadata.envelope?.wake !== "now") return false;
       const { to, recipient_agent_id: recipientAgentId } = entry.metadata.envelope;
       if (recipientAgentId && recipientAgentId !== agentId) return false;
@@ -6356,13 +6404,129 @@ ${placementAfter.sql}
       if (!issue.assigneeType || !issue.assigneeId) return false;
       return this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id === agentId;
     });
-    return addressed.at(-1)?.seq ?? null;
+  }
+
+  sweepIdleIssueLanes(now = Date.now(), limits: { lanes?: number; entries?: number } = {}): ReRingSweepResult {
+    const stats: ReRingSweepResult = { visited: 0, eligible: 0, pageFull: false,
+      lanes: 0, examined: 0, rang: 0, coalesced: 0, errors: 0 };
+    if (!reRingSweepEnabled()) return stats;
+    const laneLimit = Math.max(1, Math.min(RE_RING_SWEEP_LANE_LIMIT, Math.floor(limits.lanes ?? RE_RING_SWEEP_LANE_LIMIT)));
+    const entryLimit = Math.max(1, Math.min(RE_RING_SWEEP_ENTRY_LIMIT, Math.floor(limits.entries ?? RE_RING_SWEEP_ENTRY_LIMIT)));
+    type Candidate = { session_id: string; agent_id: string; execution_scope: string; cursor_seq: number;
+      swept_to_seq: number; wake_hint_seq: number; last_task_id: string | null; head_seq: number; issue_id: string; workspace_id: string };
+    const candidates = this.ctx.db.query(RE_RING_SWEEP_PAGE_SQL).all(laneLimit) as Candidate[];
+    stats.visited = candidates.length;
+    stats.pageFull = candidates.length === laneLimit;
+    for (const candidate of candidates) {
+      const events = createCommitEventQueue();
+      const changes: ChildStatusChange[] = [];
+      try {
+        const outcome = this.ctx.db.transaction(() => {
+          this.ctx.lockWorkspaceRuntimeLifecycle(candidate.workspace_id);
+          const current = this.ctx.db.query(`SELECT l.cursor_seq, l.swept_to_seq, l.wake_hint_seq, l.status,
+            s.status AS session_status, a.id AS agent_id, a.archived_at, a.workspace_id AS agent_workspace_id
+            FROM multiremi_session_agent_lanes l
+            JOIN multiremi_issue_sessions s ON s.id = l.session_id
+            LEFT JOIN multiremi_agents a ON a.id = l.agent_id
+            WHERE l.session_id = ? AND l.agent_id = ? AND l.execution_scope = ?`).get(
+              candidate.session_id, candidate.agent_id, candidate.execution_scope) as {
+                cursor_seq: number; swept_to_seq: number; wake_hint_seq: number; status: string;
+                session_status: string; agent_id: string | null; archived_at: string | null; agent_workspace_id: string | null;
+              } | null;
+          if (!current || Number(current.wake_hint_seq) <= Number(current.swept_to_seq)) return null;
+          const permanent = current.status !== "active" || current.session_status !== "active"
+            || candidate.execution_scope.startsWith("relay:") || !current.agent_id || current.archived_at !== null
+            || current.agent_workspace_id !== candidate.workspace_id;
+          if (permanent || Number(current.cursor_seq) >= Number(current.wake_hint_seq)) {
+            this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_to_seq = wake_hint_seq, swept_at = ?
+              WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+              [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+            return null;
+          }
+          // Active-task and age blockers rotate without consuming the hint or
+          // advancing the watermark. They remain discoverable once unblocked.
+          this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_at = ?
+            WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+            [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+          const lane = this.ctx.db.query(`${RE_RING_SWEEP_CANDIDATES_SQL}
+            AND l.session_id = ? AND l.agent_id = ? AND l.execution_scope = ?`).get(
+              candidate.session_id, candidate.agent_id, candidate.execution_scope) as Candidate | null;
+          if (!lane) return null;
+          stats.eligible++;
+          const from = Math.max(Number(lane.cursor_seq), Number(lane.swept_to_seq));
+          const head = Number(lane.head_seq);
+          const entries = this.ctx.conversationLog().listConversationLogShown(lane.session_id, {
+            sinceSeq: from, toSeq: head, limit: entryLimit,
+          });
+          const youngAt = entries.findIndex(entry => Date.parse(entry.created_at) > now - RE_RING_SWEEP_MIN_AGE_MS);
+          const mature = youngAt < 0 ? entries : entries.slice(0, youngAt);
+          // When the bounded window is exhausted, advance over hidden/deleted
+          // tails too. Never step over the first entry that is still too young.
+          const to = youngAt < 0 && entries.length < entryLimit ? head : mature.at(-1)?.seq ?? from;
+          const seq = this.addressedNowEnvelopes(mature, lane.session_id, lane.agent_id, lane.execution_scope).at(-1)?.seq;
+          let action: EnsurePendingTurnResult["action"] = "none";
+          if (seq !== undefined) {
+            const lastId = lane.last_task_id ?? (this.ctx.db.query(`SELECT id FROM multiremi_tasks
+              WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ?
+              ORDER BY created_at DESC, id DESC LIMIT 1`).get(lane.session_id, lane.agent_id, lane.execution_scope) as { id: string } | null)?.id;
+            const last = lastId ? this.getTask(lastId) : null;
+            const result = this.ensurePendingTurnWithinTransaction({
+              lane: { kind: "issue", issueSessionId: lane.session_id, agentId: lane.agent_id, executionScope: lane.execution_scope },
+              wake: { reason: "re_ring", seq },
+              create: () => this.createTaskWithinWorkspaceLock({
+                agentId: lane.agent_id, issueId: lane.issue_id, issueSessionId: lane.session_id, workspaceId: lane.workspace_id,
+                prompt: `读收件箱\n\n${lane.session_id}: (${lane.cursor_seq}, ${seq}]`,
+                wakeSource: "re_ring", preserveIssueStatus: true, triggerCommentId: null,
+                assignmentAuthorType: "system", assignmentAuthorId: null,
+                ...(lane.execution_scope && last ? { ...reRingDelegationLineage(last, lane.execution_scope),
+                  priority: last.priority } : {}),
+              }, changes, events, undefined, lane.execution_scope),
+            });
+            action = result.action;
+            if (result.action === "created") events.enqueuedTasks.push(result.task!);
+            if (result.task) appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
+              origin: "periodic_sweep", action, seq, cursor_seq: Number(lane.cursor_seq), swept_from_seq: from, head_seq: head,
+            });
+          }
+          this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_to_seq = ?, swept_at = ?
+            WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+            [to, new Date(now).toISOString(), lane.session_id, lane.agent_id, lane.execution_scope]);
+          return { examined: mature.length, action };
+        })();
+        if (outcome) {
+          stats.lanes++;
+          stats.examined += outcome.examined;
+          if (outcome.action === "created") stats.rang++;
+          if (outcome.action === "coalesced") stats.coalesced++;
+        }
+        this.runChildStatusChanges(changes);
+        this.ctx.emitCommitEvents(events);
+      } catch (error) {
+        stats.errors++;
+        log.warn("idle issue lane sweep failed", { sessionId: candidate.session_id, agentId: candidate.agent_id });
+        // SQL failures have rolled back their lane transaction. Audit in a
+        // fresh frame, and keep an audit failure from aborting other lanes.
+        try {
+          this.ctx.db.transaction(() => {
+            this.ctx.db.run(`UPDATE multiremi_session_agent_lanes SET swept_at = ?
+              WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+              [new Date(now).toISOString(), candidate.session_id, candidate.agent_id, candidate.execution_scope]);
+            appendPendingTurnAuditWithinTransaction(this.ctx.db,
+            { id: candidate.last_task_id ?? "", issueId: candidate.issue_id, workspaceId: candidate.workspace_id },
+            "pending_turn_skipped", { origin: "periodic_sweep", reason: "sweep_error", error: String(error).slice(0, 1000) });
+          })();
+        } catch { /* the warning above still records the failure */ }
+      }
+    }
+    if (candidates.length) log.info("idle issue lane sweep", stats);
+    return stats;
   }
 
   private reRingUnreadIssueLane(
     task: MultiremiTask,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    origin = "turn_end",
   ): void {
     if (!task.issueSessionId || !task.issueId || task.chatSessionId) return;
     const executionScope = taskExecutionScope(task);
@@ -6384,12 +6548,15 @@ ${placementAfter.sql}
         prompt: `读收件箱。Session ${task.issueSessionId}，从 seq ${cursorSeq + 1} 读取。`,
         wakeSource: "re_ring",
         triggerCommentId: null,
+        preserveIssueStatus: true,
+        ...reRingDelegationLineage(task, executionScope), priority: task.priority,
+        assignmentAuthorType: "system", assignmentAuthorId: null,
       }, childStatusChanges, deferredEvents, null, executionScope),
     });
     if (!result.task) return;
     if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task);
     appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
-      action: result.action, wake_source: "re_ring", seq,
+      origin, action: result.action, wake_source: "re_ring", seq,
     });
   }
 
@@ -7115,6 +7282,19 @@ export function resolveHumanRequestTimeoutMs(value: unknown): number {
   const requested = Number(value);
   if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_HUMAN_REQUEST_TIMEOUT_MS;
   return Math.min(Math.max(Math.floor(requested), 60_000), 24 * 60 * 60 * 1000);
+}
+
+/** Recover the same delegation, including the link used to resolve its
+ * upstream scope. Keep unscoped and non-delegated rounds' parent behavior. */
+function reRingDelegationLineage(source: MultiremiTask, executionScope: string): Pick<CreateTaskInput,
+  "delegationId" | "delegatedByAgentId" | "delegatedFromIssueSessionId" | "parentTaskId"> {
+  return {
+    delegationId: source.delegationId,
+    delegatedByAgentId: source.delegatedByAgentId,
+    delegatedFromIssueSessionId: source.delegatedFromIssueSessionId,
+    ...(executionScope && source.delegationId && source.delegatedByAgentId
+      ? { parentTaskId: source.parentTaskId } : {}),
+  };
 }
 
 function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {
