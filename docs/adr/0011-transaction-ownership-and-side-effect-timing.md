@@ -105,6 +105,14 @@ broadcast) is not wrapped at all: with B1's bridge-failure classification
 transaction, so what is left reaching the `catch` is a real SQL error — a broken
 schema — which should fail the write.
 
+When a queued callback runs, the original transaction has ended. It may issue
+SQL through the same connection, but those writes belong to a separate commit
+unit. Callback failure cannot roll back the original committed data. This
+best-effort ordering does not guarantee delivery or consistency across those
+units. Outside a transaction the callback runs immediately and its errors
+propagate to that caller; a queued callback's errors are isolated so later
+callbacks can still run.
+
 Task event subscribers and Feishu task-delivery materialization, task-message
 subscribers, and optional Inbox channel fan-out also use `afterCommit` (MUL-482).
 Inbox route matching and pending channel-delivery insertion run after commit;
