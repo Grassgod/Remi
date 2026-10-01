@@ -26,6 +26,17 @@ const UPGRADE_DB = `${TEST_DB}_upgrade`;
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_pg_decision";
 
+function scanCounts(): { product: number; events: number; failures: number } | null {
+  const report = (globalThis as unknown as { __mul406NestingReport?: () => string }).__mul406NestingReport;
+  if (!report) return null;
+  const parsed = JSON.parse(report());
+  return {
+    product: parsed.nesting.productPath.total + parsed.nesting.unclassified.total,
+    events: parsed.emissionTotal,
+    failures: parsed.reportFailures,
+  };
+}
+
 function pgUrl(database: string): string {
   const url = new URL(PG_ADMIN_URL);
   url.pathname = `/${database}`;
@@ -95,8 +106,10 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   let store: MultiremiStore;
   let previousLarkAppId: string | undefined;
   let previousLarkAppSecret: string | undefined;
+  let scanBefore: ReturnType<typeof scanCounts>;
 
   beforeAll(async () => {
+    scanBefore = scanCounts();
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin.unsafe(`DROP DATABASE IF EXISTS ${UPGRADE_DB} WITH (FORCE)`);
@@ -115,30 +128,27 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   });
 
   afterAll(async () => {
-    // MUL-400 S1 hard constraint, measured rather than asserted by eye: with
-    // `--preload ./tests/unit/multiremi/pg-nesting-preload.ts` the run must show
-    // zero nested transactions and zero events published inside one. The global
-    // only exists when that preload ran, so a plain run skips the check.
-    const report = (globalThis as unknown as { __mul406NestingReport?: () => string }).__mul406NestingReport;
-    if (report) {
-      const parsed = JSON.parse(report()) as {
-        total: number; emissionTotal: number;
-        signatures: Array<{ count: number; stack: string }>;
-        emissionSignatures: Array<{ count: number; stack: string }>;
-      };
-      if (parsed.total !== 0 || parsed.emissionTotal !== 0) {
-        throw new Error(`decision-card nesting report is not clean: ${report()}`);
-      }
+    const scanAfter = scanCounts();
+    try {
+      try { db?.close(); } catch { /* best effort */ }
+      const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+        await admin.unsafe(`DROP DATABASE IF EXISTS ${UPGRADE_DB} WITH (FORCE)`);
+      } finally { await admin.end(); }
+    } finally {
+      if (previousLarkAppId === undefined) delete process.env.MULTIREMI_LARK_APP_ID;
+      else process.env.MULTIREMI_LARK_APP_ID = previousLarkAppId;
+      if (previousLarkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
+      else process.env.MULTIREMI_LARK_APP_SECRET = previousLarkAppSecret;
     }
-    try { db?.close(); } catch { /* best effort */ }
-    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${UPGRADE_DB} WITH (FORCE)`);
-    await admin.end();
-    if (previousLarkAppId === undefined) delete process.env.MULTIREMI_LARK_APP_ID;
-    else process.env.MULTIREMI_LARK_APP_ID = previousLarkAppId;
-    if (previousLarkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
-    else process.env.MULTIREMI_LARK_APP_SECRET = previousLarkAppSecret;
+    // MUL-482: this file owns its beforeAll → afterAll delta. Other files'
+    // intentional DB savepoint tests remain in the raw report (cmt_kexlr6zs2ras).
+    if (scanBefore && scanAfter) {
+      expect(scanAfter.product - scanBefore.product).toBe(0);
+      expect(scanAfter.events - scanBefore.events).toBe(0);
+      expect(scanAfter.failures).toBe(0);
+    }
   });
 
   // The bot is per-workspace, so each case gets its own; that keeps the

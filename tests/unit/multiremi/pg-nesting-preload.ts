@@ -1,176 +1,201 @@
 /**
- * MUL-400 S1 diagnostic tool (QA rounds 3 and 4): report, across a whole test
- * run, (a) nested `transaction()` invocations and (b) notification call sites
- * reached while the legacy transaction counter is nonzero. This baseline
- * includes afterCommit-backed calls that do not actually publish before COMMIT;
- * MUL-482 distinguishes call-site evidence from subscriber delivery evidence.
+ * Real-PG diagnostic preload. Only paths executed by the tests are covered.
  *
- * Usage — install it as a preload before any store exists:
+ * MULTIREMI_TEST_POSTGRES_URL=… MUL406_NESTING_REPORT=/tmp/nesting.jsonl \
+ *   bun test --preload ./tests/unit/multiremi/pg-nesting-preload.ts tests/unit/multiremi/
  *
- *   MULTIREMI_TEST_POSTGRES_URL=… MUL406_NESTING_REPORT=/tmp/nesting.json \
- *     bun test --preload ./tests/unit/multiremi/pg-nesting-preload.ts tests/unit/multiremi/
+ * Use initdb -E UTF8 --no-locale for temporary instances; SQL_ASCII splits
+ * Unicode characters in the backfill substring probes.
  *
- * Initialize a temporary PG instance with explicit UTF-8 (initdb -E UTF8),
- * including when --no-locale is used. SQL_ASCII makes substring-based Unicode
- * backfill probes split characters and is not a valid suite baseline.
+ * event_in_transaction means a probe subscriber was actually called before
+ * COMMIT. call_in_transaction preserves the old call-site signatures for
+ * reference: calling an afterCommit-backed method inside a transaction is safe.
+ * Nesting is checked on the invoked handle, so a new transaction in an
+ * afterCommit callback is not mistaken for a nested transaction.
  *
- * Read the report with `jq` on the JSON written to `MUL406_NESTING_REPORT`
- * (one line per hit plus the summary object) or via the global
- * `__mul406NestingReport()` the preload registers.
+ * All five StoreContext subscriber channels get independent probes, including
+ * contexts whose tests never subscribe. Standard contexts install on analytics
+ * registration; hand-built contexts install before their first notification.
+ * No production module imports this file; bunfig.toml does not preload it.
+ * Run ./pg-nesting-positive-control.ts separately with this preload before
+ * accepting a clean scan. The manual fixture is not automatically discovered.
+ * Raw nesting is never filtered: product callers and tests directly exercising
+ * the DB primitive are reported separately (MUL-482 ruling cmt_kexlr6zs2ras).
+ * Unknown caller locations fail the product gate; ADR reuse is not auto-exempt.
  *
- * Coverage boundary: this tool only sees paths a test actually executes. A
- * clean run proves nothing about a branch no case reaches — which is exactly
- * how QA round 3's closed-parent and re-derivation emissions stayed hidden, so
- * scan again after adding the negative cases that reach a new branch. Only
- * `PostgresSyncDatabase` is wrapped; the SQLite handle has savepoint-like
- * nested semantics and is not the risk this scan exists for. Nothing in
- * `packages/` imports this file, and `bunfig.toml` does not preload it.
+ * Reports append incrementally, surviving crashes even if Bun omits exit hooks.
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
 
-/** Frames that are noise in a nesting report. */
-const NOISE = /(node_modules|bun:sqlite|bun:internal|pg-nesting-preload|\.test\.ts|helpers\.ts)/;
-/** Cap the recorded signatures: a scan only needs enough to classify causes. */
-const MAX_HITS = 400;
-
-const stacks: string[] = [];
-const emissions: string[] = [];
-let installed = false;
-let depth = 0;
-/**
- * Every `PostgresSyncDatabase` a transaction has been opened on, so the emission
- * scan can ask the real handle instead of inferring from the counter.
- */
+const NOISE = /(node_modules|bun:sqlite|bun:internal|pg-nesting-preload)/;
+type HitKind = "nested_transaction" | "event_in_transaction" | "call_in_transaction";
+const hits: Record<HitKind, Map<string, number>> = {
+  nested_transaction: new Map(),
+  event_in_transaction: new Map(),
+  call_in_transaction: new Map(),
+};
+const controls: Record<HitKind, Map<string, number>> = {
+  nested_transaction: new Map(),
+  event_in_transaction: new Map(),
+  call_in_transaction: new Map(),
+};
+type NestingClass = "product_path" | "test_direct" | "unclassified";
+const classified = new Map<string, NestingClass>();
+let callDepth = 0;
+let controlDepth = 0;
+let probedContexts = 0;
+let reportFailures = 0;
 const handles = new Set<PostgresSyncDatabase>();
-/** True while any real Postgres transaction is open, for the emission scan. */
-function inTransaction(): boolean {
-  if (depth > 0) return true;
-  for (const handle of handles) {
-    if (handle.inTransaction) return true;
-  }
-  return false;
-}
+const probed = new WeakSet<StoreContext>();
+const channels = [
+  ["workspace", "workspaceEventListeners"],
+  ["task_event", "taskEventListeners"],
+  ["task_enqueued", "taskEnqueuedListeners"],
+  ["task_messages", "taskMessagesListeners"],
+  ["human_request", "humanRequestListeners"],
+] as const;
 
-/** Emit a machine-readable `kind` + first meaningful frame. */
-function frame(kind: string): string {
-  const frames = (new Error(kind).stack ?? "")
-    .split("\n")
-    .slice(3)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !NOISE.test(line))
-    .slice(0, 6);
-  return `${kind}\n${frames.join("\n")}`;
-}
+const target = process.env.MUL406_NESTING_REPORT;
+if (target) writeFileSync(target, "");
 
-function captureStack(): string {
-  const frames = (new Error("nested").stack ?? "")
-    .split("\n")
-    .slice(2)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !NOISE.test(line))
-    .slice(0, 16);
-  return frames.join("\n");
-}
-
-if (!installed) {
-  installed = true;
-  const proto = PostgresSyncDatabase.prototype as unknown as {
-    transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown;
-  };
-  const original = proto.transaction;
-  proto.transaction = function transaction(this: PostgresSyncDatabase, fn: (...args: never[]) => unknown) {
-    handles.add(this);
-    const run = original.call(this, fn);
-    return (...args: unknown[]) => {
-      depth += 1;
-      if (depth > 1 && stacks.length < MAX_HITS) {
-        const stack = captureStack();
-        stacks.push(stack);
-        appendHit(stack, "nested_transaction");
-      }
-      try {
-        return run(...args);
-      } finally {
-        depth -= 1;
-      }
-    };
-  };
-}
-
-/**
- * MUL-400 S1 QA round 3: flag every outward event published while a transaction
- * is still open. Those reach clients before the row is durable (Postgres is
- * synchronous here) and, on rollback, describe a row that never existed.
- */
-function installEmissionScan(): void {
-  const proto = StoreContext.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
-  const watched = [
-    "emitWorkspaceEvent",
-    "emitChatEvent",
-    "notifyTaskEnqueued",
-    "notifyTaskEvent",
-    "notifyTaskMessages",
-    "notifyChildStatusChange",
-  ] as const;
-  for (const name of watched) {
-    const original = proto[name];
-    if (typeof original !== "function") continue;
-    proto[name] = function watched(this: StoreContext, ...args: unknown[]) {
-      if (inTransaction() && emissions.length < MAX_HITS) {
-        const hit = frame(`event_in_transaction:${name}`);
-        emissions.push(hit);
-        appendHit(hit, "event_in_transaction");
-      }
-      return original.apply(this, args);
-    };
+function append(entry: object): void {
+  if (!target) return;
+  try { appendFileSync(target, `${JSON.stringify(entry)}\n`); }
+  catch (error) {
+    reportFailures += 1;
+    console.error("[pg-nesting] report_write_failed", error);
   }
 }
 
-installEmissionScan();
+function signature(label: string): string {
+  const previousLimit = Error.stackTraceLimit;
+  let raw: string;
+  try {
+    Error.stackTraceLimit = 100;
+    raw = new Error(label).stack ?? "";
+  } finally { Error.stackTraceLimit = previousLimit; }
+  const frames = raw.split("\n").slice(2)
+    .map(line => line.trim()).filter(line => line && !NOISE.test(line));
+  return `${label}\n${frames.join("\n")}`;
+}
 
-function report(): string {
-  const counts = new Map<string, number>();
-  for (const stack of stacks) counts.set(stack, (counts.get(stack) ?? 0) + 1);
-  const signatures = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+function record(kind: HitKind, label: string): void {
+  const stack = signature(label);
+  const map = (controlDepth ? controls : hits)[kind];
+  map.set(stack, (map.get(stack) ?? 0) + 1);
+  if (kind === "nested_transaction") {
+    // The first postgres.ts frame below this recorder is the OUTER callback:
+    // the inner runner has not started yet. Preserve the complete stack, then
+    // inspect the inner invocation chain before that boundary. A test's depth
+    // counter may forward run(...args) before the actual packages caller; it
+    // must not disguise a product call as a DB-primitive test.
+    const frames = stack.split("\n").slice(1);
+    const outer = frames.findIndex(line => line.includes("/store/db/postgres.ts:"));
+    const invocation = outer < 0 ? frames : frames.slice(0, outer);
+    classified.set(stack, invocation.some(line => line.includes("/packages/")) ? "product_path"
+      : invocation.some(line => line.includes("/tests/")) ? "test_direct" : "unclassified");
+  }
+  append({ kind: controlDepth ? `positive_control_${kind}` : kind, stack,
+    ...(kind === "nested_transaction" ? { classification: classified.get(stack) } : {}) });
+}
+
+/** The proxy forwards inTransaction to its real Postgres handle; no counter. */
+export function installProbes(ctx: StoreContext): void {
+  if (!(ctx.db instanceof PostgresSyncDatabase) || probed.has(ctx)) return;
+  probed.add(ctx);
+  probedContexts += 1;
+  for (const [channel, field] of channels) {
+    const listeners = ctx[field] as Set<(...args: never[]) => void>;
+    listeners.add(() => {
+      if (ctx.db.inTransaction) record("event_in_transaction", `event_in_transaction:${channel}`);
+    });
+  }
+  append({ kind: "probe_installed", channels: channels.map(([name]) => name) });
+}
+
+const pgProto = PostgresSyncDatabase.prototype;
+const transaction = pgProto.transaction;
+pgProto.transaction = function<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
+  handles.add(this);
+  const run = transaction.call(this, fn) as (...args: any[]) => T;
+  return (...args: any[]): T => {
+    // Check before calling the runner, not while its post-commit callbacks drain.
+    if (this.inTransaction) record("nested_transaction", "nested_transaction");
+    callDepth += 1;
+    try { return run(...args); }
+    finally { callDepth -= 1; }
+  };
+};
+
+const ctxProto = StoreContext.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+const registerAnalytics = ctxProto.registerAnalytics!;
+ctxProto.registerAnalytics = function(this: StoreContext, ...args: unknown[]) {
+  installProbes(this);
+  return registerAnalytics.apply(this, args);
+};
+for (const name of [
+  "emitWorkspaceEvent", "emitChatEvent", "notifyTaskEnqueued",
+  "notifyTaskEvent", "notifyTaskMessages", "notifyHumanRequest",
+]) {
+  const original = ctxProto[name]!;
+  ctxProto[name] = function(this: StoreContext, ...args: unknown[]) {
+    installProbes(this);
+    // Keep the earlier counter-based measurement as reference only.
+    if (callDepth > 0 || [...handles].some(handle => handle.inTransaction)) {
+      record("call_in_transaction", `call_in_transaction:${name}`);
+    }
+    return original.apply(this, args);
+  };
+}
+
+function summarize(map: Map<string, number>) {
+  const signatures = [...map].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([stack, count]) => ({ count, stack }));
-  const emissionCounts = new Map<string, number>();
-  for (const emission of emissions) emissionCounts.set(emission, (emissionCounts.get(emission) ?? 0) + 1);
-  const emissionSignatures = [...emissionCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([stack, count]) => ({ count, stack }));
+  return { total: signatures.reduce((sum, item) => sum + item.count, 0), signatures };
+}
+
+function nesting(map: Map<string, number>) {
+  const group = (category: NestingClass) => summarize(new Map([...map].filter(([stack]) => classified.get(stack) === category)));
+  return {
+    raw: summarize(map),
+    productPath: group("product_path"),
+    testDirect: group("test_direct"),
+    unclassified: group("unclassified"),
+    // No automatic exemptions. An exercised ADR 0011 §2 reuse signature must
+    // first be reviewed; it remains a product hit until explicitly accepted.
+    adr0011Reuse: { total: 0, signatures: [] },
+  };
+}
+
+export function report(): string {
   return JSON.stringify({
-    total: stacks.length,
-    signatures,
-    emissionTotal: emissions.length,
-    emissionSignatures,
+    total: summarize(hits.nested_transaction).total,
+    nesting: nesting(hits.nested_transaction),
+    signatures: summarize(hits.nested_transaction).signatures,
+    emissionTotal: summarize(hits.event_in_transaction).total,
+    emissionSignatures: summarize(hits.event_in_transaction).signatures,
+    callSiteTotal: summarize(hits.call_in_transaction).total,
+    callSiteSignatures: summarize(hits.call_in_transaction).signatures,
+    positiveControl: {
+      ...Object.fromEntries(Object.entries(controls).map(([kind, map]) => [kind, summarize(map)])),
+      nesting: nesting(controls.nested_transaction),
+    },
+    probedContexts,
+    reportFailures,
+    channels: channels.map(([name]) => name),
   }, null, 2);
 }
-
 (globalThis as unknown as { __mul406NestingReport: () => string }).__mul406NestingReport = report;
+append({ kind: "scan_installed", measurement: "subscriber_delivery", channels: channels.map(([name]) => name) });
 
-/**
- * Append each hit as it happens. Bun test may not run `process.on("exit")`
- * handlers reliably, and an incremental log survives a crashing run — which is
- * exactly when a nesting report is most useful.
- */
-function appendHit(stack: string, kind: "nested_transaction" | "event_in_transaction" = "nested_transaction"): void {
-  const target = process.env.MUL406_NESTING_REPORT;
-  if (!target) return;
-  try {
-    appendFileSync(target, `${JSON.stringify({ kind, stack })}\n`);
-  } catch {
-    // best-effort reporting
-  }
+export function withPositiveControl(fn: () => void): void {
+  controlDepth += 1;
+  try { fn(); } finally { controlDepth -= 1; }
 }
 
-const startedTarget = process.env.MUL406_NESTING_REPORT;
-if (startedTarget) {
-  try {
-    writeFileSync(startedTarget, "");
-  } catch {
-    // best-effort reporting
-  }
+export function positiveControlPassed(): void {
+  append({ kind: "positive_control_passed", eventHits: 5, nestedHits: 3, productPathHits: 2, testDirectHits: 1, afterCommitInTransaction: false });
 }
+
