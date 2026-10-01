@@ -33,7 +33,6 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
 
-const NOISE = /(node_modules|bun:sqlite|bun:internal|pg-nesting-preload)/;
 type HitKind = "nested_transaction" | "event_in_transaction" | "call_in_transaction";
 const hits: Record<HitKind, Map<string, number>> = {
   nested_transaction: new Map(),
@@ -126,8 +125,9 @@ function signature(label: string): string {
     Error.stackTraceLimit = 100;
     raw = new Error(label).stack ?? "";
   } finally { Error.stackTraceLimit = previousLimit; }
-  const frames = raw.split("\n").slice(2)
-    .map(line => line.trim()).filter(line => line && !NOISE.test(line));
+  // Retain dependency, runtime and preload frames as raw evidence too. Removing
+  // them before classification could hide a packages frame in a linked module.
+  const frames = raw.split("\n").slice(1).map(line => line.trim()).filter(Boolean);
   return `${label}\n${frames.join("\n")}`;
 }
 
@@ -139,8 +139,10 @@ function record(kind: HitKind, label: string, transactionOrigin?: string): void 
   if (kind === "nested_transaction") {
     // Inspect both COMPLETE stacks, including frames below the outer callback.
     // Never stop at postgres.ts or let a test wrapper determine the category.
+    const reachedTest = stack.split("\n").some(frame => frame.includes("/tests/")
+      && !frame.includes("/tests/unit/multiremi/pg-nesting-preload."));
     const category = productFrames(invocationStack).length || (transactionOrigin && productFrames(transactionOrigin).length)
-      ? "product_path" : stack.includes("/tests/") ? "test_direct" : "unclassified";
+      ? "product_path" : reachedTest ? "test_direct" : "unclassified";
     classified.set(stack, category);
     const exception = category === "product_path" ? reviewedSavepoint(invocationStack, transactionOrigin) : null;
     if (exception) reviewed.set(stack, exception);
