@@ -1,13 +1,18 @@
 /**
  * MUL-400 S1 diagnostic tool (QA rounds 3 and 4): report, across a whole test
- * run, (a) every nested `transaction()` opened while a Postgres transaction is
- * already open and (b) every outward event published while `inTransaction` is
- * still true on the real `PostgresSyncDatabase` handle.
+ * run, (a) nested `transaction()` invocations and (b) notification call sites
+ * reached while the legacy transaction counter is nonzero. This baseline
+ * includes afterCommit-backed calls that do not actually publish before COMMIT;
+ * MUL-482 distinguishes call-site evidence from subscriber delivery evidence.
  *
  * Usage — install it as a preload before any store exists:
  *
  *   MULTIREMI_TEST_POSTGRES_URL=… MUL406_NESTING_REPORT=/tmp/nesting.json \
  *     bun test --preload ./tests/unit/multiremi/pg-nesting-preload.ts tests/unit/multiremi/
+ *
+ * Initialize a temporary PG instance with explicit UTF-8 (initdb -E UTF8),
+ * including when --no-locale is used. SQL_ASCII makes substring-based Unicode
+ * backfill probes split characters and is not a valid suite baseline.
  *
  * Read the report with `jq` on the JSON written to `MUL406_NESTING_REPORT`
  * (one line per hit plus the summary object) or via the global
