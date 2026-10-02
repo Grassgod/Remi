@@ -40,7 +40,9 @@ function reportMarkdown(evidence: ConversationMigrationEvidence): string {
     "", "Counts and digests are read from synthetic/local sources. The reconciliation command opens no Store and runs no migrations.",
     "Hash: SHA-256 over canonical tuples of mapped kind, author type/id, raw body, created_at, task_id and parent_id.",
     "Comment task ids come from comments (NULL for tombstones), other Issue rows from events, Chat rows from messages, heads from NULL.",
-    "JSON metadata is parsed in Bun, without SQL JSON casts; marker targets and tombstones are checked separately."];
+    "JSON metadata is parsed in Bun, without SQL JSON casts; marker targets and tombstones are checked separately.",
+    "Sessions whose Issue was deleted are retained in the legacy tables, skipped and counted as orphanSessionsSkipped, like missing-Issue comments.",
+    "Chat-owned topic tasks may have historical Issue lifecycle events and deliberate Issue comments: these are counted, not ownership mismatches; mapped row integrity checks still apply."];
   for (const run of evidence.runs) {
     lines.push("", `## ${run.label}`, "", `Mismatch: **${run.reconciliation.mismatches.length}**`, "");
     if (run.startupMs != null) lines.push(`Cold startup: ${run.startupMs.toFixed(2)} ms; second startup: ${run.secondStartupMs?.toFixed(2)} ms.`, "");

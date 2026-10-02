@@ -20,6 +20,7 @@ export interface ConversationBackfillCounts {
   deletedComments: number;
   orphanCommentsAppended: number;
   orphanCommentsSkipped: number;
+  orphanSessionsSkipped: number;
   chatMessages: number;
   chatConflictSessions: number;
   chatReorderedMessages: number;
@@ -28,6 +29,7 @@ export interface ConversationBackfillCounts {
   existingRowsSkipped: number;
   commentTaskIdsFilled: number;
   chatOwnedTopicTasks: number;
+  chatOwnedTopicIssueEvents: number;
   chatOwnedTopicIssueLogRows: number;
   chatOwnedTopicChatLogRows: number;
   maxReadResultBytes: number;
@@ -42,10 +44,10 @@ export interface ConversationBackfillReport {
 
 export function emptyConversationBackfillReport(): ConversationBackfillReport {
   return { counts: { issueSessions: 0, chatSessions: 0, sessionEvents: 0, mirroredComments: 0,
-    editedComments: 0, deletedComments: 0, orphanCommentsAppended: 0, orphanCommentsSkipped: 0,
+    editedComments: 0, deletedComments: 0, orphanCommentsAppended: 0, orphanCommentsSkipped: 0, orphanSessionsSkipped: 0,
     chatMessages: 0, chatConflictSessions: 0, chatReorderedMessages: 0, tasksWithoutAssistant: 0,
     insertedRows: 0, existingRowsSkipped: 0, commentTaskIdsFilled: 0, chatOwnedTopicTasks: 0,
-    chatOwnedTopicIssueLogRows: 0, chatOwnedTopicChatLogRows: 0, maxReadResultBytes: 0 },
+    chatOwnedTopicIssueEvents: 0, chatOwnedTopicIssueLogRows: 0, chatOwnedTopicChatLogRows: 0, maxReadResultBytes: 0 },
   orphanComments: [], chatSequenceConflicts: [], mismatches: [] };
 }
 
@@ -127,7 +129,9 @@ export function* conversationBackfillSource(db: SqlDatabase, report: Conversatio
     const issue = [...readRows(db, report, { from: "multiremi_issues", columns: ["id"],
       text: { title: "title", description: "description" }, where: "id = ?", params: [session.issue_id], order: "id" })][0];
     if (!issue) {
-      report.mismatches.push({ sessionId: session.id, seq: null, reason: "session_without_issue" });
+      // Deleted Issues can leave historical sessions/events. Retain the legacy
+      // tables and skip them, just like comments whose Issue no longer exists.
+      report.counts.orphanSessionsSkipped++;
       continue;
     }
     report.counts.issueSessions++;
@@ -243,18 +247,17 @@ export function* conversationBackfillSource(db: SqlDatabase, report: Conversatio
 }
 
 function countChatOwnedTopicTasks(db: SqlDatabase, report: ConversationBackfillReport): void {
-  // Ruling (s): a topic transport retains Chat ownership on both startups.
+  // Chat ownership does not forbid historical lifecycle events or deliberate
+  // Issue comment cross-posts. Count these rows; their mapped contents remain
+  // subject to the same per-session integrity checks as every other source row.
   for (const task of readRows(db, report, { from: "multiremi_tasks", columns: ["id", "chat_session_id"],
     where: "issue_id IS NOT NULL AND chat_session_id IS NOT NULL", order: "id" })) {
     report.counts.chatOwnedTopicTasks++;
     const events = db.query("SELECT COUNT(*) AS count FROM multiremi_session_events WHERE task_id = ?").get(task.id);
-    if (Number(events.count) !== 0) report.mismatches.push({ sessionId: task.chat_session_id, seq: null,
-      reason: `chat_owned_topic_task_has_issue_events:${task.id}` });
+    report.counts.chatOwnedTopicIssueEvents += Number(events.count);
     const issueRows = db.query(`SELECT COUNT(*) AS count FROM multiremi_conversation_log log
       JOIN multiremi_issue_sessions session ON session.id = log.session_id WHERE log.task_id = ?`).get(task.id);
     report.counts.chatOwnedTopicIssueLogRows += Number(issueRows.count);
-    if (Number(issueRows.count) !== 0) report.mismatches.push({ sessionId: task.chat_session_id, seq: null,
-      reason: `chat_owned_topic_task_has_issue_log:${task.id}` });
     const chatRows = db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE session_id = ? AND task_id = ?")
       .get(task.chat_session_id, task.id);
     report.counts.chatOwnedTopicChatLogRows += Number(chatRows.count);
