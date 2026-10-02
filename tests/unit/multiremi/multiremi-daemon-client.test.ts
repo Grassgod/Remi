@@ -188,6 +188,23 @@ describe("MultiremiDaemonClient request deadlines", () => {
     expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", method: "POST", timeoutMs: 30 });
   });
 
+  it.each(["", JSON.stringify({ runtimes: [] })])("rejects registration when an aborted response body resolves with %j", async (body) => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: () => new Promise<string>(resolve => {
+        init?.signal?.addEventListener("abort", () => resolve(body), { once: true });
+      }),
+    })) as unknown as typeof globalThis.fetch;
+
+    const error = await new MultiremiDaemonClient("https://remi.example", null, { requestTimeoutMs: 30 })
+      .registerDaemonRuntime({ workspaceId: "local", daemonId: "dmn_timeout", runtime: {
+        name: "timeout fixture", type: "claude", version: "v0.0.0",
+      } }).catch((value: unknown) => value);
+    expect(error).toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", method: "POST",
+      path: "/api/daemon/register", timeoutMs: 30 });
+  });
+
   it.each([401, 403, 410])("preserves HTTP %s authority failures when the response body times out", async (status) => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
       ok: false,

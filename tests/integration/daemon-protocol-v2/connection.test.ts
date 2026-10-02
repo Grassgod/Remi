@@ -89,11 +89,16 @@ describe("daemon protocol v2 real connection", () => {
   });
 
   it("throws the HTTP-style timeout when human_request.get cannot reach the server", async () => {
-    const h = await fixture({ daemonOptions: { requestTimeoutMs: 50 } });
+    const h = await fixture();
     await h.startDaemon();
+    // The short deadline belongs to the disconnected RPC, not file-backed HTTP registration.
+    (h.daemon as unknown as { options: { requestTimeoutMs: number } }).options.requestTimeoutMs = 50;
     await h.disconnect();
-    await expect(h.daemon.getFeishuBotHumanRequest("tsk_unreachable", "hrq_unreachable"))
-      .rejects.toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
+    const error = await h.daemon.getFeishuBotHumanRequest("tsk_unreachable", "hrq_unreachable")
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
+    expect(error).toMatchObject({ method: "GET", timeoutMs: 50,
+      path: "/api/daemon/tasks/tsk_unreachable/human-requests/hrq_unreachable" });
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
