@@ -278,7 +278,12 @@ adapter excludes head, includes hidden markers, renames assignment wire kind to
 The B7 migration runs after `backfillDefaultIssueSessions`, copies every source
 seq, skips existing rows, and only fills a NULL comment task association without
 changing its revision or update time (ruling (f)). Chat-owned topic transport
-tasks retain NULL Issue sessions and no Issue log rows (ruling (s)); their Chat
+tasks retain NULL Issue sessions (ruling (s)); historical Issue lifecycle events
+and deliberate Issue comment cross-posts are retained and counted, rather than
+rejected solely because their task is Chat-owned. Their mapped rows still undergo
+the ordinary content, count, sequence, tombstone and head checks. Sessions whose
+Issue was deleted are skipped and counted as `orphanSessionsSkipped`, like
+missing-Issue comments; their legacy sessions and events are not deleted. Chat
 message associations are reconciled separately. The read-only
 [reconciliation command](../../scripts/reconcile-conversation-log.ts) reports
 counts and per-session digests without constructing a Store. The

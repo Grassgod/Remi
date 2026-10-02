@@ -1552,7 +1552,10 @@ export class MultiremiDaemonClient {
       responseStatus = resp.status;
       // Keep the deadline until the body is consumed, even for error responses.
       // Returning this promise without awaiting it would clear the timer early.
-      return await parseResponse<T>(resp, method, path);
+      const result = await parseResponse<T>(resp, method, path);
+      // A transport may fulfill a body read even after the request was aborted.
+      abort.signal.throwIfAborted();
+      return result;
     } catch (error) {
       if (isTerminalDaemonAuthorityError(error)) throw error;
       // Received authority headers remain definitive if the body is interrupted.

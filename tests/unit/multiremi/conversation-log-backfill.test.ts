@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openConversationLogTarget, readOnlyConversationTransaction } from "../../../scripts/reconcile-conversation-log.js";
+import { openConversationLogTarget, readOnlyConversationTransaction, readOnlyConversationReconciliation } from "../../../scripts/reconcile-conversation-log.js";
 
 /** Row count and a SHA-256 over the canonically serialized rows of every table the given connection can see. */
 function tableFingerprint(backend: "sqlite" | "pg", db: SqlDatabase): Record<string, { count: number; hash: string }> {
@@ -38,6 +38,72 @@ function sqliteFileFingerprint(path: string): Record<string, { count: number; ha
 
 describe("MUL-427 B7: conversation backfill and reconciliation", () => {
   for (const backend of ["sqlite", "pg"] as const) {
+    for (const shape of ["deleted Issue session", "topic lifecycle events", "topic Issue comments"] as const) {
+      it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: startup accepts historical ${shape} and reconciles its counters`, async () => {
+        await withStore(backend, (store, db) => {
+          const at = "2026-08-01T00:00:00.000Z";
+          const preservedTables = ["multiremi_issue_sessions", "multiremi_session_events", "multiremi_issue_comments"];
+          let commentId: string | undefined;
+          if (shape === "deleted Issue session") {
+            db.run(`INSERT INTO multiremi_issue_sessions (id, issue_id, created_at, updated_at)
+              VALUES ('ises_deleted_issue', 'iss_deleted_history', ?, ?)`, [at, at]);
+            db.run(`INSERT INTO multiremi_session_events (id, session_id, seq, author_type, kind, body, metadata, created_at)
+              VALUES ('eve_deleted_issue', 'ises_deleted_issue', 1, 'member', 'message', 'Retained legacy event', '{}', ?)`, [at]);
+          } else {
+            const agent = store.createAgent({ name: "Historical topic worker", provider: "codex", workspaceId: "local" });
+            const issue = store.createIssue({ title: "Historical topic Issue", workspaceId: "local" });
+            const session = store.getOrCreateDefaultIssueSession(issue.id);
+            const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
+            bindFeishuTopicFixture(store, db, chat.id, issue.id);
+            const topic = store.sendChatMessage(chat.id, { content: "Topic-owned work" });
+            db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [topic.task.id]);
+            if (shape === "topic lifecycle events") {
+              for (const kind of ["task_completed", "task_cancelled"] as const) {
+                store.appendSessionEvent(session.id, { kind, authorType: "system", taskId: topic.task.id, body: kind });
+              }
+            } else {
+              commentId = store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id,
+                taskId: topic.task.id, body: "Legitimate cross-post from a topic task" }).id;
+              db.run(`INSERT INTO multiremi_issue_comments
+                (id, issue_id, issue_session_id, author_type, author_id, task_id, body, type, created_at, updated_at)
+                VALUES ('cmt_topic_orphan', ?, ?, 'agent', ?, ?, 'Unmirrored topic comment', 'comment', ?, ?)`,
+                [issue.id, session.id, agent.id, topic.task.id, at, at]);
+            }
+          }
+          const legacyRows = () => Object.fromEntries(preservedTables.map((table) =>
+            [table, db.query(`SELECT * FROM ${table} ORDER BY id`).all()]));
+          const before = legacyRows();
+          db.exec("DELETE FROM multiremi_conversation_log; DELETE FROM multiremi_conversation_heads");
+          db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [CONVERSATION_LOG_BACKFILL_MIGRATION]);
+          new MultiremiStore(db);
+          expect(db.query("SELECT id FROM multiremi_schema_migrations WHERE id = ?").get(CONVERSATION_LOG_BACKFILL_MIGRATION)).not.toBeNull();
+          // Startup can append a missing legacy comment mirror; it must retain
+          // every original session, event and comment without rewriting it.
+          const afterStartup = legacyRows();
+          for (const table of preservedTables) expect(afterStartup[table]).toEqual(expect.arrayContaining(before[table]));
+          const counts = { orphanSessionsSkipped: shape === "deleted Issue session" ? 1 : 0,
+            chatOwnedTopicTasks: shape === "deleted Issue session" ? 0 : 1,
+            chatOwnedTopicIssueEvents: shape === "topic lifecycle events" ? 2 : 0,
+            chatOwnedTopicIssueLogRows: shape === "deleted Issue session" ? 0 : 2 };
+          const reconciliation = readOnlyConversationReconciliation(db);
+          expect(reconciliation).toMatchObject({ mismatches: [], counts });
+          expect(reconciliation.sessions.every((row) => row.sourceDigest === row.logDigest)).toBe(true);
+          expect(db.transaction(() => backfillConversationLogWithinTransaction(db))())
+            .toMatchObject({ mismatches: [], counts: { ...counts, insertedRows: 0 } });
+          expect(legacyRows()).toEqual(afterStartup);
+          if (shape === "deleted Issue session") {
+            expect(db.query("SELECT * FROM multiremi_conversation_log WHERE session_id = 'ises_deleted_issue'").all()).toEqual([]);
+            expect(db.query("SELECT * FROM multiremi_conversation_heads WHERE session_id = 'ises_deleted_issue'").get()).toBeNull();
+          }
+          if (commentId) {
+            db.run("UPDATE multiremi_conversation_log SET body_md = 'Tampered topic comment' WHERE id = ?", [commentId]);
+            expect(reconcileConversationLog(db).mismatches).toContainEqual(
+              expect.objectContaining({ reason: "content_hash" }));
+          }
+        });
+      }, 30_000);
+    }
+
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: old database first v2 startup repairs NULL Issue sessions and preserves Chat-owned topic transport`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Legacy startup worker", provider: "codex", workspaceId: "local" });
