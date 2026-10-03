@@ -200,6 +200,7 @@ describe("realtime fanout — two servers over one database", () => {
     storeB: MultiremiStore;
     /** POST attempts each process made: `a` = A→B, `b` = B→A. */
     postCounts: { a: number; b: number };
+    waitForPeerIdle(): Promise<void>;
     daemonEvents: { a: DaemonTaskEvent[]; b: DaemonTaskEvent[] };
     /** Simulate the other machine being unreachable, or coming back. */
     setLink(direction: "a" | "b", open: boolean): void;
@@ -217,6 +218,7 @@ describe("realtime fanout — two servers over one database", () => {
   async function startTwoServers(options: {
     queueLimit?: number;
     roles?: { a: LocalRealtimeRole; b: LocalRealtimeRole };
+    peerSendDelayMs?: number;
   } = {}): Promise<TwoServers> {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-two-"));
     const databasePath = join(directory, "shared.sqlite");
@@ -243,7 +245,8 @@ describe("realtime fanout — two servers over one database", () => {
       minBackoffMs: 20,
       maxBackoffMs: 60,
       queueLimit: options.queueLimit,
-      fetchImpl: ((url: string, init: RequestInit) => {
+      fetchImpl: (async (url: string, init: RequestInit) => {
+        if (options.peerSendDelayMs) await Bun.sleep(options.peerSendDelayMs);
         postCounts.a += 1;
         if (!linkOpen.a) return Promise.reject(new Error("peer unreachable"));
         return fetch(url.replace(":0", `:${serverB!.port}`), init);
@@ -256,7 +259,8 @@ describe("realtime fanout — two servers over one database", () => {
       minBackoffMs: 20,
       maxBackoffMs: 60,
       queueLimit: options.queueLimit,
-      fetchImpl: ((url: string, init: RequestInit) => {
+      fetchImpl: (async (url: string, init: RequestInit) => {
+        if (options.peerSendDelayMs) await Bun.sleep(options.peerSendDelayMs);
         postCounts.b += 1;
         if (!linkOpen.b) return Promise.reject(new Error("peer unreachable"));
         return fetch(url.replace(":0", `:${serverA!.port}`), init);
@@ -299,6 +303,15 @@ describe("realtime fanout — two servers over one database", () => {
       storeB,
       postCounts,
       daemonEvents,
+      waitForPeerIdle: async () => {
+        const deadline = Date.now() + WS_TIMEOUT_MS;
+        const pending = () => {
+          const a = peerA.stats(), b = peerB.stats();
+          return a.queued + a.inflight + b.queued + b.inflight;
+        };
+        while (pending() > 0 && Date.now() < deadline) await Bun.sleep(10);
+        expect(pending(), "both peer send queues must finish before sampling POST counts").toBe(0);
+      },
       setLink: (direction, open) => { linkOpen[direction] = open; },
       cleanup: () => {
         try { serverA!.stop(true); } catch { /* already stopped */ }
@@ -400,7 +413,8 @@ describe("realtime fanout — two servers over one database", () => {
   });
 
   it("routes decision HTTP to runtime and fans decision events to the ui socket once", async () => {
-    const two = await startTwoServers({ roles: { a: "ui", b: "runtime" } });
+    // A slow sender keeps the card-report event queued across the decision read.
+    const two = await startTwoServers({ roles: { a: "ui", b: "runtime" }, peerSendDelayMs: 25 });
     const encryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
     const larkAppId = process.env.MULTIREMI_LARK_APP_ID;
     const larkAppSecret = process.env.MULTIREMI_LARK_APP_SECRET;
@@ -484,7 +498,7 @@ describe("realtime fanout — two servers over one database", () => {
       try {
         const uiBase = `http://127.0.0.1:${serverA.port}`;
         const runtimeBase = `http://127.0.0.1:${serverB.port}`;
-        await Bun.sleep(100);
+        await two.waitForPeerIdle();
         const postsBeforeCreate = { ...two.postCounts };
         const createdResponse = await fetch(`${uiBase}/api/issues/${issue.id}/decisions`, {
           method: "POST",
@@ -519,6 +533,8 @@ describe("realtime fanout — two servers over one database", () => {
           headers: { Authorization: `Bearer ${daemonToken.token}` },
         })).status).toBe(200);
 
+        // The card report queues daemon:feishu_changed on A independently of the answer.
+        await two.waitForPeerIdle();
         const postsBeforeAnswer = { ...two.postCounts };
         const daemon = new MultiremiDaemonClient(runtimeBase, daemonToken.token);
         const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
@@ -531,7 +547,7 @@ describe("realtime fanout — two servers over one database", () => {
         while (!frames.some((frame) => frame.type === "decision:updated") && Date.now() < answerDeadline) {
           await Bun.sleep(20);
         }
-        await Bun.sleep(100);
+        await two.waitForPeerIdle();
         expect(frames.filter((frame) => frame.type === "decision:updated" && frame.payload.decision.id === created.id)).toHaveLength(1);
         expect(two.postCounts.b).toBeGreaterThan(postsBeforeAnswer.b);
         expect(two.postCounts.a).toBe(postsBeforeAnswer.a);
