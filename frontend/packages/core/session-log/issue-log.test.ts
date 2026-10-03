@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionLogEntrySchema, type SessionLogWindow } from "../api/schemas/session-log";
 const mocks = vi.hoisted(() => ({ read: vi.fn(), locate: vi.fn() }));
 vi.mock("../api", () => ({ api: { getSessionLog: mocks.read, locateSessionLogEntry: mocks.locate } }));
@@ -9,6 +9,8 @@ const row = (seq: number, kind = "message") => SessionLogEntrySchema.parse({ ses
   metadata: { attachments: [{ id: "att" }], reactions: [] } });
 const windowOf = (entries = [row(80), row(81)]): SessionLogWindow => ({ entries, head_seq: 81, log_version: 4, has_more_before: true, has_more_after: false });
 
+afterEach(() => { vi.unstubAllGlobals(); });
+
 describe("Issue log presentation over C7", () => {
   it("imports SSR rows into C7 without a second network read or losing display fields", async () => {
     const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: windowOf() });
@@ -18,6 +20,21 @@ describe("Issue log presentation over C7", () => {
     expect(replica.getSnapshot("s").fresh).toBe(true);
     expect(SessionLogEntrySchema.parse(replica.getSnapshot("s").entries[1]).author_id).toBe("u");
     cleanup();
+  });
+  it("connects and subscribes over http without crypto.randomUUID or Web Locks", async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: undefined,
+      getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto),
+    });
+    const subscribe = vi.fn();
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: windowOf() });
+    const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe, unsubscribe: vi.fn(),
+      env: { hasOpfs: false, locks: {} as LockManager } });
+    try {
+      expect(subscribe).toHaveBeenCalledWith("s", 1);
+      expect(replica.getSnapshot("s")).toMatchObject({ ready: true, fresh: true });
+      expect(replica.getSnapshot("s").entries.map(entry => entry.id)).toEqual(["r0", "r80", "r81"]);
+    } finally { cleanup(); }
   });
   it("keeps the head and bounds DOM rows; thread markers cannot render", () => {
     const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: windowOf([

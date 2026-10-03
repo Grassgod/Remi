@@ -5,6 +5,7 @@ import type { SessionLogEntry } from "../replica/port";
 import type { IssueLogBootstrap, SessionLogRow, SessionLogWindow } from "../api/schemas/session-log";
 import { SessionLogEntrySchema } from "../api/schemas/session-log";
 import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub";
+import { createSafeId } from "../utils";
 
 /** A bounded presentation window over C7; persisted coverage may be sparse. */
 export class IssueLogReplica extends ReplicaView {
@@ -131,7 +132,7 @@ export class IssueLogReplica extends ReplicaView {
 
   async connect(options: Pick<BrowserReplicaOptions, "userId" | "workspaceId" | "subscribe" | "unsubscribe" | "env">): Promise<() => void> {
     this.disconnected = false;
-    const browser = await openBrowserReplica({ ...options, tabId: crypto.randomUUID(), readRange: (id, range) => this.readRange(id, range) });
+    const browser = await openBrowserReplica({ ...options, tabId: createSafeId(), readRange: (id, range) => this.readRange(id, range) });
     if (this.disconnected) { browser.dispose(); return () => {}; }
     this.browser = browser;
     const update = () => {

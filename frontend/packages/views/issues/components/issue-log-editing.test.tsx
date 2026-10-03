@@ -77,6 +77,19 @@ describe("MUL-444 migrated editing", () => {
     expect(mocks.patch).toHaveBeenCalledWith("i", { description: "Updated description", attachment_ids: [] });
     expect(mocks.patch.mock.invocationCallOrder[0]).toBeLessThan(onSaved.mock.invocationCallOrder[0]!);
   });
+  it("reproduces MUL-496: saving a head row writes its title into the description", async () => {
+    const title = "# Title *with* [Markdown] `characters`";
+    const body = `${title}\n\nOriginal description`;
+    const titledEntry = { ...entry, body_md: body, metadata: { title } };
+    wrap(<IssueLogHead issueId="i" entry={titledEntry} currentUserId="u" onSaved={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox")).toHaveValue(body);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: `${body}\nEdited` } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("i", {
+      description: `${title}\n\nOriginal description\nEdited`, attachment_ids: [],
+    }));
+  });
   it("falls back to the existing sanitized Markdown renderer when body_html is absent", () => {
     wrap(<IssueLogHead issueId="i" entry={{ ...entry, body_html: null }} currentUserId="u" onSaved={async () => {}} />);
     expect(document.querySelector("[data-entry-html]")).toBeNull();

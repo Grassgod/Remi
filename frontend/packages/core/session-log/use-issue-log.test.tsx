@@ -34,7 +34,23 @@ describe("useIssueLog visibility lifecycle", () => {
 
   afterEach(() => {
     socket.subscribeStream = originalSubscribeStream;
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("loads the session without an error when crypto.randomUUID is unavailable over http", async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: undefined,
+      getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto),
+    });
+    socket.subscribeStream.mockReturnValue({ unsubscribe: vi.fn() });
+    const hook = renderHook(() => useIssueLog("s", initial));
+    try {
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledOnce());
+      expect(hook.result.current.error).toBe(false);
+      expect(hook.result.current.snapshot.ready).toBe(true);
+      expect(hook.result.current.snapshot.entries.map(entry => entry.id)).toEqual(["r0", "r1"]);
+    } finally { hook.unmount(); }
   });
 
   it("resubscribes after a hidden interval and retains the new stream when the old handle cleans up", async () => {
