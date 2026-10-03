@@ -166,13 +166,20 @@ describe("conversation log (MUL-426)", () => {
     const first = store.getOrCreateDefaultIssueSession(issue.id);
     const second = store.createIssueSession(issue.id, { title: "Review" });
     expect(store.getConversationLogEntry(first.id, 0)?.body_md).toBe("Initial issue\n\nInitial body");
+    expect(store.getConversationLogEntry(first.id, 0)?.metadata.title).toBe("Initial issue");
     expect(store.listConversationLogEntries(second.id).some((entry) => entry.kind === "session_created")).toBe(true);
     store.updateIssue(issue.id, { title: "Renamed issue", description: "Changed body" });
     for (const session of [first, second]) {
       expect(store.getConversationLogEntry(session.id, 0)).toMatchObject({
-        body_md: "Renamed issue\n\nChanged body", revision: 2,
+        body_md: "Renamed issue\n\nChanged body", revision: 2, metadata: { title: "Renamed issue" },
       });
     }
+
+    const literalTitle = "# *[x]* `title`";
+    store.updateIssue(issue.id, { title: literalTitle, description: literalTitle });
+    expect(store.getConversationLogEntry(first.id, 0)).toMatchObject({
+      body_md: `${literalTitle}\n\n${literalTitle}`, metadata: { title: literalTitle },
+    });
 
     const agent = store.createAgent({ name: "Chat agent", provider: "codex", visibility: "workspace" });
     const chat = store.createChatSession({ agentId: agent.id, title: "Initial chat" });

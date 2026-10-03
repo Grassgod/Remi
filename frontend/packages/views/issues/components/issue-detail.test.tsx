@@ -1814,7 +1814,7 @@ describe("IssueDetail (shared)", () => {
       render(
         <I18nProvider locale="en" resources={TEST_RESOURCES}>
           <QueryClientProvider client={createTestQueryClient()}>
-            <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+            <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null} members={[]} agents={[]}
               canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
               sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()}
               scrollContainerEl={null} onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
@@ -1840,7 +1840,7 @@ describe("IssueDetail (shared)", () => {
       const queryClient = createTestQueryClient();
       const view = (sessionId: string) => <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <QueryClientProvider client={queryClient}>
-          <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+          <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null} members={[]} agents={[]}
             canModerateComments={false} activeIssueSessionId={sessionId} activeIssueSession={null}
             sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()}
             scrollContainerEl={null} onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
@@ -1911,7 +1911,7 @@ describe("IssueDetail (shared)", () => {
       render(
         <I18nProvider locale="en" resources={TEST_RESOURCES}>
           <QueryClientProvider client={createTestQueryClient()}>
-            <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+            <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null} members={[]} agents={[]}
               currentUserId="user-1" canModerateComments activeIssueSessionId="session-main"
               activeIssueSession={session} sessionsPending={false} sessionsFetching={false}
               onRetrySessions={vi.fn()} highlightCommentId="reply-1"

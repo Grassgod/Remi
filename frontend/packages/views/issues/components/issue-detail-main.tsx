@@ -240,6 +240,7 @@ export function IssueDetailMain({
             <IssueActivitySection
               onContentReady={onContentReady}
               issueId={issueId}
+              issueTitle={issue.title}
               projectId={issue.project_id}
               currentUserId={currentUserId}
               canModerateComments={canModerateComments}

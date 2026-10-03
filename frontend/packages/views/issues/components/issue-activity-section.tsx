@@ -32,6 +32,7 @@ export const STICK_PIN_THRESHOLD_PX = 24;
 
 interface IssueActivitySectionProps {
   issueId: string;
+  issueTitle: string;
   projectId: string | null;
   currentUserId?: string;
   canModerateComments: boolean;
@@ -62,7 +63,7 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
   };
 }
 
-export function IssueActivitySection({ issueId, projectId, members, agents, onShowKeyResults, currentUserId, canModerateComments, activeIssueSessionId: sessionId,
+export function IssueActivitySection({ issueId, issueTitle, projectId, members, agents, onShowKeyResults, currentUserId, canModerateComments, activeIssueSessionId: sessionId,
   activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
@@ -142,7 +143,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
     </> : null}
     renderEntry={({ entry }) => {
       const row = SessionLogEntrySchema.parse(entry);
-      if (row.seq === 0) return <IssueLogHead issueId={issueId} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
+      if (row.seq === 0) return <IssueLogHead issueId={issueId} title={issueTitle} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
       if (row.kind !== "message" || row.author_type === "system") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
         {row.metadata.type === "workspace_move_cleared"
           ? formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
