@@ -776,7 +776,7 @@ describe("Repository Wiki list is metadata only (MUL-387, MUL-398 D)", () => {
       expect({ path, status: response.status }).toEqual({ path, status: 400 });
     }
     // 20 unique ids is inside the limit even when one id repeats.
-    const twenty = [...f.docs.slice(0, 19).map(doc => doc.id), f.docs[0]!.id];
+    const twenty = [...f.docs.slice(0, 20).map(doc => doc.id), f.docs[0]!.id];
     expect((await f.app.request(`${root}?include_body=true&ids=${twenty.join(",")}`, { headers: f.authorization })).status).toBe(200);
   });
 
