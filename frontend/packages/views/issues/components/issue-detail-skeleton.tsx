@@ -11,7 +11,6 @@ export function IssueDetailSkeleton() {
         <Skeleton className="h-4 w-4" />
         <Skeleton className="h-4 w-24" />
       </div>
-      <div className="h-10 shrink-0 border-b" />
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-4xl px-8 py-8 space-y-6">

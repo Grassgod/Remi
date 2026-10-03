@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitFor } from "@testing-library/react";
 import {
   CODE_BLOCK_ATTR,
   COPIED_FEEDBACK_MS,
@@ -23,11 +24,15 @@ function makeContainer(html: string, heights: number[] = []): { container: HTMLD
 }
 
 const COPY = { copyLabel: "Copy code", copiedLabel: "Copied" };
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  if (originalExecCommand) Object.defineProperty(document, "execCommand", originalExecCommand);
+  else Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("parseFences", () => {
@@ -93,6 +98,20 @@ describe("enhanceEntryHtml", () => {
 
     vi.advanceTimersByTime(COPIED_FEEDBACK_MS + 1);
     expect(button.getAttribute("aria-label")).toBe("Copy code");
+    enhanced.dispose();
+  });
+
+  it.each([true, false])("uses the http clipboard fallback and reports success only when it succeeds (%s)", async succeeds => {
+    vi.stubGlobal("navigator", { clipboard: undefined });
+    const execCommand = vi.fn(() => succeeds);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+    const { container } = makeContainer("<pre><code>http code</code></pre>");
+    const enhanced = enhanceEntryHtml(container, { ...COPY, markdown: "```js\nhttp code\n```" });
+    const button = container.querySelector(`[${COPY_BUTTON_ATTR}]`) as HTMLButtonElement;
+    button.click();
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    await waitFor(() => expect(button.getAttribute("aria-label")).toBe(succeeds ? "Copied" : "Copy code"));
+    expect(document.querySelector("textarea")).toBeNull();
     enhanced.dispose();
   });
 

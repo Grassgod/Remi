@@ -193,7 +193,8 @@
         "created_at": "<timestamp>"
       }
     ],
-    "pending_decision_count": 0
+    "pending_decision_count": 0,
+    "blocked_by": []
   },
   "sessions": [
     {

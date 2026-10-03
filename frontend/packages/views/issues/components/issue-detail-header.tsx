@@ -95,6 +95,7 @@ export function IssueDetailHeader({
   return (
     <>
     <BreadcrumbHeader
+      className="issue-detail-header"
       segments={segments}
       leaf={
         <IssueTitle issue={issue} onUpdateField={onUpdateField} />

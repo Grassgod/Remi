@@ -30,6 +30,8 @@
  * stays a plain block, which is the correct outcome.
  */
 
+import { copyText } from "@multiremi/ui/lib/clipboard";
+
 /** Preview kinds the list renders inside a fixed-height slot. */
 export type EntryPreviewKind = "mermaid" | "html";
 
@@ -269,7 +271,9 @@ export function enhanceEntryHtml(
 ): EnhancedEntryHtml {
   const document = container.ownerDocument;
   const write = options.writeClipboard
-    ?? ((text: string) => navigator.clipboard?.writeText(text));
+    ?? (async (text: string) => {
+      if (!await copyText(text)) throw new Error("Could not copy code block");
+    });
 
   const disposers: Array<() => void> = [];
   // A re-run (the body changed) must replace the previous wrapper rather than

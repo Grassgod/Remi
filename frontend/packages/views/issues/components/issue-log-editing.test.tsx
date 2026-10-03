@@ -34,18 +34,19 @@ vi.mock("../../editor", () => ({
   }),
 }));
 import { IssueTitle } from "./issue-title";
-import { IssueLogHead } from "./issue-log-head";
+import { IssueLogHead, splitIssueHeadBody } from "./issue-log-head";
 
 const entry = SessionLogEntrySchema.parse({ session_id: "s", id: "head", seq: 0, kind: "head", revision: 1,
   body_md: "Original description", body_html: "<p>Original description</p>", render_version: "v" });
 function wrap(child: React.ReactNode) {
-  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(child, { wrapper: ({ children }) => <QueryClientProvider client={client}>
     <WorkspaceSlugProvider slug="test-workspace">
       <NavigationProvider value={{ push: vi.fn(), replace: vi.fn(), back: vi.fn(), pathname: "/test-workspace/issues/i", searchParams: new URLSearchParams(), getShareableUrl: path => path }}>
-        <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, ui: enUI } }}>{child}</I18nProvider>
+        <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, ui: enUI } }}>{children}</I18nProvider>
       </NavigationProvider>
     </WorkspaceSlugProvider>
-  </QueryClientProvider>);
+  </QueryClientProvider> });
 }
 beforeEach(() => { vi.clearAllMocks(); mocks.patch.mockResolvedValue({}); mocks.upload.mockResolvedValue({ id: "att", url: "/file", filename: "file.txt" }); });
 describe("MUL-444 migrated editing", () => {
@@ -65,10 +66,11 @@ describe("MUL-444 migrated editing", () => {
     await act(async () => mocks.toast.mock.calls[0]![1].action.onClick());
     expect(mocks.patch).toHaveBeenCalledWith("i", { title: "Original title" });
   });
-  it("defaults to EntryHtml and saves the description through the server before replica refill", async () => {
+  it("renders Markdown and saves only the description before replica refill", async () => {
     const onSaved = vi.fn(async () => {});
-    wrap(<IssueLogHead issueId="i" entry={entry} currentUserId="u" onSaved={onSaved} />);
-    expect(document.querySelector("[data-entry-html]")?.textContent).toBe("Original description");
+    wrap(<IssueLogHead issueId="i" title="Title" entry={entry} currentUserId="u" onSaved={onSaved} />);
+    expect(screen.getByText("Original description")).toBeInTheDocument();
+    expect(document.querySelector("[data-entry-html]")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Updated description" } });
@@ -77,13 +79,39 @@ describe("MUL-444 migrated editing", () => {
     expect(mocks.patch).toHaveBeenCalledWith("i", { description: "Updated description", attachment_ids: [] });
     expect(mocks.patch.mock.invocationCallOrder[0]).toBeLessThan(onSaved.mock.invocationCallOrder[0]!);
   });
+  it("edits and saves only the description even with a Markdown title", async () => {
+    const title = "# Title *with* [Markdown] `characters`";
+    const body = `${title}\n\nOriginal description`;
+    const titledEntry = { ...entry, body_md: body, metadata: { title } };
+    const saved = vi.fn(async () => {});
+    const { rerender } = wrap(<IssueLogHead issueId="i" title={title} entry={titledEntry} currentUserId="u" onSaved={saved} />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(title);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-2xl", "font-bold");
+    expect(screen.getAllByText(title)).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Original description");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Original description\nEdited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("i", {
+      description: "Original description\nEdited", attachment_ids: [],
+    }));
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    rerender(<IssueLogHead issueId="i" title={title} entry={{ ...titledEntry,
+      revision: 2, body_md: `${title}\n\nOriginal description\nEdited`,
+    }} currentUserId="u" onSaved={saved} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Original description\nEdited");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
+    expect(mocks.patch.mock.calls[1]![1]).toEqual({ description: "Original description\nEdited", attachment_ids: [] });
+  });
   it("falls back to the existing sanitized Markdown renderer when body_html is absent", () => {
-    wrap(<IssueLogHead issueId="i" entry={{ ...entry, body_html: null }} currentUserId="u" onSaved={async () => {}} />);
+    wrap(<IssueLogHead issueId="i" title="Title" entry={{ ...entry, body_html: null }} currentUserId="u" onSaved={async () => {}} />);
     expect(document.querySelector("[data-entry-html]")).toBeNull();
     expect(screen.getByText("Original description")).toBeInTheDocument();
   });
   it.each(["button", "drop"])("uploads using %s and carries pending attachment IDs into save", async path => {
-    wrap(<IssueLogHead issueId="i" entry={entry} currentUserId="u" onSaved={async () => {}} />);
+    wrap(<IssueLogHead issueId="i" title="Title" entry={entry} currentUserId="u" onSaved={async () => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const file = new File(["content"], "file.txt", { type: "text/plain" });
     if (path === "button") fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
@@ -94,9 +122,41 @@ describe("MUL-444 migrated editing", () => {
     await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("i", { description: "Original description\n/file", attachment_ids: ["att"] }));
   });
   it("keeps reactions in the reserved row and forwards toggles", () => {
-    wrap(<IssueLogHead issueId="i" entry={entry} currentUserId="u" onSaved={async () => {}} />);
+    wrap(<IssueLogHead issueId="i" title="Title" entry={entry} currentUserId="u" onSaved={async () => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "OK1" }));
     expect(mocks.reaction).toHaveBeenCalledWith("OK");
     expect(document.querySelector("[data-issue-reaction-slot]")?.className).toContain("h-8");
+  });
+});
+
+describe("MUL-496 head description boundaries", () => {
+  it.each([
+    ["# *[x]* `title`\n\nBody", "# *[x]* `title`", "Body"],
+    ["Title\n\nTitle\n\nBody", "Title", "Title\n\nBody"],
+    ["Title\n\nTitle", "Title", "Title"],
+    ["Title", "Title", ""],
+    ["Unrecognized prefix\n\nBody", "Title", "Unrecognized prefix\n\nBody"],
+  ])("splits %j using only the exact row prefix", (body, title, expected) => {
+    expect(splitIssueHeadBody(body, title)).toBe(expected);
+  });
+
+  it.each([true, false])("keeps a rename safe when head metadata is present=%s", hasMetadata => {
+    wrap(<IssueLogHead issueId="i" title="New title" entry={{ ...entry,
+      body_md: hasMetadata ? "Old title\n\nBody" : "New title\n\nBody",
+      metadata: hasMetadata ? { title: "Old title" } : {},
+      body_html: "<p>Old title</p><p>Body</p>",
+    }} onSaved={async () => {}} />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("New title");
+    expect(screen.queryByText("Old title")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Body");
+  });
+
+  it("edits and saves an empty description without inserting the title", async () => {
+    wrap(<IssueLogHead issueId="i" title="Title" entry={{ ...entry, body_md: "Title", metadata: { title: "Title" } }} onSaved={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("i", { description: "", attachment_ids: [] }));
   });
 });

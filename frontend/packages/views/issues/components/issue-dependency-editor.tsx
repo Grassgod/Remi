@@ -24,6 +24,7 @@ export function IssueDependencyEditor({ issue }: { issue: Issue }) {
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: issueKeys.dependencies(wsId, issue.id) }),
+      queryClient.invalidateQueries({ queryKey: issueKeys.detail(wsId, issue.id) }),
       ...(issue.parent_issue_id ? [queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.parent_issue_id) })] : []),
     ]);
   };

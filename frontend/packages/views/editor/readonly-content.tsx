@@ -16,7 +16,9 @@
  * - Rendering mentions with the same IssueMentionCard component and .mention class
  */
 
-import { isValidElement, memo, useMemo, useRef } from "react";
+import { isValidElement, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { toast } from "sonner";
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
@@ -31,10 +33,13 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { createLowlight, common } from "lowlight";
 import { toHtml } from "hast-util-to-html";
 import { cn } from "@multiremi/ui/lib/utils";
+import { copyText } from "@multiremi/ui/lib/clipboard";
+import { Button } from "@multiremi/ui/components/ui/button";
 import { useWorkspacePaths, useWorkspaceSlug } from "@multiremi/core/paths";
 import type { Attachment } from "@multiremi/core/types";
 import { normalizeWikiHeadingAnchor } from "@multiremi/core/knowledge";
 import { useNavigation } from "../navigation";
+import { useT } from "../i18n";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
@@ -225,7 +230,28 @@ function ReadonlyLink({
   );
 }
 
-function buildComponents(): Partial<Components> {
+function CopyableCodeBlock({ children, code, preview = false }: { children: React.ReactNode; code: string; preview?: boolean }) {
+  const { t } = useT("editor");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async () => {
+    const success = await copyText(code);
+    setCopied(success);
+    if (!success) toast.error(t($ => $.link_hover.copy_failed));
+  };
+  return <div className="relative flow-root">
+    {preview ? children : <pre className="!pr-12">{children}</pre>}
+    <Button type="button" variant="ghost" size="icon-sm" className={cn("absolute", preview ? "top-6 right-12" : "top-4 right-2")}
+      title={t($ => $.code_block.copy_code)} aria-label={t($ => $.code_block.copy_code)}
+      data-code-copied={copied} onClick={() => void copy()}>{copied ? <Check /> : <Copy />}</Button>
+  </div>;
+}
+
+function buildComponents(copyCodeBlocks: boolean): Partial<Components> {
   return {
     // Links — route mention:// to mention components, others show preview card
     a: ReadonlyLink,
@@ -335,9 +361,16 @@ function buildComponents(): Partial<Components> {
       // would also fire on neighboring languages like `language-htmlbars`
       // and silently strip their <pre> wrapper.
       if (isValidElement(children)) {
-        const childProps = children.props as { className?: string };
+        const childProps = children.props as { className?: string; children?: React.ReactNode };
         if (PRE_UNWRAP_RE.test(childProps.className ?? "")) {
+          if (copyCodeBlocks && /(^|\s)language-mermaid(\s|$)/.test(childProps.className ?? "")
+            && typeof childProps.children === "string") {
+            return <CopyableCodeBlock code={childProps.children.replace(/\n$/, "")} preview>{children}</CopyableCodeBlock>;
+          }
           return <>{children}</>;
+        }
+        if (copyCodeBlocks && typeof childProps.children === "string") {
+          return <CopyableCodeBlock code={childProps.children.replace(/\n$/, "")}>{children}</CopyableCodeBlock>;
         }
       }
       return <pre>{children}</pre>;
@@ -413,6 +446,8 @@ interface ReadonlyContentProps {
   density?: "default" | "compact";
   /** Add stable heading fragments for Wiki page-local links. */
   headingAnchors?: boolean;
+  /** Preserve copy actions on surfaces migrated from server-rendered HTML. */
+  copyCodeBlocks?: boolean;
 }
 
 // Memoized so a long timeline of comments (Inbox + IssueDetail) does not
@@ -426,6 +461,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   attachments,
   density = "default",
   headingAnchors = false,
+  copyCodeBlocks = false,
 }: ReadonlyContentProps) {
   const processed = useMemo(
     () => highlightToHtml(preprocessMarkdown(content)),
@@ -434,9 +470,9 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const hover = useLinkHover(wrapperRef);
 
-  // Components map is now static — all attachment-aware logic lives in
+  // All attachment-aware logic lives in
   // <Attachment>, which reads the surrounding AttachmentDownloadProvider.
-  const components = useMemo(() => buildComponents(), []);
+  const components = useMemo(() => buildComponents(copyCodeBlocks), [copyCodeBlocks]);
   const rehypePlugins: NonNullable<Options["rehypePlugins"]> = headingAnchors
     ? [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeWikiHeadingAnchors, rehypeKatex]
     : [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex];

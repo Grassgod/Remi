@@ -15,13 +15,19 @@ import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-bu
 import { ReactionBar } from "@multiremi/ui/components/common/reaction-bar";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
-import { EntryHtml } from "../../common/session-log/entry-html";
 import { ContentEditor, ReadonlyContent, type ContentEditorRef, useFileDropZone, FileDropOverlay } from "../../editor";
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { useT } from "../../i18n";
 
-export function IssueLogHead({ issueId, entry, currentUserId, onSaved }: {
-  issueId: string; entry: SessionLogRow; currentUserId?: string; onSaved: () => Promise<void>;
+// Mirrors conversation-log-repo.ts syncIssueHeadWithinTransaction; keep these formats aligned.
+export function splitIssueHeadBody(body: string, title: string): string {
+  if (body === title) return "";
+  const prefix = `${title}\n\n`;
+  return body.startsWith(prefix) ? body.slice(prefix.length) : body;
+}
+
+export function IssueLogHead({ issueId, title, entry, currentUserId, onSaved }: {
+  issueId: string; title: string; entry: SessionLogRow; currentUserId?: string; onSaved: () => Promise<void>;
 }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
@@ -34,6 +40,9 @@ export function IssueLogHead({ issueId, entry, currentUserId, onSaved }: {
   const [pending, setPending] = useState<Attachment[]>([]);
   const editor = useRef<ContentEditorRef>(null);
   const { data: attachments = [] } = useQuery({ ...issueAttachmentsOptions(issueId), enabled: editing });
+  // Use this row's title during renames. Its body_html includes the title, so render the extracted Markdown.
+  const description = splitIssueHeadBody(entry.body_md,
+    typeof entry.metadata.title === "string" ? entry.metadata.title : title);
   const upload = useCallback(async (file: File) => {
     const attachment = await uploadWithToast(file);
     if (attachment) setPending(previous => [...previous, attachment]);
@@ -55,8 +64,9 @@ export function IssueLogHead({ issueId, entry, currentUserId, onSaved }: {
     finally { setSaving(false); }
   };
   return <section data-issue-log-head>
-    {editing ? <div {...dropZoneProps} className="relative">
-      <ContentEditor ref={editor} defaultValue={entry.body_md} placeholder={t($ => $.detail.desc_placeholder)}
+    <h1 className="break-words text-2xl font-bold leading-snug">{title}</h1>
+    {editing ? <div {...dropZoneProps} className="relative mt-5">
+      <ContentEditor ref={editor} defaultValue={description} placeholder={t($ => $.detail.desc_placeholder)}
         onUploadFile={upload} currentIssueId={issueId} attachments={[...attachments, ...pending]} />
       <div className="mt-2 flex items-center justify-between">
         <FileUploadButton size="sm" onSelect={file => editor.current?.uploadFile(file)} />
@@ -64,8 +74,8 @@ export function IssueLogHead({ issueId, entry, currentUserId, onSaved }: {
           <Button size="sm" variant="outline" disabled={saving} onClick={() => void save()}>{t($ => $.comment.save_action)}</Button></div>
       </div>
       {isDragOver && <FileDropOverlay />}
-    </div> : <div className="relative pr-8">
-      <EntryHtml html={entry.body_html} markdown={entry.body_md} fallback={<ReadonlyContent content={entry.body_md} />} />
+    </div> : <div className="relative mt-5 min-h-8 pr-8">
+      <ReadonlyContent content={description} attachments={attachments} copyCodeBlocks />
       <Tooltip><TooltipTrigger render={<Button size="icon-sm" variant="ghost" className="absolute top-0 right-0" aria-label={t($ => $.comment.edit_action)} onClick={() => setEditing(true)}><Pencil /></Button>} />
         <TooltipContent>{t($ => $.comment.edit_action)}</TooltipContent></Tooltip>
     </div>}
