@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Clock3, Play } from "lucide-react";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { issueDecisionsOptions, issueDependenciesOptions, issueKeys } from "@multiremi/core/issues/queries";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@multiremi/ui/components/ui/alert-dialog";
@@ -111,16 +111,10 @@ export function IssueDetailMain({
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const updateIssue = useUpdateIssue();
-  const { data: dependencies = [] } = useQuery(issueDependenciesOptions(wsId, issueId));
-  const decisions = useQuery(issueDecisionsOptions(wsId, issueId));
-  const hasDecisionEntries = (issue.pending_decision_count ?? 0) > 0
-    || (decisions.data?.waiting_on_human.length ?? 0) > 0
-    || (decisions.data?.owner_and_answered.pending.length ?? 0) > 0
-    || (decisions.data?.owner_and_answered.answered.length ?? 0) > 0;
-  const waitingOn = dependencies
-    .filter((dependency) => dependency.direction === "blocked_by" && dependency.depends_on_issue?.status !== "done")
-    .map((dependency) => dependency.depends_on_issue?.identifier)
-    .filter((key): key is string => !!key);
+  const waitingOn = issue.blocked_by ?? [];
+  const showDecisions = (issue.pending_decision_count ?? 0) > 0;
+  const showWaiting = !showDecisions && issue.parent_issue_id !== null
+    && issue.status === "backlog" && waitingOn.length > 0;
   const [forceStartOpen, setForceStartOpen] = useState(false);
   const [forceStartError, setForceStartError] = useState("");
   const getDecisionActorName = useCallback((type: string, id: string) => {
@@ -135,6 +129,7 @@ export function IssueDetailMain({
     try {
       await updateIssue.mutateAsync({ id: issueId, status: "todo", force: true });
       await queryClient.invalidateQueries({ queryKey: issueKeys.dependencies(wsId, issueId) });
+      await queryClient.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
       setForceStartOpen(false);
     } catch (error) {
       setForceStartError(error instanceof Error ? error.message : t(($) => $.detail.force_start_failed));
@@ -173,27 +168,23 @@ export function IssueDetailMain({
         onToggleSessionSidebar={onToggleSessionSidebar}
       />
 
-      <div
+      {(showDecisions || showWaiting) && <div
         className={`flex h-10 shrink-0 items-center border-b px-4 ${
-          hasDecisionEntries
+          showDecisions
             ? "bg-blue-50/70 dark:bg-blue-950/20"
             : ""
         }`}
         data-issue-notice-slot
       >
-        {hasDecisionEntries && (
+        {showDecisions && (
           <IssueDecisionPanel
             issueId={issueId}
             pendingCount={issue.pending_decision_count ?? 0}
-            showOwnerOnly={(issue.pending_decision_count ?? 0) === 0}
             canAnswer={canForceStart}
             getActorName={getDecisionActorName}
           />
         )}
-        {!hasDecisionEntries
-          && issue.parent_issue_id !== null
-          && issue.status === "backlog"
-          && waitingOn.length > 0 && (
+        {showWaiting && (
           <div className="flex min-w-0 w-full items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
             <Clock3 className="size-4 shrink-0" />
             <span className="flex min-w-0 flex-1 flex-col leading-4">
@@ -211,7 +202,7 @@ export function IssueDetailMain({
             )}
           </div>
         )}
-      </div>
+      </div>}
 
       <AlertDialog open={forceStartOpen} onOpenChange={setForceStartOpen}>
         <AlertDialogContent className="max-w-[390px]">

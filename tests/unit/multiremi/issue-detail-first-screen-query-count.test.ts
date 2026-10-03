@@ -147,6 +147,31 @@ describe("MUL-385 issue detail first-screen response shape", () => {
 });
 
 describe("MUL-385 issue detail first-screen query counts", () => {
+  it("includes unmet keys with one dependency read only while a child is in backlog", async () => {
+    const { store, probe } = createCountedStore();
+    const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
+    const parent = store.createIssue({ title: "Parent", status: "backlog" });
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const child = store.createIssue({ title: "Waiting child", parentIssueId: parent.id,
+      status: "backlog", blockedBy: [prerequisite.id] });
+
+    probe.reset();
+    const waiting = await app.request(`/api/issues/${child.id}`, { headers: AUTH_HEADERS });
+    expect(waiting.status).toBe(200);
+    expect((await waiting.json()).blocked_by).toEqual([prerequisite.key]);
+    expect(probe.statements).toBe(6);
+    expect([...probe.bySql.entries()].filter(([sql]) => sql.includes("multiremi_issue_dependencies"))
+      .reduce((sum, [, count]) => sum + count, 0)).toBe(1);
+
+    store.updateIssue(child.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+    probe.reset();
+    const started = await app.request(`/api/issues/${child.id}`, { headers: AUTH_HEADERS });
+    expect(started.status).toBe(200);
+    expect(await started.json()).toMatchObject({ status: "todo", blocked_by: [] });
+    expect(probe.statements).toBe(5);
+    expect([...probe.bySql.keys()].some(sql => sql.includes("multiremi_issue_dependencies"))).toBe(false);
+  });
+
   it("adds only one aggregate query for the pending decision count", async () => {
     const { store, db, probe } = createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });

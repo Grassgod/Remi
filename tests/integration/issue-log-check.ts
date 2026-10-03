@@ -237,7 +237,7 @@ try {
         const notice = document.querySelector<HTMLElement>('[data-issue-notice-slot]');
         (window as unknown as { __mul444FirstFrame?: unknown }).__mul444FirstFrame = {
           rows: [...root.querySelectorAll<HTMLElement>('[data-perf-item]')].map(row => row.offsetHeight),
-          header: notice?.previousElementSibling?.getBoundingClientRect().height ?? null,
+          header: document.querySelector('.issue-detail-header')?.getBoundingClientRect().height ?? null,
           notice: notice?.getBoundingClientRect().height ?? null,
         };
       };
@@ -293,14 +293,15 @@ try {
       const notice = document.querySelector<HTMLElement>('[data-issue-notice-slot]');
       return { first: (window as unknown as { __mul444FirstFrame?: { rows: number[]; header: number | null; notice: number | null } }).__mul444FirstFrame,
         final: { rows: [...(root?.querySelectorAll<HTMLElement>('[data-perf-item]') ?? [])].map(row => row.offsetHeight),
-          header: notice?.previousElementSibling?.getBoundingClientRect().height ?? null,
+          header: document.querySelector('.issue-detail-header')?.getBoundingClientRect().height ?? null,
           notice: notice?.getBoundingClientRect().height ?? null } };
     });
     check(`${entry} #${round} first frame rows and header keep height`, Boolean(heights.first)
       && heights.first!.rows.length === heights.final.rows.length
       && heights.first!.rows.every((height, index) => height === heights.final.rows[index])
       && heights.first!.header === heights.final.header && heights.final.header === 48
-      && heights.first!.notice === heights.final.notice && heights.final.notice === 40, heights);
+      && heights.first!.notice === heights.final.notice
+      && (heights.final.notice === null || heights.final.notice === 40), heights);
     const visibleFrames = recorded.frames.filter(f => f.profiles.contract?.state === "ready");
     const first = computeFirstRealMs(visibleFrames, "contract");
     // First visible content is the baseline; an absent root has no position.

@@ -1028,6 +1028,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({
       ...issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }),
       pending_decision_count: store.countPendingIssueDecisions(issue.id),
+      // The dependency gate only blocks backlog starts. Keep the common
+      // non-backlog detail path at the MUL-385 five-statement budget.
+      blocked_by: issue.status === "backlog"
+        ? store.listUnmetPrerequisites(issue.id).map((row) => row.key)
+        : [],
     });
   });
   app.get("/api/issues/:id/workspace", (c) => {

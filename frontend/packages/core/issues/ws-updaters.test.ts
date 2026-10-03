@@ -281,6 +281,19 @@ describe("issue archive cache updates", () => {
   });
 });
 
+describe("first-screen notice cache updates", () => {
+  it("preserves detail-only notices when an issue update omits them", () => {
+    const qc = new QueryClient();
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue, pending_decision_count: 2, blocked_by: ["MUL-1"],
+    });
+    onIssueUpdated(qc, WS_ID, { id: ISSUE_ID, title: "Updated" });
+    expect(qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID))).toMatchObject({
+      title: "Updated", pending_decision_count: 2, blocked_by: ["MUL-1"],
+    });
+  });
+});
+
 describe("parent done grant cache updates", () => {
   it("invalidates detail when raw grant columns arrive without deriving effective state", () => {
     const qc = new QueryClient();
