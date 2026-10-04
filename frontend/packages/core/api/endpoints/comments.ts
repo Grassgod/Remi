@@ -1,3 +1,8 @@
+import { z } from "zod";
+import { turnToTask } from "../turn-task";
+import { MessagesEndpoints } from "./messages";
+import { MessageResponseSchema, MessageReactionSchema, type Message } from "../schemas/messages";
+import { parseStrictResponse } from "../schema";
 import type {
   AssigneeFrequencyEntry,
   Comment,
@@ -6,7 +11,6 @@ import type {
   IssueSession,
   IssueSessionTask,
   Reaction,
-  SessionEvent,
   SessionParticipant,
   SessionResult,
   TimelineEntry,
@@ -15,17 +19,12 @@ import type {
 import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
 import {
-  CommentsListSchema,
   EMPTY_ISSUE_SESSION,
   EMPTY_ISSUE_SESSIONS,
-  EMPTY_ISSUE_SESSION_TASKS,
-  EMPTY_SESSION_EVENTS,
   EMPTY_SESSION_PARTICIPANTS,
   EMPTY_SESSION_RESULTS,
   IssueSessionListSchema,
   IssueSessionSchema,
-  IssueSessionTaskListSchema,
-  SessionEventListSchema,
   SessionParticipantListSchema,
   SessionParticipantSchema,
   SessionResultListSchema,
@@ -37,36 +36,32 @@ import {
   TimelinePageSchema,
 } from "../schemas/timeline";
 
+function messageComment(message: Message, issueId = ""): Comment {
+  return { id: message.id, issue_id: issueId, issue_session_id: message.session_id,
+    author_type: message.sender_type === "member" || message.sender_type === "agent" ? message.sender_type : "system", author_id: message.sender_id ?? "", task_id: message.task_id,
+    content: message.body_md, type: "comment", parent_id: message.reply_to_id,
+    created_at: message.created_at, updated_at: message.updated_at, resolved_at: message.resolved_at, resolved_by_type: message.resolved_by_type === "member" || message.resolved_by_type === "agent" ? message.resolved_by_type : message.resolved_by_type ? "system" : null, resolved_by_id: message.resolved_by_id, attachments: message.attachments, reactions: message.reactions };
+}
 export class CommentsEndpoints {
   constructor(readonly http: HttpClient) {}
 
   // Comments
-  async listComments(issueId: string): Promise<Comment[]> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/comments`);
-    return parseWithFallback(raw, CommentsListSchema, [], {
-      endpoint: "GET /api/issues/:id/comments",
-    });
-  }
-
   async createComment(
     issueId: string,
     content: string,
-    type?: string,
+    _type?: string,
     parentId?: string,
     attachmentIds?: string[],
     issueSessionId?: string,
   ): Promise<Comment> {
-    return this.http.fetch(issueSessionId
-      ? `/api/issues/${issueId}/sessions/${issueSessionId}/messages`
-      : `/api/issues/${issueId}/comments`, {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        type: type ?? "comment",
-        ...(parentId ? { parent_id: parentId } : {}),
-        ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
-      }),
+    const sessions = issueSessionId ? [] : await this.listIssueSessions(issueId);
+    const sessionId = issueSessionId ?? sessions.find(session => session.is_default)?.id;
+    if (!sessionId) throw new Error("Conversation not found");
+    const result = await new MessagesEndpoints(this.http).sendMessage(sessionId, {
+      body_md: content, message_kind: parentId ? "reply" : "request", reply_to_id: parentId,
+      to: { type: "role", ref: "issue_owner" }, wake_requested: "now", attachment_ids: attachmentIds,
     });
+    return messageComment(result.message, issueId);
   }
 
   async listTimeline(issueId: string, issueSessionId?: string): Promise<TimelineEntry[]> {
@@ -164,18 +159,13 @@ export class CommentsEndpoints {
     );
   }
 
-  async listSessionEvents(issueId: string, sessionId: string): Promise<SessionEvent[]> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/events`);
-    return parseWithFallback(raw, SessionEventListSchema, EMPTY_SESSION_EVENTS, {
-      endpoint: "GET /api/issues/:id/sessions/:sessionId/events",
-    });
-  }
-
-  async listSessionTasks(issueId: string, sessionId: string): Promise<IssueSessionTask[]> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/tasks`);
-    return parseWithFallback(raw, IssueSessionTaskListSchema, EMPTY_ISSUE_SESSION_TASKS, {
-      endpoint: "GET /api/issues/:id/sessions/:sessionId/tasks",
-    });
+  async listSessionTasks(_issueId: string, sessionId: string): Promise<IssueSessionTask[]> {
+    const tasks: IssueSessionTask[] = [];
+    let cursor: string | undefined;
+    do { const page = await new MessagesEndpoints(this.http).listTurns({ session_id: sessionId, cursor, limit: 100 });
+      tasks.push(...page.turns.map(turn => ({ ...turnToTask(turn), issue_session_id: turn.session_id }))); cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+    return tasks;
   }
 
   async listIssueSessionResults(issueId: string): Promise<SessionResult[]> {
@@ -190,36 +180,30 @@ export class CommentsEndpoints {
   }
 
   async updateComment(commentId: string, content: string, attachmentIds?: string[]): Promise<Comment> {
-    return this.http.fetch(`/api/comments/${commentId}`, {
-      method: "PUT",
-      body: JSON.stringify({ content, attachment_ids: attachmentIds }),
-    });
+    const messages = new MessagesEndpoints(this.http);
+    if (attachmentIds) {
+      const current = await messages.getMessage(commentId);
+      const ids = current.attachments.map(a => a.id).sort();
+      if (JSON.stringify(ids) !== JSON.stringify([...attachmentIds].sort())) throw new Error("Message attachments cannot be changed after sending");
+    }
+    return messageComment(await messages.editMessage(commentId, content));
   }
-
   async deleteComment(commentId: string): Promise<void> {
-    await this.http.fetch(`/api/comments/${commentId}`, { method: "DELETE" });
+    await new MessagesEndpoints(this.http).deleteMessage(commentId);
   }
-
-  async resolveComment(commentId: string): Promise<Comment> {
-    return this.http.fetch(`/api/comments/${commentId}/resolve`, { method: "POST" });
+  async resolveComment(commentId: string): Promise<Comment> { return this.setResolved(commentId, true); }
+  async unresolveComment(commentId: string): Promise<Comment> { return this.setResolved(commentId, false); }
+  async setResolved(commentId: string, resolved: boolean): Promise<Comment> {
+    const path = `/api/messages/${encodeURIComponent(commentId)}/resolve`;
+    const response = parseStrictResponse<z.infer<typeof MessageResponseSchema>>(await this.http.fetch<unknown>(path, { method: "POST", body: JSON.stringify({ resolved }) }), MessageResponseSchema, { endpoint: path });
+    return messageComment(response.message);
   }
-
-  async unresolveComment(commentId: string): Promise<Comment> {
-    return this.http.fetch(`/api/comments/${commentId}/resolve`, { method: "DELETE" });
-  }
-
-  async addReaction(commentId: string, emoji: string): Promise<Reaction> {
-    return this.http.fetch(`/api/comments/${commentId}/reactions`, {
-      method: "POST",
-      body: JSON.stringify({ emoji }),
-    });
-  }
-
-  async removeReaction(commentId: string, emoji: string): Promise<void> {
-    await this.http.fetch(`/api/comments/${commentId}/reactions`, {
-      method: "DELETE",
-      body: JSON.stringify({ emoji }),
-    });
+  async addReaction(commentId: string, emoji: string): Promise<Reaction[]> { return this.messageReactions(commentId, emoji, false); }
+  async removeReaction(commentId: string, emoji: string): Promise<Reaction[]> { return this.messageReactions(commentId, emoji, true); }
+  async messageReactions(commentId: string, emoji: string, remove: boolean): Promise<Reaction[]> {
+    const path = `/api/messages/${encodeURIComponent(commentId)}/reactions`;
+    const raw = await this.http.fetch<unknown>(path, { method: "POST", body: JSON.stringify({ emoji, remove }) });
+    return parseStrictResponse<{ reactions: Reaction[] }>(raw, z.object({ reactions: z.array(MessageReactionSchema) }), { endpoint: path }).reactions;
   }
 
   async addIssueReaction(issueId: string, emoji: string): Promise<IssueReaction> {

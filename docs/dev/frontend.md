@@ -34,7 +34,17 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
-Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，列表等运行卡片首次查询结束再显现，避免卡片插入造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和 `/api/turns?issue=...` 轮列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，列表等运行卡片首次查询结束再显现，避免卡片插入造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+
+## 统一消息与轮展示
+
+对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Chat 乐观发送以 canonical dedupe_key 匹配日志行。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+
+[TurnControls](../../frontend/packages/views/common/turn-controls.tsx) 展开时才读取 attempts，查看日志时传选中 attempt_id；历史日志与当前尝试独立。失败/取消轮可以暖重试或冷重试，服务端返回同一 turn.id 和新的 current_attempt_id。输入弹窗按需读取 turn input 的完整 `(from_seq,to_seq]` 消息与 legacy_prompt，不在首屏逐行展开。
+
+Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。
+
+决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
 
 ## 一次任务读取与更新
 
@@ -57,7 +67,7 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 | 任务列表 UI | [issues-page.tsx](../../frontend/packages/views/issues/components/issues-page.tsx) 的 `IssuesPage`，以及同目录 `board-view.tsx`、`list-view.tsx`、`swimlane-view.tsx` |
 | 任务详情与执行会话 | [issue-detail.tsx](../../frontend/packages/views/issues/components/issue-detail.tsx)、[issue-detail-main.tsx](../../frontend/packages/views/issues/components/issue-detail-main.tsx)、[session-mutations.ts](../../frontend/packages/core/issues/session-mutations.ts) |
 | 工作台待输入 / 待验收 / 失败恢复 | [issues/workbench.ts](../../frontend/packages/core/issues/workbench.ts) 的 `workbenchIssuesOptions`、`partitionReviewIssues`；[workbench-page.tsx](../../frontend/packages/views/workbench/components/workbench-page.tsx) |
-| 收件箱的分页、摘要与展示分组 | [inbox/queries.ts](../../frontend/packages/core/inbox/queries.ts) 的 `inboxPageOptions` / `inboxSummaryOptions`、[inbox/grouping.ts](../../frontend/packages/core/inbox/grouping.ts)、[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) |
+| 收件箱的游标分页、未读计数与阅读位置 | [inbox/queries.ts](../../frontend/packages/core/inbox/queries.ts) 的 `inboxPageOptions` / `inboxSummaryOptions`、[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) |
 | Issue 飞书话题设置 | [issue-topic-section.tsx](../../frontend/packages/views/settings/components/issue-topic-section.tsx)、[feishu-bot/queries.ts](../../frontend/packages/core/feishu-bot/queries.ts)、[workspaces router](../../packages/server/src/api/routers/workspaces.ts) 的 `/api/workspaces/:id/issue-topics` |
 | 平铺会话日志（切片、行高缓存、副本端口） | [session-log-list.tsx](../../frontend/packages/views/common/session-log/session-log-list.tsx)、[entry-html.tsx](../../frontend/packages/views/common/session-log/entry-html.tsx)、[use-row-heights.ts](../../frontend/packages/views/common/session-log/use-row-heights.ts)、[core/replica/port.ts](../../frontend/packages/core/replica/port.ts) |
 | 执行过程弹窗 | [task-trace-dialog.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.tsx)、[build-timeline.ts](../../frontend/packages/views/common/task-transcript/build-timeline.ts)、[agent-transcript-dialog.tsx](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx)；点击后从 task trace API 分页读取，运行中由 trace socket 续传 |
@@ -72,7 +82,7 @@ Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked
 
 Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/packages/views/issues/components/issue-log-head.tsx) 用详情标题渲染只读标题，按同一 head 行的 `metadata.title` 精确移除一次 Markdown 前缀，避免改标题时混用版本。描述交给 `ReadonlyContent`，复用已有附件查询缓存并启用普通代码块复制；冷缓存只在下载点击时加载附件列表，按 URL 找到 ID 后调用已有下载入口刷新签名，首屏不请求附件列表。编辑和保存都只包含描述，不消费带标题的 `body_html`。服务端与 agent 的日志契约不变。
 
-收件箱页面使用 `useInfiniteQuery` 按游标每次读取 50 条；侧栏关注数与页内未读数来自独立的 `/api/inbox/summary`，摘要查询 `staleTime` 为 30 秒，不需要加载完整列表。筛选、日期分组、成功自动运行及同父单通知的折叠应用于已加载页；父单元数据由服务端投影提供，但只投影通知所属工作区内仍存在的父单，组内失败、卡住、待决定通知优先。父单分组头不提供整组归档，展开后逐条归档；行内操作始终保留固定宽度，悬停只改变可见性。链接指向尚未加载的通知时，页面继续加载后续页，读取失败不能当作通知不存在。读/归档 mutation 和 WS 更新同时维护旧列表缓存与分页缓存，并刷新摘要；具体分组和计数契约见[收件箱边界](../inbox-workbench-boundary.md)。
+收件箱使用 `GET /api/inbox` 的统一消息，每页 50 条，续页只使用服务端 opaque cursor。页内未读数与侧栏关注数分别来自响应的 `unread_count`、`attention_count`，覆盖所有可见对话；摘要读取同一端点的 limit=1，不拼合加载页计算。选择消息不会自动标读；「读到这里」以 session_id/to_seq 推进当前人的读游标，「全部已读」只发一次 `{all:true}`。没有逐条归档或归档批处理。深链接通过 message ID 读取详情，读游标写入失败保留原状态；查询键按工作区隔离，写入完成只刷新发起工作区。WS inbox 索引信号和可见会话日志帧触发缓存失效，前台 10 秒轮询提供恢复路径。
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 

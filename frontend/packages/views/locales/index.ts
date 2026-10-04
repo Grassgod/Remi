@@ -1,3 +1,7 @@
+import koMessages from "./ko/messages.json";
+import jaMessages from "./ja/messages.json";
+import zhHansMessages from "./zh-Hans/messages.json";
+import enMessages from "./en/messages.json";
 import type { LocaleResources, SupportedLocale } from "@multiremi/core/i18n";
 import enCommon from "./en/common.json";
 import enAuth from "./en/auth.json";
@@ -127,6 +131,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workbench: enWorkbench,
     search: enSearch,
     inbox: enInbox,
+    messages: enMessages,
     workspace: enWorkspace,
     projects: enProjects,
     repositories: enRepositories,
@@ -156,6 +161,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workbench: zhHansWorkbench,
     search: zhHansSearch,
     inbox: zhHansInbox,
+    messages: zhHansMessages,
     workspace: zhHansWorkspace,
     projects: zhHansProjects,
     repositories: zhHansRepositories,
@@ -185,6 +191,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workbench: koWorkbench,
     search: koSearch,
     inbox: koInbox,
+    messages: koMessages,
     workspace: koWorkspace,
     projects: koProjects,
     repositories: koRepositories,
@@ -214,6 +221,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     workbench: jaWorkbench,
     search: jaSearch,
     inbox: jaInbox,
+    messages: jaMessages,
     workspace: jaWorkspace,
     projects: jaProjects,
     repositories: jaRepositories,

@@ -82,4 +82,6 @@ input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围�
 
 按钮只携带 `{t,message_id}`，不使用 task_id/issue_id 路由。宿主专用 daemon token 调用 `GET /api/daemon/messages/:id`、`POST /api/daemon/messages/:id/card`、`POST /api/daemon/messages/:id/answer`。GET 返回 `{message,request,decision}`；card 接受 `{recipient_open_id}`，用于轮内提问；Issue 裁决卡由话题 outbox 投递。answer 接受 `{token,operator_open_id,answer}` 或 `{token,operator_open_id,response}`。token 绑定实际收件人，答复必须映射为活跃工作区成员；answerMessageDecision 原子消费 token 并发送一条 reply。页面用普通 message 发送端点回答，无须也不能领取 daemon 卡片凭据。
 
+卡片 patch 的 outbox envelope 必须包含 canonical `message_id`，并另外指定外部飞书 `targetMessageId`。宿主先从 daemon messages 读取同一条 decision 的已解决/删除状态，再更新指定外部卡片；缺少任一 ID、ID 不符或非终态时拒绝。外部飞书消息 ID 只定位运输卡片，不能作为业务消息 ID，也不回退使用 replyToMessageId。
+
 实现验证入口为 [unified-api.test.ts](../../tests/unit/multiremi/unified-api.test.ts)、[卡片 token 回归](../../tests/unit/multiremi/multiremi-question-card-token.test.ts) 和 [CLI 用例](../../tests/unit/remi/cli-unified.test.ts)。

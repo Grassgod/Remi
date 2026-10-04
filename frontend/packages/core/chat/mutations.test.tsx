@@ -5,11 +5,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSession } from "../types";
 import { chatKeys } from "./queries";
-import { useDeleteChatSession, useMarkChatSessionRead, useUpdateChatSession, usePrioritizeChatQueuedTask } from "./mutations";
+import { useDeleteChatSession, useMarkChatSessionRead, useUpdateChatSession, useUpdateChatQueuedTask } from "./mutations";
 
 const mock = vi.hoisted(() => ({
   wsId: "ws-1", deleteChatSession: vi.fn(), updateChatSession: vi.fn(), markChatSessionRead: vi.fn(),
-  prioritizeQueuedChatMessage: vi.fn(), setActiveSession: vi.fn(), clearInputDraft: vi.fn(),
+  editMessage: vi.fn(), setActiveSession: vi.fn(), clearInputDraft: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mock }));
 vi.mock("../hooks", () => ({ useWorkspaceId: () => mock.wsId }));
@@ -120,12 +120,12 @@ describe("chat session mutations", () => {
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toMatchObject({ has_unread: false, unread_count: 0 });
   });
 
-  it("refreshes queue after prioritizing without issuing an extra cancel", async () => {
-    mock.prioritizeQueuedChatMessage.mockResolvedValue({ task_id: "task-2", active_task_id: "task-1" });
+  it("refreshes the unread message query after a consumed-message edit fails", async () => {
+    mock.editMessage.mockRejectedValue(new Error("Message has been consumed"));
     const invalidate = vi.spyOn(qc, "invalidateQueries");
-    const { result } = renderHook(() => usePrioritizeChatQueuedTask(), { wrapper });
-    await act(async () => { await result.current.mutateAsync({ sessionId: "chat-1", taskId: "task-2" }); });
-    expect(mock.prioritizeQueuedChatMessage).toHaveBeenCalledWith("chat-1", "task-2");
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
+    const { result } = renderHook(() => useUpdateChatQueuedTask(), { wrapper });
+    await act(async () => { await expect(result.current.mutateAsync({ sessionId: "chat-1", messageId: "message-2", content: "edited" })).rejects.toThrow("consumed"); });
+    expect(mock.editMessage).toHaveBeenCalledWith("message-2", "edited");
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-unread", "ws-1", "chat-1"] });
   });
 });

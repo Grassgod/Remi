@@ -15,7 +15,7 @@ import { AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS, isRouteContentReadyForTest, res
 const activityCallbacks = vi.hoisted(() => ({ current: [] as Array<() => void> }));
 const update = vi.hoisted(() => vi.fn());
 vi.mock("@multiremi/core/api", () => ({ api: {
-  listIssueDependencies: vi.fn(), listIssueDecisions: vi.fn(),
+  listIssueDependencies: vi.fn(), listMessages: vi.fn(),
 } }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -189,11 +189,12 @@ function renderMain(
 describe("MUL-496 first-screen notices", () => {
   it("omits an empty slot and makes no first-screen decision or dependency requests", async () => {
     const dependencies = vi.spyOn(api, "listIssueDependencies");
-    const decisions = vi.spyOn(api, "listIssueDecisions");
+    const decisions = vi.spyOn(api, "listMessages");
     const { queryClient, rerenderMain } = renderMain(false);
-    queryClient.setQueryData(issueKeys.decisions("ws-1", "issue-1"), {
-      waiting_on_human: [], owner_and_answered: { pending: [{ id: "owner" }], answered: [{ id: "answered" }] },
-    });
+    queryClient.setQueryData(issueKeys.decisions("ws-1", "issue-1"), [
+      { id: "owner", message_kind: "decision", resolved_at: null },
+      { id: "answered", message_kind: "decision", resolved_at: "2026-10-01" },
+    ]);
     rerenderMain({});
     await act(async () => {});
     expect(document.querySelector("[data-issue-notice-slot]")).toBeNull();

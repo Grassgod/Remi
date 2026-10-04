@@ -9,7 +9,7 @@ function entry(seq: number, clientId?: string): SessionLogEntry {
   return {
     session_id: sessionId, seq, id: `server-${seq}`, revision: 1,
     kind: "message", body_md: "same text", body_html: null, render_version: null,
-    metadata: clientId ? { client_id: clientId } : {},
+    dedupe_key: clientId ?? null, metadata: {},
   } as SessionLogEntry;
 }
 
@@ -26,7 +26,7 @@ function attachment(id: string): Attachment {
 }
 
 describe("optimistic chat log merge", () => {
-  it("matches by client_id, keeps the DOM identity and position as each send is confirmed", () => {
+  it("matches by canonical dedupe_key, keeps the DOM identity and position as each send is confirmed", () => {
     const first = local("send-1", 5.000001);
     const second = local("send-2", 5.000002);
     const initial = mergeOptimisticChatRows([entry(5)], [first, second]);
@@ -50,7 +50,7 @@ describe("optimistic chat log merge", () => {
     expect((initial[0] as SessionLogEntry & { metadata: { attachments: unknown[] } }).metadata.attachments)
       .toMatchObject([{ id: "local-file" }]);
     const confirmed = mergeOptimisticChatRows([{ ...entry(6, "send-1"),
-      metadata: { client_id: "send-1", attachments: [{ id: "server-file", filename: "draft.txt" }] },
+      metadata: { attachments: [{ id: "server-file", filename: "draft.txt" }] },
     } as SessionLogEntry], [sending]);
     expect(confirmed[0]?.id).toBe(initial[0]?.id);
     expect((confirmed[0] as SessionLogEntry & { metadata: { attachments: unknown[] } }).metadata.attachments)

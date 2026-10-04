@@ -1112,6 +1112,10 @@ export class MultiremiDaemonClient {
     return result.request;
   }
 
+  getFeishuDecisionMessage(messageId: string): Promise<{ message: { id: string; message_kind: string; resolved_at: string | null; deleted_at: string | null } }> {
+    return this.get(`/api/daemon/messages/${encodeURIComponent(messageId)}`);
+  }
+
   getMessageHumanRequest(messageId: string): Promise<MultiremiTaskHumanRequest | null> {
     return this.get<{ request?: MultiremiTaskHumanRequest | null }>(`/api/daemon/messages/${encodeURIComponent(messageId)}`)
       .then(result => result.request ?? null);

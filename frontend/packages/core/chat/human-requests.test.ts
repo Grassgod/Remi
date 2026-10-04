@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listTaskHumanRequests } = vi.hoisted(() => ({
-  listTaskHumanRequests: vi.fn(),
+const { listMessages } = vi.hoisted(() => ({
+  listMessages: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
-  api: { listTaskHumanRequests },
+  api: { listMessages },
 }));
 
 import { humanRequestsOptions, parseTaskHumanRequest } from "./human-requests";
@@ -26,13 +26,13 @@ const REQUEST = {
 };
 
 async function queryRequests() {
-  const queryFn = humanRequestsOptions("tsk_1").queryFn;
+  const queryFn = humanRequestsOptions("tsk_1", "session_1", "turn_1").queryFn;
   if (!queryFn) throw new Error("queryFn is missing");
   return queryFn({} as never);
 }
 
 beforeEach(() => {
-  listTaskHumanRequests.mockReset();
+  listMessages.mockReset();
 });
 
 describe("humanRequestsOptions", () => {
@@ -46,8 +46,8 @@ describe("humanRequestsOptions", () => {
   });
 
   it("parses optional question context", async () => {
-    listTaskHumanRequests.mockResolvedValue({
-      requests: [{ ...REQUEST, payload: { ...REQUEST.payload, context: { text: "Context", truncated: true } } }],
+    listMessages.mockResolvedValue({
+      messages: [{ id: "msg_1", task_id: "turn_1", created_at: REQUEST.createdAt, resolved_at: null, metadata: { human_request: { ...REQUEST, payload: { ...REQUEST.payload, context: { text: "Context", truncated: true } } } } }], next_cursor: null,
     });
 
     const requests = await queryRequests();
@@ -55,8 +55,8 @@ describe("humanRequestsOptions", () => {
   });
 
   it("keeps an old request usable when a future server sends malformed context", async () => {
-    listTaskHumanRequests.mockResolvedValue({
-      requests: [{ ...REQUEST, payload: { ...REQUEST.payload, context: { text: 42 } } }],
+    listMessages.mockResolvedValue({
+      messages: [{ id: "msg_1", task_id: "turn_1", created_at: REQUEST.createdAt, resolved_at: null, metadata: { human_request: { ...REQUEST, payload: { ...REQUEST.payload, context: { text: 42 } } } } }], next_cursor: null,
     });
 
     const requests = await queryRequests();

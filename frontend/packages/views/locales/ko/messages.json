@@ -1,0 +1,71 @@
+{
+  "recipient": "받는 사람: {{name}}",
+  "no_recipient": "대화",
+  "roles": {
+    "leader": "리더",
+    "parent_owner": "상위 이슈 담당자",
+    "delegator": "위임자",
+    "issue_owner": "이슈 담당자",
+    "relay": "전달자"
+  },
+  "kinds": {
+    "request": "요청",
+    "reply": "답장",
+    "report": "보고",
+    "decision": "결정",
+    "status": "상태",
+    "final": "결론"
+  },
+  "wakes": {
+    "now": "즉시 실행",
+    "next_turn": "다음 턴",
+    "inbox_only": "받은 편지함만"
+  },
+  "read_to_here": "#{{seq}}까지 읽음",
+  "read_cursor": "#{{seq}}까지 읽었습니다",
+  "load_failed": "메시지를 불러오지 못했습니다",
+  "attempts": "시도 목록",
+  "retry": "턴 재시도",
+  "retry_cold": "새 세션에서 재시도",
+  "retry_failed": "재시도에 실패했습니다",
+  "queue": "읽지 않은 메시지",
+  "decision_reply": "답장",
+  "resolved": "해결됨",
+  "wake_reasons": {
+    "human_sender": "사용자의 요청",
+    "platform_to_owner": "담당자에게 보내는 플랫폼 메시지",
+    "agent_dispatch": "에이전트 할당",
+    "member_to_delegator": "위임자에게 답변",
+    "to_leader": "리더에게 보내는 메시지",
+    "to_parent_owner": "상위 담당자에게 보내는 메시지",
+    "agent_pair_not_privileged": "이 에이전트 간 메시지는 다음 턴을 기다립니다",
+    "pair_round_trip_limit": "에이전트 교환 한도 도달",
+    "self": "자신에게 보내는 메시지는 깨우지 않습니다",
+    "recipient_unavailable": "수신자 사용 불가",
+    "no_recipient": "깨울 수신자 없음",
+    "requested_next_turn": "다음 턴에 처리하도록 요청됨",
+    "requested_inbox_only": "수신함에만 전달하도록 요청됨",
+    "migration": "가져온 메시지",
+    "dependencies_unmet": "선행 조건 대기 중",
+    "source_side_session": "원본 대화에만 전달",
+    "no_issue_target": "실행할 이슈 없음"
+  },
+  "statuses": {
+    "pending": "대기 중",
+    "offered": "제안됨",
+    "accepted": "수락됨",
+    "running": "실행 중",
+    "waiting_local_directory": "로컬 디렉터리 대기 중",
+    "awaiting_human": "답변 대기 중",
+    "completed": "완료",
+    "failed": "실패",
+    "cancelled": "취소됨",
+    "lost": "연결 끊김"
+  },
+  "current_attempt": "현재 시도",
+  "attempt_logs": "시도 로그 보기",
+  "no_attempts": "시도 없음",
+  "load_more": "더 보기",
+  "retry_load": "다시 불러오기",
+  "consumed_draft": "메시지가 읽혔거나 삭제되었습니다. 복사할 수 있도록 초안을 유지합니다."
+}

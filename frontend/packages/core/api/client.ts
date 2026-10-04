@@ -1,4 +1,5 @@
 import { HttpClient, type ApiClientOptions } from "./http";
+import { MessagesEndpoints } from "./endpoints/messages";
 import { SessionLogEndpoints } from "./endpoints/session-log";
 import { AuthEndpoints } from "./endpoints/auth";
 import { IssuesEndpoints } from "./endpoints/issues";
@@ -58,6 +59,7 @@ function bindEndpoints(instance: object): Record<string, unknown> {
  *  below — nothing else in this file changes. */
 export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new SessionLogEndpoints(http),
+  (http: HttpClient) => new MessagesEndpoints(http),
   (http: HttpClient) => new AuthEndpoints(http),
   (http: HttpClient) => new IssuesEndpoints(http),
   (http: HttpClient) => new CommentsEndpoints(http),
@@ -107,6 +109,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- wiring asserted in client-composition.test.ts
 export interface ApiClient extends
     SessionLogEndpoints,
+    MessagesEndpoints,
     AuthEndpoints,
     IssuesEndpoints,
     CommentsEndpoints,

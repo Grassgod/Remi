@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
+import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
 
@@ -12,6 +13,8 @@ vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
 }));
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multiremi/core/workspace/hooks", () => ({ useActorName: () => ({ getActorName: (_type: string, id: string) => id }) }));
 
 vi.mock("@multiremi/core/paths", async importOriginal => {
   const actual = await importOriginal<typeof import("@multiremi/core/paths")>();
@@ -278,5 +281,22 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     renderList([push, terminalReply("msg-2")], null);
     expect(screen.getByText("Progress update")).toBeInTheDocument();
     expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+  });
+});
+
+describe("canonical turn projection", () => {
+  it("renders a persisted reply once and leaves attempts and historical trace lazy", () => {
+    const getTaskTrace = vi.fn(); const getTurn = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const entries = [
+      { session_id: "cs-1", seq: 1, id: "turn_1", revision: 1, kind: "turn", task_id: "attempt_1", body_md: "", body_html: null, render_version: null,
+        metadata: { turn_id: "turn_1", status: "completed", final_entry_id: "msg_reply", final_reply_md: "Canonical answer" } },
+      { session_id: "cs-1", seq: 2, id: "msg_reply", revision: 1, kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_1", body_md: "Canonical answer", body_html: null, render_version: null, metadata: {} },
+    ].map(row => SessionLogEntrySchema.parse(row));
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={new MemorySessionReplica({ "cs-1": { entries } })} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    expect(screen.getAllByText("Canonical answer")).toHaveLength(1);
+    expect(getTaskTrace).not.toHaveBeenCalled(); expect(getTurn).not.toHaveBeenCalled();
+    view.unmount(); client.clear();
   });
 });

@@ -80,6 +80,7 @@ function fakeDaemon(): FakeDaemon {
   const botMenuPublishers: unknown[] = [];
   const failures: unknown[] = [];
   const daemon = {
+    getFeishuDecisionMessage: async (messageId: string) => ({ message: { id: messageId, message_kind: "decision", resolved_at: "2026-10-04T00:00:00Z", deleted_at: null } }),
     localPort: () => 4242,
     ensureTopicWorkspace: async () => null,
     // Recovery runs on every start; default to "no cards to restore".
@@ -656,7 +657,7 @@ describe("control-plane Feishu concierge host", () => {
     const sent = await test.conciergeHost.sendOutbound!(decisionDelivery({
       kind: "decision_card_patch",
       targetMessageId: "om_live_card",
-      body: JSON.stringify({ card: terminalCard }),
+      body: JSON.stringify({ message_id: "msg_decision_1", card: terminalCard }),
     }), { signal: new AbortController().signal, onStarted: async () => {} });
 
     expect(sent).toEqual({ messageId: "om_live_card" });
@@ -677,6 +678,15 @@ describe("control-plane Feishu concierge host", () => {
     await expect(test.conciergeHost.sendOutbound!(decisionDelivery({
       kind: "decision_card_patch", targetMessageId: "om_live_card", body: "{}",
     }), { signal: new AbortController().signal, onStarted: async () => {} })).rejects.toThrow(/not a card envelope/);
+    expect(patches).toBe(0);
+  });
+
+  it("refuses a patch without an explicit transport target instead of overwriting the thread root", async () => {
+    const test = host({ daemon: fakeDaemon().daemon }); await test.conciergeHost.start(assignment());
+    let patches = 0; test.channel.handle.updateProactiveCard = async () => { patches += 1; };
+    await expect(test.conciergeHost.sendOutbound!(decisionDelivery({ kind: "decision_card_patch", replyToMessageId: "om_thread_root",
+      body: JSON.stringify({ message_id: "msg_decision_1", card: { schema: "2.0" } }),
+    }), { signal: new AbortController().signal, onStarted: async () => {} })).rejects.toThrow(/no transport target/);
     expect(patches).toBe(0);
   });
 

@@ -56,19 +56,21 @@ describe("sub-issue visibility queries", () => {
 });
 
 describe("issue decision query options", () => {
-  it("uses an issue-scoped key and fetches the complete decision list", async () => {
-    const response = {
-      waiting_on_human: [],
-      owner_and_answered: { pending: [], answered: [] },
-      count: 0,
-    };
-    const listIssueDecisions = vi.fn().mockResolvedValue(response);
-    setApiInstance({ listIssueDecisions } as unknown as ApiClient);
+  it("uses the issue key and walks message cursors for every conversation", async () => {
+    const older = { id: "decision-1", created_at: "2026-10-01T00:00:00Z" };
+    const newer = { id: "decision-2", created_at: "2026-10-02T00:00:00Z" };
+    const listIssueSessions = vi.fn().mockResolvedValue([{ id: "session-1" }, { id: "session-2" }]);
+    const listMessages = vi.fn().mockImplementation(async (sessionId, { cursor }) => {
+      if (sessionId === "session-2") return { messages: [], next_cursor: null };
+      return cursor ? { messages: [newer], next_cursor: null } : { messages: [older], next_cursor: "opaque+next" };
+    });
+    setApiInstance({ listIssueSessions, listMessages } as unknown as ApiClient);
     const options = issueDecisionsOptions(WS_ID, "issue-1");
-
     expect(options.queryKey).toEqual(["issues", WS_ID, "decisions", "issue-1"]);
-    await expect(new QueryClient().fetchQuery(options)).resolves.toEqual(response);
-    expect(listIssueDecisions).toHaveBeenCalledWith("issue-1");
+    await expect(new QueryClient().fetchQuery(options)).resolves.toEqual([newer, older]);
+    expect(listIssueSessions).toHaveBeenCalledWith("issue-1");
+    expect(listMessages).toHaveBeenCalledWith("session-1", { message_kind: "decision", cursor: "opaque+next", limit: 100 });
+    expect(listMessages).toHaveBeenCalledWith("session-2", { message_kind: "decision", cursor: undefined, limit: 100 });
   });
 });
 

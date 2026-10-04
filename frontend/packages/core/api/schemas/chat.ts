@@ -13,46 +13,5 @@ export const ChatSessionListSchema = z.array(ChatSessionSchema);
 /** An update must explicitly confirm pin state; a read default cannot acknowledge an unpin. */
 export const ChatSessionUpdateResponseSchema = ChatSessionSchema.extend({ pinned: z.boolean() });
 
-export const ChatQueuedTaskSchema = z.object({
-  task_id: z.string().min(1),
-  content: z.string(),
-  attachment_ids: z.array(z.string()),
-  created_at: z.string(),
-}).loose();
-
-export const ChatPendingTaskSchema = z.object({
-  task_id: z.string().min(1).optional(),
-  status: z.string().optional(),
-  created_at: z.string().optional(),
-  wait_reason: z.string().nullable().optional().catch(undefined),
-  progress_summary: z.string().nullable().optional().catch(undefined),
-  supports_queue: z.literal(true),
-  queued_tasks: z.array(ChatQueuedTaskSchema),
-}).loose().refine(data => data.task_id
-  ? data.status !== undefined && data.created_at !== undefined
-  : data.status === undefined && data.created_at === undefined,
-{ message: "Pending head fields must be present together" });
-
-export const SendChatMessageResponseSchema = z.object({
-  message_id: z.string().min(1),
-  task_id: z.string().min(1),
-  created_at: z.string(),
-  supports_queue: z.literal(true),
-  queued: z.boolean(),
-}).loose();
-
-export const PrioritizeChatQueuedTaskResponseSchema = z.object({
-  task_id: z.string().min(1),
-  active_task_id: z.string().nullable(),
-}).loose();
-
-export const PendingChatTasksResponseSchema = z.object({
-  tasks: z.array(z.object({
-    task_id: z.string(), status: z.string(), chat_session_id: z.string(),
-  }).loose()),
-}).loose();
-
 /** Mutations returning 204 must not treat an unexpected JSON body as success. */
 export const ChatNoContentSchema = z.undefined();
-
-export const ChatCancelledTaskSchema = z.object({ id: z.string().min(1), status: z.literal("cancelled") }).loose();

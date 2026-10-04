@@ -9,7 +9,6 @@ vi.mock("../../platform/workspace-storage", () => ({ getCurrentWsId: () => "ws-1
 const store = vi.hoisted(() => ({ setActiveSession: vi.fn(), clearInputDraft: vi.fn() }));
 vi.mock("../../chat", () => ({ useChatStore: { getState: () => ({ activeSessionId: "chat-1", ...store }) } }));
 
-const queued = { task_id: "task-2", content: "follow-up", attachment_ids: [], created_at: "2026-09-11T00:01:00Z" };
 const session: ChatSession = {
   id: "chat-1", workspace_id: "ws-1", creator_id: "user-1", agent_id: "agent-1",
   title: "Chat", status: "active", pinned: false, has_unread: false, unread_count: 0,
@@ -21,7 +20,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   qc = new QueryClient();
   handlers = createChatHandlers({ qc } as Parameters<typeof createChatHandlers>[0]).handlers;
-  qc.setQueryData(chatKeys.pendingTask("chat-1"), { task_id: "task-1", status: "running", supports_queue: true, queued_tasks: [queued] });
+  qc.setQueryData(chatKeys.pendingTask("chat-1"), { task_id: "task-1", status: "running", supports_queue: true });
   qc.setQueryData(chatKeys.sessions("ws-1"), [session]);
   qc.setQueryData(chatKeys.sessionList("ws-1", "active"), [session]);
   qc.setQueryData(chatKeys.sessionList("ws-1", "archived"), []);
@@ -33,7 +32,7 @@ afterEach(() => qc.clear());
 describe("chat queue realtime", () => {
   it("refetches queued reason changes, including recovery events that omit the cleared reason", async () => {
     let pending: ChatPendingTask = {
-      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true, queued_tasks: [queued],
+      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true,
     };
     const observer = new QueryObserver(qc, {
       queryKey: chatKeys.pendingTask("chat-1"), queryFn: async () => pending,
@@ -42,7 +41,7 @@ describe("chat queue realtime", () => {
     try {
       await observer.refetch();
       expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.wait_reason).toBe(pending.wait_reason);
-      pending = { task_id: "task-1", status: "queued", supports_queue: true, queued_tasks: [queued] };
+      pending = { task_id: "task-1", status: "queued", supports_queue: true };
       handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
       await vi.waitFor(() => expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toEqual(pending));
     } finally {
@@ -52,13 +51,13 @@ describe("chat queue realtime", () => {
 
   it.each(["task:dispatch", "task:running"] as const)("clears a queued reason when %s starts execution", event => {
     qc.setQueryData(chatKeys.pendingTask("chat-1"), {
-      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true, queued_tasks: [queued],
+      task_id: "task-1", status: "queued", wait_reason: "Waiting for model support", supports_queue: true,
     });
     handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-2" });
     expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.wait_reason).toBe("Waiting for model support");
     handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-1" });
     expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({
-      task_id: "task-1", status: "running", wait_reason: null, queued_tasks: [queued],
+      task_id: "task-1", status: "running", wait_reason: null,
     });
   });
 
@@ -85,7 +84,7 @@ describe("chat queue realtime", () => {
   it("writes preparation progress only to the matching pending head", () => {
     handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "正在准备项目仓库…" });
     expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({
-      task_id: "task-1", status: "running", progress_summary: "正在准备项目仓库…", queued_tasks: [queued],
+      task_id: "task-1", status: "running", progress_summary: "正在准备项目仓库…",
     });
     for (const payload of [
       null,
@@ -102,27 +101,27 @@ describe("chat queue realtime", () => {
   it("does not replace a running head or reset its status when a follow-up is queued", () => {
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
-    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-1", status: "running", queued_tasks: [queued] });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-1", status: "running" });
     expect(qc.getQueryState(chatKeys.pendingTask("chat-1"))?.isInvalidated).toBe(true);
   });
 
   it("retains follow-ups until the authoritative next head arrives and ignores older completions", () => {
     applyChatDoneToCache(qc, { chat_session_id: "chat-1", task_id: "task-1" });
-    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toEqual({ supports_queue: true, queued_tasks: [queued] });
-    qc.setQueryData(chatKeys.pendingTask("chat-1"), { task_id: "task-2", status: "running", supports_queue: true, queued_tasks: [] });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toEqual({ supports_queue: true });
+    qc.setQueryData(chatKeys.pendingTask("chat-1"), { task_id: "task-2", status: "running", supports_queue: true });
     applyChatDoneToCache(qc, { chat_session_id: "chat-1", task_id: "task-1" });
     expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-2", status: "running" });
   });
 
   it("removes a cancelled follow-up without stopping the active head", () => {
     handlers["task:cancelled"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
-    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-1", status: "running", queued_tasks: [] });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-1", status: "running" });
   });
 
   it("preserves pending queue metadata when the final head fails", () => {
     handlers["task:failed"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
     handlers["task:failed"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
-    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))).toEqual({ supports_queue: true, queued_tasks: [] });
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))).toEqual({ supports_queue: true });
   });
 
   // MUL-472 (a): the front-end poll was cut from 3 s to 10 s (and stops while

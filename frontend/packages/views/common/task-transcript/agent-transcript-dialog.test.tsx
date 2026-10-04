@@ -8,17 +8,17 @@ import { renderWithI18n } from "../../test/i18n";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import type { TimelineItem } from "./build-timeline";
 
-const getTaskPrompt = vi.hoisted(() => vi.fn());
+const getTurnInput = vi.hoisted(() => vi.fn());
 vi.mock("@multiremi/core/api", () => ({
   api: {
-    getTaskPrompt,
+    getTurnInput,
     getAgent: vi.fn(),
     listRuntimes: vi.fn(),
   },
 }));
 
 beforeEach(() => {
-  getTaskPrompt.mockReset();
+  getTurnInput.mockReset();
 });
 
 const MISSING_COMMAND_LABEL = "Command not recorded (task from an older version)";
@@ -84,10 +84,10 @@ function renderTranscript(
 
 describe("transcript pending task state", () => {
   it("opens directly on Input Prompt when requested without an intermediate execution view", async () => {
-    getTaskPrompt.mockResolvedValue({ effective_prompt: "Assignment instructions", prompt: "Assignment instructions" });
+    getTurnInput.mockResolvedValue({ from_seq: 0, to_seq: 5, prompt: "Assignment instructions" });
     renderTranscript([], { initialView: "prompt" });
     expect(screen.getByRole("button", { name: "Input Prompt" })).toHaveAttribute("aria-pressed", "true");
-    expect(getTaskPrompt).toHaveBeenCalledWith("task-1");
+    expect(getTurnInput).toHaveBeenCalledWith("task-1");
   });
   it("shows the task execution model beside its usage, including the fallback cause", () => {
     renderTranscript([], { task: {
@@ -117,7 +117,7 @@ describe("transcript pending task state", () => {
 
 describe("task input prompt", () => {
   it("shows supplied assignment content only when the audited input is not recorded", async () => {
-    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    getTurnInput.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
     renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
     expect(screen.queryByText("Original assignment instructions")).toBeNull();
     expect(await screen.findByText("Original assignment instructions")).toBeInTheDocument();
@@ -125,41 +125,40 @@ describe("task input prompt", () => {
   });
 
   it("prefers the audited input over the assignment fallback on a successful read", async () => {
-    getTaskPrompt.mockResolvedValue({ task_id: task.id, mode: "delta", prompt: "Audited execution instructions", sha256: "b".repeat(64), assembled_at: "2026-08-17T12:00:00.000Z" });
+    getTurnInput.mockResolvedValue({ from_seq: 2, to_seq: 5, prompt: "Audited execution instructions", sha256: "b".repeat(64), assembled_at: "2026-08-17T12:00:00.000Z" });
     renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
     expect(await screen.findByText("Audited execution instructions")).toBeInTheDocument();
-    expect(screen.getByText("SHA-256: bbbbbbbbbbbb")).toBeInTheDocument();
+    expect(screen.getByText("(2, 5]")).toBeInTheDocument();
+    expect(screen.queryByText(/SHA-256:/)).toBeNull();
     expect(screen.queryByText("Original assignment instructions")).toBeNull();
   });
 
   it.each([Object.assign(new Error("unavailable"), { status: 503 }), new Error("Network failure")])("keeps load errors instead of replacing them with an assignment", async (error) => {
-    getTaskPrompt.mockRejectedValue(error);
+    getTurnInput.mockRejectedValue(error);
     renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
     expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
     expect(screen.queryByText("Original assignment instructions")).toBeNull();
   });
 
   it("loads the exact audited prompt on demand", async () => {
-    getTaskPrompt.mockResolvedValue({
-      task_id: task.id,
-      mode: "delta",
+    getTurnInput.mockResolvedValue({
+      from_seq: 2, to_seq: 5,
       prompt: "# Delta Prompt\n\n## Current Request\nFix the review note.",
       sha256: "a".repeat(64),
       assembled_at: "2026-08-17T12:00:00.000Z",
     });
     renderTranscript([]);
 
-    expect(getTaskPrompt).not.toHaveBeenCalled();
+    expect(getTurnInput).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
 
-    await waitFor(() => expect(getTaskPrompt).toHaveBeenCalledWith(task.id));
+    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith(task.id));
     expect(await screen.findByText(/# Delta Prompt/)).toBeInTheDocument();
-    expect(screen.getByText("delta")).toBeInTheDocument();
-    expect(screen.getByText("SHA-256: aaaaaaaaaaaa")).toBeInTheDocument();
+    expect(screen.getByText("(2, 5]")).toBeInTheDocument();
   });
 
   it("shows a clear legacy empty state when no prompt was recorded", async () => {
-    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    getTurnInput.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
     renderTranscript([]);
     fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
 
@@ -167,7 +166,7 @@ describe("task input prompt", () => {
   });
 
   it("does not mislabel a transient load failure as a legacy task", async () => {
-    getTaskPrompt.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 503 }));
+    getTurnInput.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 503 }));
     renderTranscript([]);
     fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
 

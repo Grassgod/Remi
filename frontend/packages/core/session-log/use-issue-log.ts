@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { StreamSubscription } from "../api/ws-client";
 import type { IssueLogBootstrap } from "../api/schemas/session-log";
 import { useWorkspaceId } from "../hooks";
@@ -20,6 +21,7 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
   const userId = useAuthStore(s => s.user?.id);
   const workspaceId = useWorkspaceId();
   const env = useReplicaEnv();
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!sessionId || !enabled) return;
@@ -37,11 +39,25 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
     const subscriptions = new Map<string, StreamSubscription>();
     let active = true;
     let disconnect: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshSurfaces = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        if (!active) return;
+        void qc.invalidateQueries({ queryKey: ["inbox", workspaceId] });
+        void qc.invalidateQueries({ queryKey: ["message-detail", workspaceId] });
+        void qc.invalidateQueries({ queryKey: ["chat-unread", workspaceId, sessionId] });
+        void qc.invalidateQueries({ queryKey: ["turns", workspaceId] });
+        void qc.invalidateQueries({ queryKey: ["issues", workspaceId, "decisions"] });
+        void qc.invalidateQueries({ queryKey: ["decision-replies", workspaceId] });
+      }, 100);
+    };
     void replica.connect({ userId, workspaceId, env,
       subscribe: (id, fromSeq) => {
         subscriptions.get(id)?.unsubscribe();
         const subscription = subscribeStream("log", id, {
-          onFrames: frames => { void replica.hydratedFrames(id, frames).catch(() => setError(true)); },
+          onFrames: frames => { void replica.hydratedFrames(id, frames).then(refreshSurfaces).catch(() => setError(true)); },
           onAck: ack => replica.ack(id, ack),
           onGap: () => { void replica.refreshVisible().catch(() => setError(true)); },
         }, { fromSeq });
@@ -50,7 +66,7 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
       unsubscribe: id => { subscriptions.get(id)?.unsubscribe(); subscriptions.delete(id); },
     }).then(cleanup => { if (active) disconnect = cleanup; else cleanup(); }).catch(() => { if (active) setError(true); });
     const offReconnect = onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
-    return () => { active = false; offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
-  }, [replica, sessionId, enabled, userId, workspaceId, subscribeStream, onReconnect, env]);
+    return () => { active = false; if (refreshTimer) clearTimeout(refreshTimer); offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
+  }, [replica, sessionId, enabled, userId, workspaceId, subscribeStream, onReconnect, env, qc]);
   return { replica, snapshot, error };
 }

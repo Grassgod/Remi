@@ -377,7 +377,7 @@ export function ChatWindow({
     try {
       const result = await api.sendChatMessage(sessionId, row.content, row.attachmentIds, row.clientId);
       if (!result.queued) qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-        task_id: result.task_id, status: "queued", created_at: result.created_at,
+        task_id: result.task_id, turn_id: result.turn_id, status: "queued", created_at: result.created_at,
         supports_queue: result.supports_queue,
       });
       refreshSession(sessionId);
@@ -435,7 +435,7 @@ export function ChatWindow({
     setStopping(true);
     setActionError(false);
     try {
-      await api.cancelTaskById(pendingTaskId);
+      await api.cancelTaskById(pendingTask?.turn_id ?? pendingTaskId);
     } catch (error) {
       setActionError(true);
       apiLogger.error("cancelTask.error", { taskId: pendingTaskId, error });
@@ -716,7 +716,7 @@ export function ChatWindow({
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      <HumanRequestDock taskId={pendingTaskId} enabled={chatVisible} />
+      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} enabled={chatVisible} />
 
       {noAgent ? (
         <NoAgentBanner />
@@ -729,10 +729,11 @@ export function ChatWindow({
 
       {/* Input — disabled for legacy archived sessions; locked out entirely
        *  when there's no agent (the EmptyState above carries the CTA). */}
-      {activeSessionId && (pendingTask?.queued_tasks?.length ?? 0) > 0 && (
+      {activeSessionId && currentSession?.agent_id && chatVisible && (
         <ChatQueue
+          key={`${wsId}:${activeSessionId}:${currentSession.agent_id}`}
           sessionId={activeSessionId}
-          tasks={pendingTask!.queued_tasks!}
+          agentId={currentSession.agent_id}
         />
       )}
       {actionError && (

@@ -5,10 +5,11 @@ import type { AgentTask } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
-const steerTask = vi.hoisted(() => vi.fn());
+const sendMessage = vi.hoisted(() => vi.fn());
+const controlTurn = vi.hoisted(() => vi.fn());
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 
-vi.mock("@multiremi/core/api", () => ({ api: { steerTask } }));
+vi.mock("@multiremi/core/api", () => ({ api: { sendMessage, controlTurn } }));
 vi.mock("sonner", () => ({ toast }));
 
 import { TaskSteerActions } from "./task-steer-actions";
@@ -18,20 +19,21 @@ const resources = { en: { common: enCommon, issues: enIssues } };
 function renderActions(status: AgentTask["status"] = "running") {
   return render(
     <I18nProvider locale="en" resources={resources}>
-      <TaskSteerActions task={{ id: "task-1", status }} showLabels />
+      <TaskSteerActions task={{ id: "attempt-1", turn_id: "turn-1", issue_session_id: "sess-1", agent_id: "agt-1", status }} showLabels />
     </I18nProvider>,
   );
 }
 
 beforeEach(() => {
-  steerTask.mockReset();
+  sendMessage.mockReset();
+  controlTurn.mockReset().mockResolvedValue({});
   toast.error.mockReset();
   toast.success.mockReset();
 });
 
 describe("TaskSteerActions", () => {
   it("submits a trimmed steer instruction", async () => {
-    steerTask.mockResolvedValue({ message: {} });
+    sendMessage.mockResolvedValue({ message: {} });
     renderActions();
 
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
@@ -41,13 +43,13 @@ describe("TaskSteerActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send instruction" }));
 
     await waitFor(() => {
-      expect(steerTask).toHaveBeenCalledWith("task-1", { content: "Switch to Chinese" });
+      expect(sendMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining({ body_md: "Switch to Chinese", to: { type: "agent", ref: "agt-1" }, dedupe_key: expect.any(String) }));
       expect(toast.success).toHaveBeenCalledWith("Instruction sent");
     });
   });
 
   it("submits force answer with an optional note", async () => {
-    steerTask.mockResolvedValue({ message: {} });
+    sendMessage.mockResolvedValue({ message: {} });
     renderActions();
 
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
@@ -57,16 +59,14 @@ describe("TaskSteerActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Request delivery" }));
 
     await waitFor(() => {
-      expect(steerTask).toHaveBeenCalledWith("task-1", {
-        force_answer: true,
-        content: "Lead with the conclusion",
-      });
+      expect(sendMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining({ body_md: "Lead with the conclusion" }));
+      expect(controlTurn).toHaveBeenCalledWith("turn-1", "wrap-up");
       expect(toast.success).toHaveBeenCalledWith("Delivery requested");
     });
   });
 
   it("shows the API error and keeps the dialog available for retry", async () => {
-    steerTask.mockRejectedValue(
+    sendMessage.mockRejectedValue(
       new Error("task is already completed: steer messages can only target a live task"),
     );
     renderActions();

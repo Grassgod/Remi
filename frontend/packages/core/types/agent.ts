@@ -75,6 +75,7 @@ export interface AgentRunCount {
 }
 
 export interface AgentTask {
+  turn_id?: string;
   id: string;
   /** Delegated instruction. Older backends may omit it from list responses. */
   prompt?: string;

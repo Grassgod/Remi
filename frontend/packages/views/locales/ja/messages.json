@@ -1,0 +1,71 @@
+{
+  "recipient": "宛先：{{name}}",
+  "no_recipient": "会話",
+  "roles": {
+    "leader": "リーダー",
+    "parent_owner": "親課題の担当者",
+    "delegator": "委任者",
+    "issue_owner": "課題の担当者",
+    "relay": "中継者"
+  },
+  "kinds": {
+    "request": "依頼",
+    "reply": "返信",
+    "report": "報告",
+    "decision": "判断",
+    "status": "状態",
+    "final": "結論"
+  },
+  "wakes": {
+    "now": "今すぐ起動",
+    "next_turn": "次のターン",
+    "inbox_only": "受信トレイのみ"
+  },
+  "read_to_here": "#{{seq}} まで既読",
+  "read_cursor": "#{{seq}} まで既読済み",
+  "load_failed": "メッセージを読み込めません",
+  "attempts": "試行一覧",
+  "retry": "ターンを再試行",
+  "retry_cold": "新しいセッションで再試行",
+  "retry_failed": "再試行できません",
+  "queue": "未読メッセージ",
+  "decision_reply": "返信",
+  "resolved": "解決済み",
+  "wake_reasons": {
+    "human_sender": "ユーザーによる依頼",
+    "platform_to_owner": "担当者宛てのプラットフォームメッセージ",
+    "agent_dispatch": "エージェントの割り当て",
+    "member_to_delegator": "委任者への返信",
+    "to_leader": "リーダー宛てのメッセージ",
+    "to_parent_owner": "親の担当者宛てのメッセージ",
+    "agent_pair_not_privileged": "このエージェント間のメッセージは次のターンを待ちます",
+    "pair_round_trip_limit": "エージェント間の往復回数上限",
+    "self": "自分宛てのメッセージでは起動しません",
+    "recipient_unavailable": "受信者を利用できません",
+    "no_recipient": "起動する受信者なし",
+    "requested_next_turn": "次のターンでの処理を要求",
+    "requested_inbox_only": "受信箱への配信のみを要求",
+    "migration": "取り込んだメッセージ",
+    "dependencies_unmet": "依存条件を待機中",
+    "source_side_session": "送信元の会話のみ",
+    "no_issue_target": "実行対象のイシューなし"
+  },
+  "statuses": {
+    "pending": "待機中",
+    "offered": "提示済み",
+    "accepted": "受理済み",
+    "running": "実行中",
+    "waiting_local_directory": "ローカルディレクトリ待ち",
+    "awaiting_human": "返信待ち",
+    "completed": "完了",
+    "failed": "失敗",
+    "cancelled": "キャンセル済み",
+    "lost": "接続喪失"
+  },
+  "current_attempt": "現在の試行",
+  "attempt_logs": "試行ログを表示",
+  "no_attempts": "試行なし",
+  "load_more": "さらに読み込む",
+  "retry_load": "再読み込み",
+  "consumed_draft": "メッセージは既読または削除済みです。コピーできるよう下書きを保持しています。"
+}

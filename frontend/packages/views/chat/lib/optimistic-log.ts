@@ -15,7 +15,8 @@ export interface OptimisticChatRow {
 
 export function clientIdOf(entry: SessionLogEntry): string | null {
   const metadata = (entry as SessionLogEntry & { metadata?: Record<string, unknown> }).metadata;
-  return typeof metadata?.client_id === "string" ? metadata.client_id : null;
+  const dedupe = (entry as SessionLogEntry & { dedupe_key?: unknown }).dedupe_key;
+  return typeof dedupe === "string" ? dedupe : typeof metadata?.client_id === "string" ? metadata.client_id : null;
 }
 
 /** Keep the local row's DOM identity when the authoritative entry arrives. */

@@ -12,7 +12,7 @@ function mergeTraceEvents(current: readonly TraceEvent[], incoming: readonly Tra
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
-export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false): TraceEvent[] {
+export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): TraceEvent[] {
   const qc = useQueryClient();
   const key = useMemo(() => ["task-trace", taskId] as const, [taskId]);
   const { data } = useQuery({
@@ -24,7 +24,7 @@ export function useTaskTrace(taskId: string | null | undefined, enabled = true, 
       let cursor = 0;
       let events: TraceEvent[] = [];
       for (;;) {
-        const page = await api.getTaskTrace(taskId, cursor);
+        const page = await api.getTaskTrace(taskId, cursor, 500, turnId);
         events = mergeTraceEvents(events, page.events);
         if (page.state !== "ok" || page.eof) {
           return mergeTraceEvents(qc.getQueryData<TraceEvent[]>(key) ?? [], events);

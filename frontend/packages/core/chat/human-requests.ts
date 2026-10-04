@@ -1,7 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { api } from "../api";
-import { parseWithFallback } from "../api/schema";
 import { chatKeys } from "./queries";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -35,6 +34,7 @@ export interface HumanRequestQuestion {
 export interface TaskHumanRequest {
   id: string;
   taskId: string;
+  sessionId?: string;
   kind: TaskHumanRequestKind;
   payload: {
     tool_call?: { title?: string } | null;
@@ -81,6 +81,7 @@ const questionContextSchema = z
 const humanRequestSchema = z.object({
   id: z.string(),
   taskId: z.string(),
+  sessionId: z.string().optional(),
   kind: z.enum(["permission", "question"]),
   payload: z
     .object({
@@ -98,7 +99,6 @@ const humanRequestSchema = z.object({
   respondedAt: z.string().nullable(),
 });
 
-const humanRequestListSchema = z.object({ requests: z.array(humanRequestSchema) });
 
 export function parseTaskHumanRequest(value: unknown): TaskHumanRequest | null {
   const parsed = humanRequestSchema.safeParse(value);
@@ -107,17 +107,27 @@ export function parseTaskHumanRequest(value: unknown): TaskHumanRequest | null {
 
 // ─── Queries ─────────────────────────────────────────────────────────────
 
-export function humanRequestsOptions(taskId: string) {
+export function humanRequestsOptions(taskId: string, sessionId?: string, turnId?: string) {
   return queryOptions({
-    queryKey: chatKeys.humanRequests(taskId),
+    queryKey: [...chatKeys.humanRequests(taskId), sessionId ?? ""],
     queryFn: async (): Promise<TaskHumanRequest[]> => {
-      const raw = await api.listTaskHumanRequests(taskId);
-      const parsed = parseWithFallback(raw, humanRequestListSchema, { requests: [] as TaskHumanRequest[] }, {
-        endpoint: `/api/tasks/${taskId}/human-requests`,
+      if (!sessionId) return [];
+      const messages = [];
+      let cursor: string | undefined;
+      do {
+        const page = await api.listMessages(sessionId, { message_kind: "decision", cursor });
+        messages.push(...page.messages); cursor = page.next_cursor ?? undefined;
+      } while (cursor);
+      return messages.filter(message => !turnId || message.task_id === turnId).flatMap(message => {
+        const record = message.metadata.human_request;
+        if (!record || typeof record !== "object") return [];
+        const request = parseTaskHumanRequest({ ...record, id: message.id, taskId, sessionId,
+          status: message.resolved_at ? "responded" : "pending", response: null, respondedBy: null,
+          createdAt: message.created_at, respondedAt: message.resolved_at });
+        return request ? [request] : [];
       });
-      return parsed.requests as TaskHumanRequest[];
     },
-    enabled: taskId.length > 0,
+    enabled: !!sessionId && !!taskId,
   });
 }
 
@@ -126,6 +136,7 @@ export function humanRequestsOptions(taskId: string) {
 export interface RespondHumanRequestInput {
   taskId: string;
   requestId: string;
+  sessionId?: string;
   /** `{ option_id }` for permission requests, `{ answers }` for questions. */
   response: Record<string, unknown>;
 }
@@ -133,8 +144,12 @@ export interface RespondHumanRequestInput {
 export function useRespondHumanRequest() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ taskId, requestId, response }: RespondHumanRequestInput) =>
-      api.respondTaskHumanRequest(taskId, requestId, response),
+    mutationFn: async ({ requestId, sessionId, response }: RespondHumanRequestInput) => {
+      if (!sessionId) throw new Error("Decision conversation is missing");
+      const text = typeof response.answers === "object" && response.answers
+        ? Object.values(response.answers).map(String).join("; ") : String(response.option_id ?? "");
+      return api.sendMessage(sessionId, { body_md: text, message_kind: "reply", reply_to_id: requestId, response });
+    },
     onSettled: (_data, _error, { taskId }) => {
       // First-write-wins on the server; refetch settles both the winner and
       // any client that lost the race (409 → refetch shows who resolved it).

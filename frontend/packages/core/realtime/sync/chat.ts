@@ -26,11 +26,9 @@ const chatWsLogger = createLogger("chat.ws");
 function settleChatPendingTask(qc: QueryClient, sessionId: string, taskId: string): void {
   qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), old => {
     if (!old) return old;
-    const queued = old.queued_tasks?.filter(task => task.task_id !== taskId);
-    if (old.task_id !== taskId) return queued ? { ...old, queued_tasks: queued } : old;
-    // Another device may have reprioritized the queue. Preserve its known
-    // contents, but let the authoritative refetch choose the next head.
-    return old.supports_queue ? { supports_queue: true, queued_tasks: queued ?? [] } : {};
+    if (old.task_id !== taskId) return old;
+    return { supports_queue: true };
+
   });
 }
 
@@ -63,6 +61,13 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
     void qc.invalidateQueries({ queryKey: issueKeys.decisionsAll(wsId) });
   };
   // Helpers reused by chat lifecycle handlers.
+  const invalidateUnified = () => {
+    const wsId = getCurrentWsId();
+    if (!wsId) return;
+    void qc.invalidateQueries({ queryKey: ["turns", wsId] });
+    void qc.invalidateQueries({ queryKey: ["chat-unread", wsId] });
+    void qc.invalidateQueries({ queryKey: ["inbox", wsId] });
+  };
   const invalidatePendingAggregate = () => {
     const id = getCurrentWsId();
     if (id) qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(id) });
@@ -85,11 +90,13 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
   return {
     handlers: {
       "chat:queue_updated": (p) => {
+        invalidateUnified();
         const payload = p as { chat_session_id: string };
         invalidateQueue(payload.chat_session_id);
       },
 
       "chat:done": (p) => {
+        invalidateUnified();
         const payload = p as ChatDonePayload;
         chatWsLogger.info("chat:done (global)", {
           task_id: payload.task_id,
@@ -114,6 +121,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // chat-window.tsx may have already populated the cache with a temporary
       // id; this handler upgrades it without replacing a running queue head.
       "task:queued": (p) => {
+        invalidateUnified();
         const payload = p as TaskQueuedPayload;
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
@@ -135,6 +143,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // frame. Stage decision in TaskStatusPill maps "running" + empty
       // taskMessages → "Thinking · Ns".
       "task:dispatch": (p) => {
+        invalidateUnified();
         const payload = p as TaskDispatchPayload;
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
@@ -152,6 +161,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // clear a stale `waiting_local_directory` pill — without it, the pill
       // would stay parked even after the daemon resumed work.
       "task:running": (p) => {
+        invalidateUnified();
         const payload = p as TaskRunningPayload;
         // A subtree human request resolving also changes its parent Issue's
         // pending_decision_count. The task event only identifies the source
@@ -189,6 +199,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // can render the "Waiting for local directory" stage instead of pinning
       // a stale "Starting / Thinking" frame.
       "task:waiting_local_directory": (p) => {
+        invalidateUnified();
         const payload = p as TaskWaitingLocalDirectoryPayload;
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
@@ -204,6 +215,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // or AskUserQuestion. Write the status for TaskStatusPill and refetch the
       // request list so HumanRequestDock renders the interactive card.
       "task:awaiting_human": (p) => {
+        invalidateUnified();
         const payload = p as TaskAwaitingHumanPayload;
         void qc.invalidateQueries({ queryKey: chatKeys.humanRequests(payload.task_id) });
         invalidateIssueDecisionSurfaces();
@@ -217,8 +229,9 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         );
       },
 
-      // Cancellation can target the head or a follow-up. Retain every other task.
+      // Cancellation settles only its matching turn. Unread messages refetch separately.
       "task:cancelled": (p) => {
+        invalidateUnified();
         const payload = p as TaskCancelledPayload;
         if (!payload.chat_session_id) return;
         chatWsLogger.info("task:cancelled (global, chat)", {
@@ -230,6 +243,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       },
 
       "task:completed": (p) => {
+        invalidateUnified();
         const payload = p as TaskCompletedPayload;
         if (!payload.chat_session_id) return; // issue tasks handled elsewhere
         chatWsLogger.info("task:completed (global, chat)", {
@@ -242,6 +256,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       },
 
       "task:failed": (p) => {
+        invalidateUnified();
         const payload = p as TaskFailedPayload;
         if (!payload.chat_session_id) return;
         chatWsLogger.warn("task:failed (global, chat)", {

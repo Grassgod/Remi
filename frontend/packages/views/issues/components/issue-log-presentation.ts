@@ -8,7 +8,7 @@ export function isSystemDetail(entry: SessionLogEntry): boolean {
   const metadata = metadataRecord(row.metadata);
   if (metadata.envelope) return true;
   if (metadata.type === "workspace_move_cleared") return false;
-  if (row.kind === "message" && (row.author_type === "member" || row.author_type === "agent")) return false;
+  if (row.kind === "message" && (!!row.message_kind || row.author_type === "member" || (row.sender_type ?? row.author_type) === "agent")) return false;
   return row.kind !== "turn" || isInboxTurn(row.body_md);
 }
 
@@ -24,9 +24,9 @@ export function firstTaskResponses(entries: readonly SessionLogRow[]): Map<strin
     if (!row.task_id) continue;
     if (row.kind === "turn" && !isSystemDetail(row) && counts.get(row.task_id) === 1) {
       turns.set(row.task_id, row);
-    } else if (row.kind === "message" && row.author_type === "agent" && !row.metadata.envelope) {
+    } else if (row.kind === "message" && (row.sender_type ?? row.author_type) === "agent" && !row.metadata.envelope) {
       const turn = turns.get(row.task_id);
-      if (turn && row.author_id === turn.metadata.assignee_agent_id && !seen.has(row.task_id)) {
+      if (turn && (row.sender_id ?? row.author_id) === turn.metadata.assignee_agent_id && !seen.has(row.task_id)) {
         responses.set(row.id, turn);
         seen.add(row.task_id);
       }
@@ -39,6 +39,7 @@ export function assignmentAuthor(row: SessionLogRow): { type: string; id: string
   if (typeof row.metadata.delegated_by_agent_id === "string" && row.metadata.delegated_by_agent_id) {
     return { type: "agent", id: row.metadata.delegated_by_agent_id };
   }
-  return (row.author_type === "member" || row.author_type === "agent") && row.author_id
-    ? { type: row.author_type, id: row.author_id } : null;
+  const type = row.sender_type ?? row.author_type;
+  const id = row.sender_id ?? row.author_id;
+  return (type === "member" || type === "agent") && id ? { type, id } : null;
 }
