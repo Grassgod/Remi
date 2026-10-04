@@ -5,7 +5,8 @@ export function readSessionLogRange(store: MultiremiStore, sessionId: string,
   const start = cursor ? JSON.parse(cursor) as { seq: number; offset: number } : { seq: from + 1, offset: 0 };
   if (!Number.isSafeInteger(start.seq) || start.seq < from + 1 || start.seq > to + 1
     || !Number.isSafeInteger(start.offset) || start.offset < 0) throw new Error("Invalid range cursor");
-  const rows = store.listConversationLogRangePage(sessionId, start.seq - 1, to, 100);
+  const readTo = Math.min(to, store.getConversationLogHead(sessionId)?.headSeq ?? 0);
+  const rows = store.listConversationLogRangePage(sessionId, start.seq - 1, readTo, 100);
   const entries: Array<Record<string, unknown>> = [];
   let remaining = 32_000;
   let next = { seq: start.seq, offset: start.offset };
@@ -28,8 +29,9 @@ export function readSessionLogRange(store: MultiremiStore, sessionId: string,
     next = end < entry.body_md.length ? { seq: entry.seq, offset: end } : { seq: entry.seq + 1, offset: 0 };
     if (next.offset > 0 || remaining < 2) break;
   }
-  const complete = rows.length === 0 || next.seq > to
-    || next.offset === 0 && rows.length < 100 && next.seq > (rows.at(-1)?.seq ?? to);
+  const complete = rows.length === 0 || next.seq > readTo
+    || next.offset === 0 && rows.length < 100 && next.seq > (rows.at(-1)?.seq ?? readTo);
+  const end = complete ? { seq: readTo + 1, offset: 0 } : next;
   return { session_id: sessionId, from_seq: from, to_seq: to, entries,
-    next_cursor: complete ? null : JSON.stringify(next) };
+    read_start: start, read_end: end, next_cursor: complete ? null : JSON.stringify(next) };
 }

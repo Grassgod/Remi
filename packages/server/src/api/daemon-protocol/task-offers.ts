@@ -46,7 +46,8 @@ interface RuntimePump {
   cooldownReason: string | null;
   cooldownTimer: DaemonProtocolTimer | null;
   preparing: string | null;
-  pending: { taskId: string; session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
+  pending: { taskId: string; agentId: string; inlineRead: { sessionId: string; seqs: number[]; toSeq: number } | null;
+    session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
   accepted: Set<string>;
   sweep: boolean;
 }
@@ -224,14 +225,23 @@ export class DaemonTaskOffers {
       if (this.session(runtimeId) !== session) { this.rescind(runtimeId, pump, task.id); return; }
       const budgeted = fitTaskOfferToBudget(payload, runtimeId, undefined, session.supportsWikiFetch);
       console.info(JSON.stringify({ event: "daemon_offer_budget", task_id: task.id, runtime_id: runtimeId, ...budgeted.report }));
+      let report = budgeted.report;
+      const failSize = () => {
+        const parts = Object.entries(report.parts).sort((a, b) => b[1] - a[1]);
+        const error = `offer_too_large: bytes=${report.bytes}; parts=${parts.map(([key, size]) => `${key}:${size}`).join(",")}`;
+        store.failTask(task.id, { error, failureReason: "offer_too_large" });
+        pump.dirty = true;
+      };
       let sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: payload }, { pausable: true });
       if (!sent.ok && sent.reason === "too_large") {
         const compact = fitTaskOfferToBudget(payload, runtimeId, 16 * 1024, session.supportsWikiFetch);
+        report = compact.report;
         console.warn(JSON.stringify({ event: "daemon_offer_transport_capacity", task_id: task.id, ...compact.report }));
         sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: compact.response }, { pausable: true });
       }
       if (!sent.ok) {
-        if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
+        if (sent.reason === "too_large") failSize();
+        else if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
         else {
           pump.waiting = true;
           store.requeueTaskOffer(task.id, runtimeId);
@@ -245,7 +255,12 @@ export class DaemonTaskOffers {
       }
       const timer = this.clock.setTimeout(() => this.rescind(runtimeId, pump, task.id), DAEMON_OFFER_TIMEOUT_MS);
       (timer as ReturnType<typeof setTimeout>).unref?.();
-      pump.pending = { taskId: task.id, session, seq: sent.seq, timer };
+      const projection = payload.session_projection as { session_id?: string; to_seq: number; jsonl?: string } | undefined;
+      const inlineRead = projection?.session_id && projection.jsonl ? { sessionId: projection.session_id, toSeq: projection.to_seq,
+        seqs: projection.jsonl.split("\n").filter(Boolean).map(line => JSON.parse(line))
+          .filter(entry => entry.type === "triggering_message" && !entry.body_folded && !entry.body_omitted_chars)
+          .map(entry => Number(entry.seq)) } : null;
+      pump.pending = { taskId: task.id, agentId: task.agentId, inlineRead, session, seq: sent.seq, timer };
     } catch (error) {
       const current = store.getTaskIdentity(task.id);
       if (current?.status === "dispatched" && current.runtimeId === runtimeId) this.rescind(runtimeId, pump, task.id);
@@ -267,6 +282,11 @@ export class DaemonTaskOffers {
       pump.pending = null;
       if (this.options.store.acceptTaskOffer(pending.taskId, runtimeId, new Date(this.clock.now()).toISOString())) {
         pump.accepted.add(pending.taskId);
+        if (pending.inlineRead) {
+          try { this.options.store.recordSessionAgentInlineRead(pending.inlineRead.sessionId, pending.agentId,
+            pending.inlineRead.seqs, pending.inlineRead.toSeq); }
+          catch { console.warn(JSON.stringify({ event: "session_log_read_progress_failed", task_id: pending.taskId })); }
+        }
       }
       this.kick(runtimeId);
       return;

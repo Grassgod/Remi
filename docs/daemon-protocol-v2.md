@@ -53,7 +53,13 @@ compaction 与 steer 切分消息段，连续文本 chunk 合并；同段存在 
 服务端按最多 100 条、32,000 正文字符分页，超长条目按字符偏移分片，不切开代理对；
 CLI 自动读取全部页并拼回完整正文。使用任务 token 的成功读取写结构化日志
 `session_log_range_read`；单条读取写 `session_log_entry_expanded`。
-记录 task/agent/session、范围或 seq、读取完成状态，不记录凭证或正文，不拦截任务。
+记录 task/agent/session、范围或 seq、实际返回的 seq 区间、分页起止偏移、下一页游标及
+已读高水位，不记录凭证或正文，不拦截任务。`complete` 仅表示本页已到范围结尾，
+不表示前面的所有页都已读取。只有连续读取才推进实际高水位；乱序或跳过分页不会越过未读缺口。
+Issue/Chat 会话在 `multiremi_conversation_heads.agent_read_state` 可空 JSON 字段按 agent
+保存完整条目的高水位和下一条的已读字符偏移。完成任务只推进 provider 续跑检查点；
+下一轮未读范围从实际高水位开始。已接受 offer 中完整内联、紧邻高水位的触发消息也可推进，
+折叠消息和未接受的 offer 不推进。升级时空状态从 0 开始；旧镜像忽略此可空列，回滚无需删列。
 
 daemon 在 `hello.caps` 声明 `wiki.fetch` 时，服务端只查询 Wiki 元数据，不读取正文、不计算
 正文 hash。offer 携带 version，`content_sha256` 可选。新 daemon 用任务 token 调用既有 Project/Repository Wiki GET 接口，
@@ -71,8 +77,12 @@ Repository Wiki 被裁减的页保留不可用标记，旧 daemon 对未裁减�
 日志 `daemon_offer_budget` 记录各字段字节及降级阶段。移除可选上下文后仍超预算时，从最大的
 剩余文本字段开始截短，保留开头、未读字数和相应读取命令；agent instructions 指向
 `remi agent get <id>`，没有触发消息的长 prompt 指向 `remi task get <id>`。
-JSONL 按条目内文本截短，保留有效 JSON；凭证、标识和路由字段保持完整。
-size 不会触发失败、反复排队或 runtime 冷却，也不改变 Issue 为 blocked。
+JSONL 按条目内文本截短，保留有效 JSON。`project_resources` 的执行绑定、Runtime workspace、
+目录、分支、冻结插件与模型连接配置和续跑身份不能作为可选上下文删除。普通路由字符串保持原样；最后一层可截短
+超过 8,000 字符的异常 URL/path，保留凭证和 task/agent/Issue 等身份字段。
+只有文本截短后结构本身仍超过编码器 1 MiB 硬限时，才一次性置任务失败，
+`failure_reason=offer_too_large`，报告各部分字节并向派活人发短门铃。
+此异常不将 Issue 置 blocked，runtime 立即继续下一项任务，不反复排队、不等待容量或冷却。
 具体决策见 [ADR 0013](adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)。
 
 ## 1. 连接与帧
@@ -935,7 +945,7 @@ v2 显式设置：
 |---|---|---|
 | `window_full` | 未确认帧数或字节数已到窗口上限 | 等 ack 腾出空间，从 DB 重新推导后重推 |
 | `paused` | socket 处于背压暂停 | 等 drain 后重推 |
-| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | `task.offer` 先降级；仍超限则撤回派发、记录尺寸并按 cooldown 保持排队，不置失败或 blocked。其他实体丢弃并记录诊断；不等 ack |
+| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | `task.offer` 先降级并截短异常长路由字符串；结构仍超硬限才以 `offer_too_large` 一次性失败并报告尺寸。不置 Issue blocked、不等待容量、不冷却，继续后续任务。其他实体丢弃并记录诊断；不等 ack |
 | `closed` | 连接已关闭或 socket 丢弃了帧 | 放弃这条连接，等重连后重建 |
 
 `too_large` 是服务端内部类型（`DaemonSessionSendRefusal`），不是协议契约的一部分。ack 腾出空间后

@@ -4,8 +4,10 @@
 
 Accepted for MUL-498. The latest user decision replaces inbox directories and
 inline unread history with triggering messages and one complete unread-range
-read. It also supersedes the earlier `offer_too_large` failure fallback: payload
-size must not fail a task or block its Issue. No schema migration is required.
+read. Text is truncated before dispatch. The latest review permits one exception:
+an irreducible structure still exceeding the protocol hard limit fails once with
+`offer_too_large`, reports byte sizes, and never blocks its Issue or runtime queue.
+One nullable column stores actual read progress separately from provider checkpoints.
 
 ## Context
 
@@ -39,6 +41,15 @@ existing daemon versions as well as the updated worker.
 - The existing session-log get command and endpoint accept a range. The CLI reads
   all pages and rejoins long entries. Task-token reads emit structured diagnostics
   without contents or credentials; reading is encouraged, never enforced.
+  Each agent's full-entry high-water and partial-entry offset are persisted in
+  the session head's nullable `agent_read_state` JSON column, shared by Issue and
+  Chat sessions. Existing participants/lanes have no suitable JSON field; the
+  head's existing counter serializes updates without changing provider identity.
+  Completion advances only the provider checkpoint. Actual high-water advances
+  on contiguous range pages or accepted, fully inline contiguous triggers.
+  Folded triggers, rejected offers and out-of-order reads do not acknowledge gaps.
+  Read logs include actual returned seqs, start/end offsets and persisted progress;
+  `complete` means the final page, not proof that all preceding pages were read.
 - The `wiki.fetch` hello capability separates Wiki downloads from task offers.
   Its server path lists metadata without reading SQL or OpenViking bodies or
   calculating body hashes. Version is required; a body SHA is optional.
@@ -53,10 +64,14 @@ existing daemon versions as well as the updated worker.
   soft budget. Knowledge bodies go first, followed by trigger allowances, long
   descriptions and large optional context. If necessary, remaining text fields
   are truncated largest first with omitted-character counts and source read
-  commands. JSONL remains parseable, and credentials and routing identities
-  remain intact. Per-field byte diagnostics remain available. Oversized
-  instructions dispatch after truncation, without failure, requeue or runtime
-  cooldown, so subsequent tasks can run.
+  commands. JSONL remains parseable. Credentials, task/agent/Issue identifiers,
+  Project resource execution bindings, Runtime workspace, frozen plugins/model
+  connection profiles and provider resume identity remain intact for normal payloads. A final string pass may truncate
+  pathological URLs/paths exceeding 8,000 characters. If structure alone still
+  exceeds the encoder's 1 MiB hard limit, fail once with `offer_too_large` and
+  per-part byte diagnostics. The failure reaches the delegator's bounded bell,
+  leaves Issue status unchanged and continues the runtime queue. Neither size
+  path waits for transport capacity, repeatedly requeues or enters cooldown.
 
 No public route, command path or existing wire field is renamed. Additive range
 flags, a hello capability and metadata use existing compatibility patterns.
@@ -72,9 +87,9 @@ flags, a hello capability and metadata use existing compatibility patterns.
   offer already fails before delivery.
 - Put Wiki bodies in a second WebSocket frame or add a download API: unnecessary
   protocol/API surface; authenticated Wiki read endpoints already exist.
-- Fail or repeatedly queue oversized offers: rejected by the latest user
-  instruction. Truncate remaining text before sending rather than indefinitely
-  starving that runtime's queue.
+- Fail text-heavy offers or repeatedly queue oversized offers: truncate text
+  first; only irreducible structural overflow is allowed to fail. Requeueing
+  the same unshrinkable payload can indefinitely starve that runtime's queue.
 
 ## Consequences and Rollback
 
@@ -90,7 +105,10 @@ Local verification covers deterministic result boundaries, terminal comment
 references, offers, range pagination/permissions and Wiki caching/failure.
 PPE testing with current and isolated 0.2.85 daemons and final-head CI remain
 separate acceptance gates. Revert the implementation commits to roll back;
-there are no database migrations or data rewrites to undo.
+the nullable `agent_read_state` column may remain, as older images ignore it.
+Provider checkpoint columns are unchanged. Null state conservatively starts at
+0 rather than treating legacy provider progress as proof of reading; upgrading
+may reread older context. No existing data is rewritten.
 
 ## Implementation
 

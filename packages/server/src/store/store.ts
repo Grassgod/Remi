@@ -4586,6 +4586,18 @@ runMigrations(this.db);
     return this.conversationLog.getHead(sessionId, query);
   }
 
+  getSessionAgentReadProgress(sessionId: string, agentId: string) {
+    return this.conversationLog.getSessionAgentReadProgress(sessionId, agentId);
+  }
+
+  recordSessionAgentRangeRead(...args: Parameters<ConversationLogRepo["recordSessionAgentRangeRead"]>) {
+    return this.conversationLog.recordSessionAgentRangeRead(...args);
+  }
+
+  recordSessionAgentInlineRead(...args: Parameters<ConversationLogRepo["recordSessionAgentInlineRead"]>) {
+    return this.conversationLog.recordSessionAgentInlineRead(...args);
+  }
+
   /** A window of shown entries; hidden markers never appear. */
   conversationLogWindow(sessionId: string, input: ConversationLogWindowInput = {}): ConversationLogWindow {
     return this.conversationLog.window(sessionId, input);

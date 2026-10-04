@@ -6681,6 +6681,7 @@ ${placementAfter.sql}
     retryCreated: boolean,
   ): string | null {
     if (!task.issueId) return null;
+    if (status === "failed" && task.failureReason === "offer_too_large") return null;
 
     // An infrastructure retry is still the same active attempt chain. Ordinary
     // queued siblings have not started yet and keep the historical todo state.

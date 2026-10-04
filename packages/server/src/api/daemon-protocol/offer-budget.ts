@@ -1,4 +1,4 @@
-import { DAEMON_OFFER_BUDGET_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_FRAME_MAX_BYTES, DAEMON_OFFER_BUDGET_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { expandHint, TRIGGER_MESSAGE_INLINE_CHARS } from "@multiremi/contracts/session-input.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
@@ -11,13 +11,14 @@ function prefix(body: string, limit: number): string {
   return body.slice(0, limit);
 }
 
-/** Last resort for large instructions/metadata. Identity, credentials and executable paths stay intact. */
-function truncateOfferStrings(response: Payload, runtimeId: string, budget: number): void {
+/** Normal routing values stay intact; the emergency pass also folds pathological URLs/paths. */
+function truncateOfferStrings(response: Payload, runtimeId: string, budget: number, emergency = false): void {
   const protectedKey = /^(?:id|.*[Ii]d|.*_id|auth_token|.*[Tt]oken|.*_token|.*[Pp]ath|.*_path|.*[Uu]rl|.*_url|provider|model|status|type|kind|expand|expand_hint|command|version|created_at|updated_at)$/;
+  const identityKey = /^(?:id|.*[Ii]d|.*_id|.*[Tt]oken|.*_token|execution_scope|executionScope|execution_fingerprint|executionFingerprint)$/;
   const candidates: { owner: Payload; key: string; body: string; command: string }[] = [];
   const projections: { owner: Payload; key: string; entries: Payload[] }[] = [];
   const taskCommand = `remi task get ${response.id}`;
-  const visit = (value: any, command: string) => {
+  const visit = (value: any, command: string, executionBinding = false) => {
     if (!value || typeof value !== "object") return;
     for (const [key, child] of Object.entries(value)) {
       if (typeof child === "string" && (key === "jsonl" || key === "content_jsonl")) {
@@ -26,12 +27,16 @@ function truncateOfferStrings(response: Payload, runtimeId: string, budget: numb
         for (const entry of entries) {
           if (entry.type === "triggering_message") visit(entry, entry.expand ?? `remi session log get ${value.session_id} ${entry.seq}`);
         }
-      } else if (typeof child === "string" && !protectedKey.test(key)) {
+      } else if (typeof child === "string" && (!protectedKey.test(key) && !identityKey.test(key) && !executionBinding
+        && !["work_dir", "workDir", "prior_work_dir", "priorWorkDir", "branch_name", "branchName", "branch", "executable"].includes(key)
+        || emergency && !identityKey.test(key) && child.length > TRIGGER_MESSAGE_INLINE_CHARS
+          && (!executionBinding || /(?:url|path|dir)$/i.test(key)))) {
         candidates.push({ owner: value, key, body: child, command });
       } else if (child && typeof child === "object") {
         const source = ["agent", "issue", "project"].includes(key) && (child as Payload).id
           ? `remi ${key} get ${(child as Payload).id}` : command;
-        visit(child, source);
+        visit(child, source, executionBinding || ["resource_ref", "resourceRef", "runtime_workspace", "codex_profile", "claude_profile",
+          "plugin_snapshot", "workspace_env", "custom_env", "custom_args", "mcp_config", "allowed_tools"].includes(key));
       }
     }
   };
@@ -39,6 +44,7 @@ function truncateOfferStrings(response: Payload, runtimeId: string, budget: numb
   const sync = () => { for (const projection of projections) projection.owner[projection.key] = projection.entries.map(entry => JSON.stringify(entry)).join("\n"); };
   candidates.sort((a, b) => Buffer.byteLength(JSON.stringify(b.body)) - Buffer.byteLength(JSON.stringify(a.body)));
   for (const { owner, key, body, command } of candidates) {
+    if (Buffer.byteLength(JSON.stringify(`\n${expandHint(body.length, command)}`)) >= Buffer.byteLength(JSON.stringify(body))) continue;
     sync();
     const excess = taskOfferBytes(response, runtimeId) - budget;
     if (excess <= 0) return;
@@ -64,14 +70,6 @@ function truncateOfferStrings(response: Payload, runtimeId: string, budget: numb
     } else owner[key] = folded(low);
   }
   sync();
-  // If collection overhead alone dominates, remove additional context rather than queueing the task.
-  const essential = new Set(["id", "agent", "runtime_id", "workspace_id", "auth_token", "prompt", "issue_id", "issue_session_id",
-    "chat_session_id", "session_projection", "session_id", "work_dir", "repos", "execution_scope", "holds_workspace", "knowledge_warnings"]);
-  for (const key of Object.keys(response).filter(key => !essential.has(key))
-    .sort((a, b) => Buffer.byteLength(JSON.stringify(response[b])) - Buffer.byteLength(JSON.stringify(response[a])))) {
-    if (taskOfferBytes(response, runtimeId) <= budget) break;
-    delete response[key];
-  }
 }
 
 export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Payload): void {
@@ -90,7 +88,8 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
     if (!triggers.size && entry.kind === "turn" && entry.task_id === task.id) triggers.add(entry.seq);
   }
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
-    fromSeq: projection.from_seq, toSeq: projection.to_seq, entries, triggerSeqs: triggers });
+    fromSeq: Math.min(store.getSessionAgentReadProgress(projection.session_id, task.agentId).seq, projection.to_seq),
+    toSeq: projection.to_seq, entries, triggerSeqs: triggers });
   if (triggers.size) response.prompt = "Respond to the triggering messages in Current Session Context. 动手前先读完未读的部分，了解上下文。";
   if (triggers.size) delete response.chat_message;
   delete response.trigger_comment_content;
@@ -98,15 +97,15 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   const inherited = response.inherited_session_projection;
   if (inherited?.session_id) {
     inherited.jsonl = taskSessionInput({ sessionId: inherited.session_id, agentId: task.agentId,
-      fromSeq: inherited.from_seq, toSeq: inherited.to_seq,
-      entries: store.listConversationLogEntries(inherited.session_id, { sinceSeq: inherited.from_seq, toSeq: inherited.to_seq }),
+      fromSeq: Math.min(store.getSessionAgentReadProgress(inherited.session_id, task.agentId).seq, inherited.to_seq), toSeq: inherited.to_seq,
+      entries: store.listConversationLogEntries(inherited.session_id, { toSeq: inherited.to_seq }),
       triggerSeqs: new Set() });
   }
   const bound = response.bound_issue_log;
   if (bound?.session_id) {
     bound.content_jsonl = taskSessionInput({ sessionId: bound.session_id, agentId: task.agentId,
-      fromSeq: bound.from_seq, toSeq: bound.to_seq,
-      entries: store.listConversationLogEntries(bound.session_id, { sinceSeq: bound.from_seq, toSeq: bound.to_seq }),
+      fromSeq: Math.min(store.getSessionAgentReadProgress(bound.session_id, task.agentId).seq, bound.to_seq), toSeq: bound.to_seq,
+      entries: store.listConversationLogEntries(bound.session_id, { toSeq: bound.to_seq }),
       triggerSeqs: new Set() });
   }
 }
@@ -182,7 +181,7 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
   if (taskOfferBytes(response, runtimeId) > budget) {
     warnings.push("Large optional execution context omitted; retrieve relevant context using remi CLI.");
     if (response.agent) response.agent.skills = [];
-    for (const key of ["plugin_snapshot", "skills", "project_contexts", "repository_wiki_contexts", "project_resources"]) {
+    for (const key of ["skills", "project_contexts", "repository_wiki_contexts"]) {
       delete response[key];
     }
     steps.push("optional_context");
@@ -191,7 +190,11 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
     truncateOfferStrings(response, runtimeId, budget - 1_024);
     steps.push("strings");
   }
-  const parts = Object.fromEntries(Object.entries(response).filter(([key]) => key !== "auth_token")
+  if (taskOfferBytes(response, runtimeId) > DAEMON_FRAME_MAX_BYTES) {
+    truncateOfferStrings(response, runtimeId, budget - 1_024, true);
+    steps.push("protected_strings");
+  }
+  const parts = Object.fromEntries(Object.entries(response)
     .map(([key, value]) => [key, Buffer.byteLength(JSON.stringify(value) ?? "null")]));
   const bytes = taskOfferBytes(response, runtimeId);
   return { response, report: { bytes, parts, steps } };

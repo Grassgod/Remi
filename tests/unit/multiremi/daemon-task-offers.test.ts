@@ -48,6 +48,46 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
 }
 
 describe("A-3 task offers", () => {
+  it("dispatches irreducible structure that exceeds the soft budget but fits the actual protocol hard limit", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, repos: new Array(300_000).fill(0) }));
+    const task = h.task(); await h.hello();
+    expect(h.offered()[0]!.p.id).toBe(task.id);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeGreaterThan(512 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(1_048_576);
+    expect(h.store.getTask(task.id)).toMatchObject({ status: "dispatched", failureReason: null });
+  });
+
+  it("folds a pathological repository URL and releases the runtime for its next task", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, auth_token: "fixture-capability",
+      agent: { id: task.agentId }, repos: [{ url: task.prompt === "huge" ? "x".repeat(1_100_000) : "https://github.com/example/repo.git" }] }));
+    const huge = h.task(0, "huge"); const next = h.task();
+    await h.hello();
+    expect(h.offered()[0]!.p.id).toBe(huge.id);
+    expect(h.offered()[0]!.p.repos[0].url).toContain("还有");
+    expect(h.offered()[0]!.p.auth_token).toBe("fixture-capability");
+    expect(h.offered()[0]!.p.agent.id).toBe(huge.agentId);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(1_048_576);
+    await h.accept(); h.store.startTask(huge.id); h.store.completeTask(huge.id, { output: "done" });
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered().map(frame => frame.p.id)).toEqual([huge.id, next.id]);
+  });
+
+  it("fails only irreducible structure with size diagnostics and continues the same runtime queue", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt,
+      repos: task.prompt === "structure" ? new Array(600_000).fill(0) : [] }));
+    const issue = h.store.createIssue({ title: "Structural capacity", status: "in_progress" });
+    const huge = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "structure", maxAttempts: 3 });
+    const next = h.task(); await h.hello();
+    expect(h.store.getTask(huge.id)).toMatchObject({ status: "failed", failureReason: "offer_too_large" });
+    expect(h.store.getTask(huge.id)!.error).toContain("parts=repos:");
+    expect(h.store.getIssue(issue.id)!.status).not.toBe("blocked");
+    expect(h.offered().map(frame => frame.p.id)).toEqual([next.id]);
+    await h.accept();
+    h.clock.advance(120_000); h.offers.kick(); await h.layer.drain();
+    expect(h.offered().map(frame => frame.p.id)).toEqual([next.id]);
+    expect(h.store.listTasks().filter(task => task.issueId === issue.id)).toHaveLength(1);
+  });
+
   it("degrades an oversized offer and dispatches without failing or blocking the Issue", async () => {
     const h = fixture(async task => ({ id: task.id, prompt: "触发".repeat(200_000),
       issue: { id: task.issueId, description: "description".repeat(100_000) },

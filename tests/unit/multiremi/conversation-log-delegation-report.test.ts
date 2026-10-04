@@ -88,6 +88,24 @@ function reportEnvelope(store: MultiremiStore, sessionId: string, sourceTaskId: 
   return entries[0]!;
 }
 
+it("structural offer failures ring the delegator with byte diagnostics without blocking the child Issue", async () => {
+  await withStore("sqlite", async store => {
+    const f = fixture(store);
+    const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+    expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+    store.startTask(f.leaderTask.id); store.completeTask(f.leaderTask.id, { output: "Dispatched." });
+    expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+    store.failTask(childTask.id, { failureReason: "offer_too_large", error: "offer_too_large: bytes=1201234; parts=repos:1200001,agent:25" });
+    const envelope = reportEnvelope(store, f.leaderSession.id, childTask.id);
+    expect(envelope.body_md).toContain("Status: failed");
+    expect(envelope.body_md).toContain("offer_too_large");
+    expect(envelope.body_md).toContain("repos:1200001");
+    expect(envelope.body_md).toContain(`remi task get ${childTask.id}`);
+    expect(Buffer.byteLength(envelope.body_md)).toBeLessThan(2048);
+    expect(store.getIssue(f.child.id)!.status).not.toBe("blocked");
+  });
+});
+
 /** Every session-event seq has a log row at the same seq, and nothing else is in the log. */
 function expectNoSeqHole(store: MultiremiStore, sessionId: string): void {
   const eventSeqs = store.listSessionEvents(sessionId).map((event) => event.seq);

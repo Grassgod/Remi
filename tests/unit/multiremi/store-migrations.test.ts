@@ -45,6 +45,23 @@ afterEach(() => {
 });
 
 describe("store migrations", () => {
+  it("adds nullable unread state without acknowledging legacy provider checkpoints and preserves it on restart", () => {
+    const database = freshDb(); migrate(database);
+    database.exec(`ALTER TABLE multiremi_conversation_heads DROP COLUMN agent_read_state;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20261004_session_agent_read_progress';`);
+    database.run("INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at) VALUES (?, 7, 3, ?)",
+      ["legacy-session", "2026-10-04T00:00:00Z"]);
+    migrate(database);
+    expect(database.query("SELECT head_seq, log_version, agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get("legacy-session"))
+      .toEqual({ head_seq: 7, log_version: 3, agent_read_state: null });
+    const progress = JSON.stringify({ agent: { seq: 2, offset: 32_000 } });
+    database.run("UPDATE multiremi_conversation_heads SET agent_read_state = ? WHERE session_id = ?", [progress, "legacy-session"]);
+    migrate(database); migrate(database);
+    expect(database.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get("legacy-session"))
+      .toEqual({ agent_read_state: progress });
+    expect(database.query("PRAGMA table_info(multiremi_conversation_heads)").all()).toContainEqual(expect.objectContaining({ name: "agent_read_state", notnull: 0 }));
+  });
+
   it("upgrades gateway context declarations with no presets and preserves them across restarts", () => {
     const database = freshDb();
     migrate(database);

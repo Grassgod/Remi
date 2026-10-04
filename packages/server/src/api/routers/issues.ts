@@ -1700,9 +1700,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const token = currentTaskAccessToken(c);
       try {
         const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
+        let progress;
+        if (token?.taskId && token.agentId) {
+          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+          catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
+        }
         if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
           task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, from_seq: from, to_seq: to,
-          complete: page.next_cursor === null, entries: page.entries.length });
+          complete: page.next_cursor === null, entries: page.entries.length,
+          returned_from_seq: page.entries[0]?.seq ?? null, returned_to_seq: page.entries.at(-1)?.seq ?? null,
+          read_start: page.read_start, read_end: page.read_end, next_cursor: page.next_cursor,
+          read_high_water: progress?.seq ?? null, read_offset: progress?.offset ?? null });
         return c.json(page);
       } catch (error) {
         if (error instanceof SyntaxError || error instanceof Error && error.message.startsWith("Invalid range cursor")) {
