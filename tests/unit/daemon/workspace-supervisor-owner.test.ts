@@ -25,6 +25,16 @@ describe("workspace supervisor process ownership", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("stores default supervisor leases under the shared test run root", () => {
+    const { root } = fixture("shared-test-locks");
+    const lease = acquireWorkspaceSupervisorLease(root);
+    try {
+      expect(lease.lockPath.startsWith(join(process.env.MULTIREMI_TEST_RUN_ROOT!, "shared-locks", "workspace-supervisors")))
+        .toBe(true);
+      expect(lease.lockPath.startsWith(process.env.MULTIREMI_STATE_DIR!)).toBe(false);
+    } finally { lease.release(); }
+  });
+
   it("rejects another live process across daemon ports and timezones", () => {
     const { root, stateRoot } = fixture("live");
     const lease = acquireWorkspaceSupervisorLease(root, { basePort: 6131, stateRoot });

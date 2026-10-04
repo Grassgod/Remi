@@ -25,11 +25,13 @@ import type {
 } from "@multiremi/contracts/messaging.js";
 import { LarkCliMessageProvider } from "@multiremi/messaging/providers/lark-cli/provider.js";
 import { BunLarkCliRunner } from "@multiremi/messaging/providers/lark-cli/runner.js";
+import { larkCliTestEnv } from "../helpers/lark-cli-isolation.js";
 
 const WINDOW_DAYS = 7;
 /** Small enough that an account with any activity pages more than once. */
 const PAGE_SIZE = 5;
 const CLI_TIMEOUT_MS = 60_000;
+const runner = new BunLarkCliRunner({ timeoutMs: CLI_TIMEOUT_MS, env: larkCliTestEnv() });
 
 /**
  * Chats the account actually saw traffic in during the window.
@@ -39,7 +41,6 @@ const CLI_TIMEOUT_MS = 60_000;
  * assertions pass without ever pulling a message.
  */
 async function discoverActiveChats(start: Date, end: Date): Promise<string[]> {
-  const runner = new BunLarkCliRunner({ timeoutMs: CLI_TIMEOUT_MS });
   const payload = await runner.run([
     "im", "+messages-search",
     // Second precision, like the Provider: Feishu rejects the milliseconds
@@ -64,7 +65,7 @@ const windowStart = new Date(windowEnd.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 
  */
 const reachable = await (async (): Promise<boolean> => {
   try {
-    const health = await new LarkCliMessageProvider({ timeoutMs: CLI_TIMEOUT_MS })
+    const health = await new LarkCliMessageProvider({ timeoutMs: CLI_TIMEOUT_MS, runner })
       .checkHealth({ connection: connectionFixture(null) });
     return health.status === "ready";
   } catch {
@@ -115,7 +116,7 @@ function sourceFixture(allowlist: MessageAllowlistEntry[]): MessageSource {
 }
 
 describe.skipIf(!reachable)("lark-cli message provider against the real CLI", () => {
-  const provider = new LarkCliMessageProvider({ timeoutMs: CLI_TIMEOUT_MS });
+  const provider = new LarkCliMessageProvider({ timeoutMs: CLI_TIMEOUT_MS, runner });
   let context: MessageProviderContext;
   let activeChatIds: string[] = [];
 
