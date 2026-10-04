@@ -5,15 +5,16 @@ import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import { TaskTraceDialog } from "./task-trace-dialog";
 
-const { getTaskTrace, handlers, subscriptionEnabled } = vi.hoisted(() => ({
+const { getTaskTrace, getTaskPrompt, handlers, subscriptionEnabled } = vi.hoisted(() => ({
   getTaskTrace: vi.fn(),
+  getTaskPrompt: vi.fn(),
   handlers: { current: null as null | Record<string, (...args: never[]) => void> },
   subscriptionEnabled: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@multiremi/core/api")>(),
-  api: { getTaskTrace, getTaskPrompt: vi.fn(), getAgent: vi.fn(), listRuntimes: vi.fn() },
+  api: { getTaskTrace, getTaskPrompt, getAgent: vi.fn(), listRuntimes: vi.fn() },
 }));
 
 vi.mock("@multiremi/core/realtime", () => ({
@@ -46,12 +47,24 @@ function renderTrace(overrides: Partial<AgentTask> = {}) {
 
 beforeEach(() => {
   getTaskTrace.mockReset();
+  getTaskPrompt.mockReset();
   subscriptionEnabled.mockReset();
   handlers.current = null;
   HTMLElement.prototype.scrollTo = vi.fn();
 });
 
 describe("task trace dialog", () => {
+  it("passes assignment fallback through to the Input Prompt view on 404", async () => {
+    getTaskTrace.mockResolvedValue(page({ state: "not_found", source: null }));
+    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <TaskTraceDialog task={{ ...task, status: "queued" }} agentName="Agent" onOpenChange={() => {}} initialView="prompt" promptFallback={<p>Assignment from the turn</p>} />
+    </QueryClientProvider>);
+    expect(await screen.findByText("Assignment from the turn")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Input Prompt" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/older runtime/)).toBeNull();
+  });
+
   it("pages the trace and merges duplicate live frames and a gap by seq", async () => {
     getTaskTrace
       .mockResolvedValueOnce(page({ events: [event(1), event(2)], next_after_seq: 2, head: 3, eof: false }))

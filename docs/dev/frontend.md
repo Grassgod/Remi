@@ -72,6 +72,16 @@ Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/pack
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 
+Issue 活动区默认显示普通评论、固定单行的派活和 `workspace_move_cleared` 动态。派活和被派 agent 的首条回应引用在点击后打开既有任务弹窗，初始停在「输入 Prompt」，评论流内不展开正文。回应关联只用当前窗口中唯一的同 task 派活记录，首次出现时确定，翻页不向已显示的评论追加引用；任务列表只在点击时复用缓存或读取。系统细节开关按用户和工作区在本地同步持久化，渲染前过滤结果发布、信封、收件箱唤醒及未知非评论类型。SSR 列表在本地偏好 hydration 完成前保持隐藏，定位脚本通过 `data-ssr-display-ready` 门禁等待最终显示集合，避免默认集合先显现再变化；用户切换开关时在绘制前保持 released 阅读锚点或 pinned 贴底。打开后 [IssueLogEventRow](../../frontend/packages/views/issues/components/issue-log-event-row.tsx) 显示固定一行人话，发布结果使用已有结果列表并打开右侧结果面板。信封按 `dedupeKey` 来源优先、`kind/to.role` 次之分类，永不使用正文兜底。Chat 永久过滤内部条目，无系统细节开关；普通评论交互和用户/assistant 气泡沿用原路径。
+
+派活和回应引用提供原始 turn 给任务弹窗：输入 Prompt 请求只有返回 404（未记录执行输入）时才显示该 turn 的派活说明，优先使用 `body_html`，缺失时渲染完整 `body_md`，两条路径都使用紧凑正文样式限制标题大小。提示依据 turn 的 `metadata.status`：`queued`、`dispatched` 和等待目录锁的 `waiting_local_directory` 显示「任务尚未开始执行」，其他或未知状态显示「未记录执行输入」；四语言同步。200 仍展示完整审计输入，网络或服务端错误仍保留错误态；没有 turn 的执行过程等入口沿用原空态。验证入口为 [派活弹窗测试](../../frontend/packages/views/issues/components/issue-task-prompt-dialog.test.tsx)、[执行弹窗测试](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)和 [输入 Prompt 测试](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.test.tsx)。
+
+固定摘要通过 `transformEntries` 使用新的行高缓存 `render_version`，不重用旧全文或展开态测量，也不更改副本日志。开关切换由用户触发，弹窗不增加评论流高度，姓名和标题更新只替换单行文字。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[偏好测试](../../frontend/packages/core/issues/stores/activity-preferences-store.test.ts)、现有 Chat、任务弹窗及滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。前端隐藏仍占服务端分页条数；补回状态动态和显示层分页属于后续改动。
+
+深链目标属于系统细节时，本次访问临时开启显示且不写偏好，开关显示为开启；目标未加载时揭示门禁继续等待，用户手动切换后以其选择为准并持久化，离开该深链访问后恢复保存值。SSR 与客户端在渲染前使用同一目标分类，首个可见帧即可定位和高亮；验证入口为 [Issue 深链回归](../../frontend/packages/views/issues/components/issue-detail.test.tsx)和 [SSR 定位脚本回归](../../frontend/apps/web/app/issue-log-ssr-position.test.ts)。
+
+`/log/locate` 返回 404 时，已删除或不存在的评论深链回退到该会话尾部；未指定会话时，所有会话均返回 404 才回退到默认会话。回退窗口与缺失目标状态一起就绪，渲染前取消锚点、高亮和临时系统细节，首个可见帧沿用普通浏览的贴底状态。SSR 用 `missingCommentId` 标记尾部 seed；旧 SSR seed 的目标不在窗口时，客户端重新定位后按同一规则回退。网络错误、5xx 和尾部读取失败仍保留错误态与重试。验证入口为 [日志窗口回归](../../frontend/packages/core/session-log/issue-log.test.ts)、上述 Issue 深链回归与 [SSR 读取回归](../../frontend/apps/web/features/issues/server-log.test.ts)。
+
 ## 实时更新与性能定位
 
 Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../../frontend/packages/core/runtimes/provider-profile.ts) 与[共享表单](../../frontend/packages/views/runtimes/components/runtime-provider-profile-tab.tsx)读取和保存单个 Runtime 的 provider 配置；查询键包含 workspace/runtime ID，响应严格校验。表单支持 API Key（保存后清空，留空保留）和本机环境变量；Claude 还支持 Bearer / x-api-key 请求鉴权；未声明对应 `codex_profiles: 1` 或 `claude_profiles: 1` 的旧 daemon 只能查看更新提示。保存后失效 Runtime 和模型目录缓存；鉴权与隔离契约见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)和 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)。

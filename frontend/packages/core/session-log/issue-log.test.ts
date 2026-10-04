@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionLogEntrySchema, type SessionLogWindow } from "../api/schemas/session-log";
+import { ApiError } from "../api/http";
 const mocks = vi.hoisted(() => ({ read: vi.fn(), locate: vi.fn() }));
 vi.mock("../api", () => ({ api: { getSessionLog: mocks.read, locateSessionLogEntry: mocks.locate } }));
 import { IssueLogReplica } from "./issue-log";
@@ -78,6 +79,67 @@ describe("Issue log presentation over C7", () => {
     expect(mocks.read).toHaveBeenCalledWith("s", { before: 30 });
     expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([78, 79, 80, 81, 82]);
     expect(replica.window?.has_more_before).toBe(true);
+  });
+
+  it.each(["deleted-comment", "missing-comment"])("falls back to a ready tail when locate cannot find %s", async commentId => {
+    mocks.locate.mockReset().mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    mocks.read.mockReset().mockImplementation(async (_id, params) => params.anchor === 0
+      ? windowOf([row(0, "head")]) : windowOf());
+    const replica = new IssueLogReplica("s");
+    const readyFrames: Array<string | null> = [];
+    replica.subscribe("s", () => {
+      if (replica.getSnapshot("s").ready) readyFrames.push(replica.missingCommentId);
+    });
+    await replica.loadAround(commentId);
+    expect(replica.getSnapshot("s")).toMatchObject({ ready: true, fresh: true });
+    expect(replica.getSnapshot("s").entries.map(entry => entry.id)).toEqual(["r0", "r80", "r81"]);
+    expect(readyFrames).toEqual([commentId]);
+    expect(replica.hasWindowFor(commentId)).toBe(true);
+    expect(replica.hasWindowFor()).toBe(true);
+    mocks.locate.mockClear();
+    await replica.refreshVisible();
+    expect(mocks.locate).not.toHaveBeenCalled();
+  });
+
+  it.each([new ApiError("server unavailable", 503, "Unavailable"), new TypeError("Failed to fetch")])(
+    "preserves locate errors other than not-found: %s", async error => {
+      mocks.locate.mockReset().mockRejectedValue(error);
+      mocks.read.mockReset();
+      const replica = new IssueLogReplica("s");
+      await expect(replica.loadAround("target")).rejects.toBe(error);
+      expect(mocks.read).not.toHaveBeenCalled();
+      expect(replica.missingCommentId).toBeNull();
+      expect(replica.getSnapshot("s").ready).toBe(false);
+    },
+  );
+
+  it("does not hide a tail read failure after locate returns not-found", async () => {
+    mocks.locate.mockReset().mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    const error = new ApiError("session not found", 404, "Not Found");
+    mocks.read.mockReset().mockRejectedValue(error);
+    const replica = new IssueLogReplica("s");
+    await expect(replica.loadAround("target")).rejects.toBe(error);
+    expect(replica.getSnapshot("s").ready).toBe(false);
+    expect(replica.missingCommentId).toBeNull();
+  });
+
+  it("rechecks an SSR target that is absent from its window, then uses the tail", async () => {
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"),
+      window: windowOf(), targetCommentId: "missing-comment" });
+    expect(replica.hasWindowFor("missing-comment")).toBe(false);
+    mocks.locate.mockReset().mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    mocks.read.mockReset().mockResolvedValue(windowOf());
+    await replica.loadAround("missing-comment");
+    expect(replica.hasWindowFor("missing-comment")).toBe(true);
+    expect(replica.missingCommentId).toBe("missing-comment");
+  });
+
+  it("imports an SSR missing-target fallback without locating it again", () => {
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: null,
+      window: windowOf(), missingCommentId: "missing-comment" });
+    expect(replica.hasWindowFor("missing-comment")).toBe(true);
+    expect(replica.hasWindowFor()).toBe(true);
+    expect(replica.missingCommentId).toBe("missing-comment");
   });
 
   it("hydrates live message metadata before forwarding ordered frames to C7", async () => {

@@ -63,7 +63,7 @@ function collabRawInput(title: string, status: string): Record<string, unknown> 
 
 function renderTranscript(
   items: TimelineItem[],
-  overrides: { task?: Partial<AgentTask>; isLive?: boolean } = {},
+  overrides: { task?: Partial<AgentTask>; isLive?: boolean; initialView?: "execution" | "prompt"; promptFallback?: React.ReactNode } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
@@ -75,12 +75,20 @@ function renderTranscript(
         items={items}
         agentName="Remi"
         isLive={overrides.isLive}
+        initialView={overrides.initialView}
+        promptFallback={overrides.promptFallback}
       />
     </QueryClientProvider>,
   );
 }
 
 describe("transcript pending task state", () => {
+  it("opens directly on Input Prompt when requested without an intermediate execution view", async () => {
+    getTaskPrompt.mockResolvedValue({ effective_prompt: "Assignment instructions", prompt: "Assignment instructions" });
+    renderTranscript([], { initialView: "prompt" });
+    expect(screen.getByRole("button", { name: "Input Prompt" })).toHaveAttribute("aria-pressed", "true");
+    expect(getTaskPrompt).toHaveBeenCalledWith("task-1");
+  });
   it("shows the task execution model beside its usage, including the fallback cause", () => {
     renderTranscript([], { task: {
       usage: [{ model: "primary", inputTokens: 240, outputTokens: 80 }],
@@ -108,6 +116,29 @@ describe("transcript pending task state", () => {
 });
 
 describe("task input prompt", () => {
+  it("shows supplied assignment content only when the audited input is not recorded", async () => {
+    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
+    expect(screen.queryByText("Original assignment instructions")).toBeNull();
+    expect(await screen.findByText("Original assignment instructions")).toBeInTheDocument();
+    expect(screen.queryByText(/older runtime/)).toBeNull();
+  });
+
+  it("prefers the audited input over the assignment fallback on a successful read", async () => {
+    getTaskPrompt.mockResolvedValue({ task_id: task.id, mode: "delta", prompt: "Audited execution instructions", sha256: "b".repeat(64), assembled_at: "2026-08-17T12:00:00.000Z" });
+    renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
+    expect(await screen.findByText("Audited execution instructions")).toBeInTheDocument();
+    expect(screen.getByText("SHA-256: bbbbbbbbbbbb")).toBeInTheDocument();
+    expect(screen.queryByText("Original assignment instructions")).toBeNull();
+  });
+
+  it.each([Object.assign(new Error("unavailable"), { status: 503 }), new Error("Network failure")])("keeps load errors instead of replacing them with an assignment", async (error) => {
+    getTaskPrompt.mockRejectedValue(error);
+    renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
+    expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByText("Original assignment instructions")).toBeNull();
+  });
+
   it("loads the exact audited prompt on demand", async () => {
     getTaskPrompt.mockResolvedValue({
       task_id: task.id,

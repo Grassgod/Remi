@@ -19,7 +19,7 @@ import { AttachmentSchema } from "@multiremi/core/api/schemas";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
 import { SessionLogList } from "../../common/session-log/session-log-list";
-import { EntryHtml } from "../../common/session-log/entry-html";
+import { isInboxTurn, metadataRecord } from "../../common/session-log/event-summary";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multiremi/core/agents";
@@ -101,7 +101,11 @@ export function ChatMessageList({
     if (visible) onLoadOlderMessages?.();
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
-    mergeOptimisticChatRows(entries.filter(entry => entry.seq > 0), optimisticRows), [optimisticRows]);
+    mergeOptimisticChatRows(entries.filter(entry => {
+      const row = entry as SessionLogEntry & { author_type?: string; metadata?: Record<string, unknown> };
+      if (row.seq === 0 || metadataRecord(row.metadata).envelope) return false;
+      return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message" && row.author_type === "member";
+    }), optimisticRows), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
   const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
@@ -132,13 +136,7 @@ export function ChatMessageList({
         author_type?: string; task_id?: string | null; created_at?: string;
         metadata?: Record<string, unknown>;
       };
-      if (row.kind !== "message" && row.kind !== "turn") {
-        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
-      }
       const isUser = row.kind === "message" && row.author_type === "member";
-      if (row.kind === "message" && !isUser) {
-        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
-      }
       const message: ChatMessage = {
         id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",
         content: isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md),

@@ -125,7 +125,7 @@ export default async function RootLayout({
           };
           const place=()=>document.querySelectorAll('[data-session-log-scroll][data-ssr-initial]').forEach(e=>{
             const expected=Number(e.dataset.ssrExpected||0);
-            if(e.dataset.ssrPositioned||e.dataset.ssrPositioning||expected<1||e.querySelectorAll('[data-perf-item]').length<expected||e.clientHeight<1||e.scrollHeight<1)return;
+            if(e.dataset.ssrDisplayReady==='0'||e.dataset.ssrPositioned||e.dataset.ssrPositioning||expected<1||e.querySelectorAll('[data-perf-item]').length<expected||e.clientHeight<1||e.scrollHeight<1)return;
             e.dataset.ssrPositioning='1';const c=e.firstElementChild;position(e);
             const r=e.getBoundingClientRect();
             const images=[...e.querySelectorAll('img')].filter(i=>!i.complete&&i.getBoundingClientRect().bottom>r.top&&i.getBoundingClientRect().top<r.bottom);
@@ -134,7 +134,7 @@ export default async function RootLayout({
               position(e);c.style.visibility='';e.dataset.ssrPositioned='1';e.dataset.perfState='ready';
             }));
           });
-          new MutationObserver(place).observe(document,{childList:true,subtree:true});
+          new MutationObserver(place).observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-ssr-display-ready']});
           document.addEventListener('DOMContentLoaded',place);place();
         })();` }} />
       </head>
