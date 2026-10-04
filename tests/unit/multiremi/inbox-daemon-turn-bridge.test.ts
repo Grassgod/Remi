@@ -18,6 +18,7 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission'}},f.scope);
     expect(requested.ok).toBe(true);expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('awaiting_human');
     const message=requested.message as any;f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Yes'});
+    expect(()=>f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Again'})).toThrow('settled');
     expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('running');expect(f.bridge.rpc('turn.decision.get',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,message_id:message.id},f.scope).status).toBe('resolved');
     const before=f.store.getSessionAgentReadProgress(f.session.id,f.agent.id);f.store.wrapUpTurn(f.sent.turn_id!);expect(f.bridge.snapshot(f.scope,new Set([f.attempt.id])).wrapUps).toHaveLength(1);expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual(before);});
   it('completes atomically, re-rings unread interrupt, completion replay is idempotent',()=>{const f=setup();const later=f.store.sendMessage({session_id:f.session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:f.agent.id},message_kind:'request',wake_requested:'now',body_md:'interrupt'});
@@ -42,6 +43,17 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     f.store.recordSessionAgentRangeRead(f.session.id,f.agent.id,{seq:1,offset:0},{seq:offer.input_to_seq+1,offset:0});
     expect(f.bridge.rpc('turn.input',receipt,f.scope).ok).toBe(true);
     expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(offer.input_to_seq);
+  });
+
+  it('cold retry replaces the attempt and trace binding without changing Issue status',()=>{const f=setup();
+    f.store.cancelTurn(f.sent.turn_id!);const before=f.store.getIssue(f.issue.id)!;
+    f.db.run("UPDATE multiremi_session_lanes SET provider_session_id='old',work_dir='/old',execution_fingerprint='old' WHERE session_id=? AND reader_id=?",[f.session.id,f.agent.id]);
+    const replacement=f.store.retryTurn(f.sent.turn_id!,true);
+    expect(replacement.id).toBe(f.sent.turn_id!);expect(replacement.current_attempt_id).not.toBe(f.attempt.id);
+    expect(f.store.listTurnAttempts(replacement.id)).toHaveLength(2);expect(f.store.getTurnTrace(replacement.id).attempt_id).toBe(replacement.current_attempt_id!);
+    expect(f.store.getIssue(f.issue.id)?.status).toBe(before.status);expect(f.store.getIssue(f.issue.id)?.updatedAt).toBe(before.updatedAt);
+    expect(f.db.query("SELECT provider_session_id,work_dir,execution_fingerprint FROM multiremi_session_lanes WHERE session_id=? AND reader_id=? AND execution_scope='' ").get(f.session.id,f.agent.id)).toMatchObject({provider_session_id:null,work_dir:null,execution_fingerprint:null});
+    expect(f.bridge.rpc('turn.input',{turn_id:replacement.id,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,message_ids:[]},f.scope).code).toBe('stale_attempt');
   });
 
 });

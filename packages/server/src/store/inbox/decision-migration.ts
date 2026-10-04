@@ -17,8 +17,8 @@ export function foldDecisionRecords(db:SqlDatabase):void {
       const {token_hash,token_recipient,token_consumed_at,...content}=record;
       const metadata=JSON.stringify({[key]:content});
       const resolved=['pending','escalated'].includes(String(record.status))?null:record.responded_at??record.answered_at??at;
-      if(existing){db.run(`UPDATE multiremi_conversation_log SET metadata=?,card_token_hash=?,card_token_recipient=?,card_token_consumed_at=?,resolved_at=? WHERE id=?`,
-        [metadata,record.token_hash??null,record.token_recipient??null,record.token_consumed_at??null,resolved,id]);return;}
+      if(existing){db.run(`UPDATE multiremi_conversation_log SET metadata=?,card_token_hash=?,card_token_recipient=?,card_token_consumed_at=?,resolved_at=?,options=? WHERE id=?`,
+        [metadata,record.token_hash??null,record.token_recipient??null,record.token_consumed_at??null,resolved,options?JSON.stringify(options):null,id]);return;}
       const head=db.query('UPDATE multiremi_conversation_heads SET head_seq=head_seq+1,log_version=log_version+1 WHERE session_id=? RETURNING head_seq').get(sessionId);
       db.run(`INSERT INTO multiremi_conversation_log(session_id,seq,id,kind,visibility,sender_type,sender_id,task_id,body_md,metadata,created_at,updated_at,
         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,options,card_token_hash,card_token_recipient,card_token_consumed_at,resolved_at)

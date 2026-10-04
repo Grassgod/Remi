@@ -6704,12 +6704,19 @@ export class IssuesRepo {
   private triggerCommentMentions(issue:MultiremiIssue,comment:MultiremiIssueComment,_seq:number,
     deferredEvents?:CommitEventQueue,_changes?:ChildStatusChangeCollector):MultiremiTask[] {
     const events=deferredEvents??createCommitEventQueue(),tasks:MultiremiTask[]=[],seen=new Set<string>();
-    const source=comment.taskId?this.ctx.db.query('SELECT id FROM multiremi_turns WHERE id=? OR current_attempt_id=?').get(comment.taskId,comment.taskId):null;
+    const source=comment.taskId?this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=? OR current_attempt_id=?').get(comment.taskId,comment.taskId):null;
     let first=true;
     for(const target of this.resolveCommentMentionTargets(comment.body,issue.workspaceId)){
       const agent=this.ctx.resolveRunnableAgentForAssignee(target.assigneeType,target.assigneeId);
       const agentId=agent?.id??(target.assigneeType==='agent'?target.assigneeId:null);
       if(!agentId||seen.has(agentId))continue;seen.add(agentId);
+      if(comment.authorType==='agent'&&source?.delegated_by_agent_id===agentId){
+        const report=sendMessageWithinTransaction(this.ctx,{session_id:comment.issueSessionId!,sender:{type:'agent',id:comment.authorId},
+          source_turn_id:source.id,to:{type:'role',ref:'delegator'},message_kind:'reply',wake_requested:'now',body_md:comment.body,
+          dedupe_key:`delegation_progress:${comment.id}:${agentId}`,metadata:{source_comment_id:comment.id}},events);
+        if(report.turn_id){const turn=this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(report.turn_id);const task=turn?this.ctx.tasks().getTask(turn.current_attempt_id):null;if(task)tasks.push(task);}
+        continue;
+      }
       const result=sendMessageWithinTransaction(this.ctx,{id:first?comment.id:undefined,session_id:comment.issueSessionId!,
         sender:{type:comment.authorType==='agent'?'agent':comment.authorType==='member'?'member':'platform',id:comment.authorId},
         source_turn_id:source?.id??null,to:{type:'agent',ref:agentId},message_kind:'request',wake_requested:'now',body_md:comment.body,

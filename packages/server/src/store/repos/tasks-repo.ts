@@ -1,5 +1,5 @@
 import { assertOfferedInputRead, lockLane,reRingAfterTurnEnd,sweepIdleLanes,acknowledgeInput } from "../inbox/lane-machine.js";
-import { sendMessageWithinTransaction } from "../inbox/send-message.js";
+import { countMessageDelegationPairHops, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
@@ -1106,10 +1106,8 @@ export class TasksRepo {
   constructor(private ctx: StoreContext) {}
 
   countDelegationPairHops(source: MultiremiTask, targetAgentId: string, limit = pairRoundTripLimit()): number {
-    const lastMember = this.ctx.db.query(`SELECT MAX(created_at) AS created_at
-      FROM multiremi_conversation_log WHERE session_id = ? AND author_type = 'member'`)
-      .get(source.issueSessionId) as { created_at: string | null };
-    return countDelegationPairHops(source, targetAgentId, (id) => this.getTask(id), lastMember.created_at, 2 * limit);
+    const turn=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(source.id);
+    return turn?countMessageDelegationPairHops(this.ctx,turn.turn_id,targetAgentId,limit):0;
   }
 
   recordDelegationRoundTripLimitedWithinTransaction(
@@ -1667,7 +1665,7 @@ export class TasksRepo {
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
     if(!sessionId)throw new Error('A request must name an Issue, Chat or automation conversation');
     let type=existing?.sender_type??(sourceTask?'agent':input.assignmentAuthorType==='agent'?'agent':input.assignmentAuthorType==='system'?'platform':'member');
-    let senderId=existing?.sender_id??(type==='agent'?sourceTask?.agentId??input.assignmentAuthorId??null:type==='member'?input.assignmentAuthorId??'local':null);
+    let senderId=existing?.sender_id??(type==='agent'?sourceTask?.agentId??input.assignmentAuthorId??null:type==='member'?input.assignmentAuthorId??null:null);
     if(type==='member')senderId=this.ctx.workspaces().getWorkspaceMemberByRef(senderId??'local',input.workspaceId??'local')?.id??senderId;
     const result=sendMessageWithinTransaction(this.ctx,{id:existing?.id,session_id:sessionId,sender:{type,id:senderId},
       source_turn_id:existing?.task_id??sourceTurn?.turn_id??null,to:{type:'agent',ref:input.agentId},message_kind:'request',wake_requested:'now',
@@ -4756,7 +4754,10 @@ ${placementAfter.sql}
           acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),input.turnInputToSeq);
         }}
       const now = nowIso();
-      const storedResult = skipAutoReply?null:toJson(taskCompletionResultPayload(input));
+      const existingReply=turn&&!current.chatSessionId&&current.issueId
+        &&this.agentCommentedSince(current.issueId,current.agentId,current.startedAt??current.dispatchedAt??current.createdAt,current.id)
+        ?this.lastDelegationResultCommentId(current):null;
+      const storedResult = skipAutoReply||existingReply?null:toJson(taskCompletionResultPayload(input));
       const result = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
          SET status = 'completed',
              result = ?,
@@ -4771,6 +4772,12 @@ ${placementAfter.sql}
         [storedResult, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      if(existingReply&&!skipAutoReply&&turn){
+        this.ctx.db.run('UPDATE multiremi_turns SET reply_message_id=? WHERE id=?',[existingReply,turn.id]);
+        const reply=this.ctx.inbox().getMessage(existingReply)!;
+        const {output,...provenance}=taskCompletionResultPayload(input);
+        this.ctx.conversationLog().updateConversationLogWithinTransaction(reply.session_id,reply.seq,{fields:{metadata:{...reply.metadata,task_result:provenance}}});
+      }
       if(skipAutoReply&&turn)this.ctx.db.run('UPDATE multiremi_turns SET reply_message_id=NULL WHERE id=?',[turn.id]);
       this.markEmptyTraceAtTerminal(taskId, input.traceEventCount);
       const completed = this.getTask(taskId)!;
@@ -5456,34 +5463,8 @@ ${placementAfter.sql}
           "delegator_issue_closed", {}, deferredEvents);
         return { task: null, created: false, covered: false };
       }
-      const existing = this.ctx.db.query(
-        `SELECT seq FROM multiremi_conversation_log
-         WHERE session_id = ? AND task_id = ? AND kind = 'delegation_report'
-         ORDER BY seq DESC LIMIT 1`,
-      ).get(returnSession.id, source.id) as { seq: number } | null;
-      const sourceIssue = source.issueId ? this.ctx.issues().getIssue(source.issueId) : null;
-      // The bridge metadata and inbox report must name the same comment. A
-      // second SELECT could see a comment that landed between the two reads
-      // (comment writes do not take the workspace lifecycle lock), and both
-      // writes commit in one transaction, so resolve here and thread the value
-      // through the drain below.
-      if (triggerResultCommentId === undefined) triggerResultCommentId = this.lastDelegationResultCommentId(source);
-      const bridge = existing ?? this.ctx.issueSessions().appendSessionEventWithinTransaction(returnSession.id, {
-        authorType: "system",
-        kind: "delegation_report",
-        body: `${this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId} finished ${source.id} on ${sourceIssue?.key ?? source.issueId}: ${terminalStatus}`,
-        taskId: source.id,
-        metadata: {
-          source_issue_id: source.issueId,
-          source_issue_key: sourceIssue?.key ?? null,
-          source_task_id: source.id,
-          delegate_agent_id: source.agentId,
-          terminal_status: terminalStatus,
-          result_comment_id: triggerResultCommentId,
-          delegation_id: delegationId,
-        },
-      });
-      requiredEventSeq = bridge.seq;
+      // The return is one addressed report message; there is no separate bridge row.
+      if(triggerResultCommentId===undefined)triggerResultCommentId=this.lastDelegationResultCommentId(source);
     }
     if (!hasDelegationId && !hasDelegator) {
       return terminalStatus ? drainTerminalReturns() : { task: null, created: false, covered: false };
@@ -5600,59 +5581,24 @@ ${placementAfter.sql}
       "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
       [issueSessionId],
     );
-    const reportRows = this.ctx.db.query(
-      `SELECT task.*,
-              (SELECT MAX(event.seq)
-               FROM multiremi_conversation_log event
-               WHERE event.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
-                 AND event.task_id = task.id
-                 AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')) AS terminal_event_seq,
-              (SELECT report.metadata
-                FROM multiremi_conversation_log report
-                WHERE report.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
-                  AND report.task_id = task.id
-                  AND report.kind = 'delegation_report'
-                ORDER BY report.seq DESC
-                LIMIT 1) AS delegation_report_metadata
-       FROM multiremi_turn_execution_records task
-       WHERE COALESCE(task.delegated_from_issue_session_id, task.issue_session_id) = ?
-         AND task.status IN ('completed', 'failed', 'cancelled')
-         AND task.delegation_id IS NOT NULL
-         AND task.delegated_by_agent_id IS NOT NULL
-         AND task.agent_id <> task.delegated_by_agent_id
-         AND task.delegation_return_task_id IS NULL
-         AND task.delegation_skip_reason IS NULL
-         AND EXISTS (
-           SELECT 1 FROM multiremi_conversation_log terminal_event
-           WHERE terminal_event.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
-             AND terminal_event.task_id = task.id
-             AND terminal_event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM multiremi_turn_execution_records successor
-           WHERE successor.parent_task_id = task.id
-             AND successor.delegation_id = task.delegation_id
-             AND successor.agent_id = task.agent_id
-         )
-       ORDER BY task.completed_at ASC, task.created_at ASC, task.id ASC`,
-    ).all(issueSessionId) as Row[];
+    const reportRows = this.ctx.db.query(`SELECT task.*,
+      (SELECT MAX(seq) FROM multiremi_conversation_log e WHERE e.session_id=task.issue_session_id AND e.task_id=t.id) AS terminal_event_seq
+      FROM multiremi_turn_execution_records task JOIN multiremi_turns t ON t.id=task.turn_id AND t.current_attempt_id=task.id
+      WHERE COALESCE(t.delegated_from_issue_session_id,t.session_id)=?
+        AND t.status IN ('completed','failed','cancelled') AND t.delegation_id IS NOT NULL
+        AND t.delegated_by_agent_id IS NOT NULL AND t.agent_id<>t.delegated_by_agent_id
+        AND t.delegation_return_turn_id IS NULL AND t.delegation_skip_reason IS NULL
+      ORDER BY t.ended_at,t.created_at,t.id`).all(issueSessionId) as Row[];
     const reports = reportRows.map((row): DelegationTerminalReport => {
       const source = toTask(row);
       const isTrigger = trigger?.source.id === source.id;
       const terminalStatus = isTrigger
         ? trigger.terminalStatus
         : source.status as DelegationTerminalReport["terminalStatus"];
-      const reportMetadata = row.delegation_report_metadata == null
-        ? null
-        : parseJson<Record<string, unknown>>(row.delegation_report_metadata, {});
       const crossIssue = source.issueId != null && source.issueId !== returnIssueId;
-      const hasResultCommentSnapshot = reportMetadata != null
-        && Object.hasOwn(reportMetadata, "result_comment_id");
-      const resultCommentId = hasResultCommentSnapshot
-          ? nullableString(reportMetadata.result_comment_id)
-          : isTrigger && trigger.resultCommentId !== undefined
-            ? trigger.resultCommentId
-            : this.lastDelegationResultCommentId(source);
+      const resultCommentId = isTrigger && trigger.resultCommentId !== undefined
+        ? trigger.resultCommentId
+        : this.lastDelegationResultCommentId(source);
       return {
         source,
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,
@@ -5809,7 +5755,7 @@ ${placementAfter.sql}
     if (!source.issueId) return null;
     const row = this.ctx.db.query(
       `SELECT id FROM multiremi_issue_message_records
-       WHERE issue_id = ? AND task_id = ? AND author_type = 'agent' AND author_id = ?
+       WHERE issue_id = ? AND task_id = (SELECT turn_id FROM multiremi_turn_attempts WHERE id=?) AND author_type = 'agent' AND author_id = ?
        ORDER BY created_at DESC, id DESC LIMIT 1`,
     ).get(source.issueId, source.id, source.agentId) as { id: string } | null;
     return row?.id ?? null;

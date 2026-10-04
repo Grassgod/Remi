@@ -123,9 +123,10 @@ export class InboxRepo {
         }
         const session = this.ctx.issueSessions().getIssueSession(sessionId);
         if (!session) throw new Error("Envelope delegation return session not found");
-        const parent = source.parentTaskId ? this.ctx.tasks().getTask(source.parentTaskId) : null;
-        const scope = parent?.agentId === source.delegatedByAgentId && parent.issueSessionId === session.id
-          ? parent.execution_scope ?? "" : "";
+        const parent=this.ctx.db.query(`SELECT p.* FROM multiremi_turns child
+          JOIN multiremi_conversation_log request ON request.id=child.trigger_message_id
+          JOIN multiremi_turns p ON p.id=request.task_id WHERE child.current_attempt_id=?`).get(source.id);
+        const scope=parent?.agent_id===source.delegatedByAgentId&&parent.session_id===session.id?parent.execution_scope:'';
         return [this.issueRecipient(session.issueId, source.delegatedByAgentId, session.id, scope)];
       }
       case "relay": {

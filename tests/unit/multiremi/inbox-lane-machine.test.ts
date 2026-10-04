@@ -11,6 +11,7 @@ pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
     const one=store.sendMessage(input),two=store.sendMessage({...input,body_md:'two',dedupe_key:'two'});
     expect(one.wake_reason).toBe('human_sender');expect(two.turn_id).toBe(one.turn_id);
     expect(store.sendMessage(input).message.id).toBe(one.message.id);
+    expect(store.sendMessage({...input,body_md:'two',dedupe_key:'two'}).turn_id).toBe(two.turn_id);
     expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_turns WHERE session_id=?').get(session.id).n)).toBe(1);
     expect(db.query('SELECT trigger_message_id FROM multiremi_turns WHERE id=?').get(one.turn_id!).trigger_message_id).toBe(one.message.id);
   });

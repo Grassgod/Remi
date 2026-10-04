@@ -155,6 +155,7 @@ export class InboxOperations {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
       const key=message.metadata.human_request?'human_request':'decision_record';
       const record=(message.metadata[key]??{}) as Record<string,unknown>;
+      if(message.resolved_at||message.deleted_at||!['pending','escalated'].includes(String(record.status??'pending')))throw new Error('Decision is settled');
       if(!patchDecisionRecord(this.ctx,id,key,{status:key==='human_request'?'responded':'answered',responded_at:nowIso()},String(record.status??'pending'),input.credential))throw new Error('Decision is settled');
       return sendMessageWithinTransaction(this.ctx,{session_id:message.session_id,sender:input.sender,to:message.sender_type==='agent'&&message.sender_id?{type:'agent',ref:message.sender_id}:{type:'none'},
         body_md:input.body_md,message_kind:'reply',wake_requested:'now',reply_to_id:id},events);});
