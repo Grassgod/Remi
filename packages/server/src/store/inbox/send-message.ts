@@ -150,8 +150,9 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let scope=input.execution_scope??roleScope??'';
   let delegatedLane:any=null;
   if(policy.reason==='agent_dispatch'&&source&&targetIssue){
-    const latest=ctx.db.query('SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=? ORDER BY created_at DESC,id DESC LIMIT 1').get(targetIssue.id,recipientId);
-    if(latest?.delegated_by_agent_id===input.sender.id&&latest.delegated_from_issue_session_id===source.session_id)delegatedLane=latest;
+    delegatedLane=ctx.db.query(`SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=?
+      AND delegated_by_agent_id=? AND delegated_from_issue_session_id=? ORDER BY created_at DESC,id DESC LIMIT 1`)
+      .get(targetIssue.id,recipientId,input.sender.id,source.session_id);
     scope=input.execution_scope??delegatedLane?.execution_scope??createInput.delegationId??createId('dlg');
   }
   if(message.metadata.execution_scope!==scope){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,entry.seq,{fields:{metadata:{...message.metadata,execution_scope:scope}}});message=getMessage(ctx,entry.id)!;}

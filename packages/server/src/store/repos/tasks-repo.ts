@@ -4,7 +4,7 @@ import { patchDecisionRecord } from "../inbox/decision-records.js";
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
-import { turnExecutionMutationStatement, runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import { AgentReplyCommentError, turnExecutionMutationStatement, runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Tasks domain (task lifecycle, claiming/dispatch, task messages, human requests, usage and the
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
@@ -758,7 +758,6 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  */
 export class TaskSteerPendingError extends Error {}
 
-class AgentReplyCommentError extends Error {}
 
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
@@ -1664,7 +1663,7 @@ export class TasksRepo {
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
     if(!sessionId)throw new Error('A request must name an Issue, Chat or automation conversation');
-    let type=existing?.sender_type??(sourceTask?'agent':input.assignmentAuthorType==='agent'?'agent':input.assignmentAuthorType==='system'?'platform':'member');
+    let type=existing?.sender_type??(input.assignmentAuthorType==='system'?'platform':sourceTask?'agent':input.assignmentAuthorType==='agent'?'agent':'member');
     let senderId=existing?.sender_id??(type==='agent'?sourceTask?.agentId??input.assignmentAuthorId??null:type==='member'?input.assignmentAuthorId??null:null);
     if(type==='member')senderId=this.ctx.workspaces().getWorkspaceMemberByRef(senderId??'local',input.workspaceId??'local')?.id??senderId;
     const result=sendMessageWithinTransaction(this.ctx,{id:existing?.id,session_id:sessionId,sender:{type,id:senderId},
@@ -5627,6 +5626,14 @@ ${placementAfter.sql}
       const delegator = this.ctx.agents().getAgent(report.source.delegatedByAgentId!);
       if (!delegator || delegator.archivedAt || delegator.workspaceId !== report.source.workspaceId
         || !returnIssue || ["done", "cancelled"].includes(returnIssue.status)) {
+        if(delegator?.archivedAt&&delegator.workspaceId===report.source.workspaceId&&returnIssue&&!['done','cancelled'].includes(returnIssue.status)){
+          sendMessageWithinTransaction(this.ctx,{session_id:issueSessionId,sender:{type:'platform',id:null},
+            source_turn_id:this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(report.source.id)?.turn_id,
+            to:{type:'agent',ref:delegator.id},message_kind:'report',wake_requested:'now',
+            dedupe_key:`delegation_terminal:${report.source.id}`,
+            body_md:delegationTerminalReportSection(report,report.resultCommentId?this.ctx.issues().getIssueComment(report.resultCommentId)?.body:undefined),
+            metadata:{message_source:{issueId:report.source.issueId,taskId:report.source.id,commentId:report.resultCommentId}}},deferredEvents);
+        }
         this.recordDelegationReturnSkipped(report.source, delegationWakeupInputForReport(report), report.requiredEventSeq,
           returnIssue && !["done", "cancelled"].includes(returnIssue.status) ? "delegator_unavailable" : "delegator_issue_closed",
           {}, deferredEvents);
@@ -5975,15 +5982,14 @@ ${placementAfter.sql}
           // Redispatch creates a replacement in this transaction that covers the unread lane.
           if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents, reRingOrigin);
         } else if (status === "failed" && !retry) {
-          if (!RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
-            && this.promoteSessionAgentLane(task)) {
-            this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
-          } else {
+          if (RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
+            || !this.promoteSessionAgentLane(task)) {
             this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
               reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
               taskId: task.id,
             }, deferredEvents);
           }
+          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
         }
         // A pending recovery retry already suppresses this wakeup for its own
         // source: the drain below skips any delegation source that has a
@@ -6272,9 +6278,11 @@ ${placementAfter.sql}
 
   private promoteSessionAgentLane(task: MultiremiTask): boolean {
     if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return false;
-    const cursorSeq = Math.max(0, task.projectionToSeq ?? 0);
     const now = nowIso();
     const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
+    // Input receipts may advance beyond the original provider projection.
+    // Retaining the provider session must not rewind the unified inbox cursor.
+    const cursorSeq = Math.max(lane.cursorSeq, task.projectionToSeq ?? 0);
     // The provider lineage and its cursor are one checkpoint. For a warm turn,
     // only the lineage used by the task may advance; for a cold turn the lane
     // must still be empty. This prevents a late completion from overwriting a
@@ -6582,7 +6590,7 @@ function delegationTerminalReportSection(report: DelegationTerminalReport, comme
     ...(report.crossIssue && report.sourceIssueKey ? [`来源：${report.sourceIssueKey}`] : []),
     report.resultCommentId
       ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
-      : `结论评论：无；结果见 remi task get ${report.source.id}`,
+      : `结论评论：无；结果见 remi turn get ${report.source.id}`,
     `摘要：${envelopeSummary(report.terminalStatus === "cancelled" ? null
       : report.terminalStatus === "completed" ? commentBody ?? report.terminalBody : report.terminalBody)}`,
     "请读该评论后继续负责父任务；本轮所有委派都终态后再发一次轮次总结。",

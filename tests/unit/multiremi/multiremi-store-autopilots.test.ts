@@ -105,14 +105,19 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
     const comment = store.createIssueComment(run.issueId!, { body: "Looks important" });
     expect(comment.body).toBe("Looks important");
-    expect(store.listIssueActivity(run.issueId!)).toHaveLength(2);
+    expect(store.listIssueActivity(run.issueId!).map(entry => entry.type)).toEqual([
+      "issue_created", "turn_created", "comment_created",
+    ]);
 
     store.updateIssue(run.issueId!, { status: "in_progress" });
     expect(store.claimTask(runtime.id)?.id).toBe(run.taskId!);
     store.startTask(run.taskId!);
     store.completeTask(run.taskId!, { output: "fixed" });
 
-    expect(store.getIssue(run.issueId!)?.status).toBe("in_review");
+    // §3.4 uses the Issue owner's last turn; an unassigned Issue has no owner terminal to derive from.
+    expect(store.getIssue(run.issueId!)?.assigneeId).toBeNull();
+    expect(store.getTurn(run.taskId!)?.status).toBe("completed");
+    expect(store.getIssue(run.issueId!)?.status).toBe("in_progress");
     expect(store.getProject(project.id)?.doneCount).toBe(0);
     expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
     // Completion appends task_completed, then the agent-reply comment_created.

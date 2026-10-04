@@ -3309,16 +3309,28 @@ export class IssuesRepo {
     }
     const parent = this.sameWorkspaceParent(issue);
     if (!parent) return;
-    if(changed&&!['done','cancelled'].includes(parent.status)){
-      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
-      sendMessageWithinTransaction(this.ctx,{session_id:session.id,sender:{type:'platform',id:null},to:{type:'role',ref:'parent_owner'},
-        message_kind:'status',wake_requested:['done','cancelled'].includes(parent.status)?'inbox_only':'now',
-        dedupe_key:`child_status:${issue.id}:${issue.status}:${eventId}`,
-        body_md:`${issue.key} ${issue.title}: ${previous.status} → ${issue.status}`,
-        metadata:{child_issue_id:issue.id,child_status:issue.status,message_source:{issueId:issue.id,taskId:parentTaskId??undefined}}},deferredEvents);
-    }
     const reported = changed ? childTerminalOutcome(issue.status) : null;
     const outcome = reported === "blocked" && options.taskTerminalStatus === "failed" ? "failed" : reported;
+    if(changed&&!['done','cancelled'].includes(parent.status)){
+      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
+      const details = { childIssueId: issue.id, child_issue_id: issue.id, childIssueKey: issue.key,
+        child_issue_key: issue.key, childStatus: issue.status, child_status: issue.status, outcome };
+      const body = outcome ? childStatusSystemCommentBody({mentionPrefix:this.parentAssigneeMentionPrefix(parent),
+        childKey:issue.key,childId:issue.id,childTitle:issue.title,outcome,childStatus:issue.status,readinessLines})
+        : `${issue.key} ${issue.title}: ${previous.status} → ${issue.status}`;
+      const delivered = sendMessageWithinTransaction(this.ctx,{session_id:session.id,sender:{type:'platform',id:null},to:{type:'role',ref:'parent_owner'},
+        message_kind:'status',wake_requested:'now',
+        dedupe_key:`child_status:${issue.id}:${issue.status}:${eventId}`,
+        body_md:body,
+        metadata:{child_issue_id:issue.id,child_status:issue.status,outcome,
+          message_source:{issueId:issue.id,taskId:parentTaskId??undefined},
+          inbox_item:{type:'child_issue_terminal',severity:outcome==='failed'||outcome==='blocked'?'warning':'info',
+            details,title:`${parent.key}: ${issue.key} ${outcome ? childOutcomeLabel(outcome) : issue.status}`}}},deferredEvents);
+      if (outcome && !parent.assigneeId) {
+        this.notifyParentSubscribersOfChildOutcome(parent, issue, outcome, deferredEvents,
+          this.getIssueComment(delivered.message.id)!);
+      }
+    }
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) this.recordChildStatusAfterParentClosed(parent, issue, outcome, deferredEvents);
       return;
@@ -4106,8 +4118,9 @@ export class IssuesRepo {
     child: MultiremiIssue,
     outcome: ChildTerminalOutcome,
     deferredEvents: CommitEventQueue,
+    existingComment?: MultiremiIssueComment,
   ): MultiremiIssueComment {
-    const comment = this.createSystemIssueCommentWithinTransaction(parent.id, childStatusSystemCommentBody({
+    const comment = existingComment ?? this.createSystemIssueCommentWithinTransaction(parent.id, childStatusSystemCommentBody({
       mentionPrefix: "",
       childKey: child.key,
       childId: child.id,
@@ -4485,6 +4498,7 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
+        assignmentAuthorType: "system",
         // Same authoritative-camelCase read as the other task-creation paths.
         parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });

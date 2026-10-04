@@ -14,9 +14,9 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 消息头在发送时冻结收件人。`source_turn_id` 验证发件轮的 agent 和工作区；`reply_to_id` 必须属于原对话。角色可能选择父单或委派来源对话。agent request 只有源为 Issue 轮、非旁支、目标在 Issue 上时才产生委派；符合条件的所有方向均为 `now / agent_dispatch`。self、不运行的收件人、依赖、来源和目标前置优先于派活规则。超过 `countDelegationPairHops` 的 `2L` 边界时消息保留，降为 `next_turn / pair_round_trip_limit`，不建或合并轮，说明通知和活动在同事务记录。L 默认 5，由 `MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT` 调整。
 
-平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；谱系计数也沿触发 request 追溯。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。发布失败时回滚后只完成轮，reply_message_id 留空。
+平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。
 
-[lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap；游标只前进。
+[lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。取消或最终失败的轮会消费它的原触发消息，后续未读消息仍补铃；未读委派报告补铃时，其回程指针更新到承接消息的后继轮。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap；保留 provider 会话时不回退已确认的收件箱游标。
 
 ## Store 消费接口
 
@@ -36,7 +36,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## 状态与迁移
 
-[deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、负责人最后终态的顺序推导。human_sender 或 agent_dispatch 的 pending 为 todo，纯平台 pending 保持原状态。completed/failed/cancelled 分别为 in_review/blocked/todo。尝试失败、lost、换机、重试不推导 Issue。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。
+[deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、负责人最后终态的顺序推导。human_sender 或 agent_dispatch 的 pending 为 todo，纯平台 pending 保持原状态。负责人最后一轮 completed/failed/cancelled 分别为 in_review/blocked/todo；无负责人时，不以其它 agent 的终态替代这条规则。尝试失败、lost、换机、重试不推导 Issue。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。成员负责人在 member lane 收到 status，失败和阻塞仍显示 warning；无负责人父单保留状态消息及 skip 活动，终态告警仍送给订阅者。
 
 `20261005_fold_agent_read_state` 把 head 上的 seq/offset 合并到 agent lane；lane 更靠前时保留 lane，等 seq 时保留最大 offset。`20261005_fold_decision_records` 将历史提问与决定的状态、选项和一次性令牌搬到消息，消息令牌使用部分唯一索引。领域消费者读取只投影新消息的 question/decision/member-inbox views。原提问、决定、插话表仍留作物理删除的备份窗口，但运行代码不读取它们。退役脚本 mul493 组同时列出 head.agent_read_state，执行前验证折叠迁移已完成。
 
