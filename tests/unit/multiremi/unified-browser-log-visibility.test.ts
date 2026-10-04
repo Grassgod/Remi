@@ -153,18 +153,23 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       await member.through(edited.seq); await owner.through(edited.seq);
       expect(member.frames().find(frame => frame.seq === edited.seq)?.payload.visibility).toBe("hidden");
       const reply = f.store.sendMessage({ session_id: f.session.id, sender: { type: "member", id: "mem_local_local" },
-        to: { type: "none" }, reply_to_id: q.request.id, body_md: "Private response", metadata: { human_response: { option_id: "allow_once" } }, wake_requested: "inbox_only" }).message;
+        to: { type: "none" }, message_kind: "reply", reply_to_id: q.request.id, body_md: "Private response", metadata: { human_response: { option_id: "allow_once" } }, wake_requested: "inbox_only" }).message;
       await member.through(reply.seq); await owner.through(reply.seq);
       privateRowsHidden(member.frames(), [q.request.id, q.turn.id, q.task.id, reply.id]);
       expect(JSON.stringify(member.frames())).not.toContain("Private response");
       expect(owner.frames().some(frame => frame.payload.id === reply.id)).toBe(true);
+      const responseEdit = f.store.appendConversationLog({ sessionId: f.session.id, kind: "message_edited", authorType: "system",
+        metadata: { target_seq: reply.seq, previous_body: "Private response" } });
+      await member.through(responseEdit.seq); await owner.through(responseEdit.seq);
+      expect(member.frames().find(frame => frame.seq === responseEdit.seq)?.payload.visibility).toBe("hidden");
+      expect(owner.frames().some(frame => frame.payload.id === responseEdit.id)).toBe(true);
       noCredentials(owner.frames());
       expect(member.events.filter(event => event.type.startsWith("task:")).length).toBe(0);
       expect(owner.events.some(event => event.type.startsWith("task:"))).toBe(true);
     } finally { await f.close(); }
   });
 
-  it("shared sources remain visible and a permission change is applied to retained replay", async () => {
+  it("shared sources remain visible and permission changes and archiving apply to retained replay", async () => {
     const f = await scaffold(true);
     try {
       const q = f.question("question"); f.start();
@@ -176,6 +181,14 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       member.events.length = 0;
       await member.subscribe(q.row.seq); await member.through(q.row.seq);
       privateRowsHidden(member.frames(), [q.request.id, q.turn.id, q.task.id]);
+      f.db.run("UPDATE multiremi_agents SET archived_at=? WHERE id=?", [new Date().toISOString(), f.agent.id]);
+      member.events.length = 0;
+      await member.subscribe(q.row.seq); await member.through(q.row.seq);
+      privateRowsHidden(member.frames(), [q.request.id, q.turn.id, q.task.id]);
+      const owner = await f.connect(f.owner.token);
+      await owner.subscribe(q.row.seq); await owner.through(q.row.seq);
+      expect(owner.frames().some(frame => frame.payload.id === q.request.id)).toBe(true);
+      noCredentials(owner.frames());
     } finally { await f.close(); }
   });
 });

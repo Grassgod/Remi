@@ -87,7 +87,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   for (const entry of entries) {
     if (!triggers.size && entry.kind === "turn" && entry.task_id === task.id) triggers.add(entry.seq);
   }
-  const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId).seq;
+  const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId, task.id).seq;
   const coldStart = projection.mode === "bootstrap";
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
     fromSeq: coldStart ? 0 : Math.min(readSeq, projection.to_seq),

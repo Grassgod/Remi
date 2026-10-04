@@ -7,10 +7,12 @@ import { countDelegationPairHops, pairRoundTripLimit, DelegationRoundTripLimitEr
 import { resolveWake } from './wake-policy.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { lockLane } from './lane-machine.js';
-import { ensurePendingTurn } from './lane-machine.js';
+import { deliverToRunningTurn, ensurePendingTurn } from './lane-machine.js';
+import { dependencyGateEnabled } from '../repos/issue-dependencies.js';
 import { parseJson } from '../helpers.js';
 import { toConversationLogEntry } from '../repos/conversation-log-repo.js';
 import type { MultiremiAgent } from '@multiremi/contracts/types.js';
+import { afterCommit } from '../db/postgres.js';
 
 export function getMessage(ctx:StoreContext,id:string):UnifiedMessage|null {
   const row=ctx.db.query("SELECT * FROM multiremi_conversation_log WHERE id=? AND kind='message'").get(id);
@@ -110,6 +112,10 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   if(duplicate){const message=getMessage(ctx,duplicate.id)!;const delivery=message.metadata.delivery_turn_id;
     const turn=ctx.db.query('SELECT id FROM multiremi_turns WHERE id=? OR trigger_message_id=?').get(typeof delivery==='string'?delivery:null,message.id);
     return {message,wake_applied:message.wake_applied,wake_reason:message.wake_reason,...(turn?{turn_id:turn.id}:{})};}
+  const decisionTurn=input.message_kind==='reply'&&reply?.message_kind==='decision'&&reply.task_id
+    ?ctx.db.query("SELECT * FROM multiremi_turns WHERE id=? AND status IN ('running','awaiting_human')").get(reply.task_id):null;
+  const unmet=dependencyGateEnabled()&&targetIssue?.status==='backlog'?ctx.issues().listUnmetPrerequisites(targetIssue.id):[];
+  const force=createInput.dependencyForce??createInput.dependency_force;
   const sourceSession=source?ctx.issueSessions().getIssueSession(source.session_id):null;
   const limit=pairRoundTripLimit();
   const hops=source&&recipientId?countMessageDelegationPairHops(ctx,source.id,recipientId,limit):0;
@@ -119,7 +125,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const parentAgent=parentOwner?.assigneeType&&parentOwner.assigneeId?ctx.resolveRunnableAgentForAssignee(parentOwner.assigneeType,parentOwner.assigneeId):null;
   const policy=resolveWake(input.sender,input.to,input.wake_requested,input.message_kind,{
     recipientType,recipientId,recipientAvailable:recipientType==='agent'?!!targetAgent&&!targetAgent.archivedAt:recipientType==='member'?!!member&&!member.archivedAt:false,
-    dependenciesMet:!targetIssue||targetIssue.status!=='backlog'||!!createInput.dependencyForce||ctx.issues().listUnmetPrerequisites(targetIssue.id).length===0,
+    dependenciesMet:!!force||unmet.length===0,
     sourceSideSession:!!sourceSession&&sourceSession.inheritMode!=='none',sourceHasIssue:input.sender.type==='agent'?!!source?.issue_id:undefined,
     targetHasIssue:!!targetIssue,pairHops:hops,pairLimit:limit,
     isReplyToDelegator:reply?.sender_type==='agent'&&reply.sender_id===recipientId||source?.delegated_by_agent_id===recipientId,isLeader:!!isLeader,isParentOwner:parentAgent?.id===recipientId,
@@ -130,6 +136,11 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     reply_to_id:sessionId===input.session_id?input.reply_to_id??null:null,dedupe_key:input.dedupe_key??null,options:input.options??null,
     card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
   const body=input.sender.type==='platform'&&['status','report'].includes(input.message_kind)?clampEnvelopeBody(input.body_md):input.body_md;
+  const metadata={...input.metadata};
+  if(input.message_kind==='decision'){
+    const key=metadata.human_request?'human_request':'decision_record';
+    metadata[key]={status:'pending',...(metadata[key] as object)};
+  }
   const existing=input.id?getMessage(ctx,input.id):null;
   if(existing&&(existing.session_id!==sessionId||existing.sender_type!==input.sender.type||existing.sender_id!==input.sender.id))throw new Error('Cannot readdress a message owned by another sender');
   let entry;
@@ -139,13 +150,13 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
       wake_requested=?,wake_applied=?,wake_reason=?,dedupe_key=?,options=?,task_id=COALESCE(?,task_id) WHERE id=?`,
       [header.to_type,header.to_ref,header.to_agent_id,header.to_member_id,header.message_kind,header.wake_requested,header.wake_applied,header.wake_reason,
         header.dedupe_key,header.options?JSON.stringify(header.options):null,source?.id??null,existing.id]);
-    ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{fields:{metadata:{...existing.metadata,...input.metadata,pending_completion:false}}});
+    ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{fields:{metadata:{...existing.metadata,...metadata,pending_completion:false}}});
     ctx.db.run("UPDATE multiremi_conversation_log SET visibility='shown' WHERE id=?",[existing.id]);
     entry=ctx.conversationLog().getConversationLogEntryById(existing.id)!;
   }else{
   entry=ctx.conversationLog().appendWithinTransaction({sessionId,id:input.id??createId(sessionId.startsWith('ises_')?'cmt':'msg'),kind:'message',authorType:input.sender.type,
     authorId:input.sender.id,taskId:source?.id??null,bodyMd:body,parentId:header.reply_to_id,messageHeader:header,visibility:input.visibility,
-    metadata:{...input.metadata,...(input.execution_scope?{execution_scope:input.execution_scope}:{})}});
+    metadata:{...metadata,...(input.execution_scope?{execution_scope:input.execution_scope}:{})}});
   }
   let message=getMessage(ctx,entry.id)!;
   if(recipientType==='member'&&recipientId){
@@ -153,11 +164,12 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,created_at,updated_at)
       VALUES(?,'member',?,'',?,?) ON CONFLICT DO NOTHING`,[sessionId,recipientId,at,at]);
   }
-  let scope=input.execution_scope??roleScope??'';
+  let scope=decisionTurn?.execution_scope??input.execution_scope??roleScope??'';
   let delegatedLane:any=null;
   if(policy.reason==='agent_dispatch'&&source&&targetIssue){
-    const latest=ctx.db.query('SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=? ORDER BY created_at DESC,id DESC LIMIT 1').get(targetIssue.id,recipientId);
-    if(latest?.delegated_by_agent_id===input.sender.id&&latest.delegated_from_issue_session_id===source.session_id)delegatedLane=latest;
+    delegatedLane=ctx.db.query(`SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=?
+      AND delegated_by_agent_id=? AND delegated_from_issue_session_id=? ORDER BY created_at DESC,id DESC LIMIT 1`)
+      .get(targetIssue.id,recipientId,input.sender.id,source.session_id);
     scope=input.execution_scope??delegatedLane?.execution_scope??createInput.delegationId??createId('dlg');
   }
   if(message.metadata.execution_scope!==scope){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,entry.seq,{fields:{metadata:{...message.metadata,execution_scope:scope}}});message=getMessage(ctx,entry.id)!;}
@@ -185,11 +197,15 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     lockLane(ctx,source.session_id,source.agent_id,source.execution_scope);
     ctx.db.run("UPDATE multiremi_turns SET status='awaiting_human',waiting_on_message_id=? WHERE id=? AND status IN ('pending','running','awaiting_human')",[message.id,source.id]);
   }
+  const resumedIssues=new Set<string>();
   if(input.message_kind==='reply'&&reply?.message_kind==='decision'){
     ctx.db.run('UPDATE multiremi_conversation_log SET resolved_at=COALESCE(resolved_at,?) WHERE id=?',[message.created_at,reply.id]);
     const waiting=ctx.db.query("SELECT * FROM multiremi_turns WHERE waiting_on_message_id=? AND status='awaiting_human'").all(reply.id);
     for(const turn of waiting){lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
-      ctx.db.run("UPDATE multiremi_turns SET status='running',waiting_on_message_id=NULL WHERE id=? AND status='awaiting_human'",[turn.id]);}
+      ctx.db.run("UPDATE multiremi_turns SET status='running',waiting_on_message_id=NULL WHERE id=? AND status='awaiting_human'",[turn.id]);
+      const resumed=ctx.tasks().getTask(turn.current_attempt_id);
+      if(resumed)afterCommit(ctx.db,()=>ctx.notifyTaskEvent('task:running',resumed));
+      if(turn.issue_id)resumedIssues.add(turn.issue_id);}
   }
   let turnInput=createInput;
   if(input.to.type==='role'&&input.to.ref==='delegator'&&source?.delegation_id){
@@ -199,11 +215,19 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     turnInput={...createInput,delegationId:delegatedLane?.delegation_id??createInput.delegationId??scope,delegatedByAgentId:input.sender.id,
       delegatedFromIssueSessionId:sourceSession.id,parentTaskId:null};
   }
-  const turnId=ensurePendingTurn(ctx,message,{...input,execution_scope:scope,session_id:sessionId},events,turnInput);
+  // Decision answers are input for the waiting work unit, including cross-Issue answers.
+  const turnId=decisionTurn
+    ?deliverToRunningTurn(ctx,decisionTurn,message)
+    :ensurePendingTurn(ctx,message,{...input,execution_scope:scope,session_id:sessionId},events,turnInput);
   if(turnId){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,message.seq,{fields:{metadata:{...message.metadata,delivery_turn_id:turnId}}});message=getMessage(ctx,message.id)!;}
   if(policy.applied!==input.wake_requested&&targetIssue)ctx.appendIssueActivity(targetIssue.id,{actorType:'system',actorId:null,type:'wake_downgraded',
     body:policy.reason,data:{message_id:message.id,requested:input.wake_requested,applied:policy.applied,reason:policy.reason}},events);
+  if(turnId&&force&&targetIssue&&unmet.length)ctx.issues().recordDependencyForceStarted(targetIssue.id,{
+    source:force.source,status:'todo',previousStatus:targetIssue.status,unmet,actorType:'member',actorId:force.actorMemberId,
+    commentId:force.commentId??message.id,taskId:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(turnId)?.current_attempt_id,agentId:recipientId,
+  },events);
   const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
+  for(const id of resumedIssues)affected.add(id);
   for(const id of affected)if(id)deriveIssueStatusWithinTransaction(ctx,id,events);
   // Cross-conversation inbox caches need a workspace signal even without a log subscription.
   ctx.emitWorkspaceEvent({type:'inbox:new',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});

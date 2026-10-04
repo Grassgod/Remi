@@ -22,9 +22,12 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
       : seqs.flatMap(seq => store.getConversationLogEntry(sessionId, seq) ?? []);
     const bySeq = new Map(rows.map(row => [row.seq, row]));
     const byId = new Map(rows.map(row => [row.id, row]));
-    const replies = [...new Set(rows.flatMap(row => row.parent_id ? [row.parent_id] : []))];
-    const targets = [...new Set(rows.flatMap(row => Number.isSafeInteger(row.metadata.target_seq) ? [Number(row.metadata.target_seq)] : []))];
-    if (replies.length || targets.length) {
+    let frontier = rows;
+    for (let depth = 0; depth <= 4 && frontier.length; depth++) {
+      const replies = [...new Set(frontier.flatMap(row => row.parent_id && !byId.has(row.parent_id) ? [row.parent_id] : []))];
+      const targets = [...new Set(frontier.flatMap(row => Number.isSafeInteger(row.metadata.target_seq)
+        && !bySeq.has(Number(row.metadata.target_seq)) ? [Number(row.metadata.target_seq)] : []))];
+      if (!replies.length && !targets.length) break;
       const related = postgres
         ? (await postgres.query<Record<string, unknown>>(
           `SELECT * FROM multiremi_conversation_log WHERE session_id=? AND (${[
@@ -34,6 +37,7 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
         : [...replies.flatMap(id => store.getConversationLogEntryById(id) ?? []),
           ...targets.flatMap(seq => store.getConversationLogEntry(sessionId, seq) ?? [])];
       for (const row of related) { byId.set(row.id, row); bySeq.set(row.seq, row); }
+      frontier = related;
     }
     const allowed = new Map<string, boolean>(), memo = createTaskAuthMemo();
     const visible = async (entry: ConversationVisibilityEntry) => {

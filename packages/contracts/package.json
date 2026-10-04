@@ -25,6 +25,7 @@
     "./live-hub": "./src/live-hub.ts",
     "./conversation-log": "./src/conversation-log.ts",
     "./unified-model": "./src/unified-model.ts",
+    "./issue-activity": "./src/issue-activity.ts",
     "./trace-file": "./src/trace-file.ts"
   },
   "dependencies": {}

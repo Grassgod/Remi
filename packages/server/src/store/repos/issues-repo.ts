@@ -46,7 +46,7 @@ import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
-import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
+import { INBOX_LEDGER_TYPES, isInboxLedgerType, issueActivityDetails, type IssueActivityEntry } from "@multiremi/contracts";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
@@ -1276,7 +1276,7 @@ export class IssuesRepo {
   /** First page per status, including counts and labels from one read snapshot. */
   listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false): IssueStatusPages {
     if (this.ctx.db.inTransaction) throw new Error("status pages require their own read snapshot");
-    return this.ctx.db.transaction(() => {
+    const snapshot = this.ctx.db.transaction(() => {
       if (this.ctx.db.dialect === "postgres") {
         this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
       }
@@ -1322,7 +1322,10 @@ export class IssuesRepo {
           archived_total: this.countIssues({ workspaceId: this.listIssuesWorkspaceId(resolved), archivedOnly: true }),
         } : {}),
       };
-    })();
+    });
+    // SQLite's deferred transaction keeps one WAL read snapshot while allowing
+    // another connection to commit writes. Store writers still use IMMEDIATE.
+    return (snapshot.deferred ?? snapshot)();
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -2909,12 +2912,19 @@ export class IssuesRepo {
     // MUL-400 S1c (QA round 1): every audit row below commits with the status
     // write above. The events go on the caller's queue, so a rollback leaves
     // neither rows nor listeners behind.
+    const previous: Record<string, unknown> = {};
+    for (const [field, before, after] of [
+      ["status", current.status, next.status], ["priority", current.priority, next.priority],
+      ["title", current.title, next.title], ["description", current.description, next.description],
+      ["start_date", current.startDate, next.startDate], ["due_date", current.dueDate, next.dueDate],
+      ["project_id", current.projectId, next.projectId], ["parent_issue_id", current.parentIssueId, next.parentIssueId],
+    ] as const) if (before !== after) previous[field] = before;
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
       type: "issue_updated",
       body: null,
-      data: input,
+      data: { ...input, previous },
     }, deferredEvents);
     if (dispatchOutcome?.skipped) {
       this.recordForcedStartSkipped(next, dispatchOutcome.skipped, input, deferredEvents);
@@ -3309,16 +3319,28 @@ export class IssuesRepo {
     }
     const parent = this.sameWorkspaceParent(issue);
     if (!parent) return;
-    if(changed&&!['done','cancelled'].includes(parent.status)){
-      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
-      sendMessageWithinTransaction(this.ctx,{session_id:session.id,sender:{type:'platform',id:null},to:{type:'role',ref:'parent_owner'},
-        message_kind:'status',wake_requested:['done','cancelled'].includes(parent.status)?'inbox_only':'now',
-        dedupe_key:`child_status:${issue.id}:${issue.status}:${eventId}`,
-        body_md:`${issue.key} ${issue.title}: ${previous.status} → ${issue.status}`,
-        metadata:{child_issue_id:issue.id,child_status:issue.status,message_source:{issueId:issue.id,taskId:parentTaskId??undefined}}},deferredEvents);
-    }
     const reported = changed ? childTerminalOutcome(issue.status) : null;
     const outcome = reported === "blocked" && options.taskTerminalStatus === "failed" ? "failed" : reported;
+    if(changed&&!['done','cancelled'].includes(parent.status)){
+      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
+      const details = { childIssueId: issue.id, child_issue_id: issue.id, childIssueKey: issue.key,
+        child_issue_key: issue.key, childStatus: issue.status, child_status: issue.status, outcome };
+      const body = outcome ? childStatusSystemCommentBody({mentionPrefix:this.parentAssigneeMentionPrefix(parent),
+        childKey:issue.key,childId:issue.id,childTitle:issue.title,outcome,childStatus:issue.status,readinessLines})
+        : `${issue.key} ${issue.title}: ${previous.status} → ${issue.status}`;
+      const delivered = sendMessageWithinTransaction(this.ctx,{session_id:session.id,sender:{type:'platform',id:null},to:{type:'role',ref:'parent_owner'},
+        message_kind:'status',wake_requested:'now',
+        dedupe_key:`child_status:${issue.id}:${issue.status}:${eventId}`,
+        body_md:body,
+        metadata:{child_issue_id:issue.id,child_status:issue.status,outcome,
+          message_source:{issueId:issue.id,taskId:parentTaskId??undefined},
+          inbox_item:{type:'child_issue_terminal',severity:outcome==='failed'||outcome==='blocked'?'warning':'info',
+            details,title:`${parent.key}: ${issue.key} ${outcome ? childOutcomeLabel(outcome) : issue.status}`}}},deferredEvents);
+      if (outcome && !parent.assigneeId) {
+        this.notifyParentSubscribersOfChildOutcome(parent, issue, outcome, deferredEvents,
+          this.getIssueComment(delivered.message.id)!);
+      }
+    }
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) this.recordChildStatusAfterParentClosed(parent, issue, outcome, deferredEvents);
       return;
@@ -4106,8 +4128,9 @@ export class IssuesRepo {
     child: MultiremiIssue,
     outcome: ChildTerminalOutcome,
     deferredEvents: CommitEventQueue,
+    existingComment?: MultiremiIssueComment,
   ): MultiremiIssueComment {
-    const comment = this.createSystemIssueCommentWithinTransaction(parent.id, childStatusSystemCommentBody({
+    const comment = existingComment ?? this.createSystemIssueCommentWithinTransaction(parent.id, childStatusSystemCommentBody({
       mentionPrefix: "",
       childKey: child.key,
       childId: child.id,
@@ -4485,6 +4508,7 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
+        assignmentAuthorType: "system",
         // Same authoritative-camelCase read as the other task-creation paths.
         parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
@@ -5453,6 +5477,27 @@ export class IssuesRepo {
       "SELECT * FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(issueId) as Row[];
     return rows.map(toIssueActivity);
+  }
+
+  listIssueActivityBetween(issueId: string, input: {
+    fromInclusive?: string | null; toExclusive?: string | null; types: readonly string[]; limit?: number;
+  }): { activities: IssueActivityEntry[]; activities_truncated: boolean } {
+    if (!input.types.length) return { activities: [], activities_truncated: false };
+    const limit = Math.max(1, Math.min(200, input.limit ?? 200));
+    const where = ["issue_id = ?", `type IN (${input.types.map(() => "?").join(",")})`];
+    const params: (string | number)[] = [issueId, ...input.types];
+    if (input.fromInclusive != null) { where.push("created_at >= ?"); params.push(input.fromInclusive); }
+    if (input.toExclusive != null) { where.push("created_at < ?"); params.push(input.toExclusive); }
+    const rows = this.ctx.db.query(`SELECT * FROM multiremi_issue_activity WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params, limit + 1) as Row[];
+    return {
+      activities: rows.slice(0, limit).reverse().map(row => {
+        const a = toIssueActivity(row);
+        return { type: "activity", id: a.id, actor_type: a.actorType, actor_id: a.actorId,
+          created_at: a.createdAt, action: a.type, details: issueActivityDetails(a.data, a.body) };
+      }),
+      activities_truncated: rows.length > limit,
+    };
   }
 
   // Assign-on-create could not queue a task. Persist the reason as a visible
@@ -6659,9 +6704,11 @@ export class IssuesRepo {
   ): void {
     const subscribers = this.listIssueSubscribers(issue.id);
     const excluded = new Set(excludedMemberIds);
+    const actorMemberId=actorType==='member'&&actorId
+      ?this.ctx.workspaces().getWorkspaceMemberByRef(actorId,issue.workspaceId)?.id??actorId:null;
     for (const subscriber of subscribers) {
       if (subscriber.userType !== "member") continue;
-      if (actorType === "member" && actorId === subscriber.userId) continue;
+      if (actorType === "member" && actorMemberId === subscriber.userId) continue;
       if (excluded.has(subscriber.userId)) continue;
       this.ctx.createInboxItem({
         issueId: issue.id,
@@ -7674,7 +7721,7 @@ function activityToTimelineEntry(activity: MultiremiIssueActivity): MultiremiTim
     createdAt: activity.createdAt,
     created_at: activity.createdAt,
     action: activity.type,
-    details: activity.data ?? (activity.body == null ? null : { body: activity.body }),
+    details: issueActivityDetails(activity.data, activity.body),
   };
 }
 

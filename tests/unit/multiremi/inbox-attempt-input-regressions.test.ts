@@ -1,0 +1,111 @@
+import { expect, it } from 'bun:test';
+import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
+import { MultiremiStore } from '@multiremi/store.js';
+pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
+    function setup(body = 'original instructions') {
+        const f = fixture();
+        const agent = f.store.createAgent({ name: 'Input owner', provider: 'codex' });
+        const issue = f.store.createIssue({ title: 'Attempt input', assigneeType: 'agent', assigneeId: agent.id });
+        const session = f.store.getOrCreateDefaultIssueSession(issue.id);
+        f.store.registerRuntime({ id: 'rt_input', daemonId: 'daemon_input', name: 'Input fixture', provider: 'codex', workspaceId: 'local' });
+        const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: body };
+        const sent = f.store.sendMessage(message);
+        const attempt = f.store.claimTask('rt_input')!;
+        f.store.startTask(attempt.id);
+        const bridge = f.store.getDaemonTurnBridge(), scope = { workspaceId: 'local', runtimeId: 'rt_input', daemonId: 'daemon_input' };
+        const offer = bridge.offerInput(f.store.getTaskWithAgent(attempt.id)!);
+        const receipt = (id: string, input: typeof offer) => ({ turn_id: sent.turn_id, attempt_id: id, input_to_seq: input.input_to_seq, message_ids: input.input_messages.map(m => m.id) });
+        return { ...f, agent, issue, session, message, sent, attempt, bridge, scope, offer, receipt };
+    }
+    it('cold replacement must read its own folded body even when the lane already read it', () => {
+        const f = setup('x'.repeat(20000));
+        f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: f.offer.input_to_seq + 1, offset: 0 }, f.attempt.id);
+        expect(f.bridge.rpc('turn.input', f.receipt(f.attempt.id, f.offer), f.scope).ok).toBe(true);
+        const cursor = f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq;
+        f.store.cancelTurn(f.sent.turn_id!);
+        const retried = f.store.retryTurn(f.sent.turn_id!, true);
+        expect(f.store.claimTask('rt_input')?.id).toBe(retried.current_attempt_id!);
+        f.store.startTask(retried.current_attempt_id!);
+        const input = f.bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
+        expect(input.input_from_seq).toBe(0);
+        expect(input.input_messages.find(m => m.id === f.sent.message.id)?.body_md).toContain('还有 12000 字没看');
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).code).toBe('input_gap');
+        expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq).toBe(cursor);
+        f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], input.input_to_seq, true, retried.current_attempt_id!);
+        expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).code).toBe('input_gap');
+        expect(f.store.getTurn(f.sent.turn_id!)!.input_to_seq).toBe(f.offer.input_to_seq);
+        f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: input.input_to_seq + 1, offset: 0 }, retried.current_attempt_id!);
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
+        expect(f.bridge.complete({ payload: { turn_id: f.sent.turn_id!, attempt_id: retried.current_attempt_id!, input_to_seq: input.input_to_seq, reply: { body_md: 'cold result', message_kind: 'final' } }, completionFields: null }, f.scope).ok).toBe(true);
+        expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('completed');
+        expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq).toBeGreaterThanOrEqual(cursor);
+    });
+    it('cold replacement replays every acknowledged message merged into the work unit', () => {
+        const f = setup();
+        const second = f.store.sendMessage({ ...f.message, body_md: 'additional original instructions' });
+        const offered = f.bridge.offerInput(f.store.getTaskWithAgent(f.attempt.id)!);
+        expect(f.bridge.rpc('turn.input', f.receipt(f.attempt.id, offered), f.scope).ok).toBe(true);
+        const retried = f.store.retryTurn(f.sent.turn_id!, true);
+        expect(f.store.claimTask('rt_input')?.id).toBe(retried.current_attempt_id!);
+        const input = f.bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
+        expect(input.input_from_seq).toBe(0);
+        expect(input.input_messages.map(m => m.id)).toEqual([f.sent.message.id, second.message.id]);
+        f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], input.input_to_seq, true, retried.current_attempt_id!);
+        expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
+    });
+    it('resumed replacement keeps its provider receipt and receives only later input', () => {
+        const f = setup();
+        expect(f.bridge.rpc('turn.input', f.receipt(f.attempt.id, f.offer), f.scope).ok).toBe(true);
+        f.db.run("UPDATE multiremi_turn_attempts SET session_id='retained-provider',work_dir='/retained' WHERE id=?", [f.attempt.id]);
+        const before = f.store.getIssue(f.issue.id)!;
+        const retried = f.store.retryTurn(f.sent.turn_id!);
+        expect(f.store.getIssue(f.issue.id)?.updatedAt).toBe(before.updatedAt);
+        const later = f.store.sendMessage({ ...f.message, body_md: 'later instructions' });
+        expect(later.turn_id).toBe(f.sent.turn_id!);
+        expect(f.store.claimTask('rt_input')?.id).toBe(retried.current_attempt_id!);
+        f.store.startTask(retried.current_attempt_id!);
+        const input = f.bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
+        expect(input.input_from_seq).toBe(f.offer.input_to_seq);
+        expect(input.input_messages.map(m => m.id)).toEqual([later.message.id]);
+        expect(f.bridge.rpc('turn.input', f.receipt(f.attempt.id, input), f.scope).code).toBe('stale_attempt');
+        expect(() => f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: input.input_to_seq + 1, offset: 0 }, f.attempt.id)).toThrow('stale_attempt');
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
+    });
+    it('already covered first-attempt wakes still retire without executing old work', () => {
+        const f = fixture(), agent = f.store.createAgent({ name: 'Old wake', provider: 'codex' }), issue = f.store.createIssue({ title: 'Old wake' });
+        const session = f.store.getOrCreateDefaultIssueSession(issue.id);
+        f.store.registerRuntime({ id: 'rt_old', daemonId: 'daemon_old', name: 'Old wake runtime', provider: 'codex', workspaceId: 'local' });
+        const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: 'covered work' };
+        const sent = f.store.sendMessage(message), first = f.store.claimTask('rt_old')!;
+        f.store.startTask(first.id);
+        f.store.completeTask(first.id, { output: 'work completed' });
+        const obsolete = f.store.sendMessage({ ...message, id: sent.message.id });
+        expect(obsolete.turn_id).not.toBe(sent.turn_id!);
+        expect(f.store.claimTask('rt_old')).toBeNull();
+        expect(f.store.getTurn(obsolete.turn_id!)?.status).toBe('cancelled');
+        expect(f.store.getTurn(sent.turn_id!)?.status).toBe('completed');
+        expect(f.store.listTurns({ workspace_id: 'local', session_id: session.id }).filter(t => t.status === 'cancelled')).toHaveLength(1);
+    });
+    it('upgrades existing int4 counters and public decisions on two successive starts', () => {
+        const f = setup();
+        const decision = f.store.sendMessage({ session_id: f.session.id, sender: { type: 'agent', id: f.agent.id }, source_turn_id: f.sent.turn_id!, to: { type: 'member', ref: 'mem_local_local' }, message_kind: 'decision', wake_requested: 'now', body_md: 'Approve?', options: [{ value: 'yes', label: 'Yes' }] });
+        f.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', ['{}', decision.message.id]);
+        f.db.run('DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)', ['20261005_attempt_input_receipts', '20261005_attempt_counters_bigint']);
+        if (f.db.dialect === 'postgres')
+            f.db.exec('ALTER TABLE multiremi_turn_attempts ALTER COLUMN event_count TYPE INTEGER, ALTER COLUMN tool_call_count TYPE INTEGER');
+        new MultiremiStore(f.db);
+        new MultiremiStore(f.db);
+        expect(f.store.getMessage(decision.message.id)?.metadata.decision_record).toEqual({ status: 'pending' });
+        if (f.db.dialect === 'postgres')
+            expect(f.db.query("SELECT data_type FROM information_schema.columns WHERE table_name='multiremi_turn_attempts' AND column_name IN ('event_count','tool_call_count') ORDER BY column_name").all()).toEqual([{ data_type: 'bigint' }, { data_type: 'bigint' }]);
+        f.store.answerMessageDecision(decision.message.id, { sender: { type: 'member', id: 'mem_local_local' }, body_md: 'Yes' });
+        const offer = f.bridge.offerInput(f.store.getTaskWithAgent(f.attempt.id)!);
+        f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 }, f.attempt.id);
+        const fields = { trace: { head: 0, event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER, closed: true as const, type_histogram: [] }, final_reply_md: '', model: { provider: 'codex', model: 'fixture' } };
+        expect(f.bridge.complete({ payload: { turn_id: f.sent.turn_id!, attempt_id: f.attempt.id, input_to_seq: offer.input_to_seq, reply: { body_md: 'large counts', message_kind: 'final' } }, completionFields: fields }, f.scope).ok).toBe(true);
+        expect(f.store.listTurnAttempts(f.sent.turn_id!).at(-1)).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER });
+        expect(f.store.getConversationLogEntryById(f.sent.turn_id!)?.metadata).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER });
+    });
+});

@@ -38,6 +38,12 @@ const log = createLogger("core");
 
 // AsyncLock + resolveSessionKey extracted to daemon/orchestrator.ts in D6.
 
+export interface RemiStoragePaths {
+  /** Remi data directory, with metrics and the default legacy sessions file. */
+  home?: string;
+  sessionsFile?: string;
+}
+
 export class Remi {
   config: RemiConfig;
   readonly agent: MultiremiAgent;
@@ -55,12 +61,14 @@ export class Remi {
   readonly _runtime = new AgentRuntime();
   private _botProjects: Map<string, MultiremiDaemonBotProject> | null;
   private readonly _ensureTopicWorkspaceCallback: ((sessionKey: string, topicId: string) => Promise<string | null>) | null;
+  private readonly _sessionsFile: string;
 
   constructor(
     config: RemiConfig,
     agent: MultiremiAgent,
     botProjects: MultiremiDaemonBotProject[] | null = null,
     ensureTopicWorkspace: ((sessionKey: string, topicId: string) => Promise<string | null>) | null = null,
+    storage: RemiStoragePaths = {},
   ) {
     this.config = config;
     this.agent = agent;
@@ -68,7 +76,9 @@ export class Remi {
     this._ensureTopicWorkspaceCallback = ensureTopicWorkspace;
     if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
     this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
-    this.metrics = new MetricsCollector(REMI_HOME);
+    this._sessionsFile = storage.sessionsFile
+      ?? (storage.home === undefined ? SESSIONS_FILE : join(storage.home, "sessions.json"));
+    this.metrics = new MetricsCollector(storage.home ?? REMI_HOME);
     this.traceCollector = new TraceCollector();
     this._migrateSessionsJson();
   }
@@ -328,8 +338,8 @@ export class Remi {
   /** One-time migration from sessions.json to SQLite. */
   private _migrateSessionsJson(): void {
     try {
-      if (!existsSync(SESSIONS_FILE)) return;
-      const raw = readFileSync(SESSIONS_FILE, "utf-8");
+      if (!existsSync(this._sessionsFile)) return;
+      const raw = readFileSync(this._sessionsFile, "utf-8");
       const data = JSON.parse(raw) as sessDb.LegacySessionData;
       if (!data.entries || !Array.isArray(data.entries) || data.entries.length === 0) return;
 
@@ -338,7 +348,7 @@ export class Remi {
 
       // Rename old file as backup (presence of .migrated = migration done)
       const { renameSync } = require("node:fs");
-      renameSync(SESSIONS_FILE, SESSIONS_FILE + ".migrated");
+      renameSync(this._sessionsFile, this._sessionsFile + ".migrated");
       log.info(`Renamed sessions.json → sessions.json.migrated`);
     } catch (e) {
       log.warn("Failed to migrate sessions.json:", e);

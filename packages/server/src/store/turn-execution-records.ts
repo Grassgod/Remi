@@ -8,6 +8,8 @@ function maskSqlLiterals(sql:string):string {
 }
 import { createId, nowIso } from "@multiremi/ids.js";
 
+export class AgentReplyCommentError extends Error {}
+
 const TURN_FIELDS = ["task_kind","agent_id","issue_id","issue_session_generation","holds_workspace","trigger_comment_id",
   "trigger_summary","workspace_id","priority","max_attempts","issue_creation_restricted","delegation_id","delegated_by_agent_id",
   "delegated_from_issue_session_id","delegation_skip_reason","wake_source","assignment_event_id","assignment_source_event_id",
@@ -138,10 +140,14 @@ export function runTurnExecutionMutation(db:SqlDatabase,sql:string,...arguments_
         const {output,...provenance}=payload??{};
         let message=db.query("SELECT reply_message_id FROM multiremi_turns WHERE id=?").get(row.turn_id).reply_message_id;
         const staged=!String(current.session_id).startsWith('auto_');
-        if(!message){message=createId(String(current.session_id).startsWith('ises_')?'cmt':'msg');
-          appendExecutionLog(db,current.session_id,message,'message',current.agent_id,String(output??''),{
-            metadata:{task_result:provenance,...(staged?{pending_completion:true}:{})},visibility:staged?'hidden':'shown',taskId:row.turn_id});turn.reply_message_id=message;}
-        else{const rendered=renderMarkdown(String(output??''));db.run('UPDATE multiremi_conversation_log SET body_md=?,body_html=?,render_version=?,revision=revision+1,updated_at=? WHERE id=?',[output??'',rendered.html,rendered.render_version,nowIso(),message]);}
+        try {
+          if(!message){message=createId(String(current.session_id).startsWith('ises_')?'cmt':'msg');
+            appendExecutionLog(db,current.session_id,message,'message',current.agent_id,String(output??''),{
+              metadata:{task_result:provenance,...(staged?{pending_completion:true}:{})},visibility:staged?'hidden':'shown',taskId:row.turn_id});turn.reply_message_id=message;}
+          else{const rendered=renderMarkdown(String(output??''));db.run('UPDATE multiremi_conversation_log SET body_md=?,body_html=?,render_version=?,revision=revision+1,updated_at=? WHERE id=?',[output??'',rendered.html,rendered.render_version,nowIso(),message]);}
+        } catch (error) {
+          throw new AgentReplyCommentError(error instanceof Error ? error.message : String(error), { cause: error });
+        }
       }
       write(db,"multiremi_turn_attempts",row.id,attempt);write(db,"multiremi_turns",row.turn_id,turn);
       notifyTurnChanged(db,row.turn_id);

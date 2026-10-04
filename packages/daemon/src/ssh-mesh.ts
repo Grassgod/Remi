@@ -172,6 +172,7 @@ function canonicalSshMeshHome(home: string): string {
 // derive its home from HOME, so re-reading it later could protect a test's
 // temporary home instead of the real one.
 const protectedSshMeshHomes = new Set<string>();
+protectedSshMeshHomes.add(canonicalSshMeshHome(homedir()));
 if (process.env.HOME) protectedSshMeshHomes.add(canonicalSshMeshHome(process.env.HOME));
 try {
   protectedSshMeshHomes.add(canonicalSshMeshHome(userInfo().homedir));

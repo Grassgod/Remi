@@ -227,7 +227,12 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
       const report=runUnifiedModelMigration(db,{reportDir:dir});
       const now=new Date();
       db.run("UPDATE multiremi_schema_migrations SET applied_at=? WHERE id=?",[new Date(now.getTime()-8*86_400_000).toISOString(),UNIFIED_MODEL_MIGRATION]);
-      new MultiremiStore(db);
+      const previous=process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+      process.env.MULTIREMI_MIGRATION_REPORT_DIR=dir;
+      try { new MultiremiStore(db); } finally {
+        if(previous===undefined)delete process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+        else process.env.MULTIREMI_MIGRATION_REPORT_DIR=previous;
+      }
       const args={set,reconciliation:report,now};
       expect(dropRetiredTables(db,args)).toEqual({dry_run:true,tables:[...RETIRED_TABLE_SETS[set]],columns:RETIRED_COLUMN_SETS[set],minimum_age_days:7});
       expect(()=>dropRetiredTables(db,{...args,execute:true})).toThrow("--confirm-drop");

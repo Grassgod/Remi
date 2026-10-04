@@ -4,6 +4,14 @@ Communication uses `remi message`, addressed unread messages use `remi inbox`,
 and execution uses `remi turn`. Issue, Chat and Autopilot remain conversation containers.
 A decision is a message with options; its answer is a reply to that message.
 
+The browser-only `GET /api/sessions/:sessionId/log?with_activity=1` adds an
+activity sidecar for the default Issue session: `activities`,
+`activities_truncated`, and `prev_entry_created_at`. Activities do not consume
+log sequence numbers or change pagination counts. The latest 200 matching
+activities remain chronological within the log window's timestamp interval.
+Side sessions and Chat ignore the flag. The retired CLI log commands remain
+local replacement notices; range reads use `remi message list`.
+
 This document is the user-facing migration contract for the Registry-based Remi CLI.
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.

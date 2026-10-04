@@ -55,7 +55,7 @@ decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，
 
 SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionId/log?anchor=&before=&after=` 返回 head、轮卡片、head_seq/log_version、前后分页标记及消息附件/反应 sidecar；`GET .../log/locate?id=` 返回 seq/head_seq；`GET .../log/entry?seq=` 或 `?id=` 展开一条展示记录及 delivered。它们使用新消息/轮的 canonical projection，保留展示 wire，不推进读游标。/log 带 from 或 to 返回 400，提示改用 `remi message list <conversation> --from <seq> --to <seq>`。Issue activity 仍由现有 Issue 详情读取协议提供。CLI 的旧 session log 命令继续本地退役；CLI 的范围读只走 messages GET。三条展示 GET 登记为 pure_ui，旧写入口仍退役。
 
-当前 S2 集成有已知的 agent 游标回归：轮完成会把 lane.cursor_seq 推到 projection_to_seq，暖续接和恢复 bootstrap 不能完整保留实际范围读取进度。`session-unread-progress.test.ts` 有 6 个失败，需 S2 修复；上述分页 HTTP 格式已定，人的 inbox 游标不受这处问题影响。页面不要用该 agent 游标推断用户阅读状态。
+按 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md)，lane 的 `cursor_seq/cursor_offset` 是实际读取高水位，`provider_cursor_seq` 是 provider 续接/完成位置。轮完成不推进实际读游标；冷 bootstrap 被接受后实际进度清零，完整 inline 输入与范围读取再推进它。范围读取绑定当前 attempt，拒绝或准备 bootstrap 不清零。人的 inbox 使用自己的 member lane，页面不要用 agent 游标推断用户阅读状态。
 
 ## Inbox
 

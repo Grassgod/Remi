@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createId } from "@multiremi/ids.js";
@@ -17,13 +17,13 @@ let sequence = 0;
 type Backend = "sqlite" | "postgres";
 type Entry = "task" | "session" | "rerun";
 
-async function withStore(backend: Backend, run: (store: MultiremiStore) => Promise<void>) {
+async function withStore(backend: Backend, run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) {
   if (backend === "sqlite") {
     const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
-      await run(store);
+      await run(store, db);
     } finally { db.close(); }
     return;
   }
@@ -37,7 +37,7 @@ async function withStore(backend: Backend, run: (store: MultiremiStore) => Promi
     db = new PostgresSyncDatabase(url.toString());
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    await run(store);
+    await run(store, db);
   } finally {
     db?.close();
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
@@ -111,34 +111,63 @@ function activity(store: MultiremiStore, issueId: string, type: string) {
   return store.listIssueActivity(issueId).filter(row => row.type === type);
 }
 
-async function withLimit(value: string | undefined, run: () => Promise<void>) {
+async function withLimit<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
   const previous = process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT;
   if (value === undefined) delete process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT;
   else process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT = value;
-  try { await run(); }
+  try { return await run(); }
   finally {
     if (previous === undefined) delete process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT;
     else process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT = previous;
   }
 }
 
-// Fixture writes are deliberately separate from credential-owned public dispatch.
-function chain(store: MultiremiStore, f: ReturnType<typeof fixture>, hops: number) {
-  let parent: MultiremiTask | null = null;
-  for (let i = 0; i < hops; i++) {
-    const agent = (hops - i) % 2 === 1 ? f.qa : f.atlas;
-    const issue = agent.id === f.qa.id ? f.a : f.b;
-    parent = store.createTask({ agentId: agent.id, issueId: issue.id,
-      issueSessionId: agent.id === f.qa.id ? f.s0.id : f.s1.id,
-      parentTaskId: parent?.id, delegationId: createId("dlg"),
-      delegatedByAgentId: agent.id === f.qa.id ? f.atlas.id : f.qa.id,
-      delegatedFromIssueSessionId: agent.id === f.qa.id ? f.s1.id : f.s0.id, prompt: "Pair chain." });
-  }
-  return parent!;
+function sourceTaskId(store: MultiremiStore, task: MultiremiTask): string | null {
+  const trigger = store.getTurn(task.id)?.trigger_message_id;
+  return trigger ? store.getMessage(trigger)?.task_id ?? null : null;
+}
+
+async function chain(store: MultiremiStore, f: ReturnType<typeof fixture>, hops: number) {
+  // Exercise durable request/report lineage; pending writes would merge in one lane.
+  return withLimit("50", async () => {
+    let source = f.source;
+    if (hops % 2) {
+      store.completeTask(source.id, { output: "Initial coordination finished." });
+      source = store.createTask({ agentId: f.atlas.id, issueId: f.b.id,
+        issueSessionId: f.s1.id, prompt: "Start the odd-hop chain." });
+      start(store, source);
+    }
+    for (let count = 0; count < hops;) {
+      const target = source.agentId === f.qa.id ? f.atlas : f.qa;
+      const targetIssue = target.id === f.qa.id ? f.a : f.b;
+      const targetSession = target.id === f.qa.id ? f.s0 : f.s1;
+      const child = await dispatch(store, source, targetIssue, target.id, "task", targetSession.id);
+      store.completeTask(source.id, { output: "Dispatched." });
+      start(store, child);
+      count++;
+      source = child;
+      if (count < hops) {
+        store.completeTask(child.id, { output: "Result." });
+        source = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
+        start(store, source);
+        count++;
+      }
+    }
+    return source;
+  });
+}
+
+function expectDowngradedMessage(store: MultiremiStore, result: any, source: MultiremiTask, targetId: string) {
+  expect(result).toMatchObject({ task: null, wake_applied: "next_turn", wake_reason: "pair_round_trip_limit" });
+  const message = store.getMessage(result.message.id)!;
+  expect(message).toMatchObject({ message_kind: "request", task_id: source.id, to_agent_id: targetId,
+    wake_applied: "next_turn", wake_reason: "pair_round_trip_limit" });
+  expect(message.body_md).toBe(result.message.body_md);
+  expect(message.metadata.delivery_turn_id).toBeUndefined();
 }
 
 for (const backend of ["sqlite", "postgres"] as const) {
-  const timeout = backend === "postgres" ? 60_000 : 15_000;
+  const timeout = backend === "postgres" ? 180_000 : 15_000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-510 universal delegation (${backend})`, () => {
     for (const entry of ["task", "session", "rerun"] as const) {
       for (const terminal of ["completed", "failed", "cancelled"] as const) {
@@ -147,8 +176,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
             const f = fixture(store);
             const child = await dispatch(store, f.source, f.b, f.atlas.id, entry, f.s1.id);
             const targetSessionId = entry === "rerun" ? store.getOrCreateDefaultIssueSession(f.b.id).id : f.s1.id;
-            expect(child).toMatchObject({ parentTaskId: f.source.id, delegatedByAgentId: f.qa.id,
+            expect(child).toMatchObject({ parentTaskId: null, delegatedByAgentId: f.qa.id,
               delegatedFromIssueSessionId: f.s0.id, issueSessionId: targetSessionId });
+            expect(sourceTaskId(store, child)).toBe(f.source.id);
             expect(child.delegationId).toStartWith("dlg_");
             expect(child.delegationId).not.toBe("dlg_forged");
             store.completeTask(f.source.id, { output: "Dispatched." });
@@ -161,7 +191,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
             finish();
             const returned = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
             expect(returned).toMatchObject({ agentId: f.qa.id, issueId: f.a.id, issueSessionId: f.s0.id,
-              parentTaskId: child.id, delegatedByAgentId: f.qa.id });
+              parentTaskId: null, delegatedByAgentId: f.qa.id });
+            expect(sourceTaskId(store, returned)).toBe(child.id);
             const body = inboxReportBody(store, returned, child.id);
             expect(body).toContain(`Status: ${terminal}\n来源：${f.b.key}\n`);
             expect(body).toContain(f.atlas.name);
@@ -170,7 +201,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
             if (terminal === "failed") expect(body).toContain("摘要：Verification failed");
             if (terminal === "cancelled") expect(body).toContain("摘要：\n");
             expect(Buffer.byteLength(body)).toBeLessThan(2048);
-            expect(store.listSessionEvents(f.s0.id).filter(e => e.kind === "delegation_report" && e.taskId === child.id))
+            expect(store.listMessages(f.s0.id).filter(m => m.message_kind === "report" && (m.metadata.message_source as any)?.taskId === child.id))
               .toHaveLength(1);
             expect(store.listTasksForIssue(f.a.id).filter(t => t.issueSessionId === f.wrong.id)).toHaveLength(0);
             expect(store.listTasksForIssue(f.b.id).filter(t => t.agentId === f.qa.id)).toHaveLength(0);
@@ -192,6 +223,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
               .toBe(true);
             expect(inboxReportBody(store, returned, child.id)).toBe(body);
             store.completeTask(returned.id, { output: "Reviewed." });
+            store.sweepIdleIssueLanes(Date.now() + 60_001);
             expect(store.listTasks("queued")).toHaveLength(0);
           }), timeout);
       }
@@ -206,8 +238,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
             issueSessionId: f.s0.id, prompt: "Dispatch acceptance." });
           start(store, leaderSource);
           const child = await dispatch(store, leaderSource, f.b, f.qa.id, entry, f.s1.id);
-          expect(child).toMatchObject({ delegatedByAgentId: f.leader.id, parentTaskId: leaderSource.id,
+          expect(child).toMatchObject({ delegatedByAgentId: f.leader.id, parentTaskId: null,
             delegatedFromIssueSessionId: f.s0.id, issueSessionId: f.s1.id });
+          expect(sourceTaskId(store, child)).toBe(leaderSource.id);
           expect(store.getIssue(f.a.id)!.assigneeId).toBeNull();
           store.completeTask(leaderSource.id, { output: "Waiting for QA." });
           start(store, child);
@@ -236,7 +269,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
           } else child = await dispatch(store, f.source, f.a, f.atlas.id, entry, targetSession.id);
           // Same-Issue task credentials bind comments to the source Session.
           expect(child).toMatchObject({ issueSessionId: entry === "mention" ? f.s0.id : targetSession.id, delegatedByAgentId: f.qa.id,
-            delegatedFromIssueSessionId: f.s0.id, parentTaskId: f.source.id });
+            delegatedFromIssueSessionId: f.s0.id, parentTaskId: null });
+          expect(sourceTaskId(store, child)).toBe(f.source.id);
           store.completeTask(f.source.id, { output: "Dispatched." });
           start(store, child);
           store.completeTask(child.id, { output: "Same Issue result." });
@@ -252,7 +286,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect((await mention(store, f.source, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
         const child = store.listTasksForIssue(f.b.id)[0]!;
         expect(child).toMatchObject({ delegatedByAgentId: f.qa.id, delegatedFromIssueSessionId: f.s0.id,
-          parentTaskId: f.source.id });
+          parentTaskId: null });
+        expect(sourceTaskId(store, child)).toBe(f.source.id);
         expect((await mention(store, f.source, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
         expect(store.listTasksForIssue(f.b.id)).toHaveLength(1);
         const otherSourceSession = store.createIssueSession(f.a.id, { title: "Other dispatcher Session" });
@@ -264,7 +299,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         start(store, child);
         const before = store.listTasks().length;
         expect((await mention(store, child, f.b, f.s1.id, f.qa.id)).status).toBe(201);
-        const report = store.listTasksForIssue(f.a.id).find(t => t.parentTaskId === child.id)!;
+        const report = store.listTasksForIssue(f.a.id).find(t => sourceTaskId(store, t) === child.id)!;
         expect(report).toMatchObject({ agentId: f.qa.id, issueSessionId: f.s0.id,
           delegationId: child.delegationId, delegatedByAgentId: f.qa.id });
         expect(store.listTasks().length).toBe(before + 1);
@@ -290,7 +325,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           expect(children).toHaveLength(2);
           expect(new Set(children.map(task => task.delegationId)).size).toBe(2);
           for (const { task: source } of sources) {
-            const child = children.find(task => task.parentTaskId === source.id)!;
+            const child = children.find(task => sourceTaskId(store, task) === source.id)!;
             expect(child.delegationId).toStartWith("dlg_");
             expect(child).toMatchObject({ agentId: f.atlas.id, issueSessionId: f.s1.id,
               delegatedByAgentId: source.agentId, delegatedFromIssueSessionId: source.issueSessionId });
@@ -307,15 +342,16 @@ for (const backend of ["sqlite", "postgres"] as const) {
           }
           const returnedIds = new Set<string>();
           for (const { task: source } of sources) {
-            const child = children.find(task => task.parentTaskId === source.id)!;
+            const child = children.find(task => sourceTaskId(store, task) === source.id)!;
             const returned = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
             returnedIds.add(returned.id);
             expect(returned).toMatchObject({ agentId: source.agentId, issueId: f.a.id,
-              issueSessionId: source.issueSessionId, parentTaskId: child.id,
+              issueSessionId: source.issueSessionId, parentTaskId: null,
               delegationId: child.delegationId, delegatedByAgentId: source.agentId });
+            expect(sourceTaskId(store, returned)).toBe(child.id);
             expect(inboxReportBody(store, returned, child.id)).toContain(`Result for ${source.agentId}.`);
-            expect(store.listSessionEvents(source.issueSessionId!).filter(event => event.kind === "delegation_report")
-              .map(event => event.taskId)).toEqual([child.id]);
+            expect(store.listMessages(source.issueSessionId!).filter(message => message.message_kind === "report")
+              .map(message => (message.metadata.message_source as any)?.taskId)).toEqual([child.id]);
             start(store, returned);
             store.completeTask(returned.id, { output: "Reviewed independently." });
           }
@@ -386,9 +422,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
           expect(run.status).toBe("running");
           expect(run.taskId).toBeTruthy();
           const task = store.getTask(run.taskId!)!;
-          expect(task).toMatchObject({ status: "queued", agentId: f.atlas.id, autopilotRunId: run.id, parentTaskId: f.source.id,
+          expect(task).toMatchObject({ status: "queued", agentId: f.atlas.id, autopilotRunId: run.id, parentTaskId: null,
             delegationId: null, delegatedByAgentId: null, delegatedFromIssueSessionId: null,
             delegationSkipReason: null, delegationReturnTaskId: null });
+          expect(sourceTaskId(store, task)).toBe(f.source.id);
           if (executionMode === "run_only") expect(task.issueId).toBeNull();
           else expect(task.issueId).toBe(run.issueId);
           const before = store.listTasks().length;
@@ -406,7 +443,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
     }
 
     for (const limit of [1, 2, 5]) {
-      it(`real dispatch/terminal-return loop refuses dispatch ${limit + 1} at L=${limit}`,
+      it(`real dispatch/terminal-return loop downgrades dispatch ${limit + 1} at L=${limit}`,
         async () => withLimit(limit === 5 ? undefined : String(limit), () => withStore(backend, async store => {
           const f = fixture(store);
           let source = f.source;
@@ -423,8 +460,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
           const before = store.listTasks().length;
           for (const entry of ["task", "session", "rerun"] as const) {
             const response = await dispatchResponse(store, source, f.b, f.atlas.id, entry, f.s1.id);
-            expect(response.status).toBe(409);
-            expect(await response.json()).toMatchObject({ code: "pair_round_trip_limit" });
+            expect(response.status).toBe(200);
+            expectDowngradedMessage(store, await response.json(), source, f.atlas.id);
             expect(store.listTasks().length).toBe(before);
           }
           expect((await mention(store, source, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
@@ -432,8 +469,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
           const newSession = store.createIssueSession(f.b.id, { title: "No prior delegation lane" });
           expect((await mention(store, source, f.b, newSession.id, f.atlas.id)).status).toBe(201);
           expect(store.listTasks().length).toBe(before);
-          expect(activity(store, f.b.id, "comment_mention_skipped").at(-1)?.data)
-            .toMatchObject({ reason: "pair_round_trip_limit" });
+          const limitedMentions = store.listMessages(newSession.id).filter(m => m.to_agent_id === f.atlas.id);
+          expect(limitedMentions).toHaveLength(1);
+          expect(limitedMentions[0]).toMatchObject({ wake_applied: "next_turn", wake_reason: "pair_round_trip_limit" });
           const notices = store.listConversationLogEntries(f.s0.id).filter(e =>
             e.metadata.envelope?.dedupeKey === `pair_round_trip_limit:${source.id}:${f.atlas.id}`);
           expect(notices).toHaveLength(1);
@@ -455,40 +493,49 @@ for (const backend of ["sqlite", "postgres"] as const) {
 
     it("checks 2L-1, 2L, 2L+1 boundaries and invalid environment fallback without schema changes",
       async () => withStore(backend, async store => {
-        const f = fixture(store);
         for (const value of [undefined, "0", "-1", "not-a-number", "1.5", "Infinity"]) {
           await withLimit(value, async () => expect(pairRoundTripLimit()).toBe(5));
         }
         for (const limit of [1, 2, 5]) await withLimit(String(limit), async () => {
           for (const hops of [2 * limit - 1, 2 * limit, 2 * limit + 1]) {
-            const source = chain(store, f, hops);
-            const before = store.listTasksForIssue(f.b.id).length;
-            const response = await dispatchResponse(store, source, f.b, f.atlas.id);
-            expect(response.status).toBe(hops < 2 * limit ? 201 : 409);
-            expect(store.listTasksForIssue(f.b.id).length).toBe(before + (hops < 2 * limit ? 1 : 0));
+            await withStore(backend, async isolated => {
+              const f = fixture(isolated);
+              const source = await chain(isolated, f, hops);
+              const before = isolated.listTasksForIssue(f.b.id).length;
+              const response = await dispatchResponse(isolated, source, f.b, f.atlas.id);
+              expect(response.status).toBe(hops < 2 * limit ? 201 : 200);
+              const result = await response.json();
+              if (hops >= 2 * limit) expectDowngradedMessage(isolated, result, source, f.atlas.id);
+              else expect(sourceTaskId(isolated, isolated.getTask(result.task.id)!)).toBe(source.id);
+              expect(isolated.listTasksForIssue(f.b.id).length).toBe(before + (hops < 2 * limit ? 1 : 0));
+            });
           }
         });
       }), timeout);
 
     it("a third agent, missing delegation or repeated agent ends only the current pair segment",
-      async () => withStore(backend, async store => {
+      async () => withStore(backend, async (store, db) => {
         const f = fixture(store);
-        const source = chain(store, f, 4);
+        const source = await chain(store, f, 4);
         expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
         expect(store.countDelegationPairHops(source, f.leader.id)).toBe(1);
-        const third = store.createTask({ agentId: f.leader.id, issueId: f.a.id,
-          parentTaskId: source.id, delegationId: createId("dlg"), delegatedByAgentId: f.qa.id, prompt: "Third agent" });
-        const afterThird = store.createTask({ agentId: f.qa.id, issueId: f.a.id,
-          parentTaskId: third.id, delegationId: createId("dlg"), delegatedByAgentId: f.atlas.id, prompt: "New segment" });
+        const third = await dispatch(store, source, f.a, f.leader.id, "task", f.s0.id);
+        const afterThird = await dispatch(store, third, f.a, f.qa.id, "task", f.s0.id);
         expect(store.countDelegationPairHops(afterThird, f.atlas.id)).toBe(1);
-        const same = store.createTask({ agentId: f.qa.id, issueId: f.a.id,
-          parentTaskId: source.id, delegationId: createId("dlg"), delegatedByAgentId: f.atlas.id, prompt: "Same agent" });
-        expect(store.countDelegationPairHops(same, f.atlas.id)).toBe(1);
-        const unmarked = store.createTask({ agentId: f.atlas.id, issueId: f.b.id,
-          parentTaskId: source.id, prompt: "First round / child status / re-ring without delegation" });
-        const afterUnmarked = store.createTask({ agentId: f.qa.id, issueId: f.a.id,
-          parentTaskId: unmarked.id, delegationId: createId("dlg"), delegatedByAgentId: f.atlas.id, prompt: "New segment" });
-        expect(store.countDelegationPairHops(afterUnmarked, f.atlas.id)).toBe(1);
+        // Corrupt one edge of the real four-hop chain to probe the stop conditions.
+        const trigger = store.getTurn(source.id)!.trigger_message_id!;
+        const originalParent = store.getMessage(trigger)!.task_id!;
+        db.run("UPDATE multiremi_conversation_log SET task_id=? WHERE id=?", [source.id, trigger]);
+        expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(1);
+        db.run("UPDATE multiremi_conversation_log SET task_id=? WHERE id=?", [originalParent, trigger]);
+        const parent = store.getTurn(originalParent)!;
+        db.run("UPDATE multiremi_turns SET agent_id=? WHERE id=?", [source.agentId, parent.id]);
+        expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(1);
+        db.run("UPDATE multiremi_turns SET agent_id=? WHERE id=?", [parent.agent_id, parent.id]);
+        db.run("UPDATE multiremi_turns SET delegation_id=NULL WHERE id=?", [parent.id]);
+        expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(1);
+        db.run("UPDATE multiremi_turns SET delegation_id=? WHERE id=?", [parent.delegation_id, parent.id]);
+        expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
       }), timeout);
 
     it("human creation has no delegation or terminal audit; self/Chat/no-target dispatch has explicit skip reasons",
@@ -500,51 +547,66 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const human = store.getTask(humanId)!;
         expect(human).toMatchObject({ parentTaskId: null, delegationId: null, delegationSkipReason: null });
         store.cancelTask(human.id);
-        expect(activity(store, f.b.id, "delegation_return_skipped")).toHaveLength(0);
+        expect(activity(store, f.b.id, "wake_downgraded").filter(row =>
+          (row.data as { sourceTaskId?: string }).sourceTaskId === human.id)).toHaveLength(0);
         for (const issue of [f.a, f.b]) {
-          const self = await dispatch(store, f.source, issue, f.qa.id);
-          expect(self.delegationSkipReason).toBe("self_dispatch");
-          expect(self.delegationId).toBeNull();
-          store.cancelTask(self.id);
-          expect(activity(store, issue.id, "delegation_return_skipped")
-            .some(row => (row.data as { sourceTaskId: string; reason: string }).sourceTaskId === self.id
-              && (row.data as { reason: string }).reason === "self_dispatch")).toBe(true);
+          const before = store.listTasks().length;
+          const response = await dispatchResponse(store, f.source, issue, f.qa.id);
+          expect(response.status).toBe(200);
+          const result = await response.json();
+          expect(result).toMatchObject({ task: null, wake_applied: "inbox_only", wake_reason: "self" });
+          expect(store.getMessage(result.message.id)).toMatchObject({ task_id: f.source.id, to_agent_id: f.qa.id, wake_reason: "self" });
+          expect(store.listTasks()).toHaveLength(before);
         }
         expect((await mention(store, f.source, f.a, f.s0.id, f.qa.id)).status).toBe(201);
-        expect(activity(store, f.a.id, "comment_mention_skipped").at(-1)?.data).toMatchObject({ reason: "self_mention" });
+        expect(store.listMessages(f.s0.id).some(message => message.wake_reason === "self" && message.to_agent_id === f.qa.id)).toBeTrue();
         const detached = store.createTask({ agentId: f.qa.id, prompt: "No Issue source" });
         const chat = store.createChatSession({ agentId: f.qa.id, creatorId: "local" });
         const chatSource = store.createTask({ agentId: f.qa.id, chatSessionId: chat.id, prompt: "Chat source" });
         for (const source of [detached, chatSource]) {
           for (const entry of ["task", "session"] as const) {
-            const child = await dispatch(store, source, f.b, f.atlas.id, entry);
-            expect(child.delegationSkipReason).toBe("source_not_issue_task");
-            store.cancelTask(child.id);
-            expect(child.delegationId).toBeNull();
-            expect(store.getTask(child.id)!.delegationReturnTaskId).toBeNull();
+            const before = store.listTasks().length;
+            const response = await dispatchResponse(store, source, f.b, f.atlas.id, entry);
+            expect(response.status).toBe(200);
+            const result = await response.json();
+            expect(result).toMatchObject({ task: null, wake_applied: "next_turn", wake_reason: "no_issue_target" });
+            expect(store.getMessage(result.message.id)?.task_id).toBe(source.id);
+            expect(store.listTasks()).toHaveLength(before);
           }
         }
+        const before = store.listTasks().length;
         const response = await request(store, f.source, "/api/multiremi/tasks", { agentId: f.atlas.id, prompt: "No target Issue" });
-        expect(response.status).toBe(201);
-        const detachedTarget = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
-        expect(detachedTarget).toMatchObject({ issueId: null, delegationId: null, delegationSkipReason: "target_not_issue_task" });
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toMatchObject({ task: null, wake_applied: "next_turn", wake_reason: "no_issue_target" });
+        expect(store.getMessage(result.message.id)?.task_id).toBe(f.source.id);
+        expect(store.listTasks()).toHaveLength(before);
       }), timeout);
 
     it("continue inherits lineage but cannot evade the pair limit or cross-Session authorization",
       async () => withLimit("2", () => withStore(backend, async store => {
         const f = fixture(store);
-        const source = chain(store, f, 4);
-        const previous = store.createTask({ agentId: f.atlas.id, issueId: f.a.id, issueSessionId: f.s0.id,
-          delegationId: createId("dlg"), delegatedByAgentId: f.qa.id,
-          delegatedFromIssueSessionId: f.s0.id, prompt: "Earlier delegated work" });
+        let source = f.source;
+        let previous: MultiremiTask | null = null;
+        for (let round = 0; round < 2; round++) {
+          const child = await dispatch(store, source, f.a, f.atlas.id, "task", f.s0.id);
+          previous ??= child;
+          store.completeTask(source.id, { output: "Dispatched." });
+          start(store, child);
+          store.completeTask(child.id, { output: "Completed." });
+          source = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
+          start(store, source);
+        }
+        expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
+        const foreign = await withLimit("50", () => dispatch(store, source, f.b, f.atlas.id, "task", f.s1.id));
         const before = store.listTasks().length;
         const response = await request(store, source, "/api/multiremi/tasks", {
-          agentId: f.atlas.id, continueTaskId: previous.id, prompt: "Another round" });
-        expect(response.status).toBe(409);
-        expect(await response.json()).toMatchObject({ code: "pair_round_trip_limit" });
+          agentId: f.atlas.id, continueTaskId: previous!.id, prompt: "Another round" });
+        expect(response.status).toBe(200);
+        expectDowngradedMessage(store, await response.json(), source, f.atlas.id);
         expect(store.listTasks().length).toBe(before);
         const cross = await request(store, source, "/api/multiremi/tasks", {
-          agentId: f.atlas.id, continueTaskId: source.parentTaskId, prompt: "Cross-Session continuation" });
+          agentId: f.atlas.id, continueTaskId: foreign.id, prompt: "Cross-Session continuation" });
         expect(cross.status).toBe(400);
         expect(store.listTasks().length).toBe(before);
       })), timeout);
