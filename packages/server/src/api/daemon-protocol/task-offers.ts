@@ -30,8 +30,8 @@ export function daemonTurnOfferPayload(execution: Record<string, unknown>, input
 export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTaskWithAgent,
   project: ProjectKnowledgeServiceContract, repository: RepositoryWikiServiceContract,
   supportsWikiFetch = false,
-  input: DaemonTurnInput = task as MultiremiTaskWithAgent & DaemonTurnInput): Promise<Record<string, unknown> | null> {
-  // Fail explicitly until S2 supplies canonical input; preserve the main offer pipeline below.
+  input: DaemonTurnInput = store.getDaemonTurnBridge().offerInput(task)): Promise<Record<string, unknown> | null> {
+  // Validate canonical input before preparing the execution context and access token.
   daemonTurnOfferPayload({}, input);
   const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
   for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {

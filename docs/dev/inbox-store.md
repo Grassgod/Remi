@@ -34,6 +34,8 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 [DaemonTurnBridge](../../packages/server/src/store/inbox/daemon-turn-bridge.ts) 提供 `offerInput`、`snapshot`、`rpc`、`complete`。所有 RPC 检查 workspace/runtime/daemon/current-attempt 绑定；旧 attempt 无法提交。offer 使用 lane 游标和 `taskSessionInput` 的 unread_range，触发消息正文最多内联 8,000 字，长正文通过 message list 范围读取。正文、HTML、任意 metadata 与卡片凭据不重复塞入输入帧。折叠正文或仅提供范围提示的上下文未完整读取时不能越过它确认输入；snapshot 只投递轮开始后当前 lane 的 now 插话与 wrap-up 标记。complete 在终态事务内确认输入、写 reply/final、补铃并推导 Issue 状态，重发返回已提交结果。
 
+[server 启动](../../packages/server/src/api/server.ts) 默认调用 `Store.getDaemonTurnBridge()`，同一实例用于 offer、下行快照、RPC 和完成报告；测试可用 `daemonTurnBridge` 显式覆盖。传输接入已在此分支完成，生产切换和 212 真机验收另行执行。定向集成验证入口为 `tests/unit/daemon/task-downlinks.test.ts` 的 Store bridge 用例。
+
 ## 状态与迁移
 
 [deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、负责人最后终态的顺序推导。human_sender 或 agent_dispatch 的 pending 为 todo，纯平台 pending 保持原状态。completed/failed/cancelled 分别为 in_review/blocked/todo。尝试失败、lost、换机、重试不推导 Issue。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。

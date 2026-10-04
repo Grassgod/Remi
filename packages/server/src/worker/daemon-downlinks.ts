@@ -141,7 +141,9 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
         const seq = this.inputSeqs.get(`${taskId}:${pending.id}`);
         if (seq !== undefined && seq <= to && !confirmed.has(pending.id)) throw new Error("unconfirmed turn input gap");
       }
-      await this.rpc("turn.input", { ...input, input_to_seq: to, message_ids: ids.filter(id => this.inputSeqs.has(`${taskId}:${id}`)) });
+      const messageIds = ids.filter(id => this.inputSeqs.has(`${taskId}:${id}`))
+        .sort((a, b) => this.inputSeqs.get(`${taskId}:${a}`)! - this.inputSeqs.get(`${taskId}:${b}`)!);
+      await this.rpc("turn.input", { ...input, input_to_seq: to, message_ids: messageIds });
       const current = this.turns.get(taskId);
       if (current) current.inputToSeq = Math.max(current.inputToSeq, to);
     }
@@ -174,6 +176,16 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
 
   registerDecision(message: UnifiedMessage, attemptId: string): void {
     this.decisions.set(message.id, message); this.decisionAttempts.set(message.id, attemptId);
+    // The daemon supplied this outgoing decision's body and received its stored
+    // message in the RPC response. Include that known input in the contiguous
+    // receipt for its answer; snapshots only push incoming now messages.
+    const turn = this.turns.get(attemptId);
+    if (message.sender_type === "agent" && turn && message.seq > turn.inputToSeq) {
+      this.inputSeqs.set(`${attemptId}:${message.id}`, message.seq);
+      let ids = this.confirmedDecisionInputs.get(attemptId);
+      if (!ids) this.confirmedDecisionInputs.set(attemptId, ids = new Set());
+      ids.add(message.id);
+    }
   }
 
   waitForDecisionReply(messageId: string, signal: AbortSignal, timeoutMs: number): Promise<UnifiedMessage | null> {

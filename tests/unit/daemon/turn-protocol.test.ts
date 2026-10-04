@@ -123,6 +123,21 @@ describe("unified turn input", () => {
     expect(h.inbox.turnInput("tsk_one").input_to_seq).toBe(3);
     expect(h.inbox.pendingTaskSteerMessages("tsk_one")).toEqual([]);
   });
+  it("receipts the daemon's outgoing decision in seq order without skipping earlier input", async () => {
+    const h = downlinks();
+    h.push(2); h.inbox.beginDecision("tsk_one");
+    h.inbox.registerDecision(message(3, { id: "decision_one", message_kind: "decision", sender_type: "agent" }), "tsk_one");
+    h.push(4, { message: message(4, { reply_to_id: "decision_one" }) });
+    const reply = await h.inbox.waitForDecisionReply("decision_one", new AbortController().signal, 100);
+    h.inbox.confirmDecisionReply("tsk_one", reply!); h.inbox.finishDecision("tsk_one");
+    await expect(h.inbox.consumeTaskSteerMessages("tsk_one", [])).rejects.toThrow("unconfirmed turn input gap");
+    expect(h.calls).toEqual([]);
+    await h.inbox.consumeTaskSteerMessages("tsk_one", ["msg_2"]);
+    expect(h.calls).toEqual([{ type: "turn.input", payload: { turn_id: "turn_one", attempt_id: "tsk_one",
+      input_to_seq: 4, message_ids: ["msg_2", "decision_one", "msg_4"] } }]);
+    expect(h.inbox.turnInput("tsk_one").input_to_seq).toBe(4);
+    expect(h.inbox.pendingTaskSteerMessages("tsk_one")).toEqual([]);
+  });
 });
 
 const directories: string[] = [];
@@ -195,12 +210,12 @@ describe("unified store transport boundary", () => {
     offerInput: () => turn, snapshot: () => ({ messages: [], wrapUps: [] }),
     rpc: () => ({ ok: true }), complete: () => ({ ok: true }), ...overrides,
   });
-  it("keeps valid new reports retryable until the unified store is installed", async () => {
+  it("uses the Store bridge by default and rejects unbound attempts without retrying", async () => {
     const store = createLocalStore();
     const rt = store.registerRuntime({ id: "rt_boundary", name: "boundary", provider: "claude" });
     const payload = { turn_id: "turn_one", attempt_id: "tsk_one", input_to_seq: 1, reply: { body_md: "reply", message_kind: "final" } };
-    expect(await reportFrame(store, "turn.complete", payload, { runtimeId: rt.id })).toMatchObject({ ok: false, code: "server_error", retryable: true });
-    expect(await reportFrame(store, "turn.input", { ...turn, message_ids: [] }, { runtimeId: rt.id })).toMatchObject({ ok: false, code: "server_error", retryable: true });
+    expect(await reportFrame(store, "turn.complete", payload, { runtimeId: rt.id })).toMatchObject({ ok: false, code: "stale_attempt", retryable: false });
+    expect(await reportFrame(store, "turn.input", { ...turn, message_ids: [] }, { runtimeId: rt.id })).toMatchObject({ ok: false, code: "stale_attempt", retryable: false });
     expect(await reportFrame(store, "turn.complete", { ...payload, output: "old" }, { runtimeId: rt.id })).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
   });
   it("passes validated input and decisions to a runtime-scoped store boundary", async () => {

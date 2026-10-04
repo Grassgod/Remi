@@ -5754,9 +5754,12 @@ ${placementAfter.sql}
   private lastDelegationResultCommentId(source: MultiremiTask): string | null {
     if (!source.issueId) return null;
     const row = this.ctx.db.query(
-      `SELECT id FROM multiremi_issue_message_records
-       WHERE issue_id = ? AND task_id = (SELECT turn_id FROM multiremi_turn_attempts WHERE id=?) AND author_type = 'agent' AND author_id = ?
-       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      `SELECT records.id FROM multiremi_issue_message_records records
+       JOIN multiremi_conversation_log log ON log.id = records.id
+       WHERE records.issue_id = ? AND records.task_id = (SELECT turn_id FROM multiremi_turn_attempts WHERE id=?)
+         AND records.author_type = 'agent' AND records.author_id = ?
+         AND log.message_kind IN ('request', 'reply', 'final')
+       ORDER BY records.created_at DESC, records.id DESC LIMIT 1`,
     ).get(source.issueId, source.id, source.agentId) as { id: string } | null;
     return row?.id ?? null;
   }
@@ -6418,6 +6421,7 @@ ${placementAfter.sql}
     const base = `SELECT 1 AS present FROM multiremi_conversation_log log
        JOIN multiremi_issue_sessions s ON s.id = log.session_id
        WHERE s.issue_id = ? AND log.sender_type = 'agent' AND log.sender_id = ? AND log.kind = 'message'
+         AND log.message_kind IN ('request', 'reply', 'final')
          AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.visibility='shown' AND log.deleted_at IS NULL AND log.task_id = (SELECT turn_id FROM multiremi_turn_attempts WHERE id=?)`;
     const row = (since == null
       ? this.ctx.db.query(`${base} LIMIT 1`).get(issueId, agentId, taskId)

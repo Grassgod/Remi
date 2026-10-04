@@ -3,7 +3,7 @@ import type { DaemonDownlinkEntity } from "./downlinks.js";
 import type { DaemonTurnBridge } from "./turn-bridge.js";
 
 export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daemonId: string, activeTaskIds: ReadonlySet<string>,
-  forget: (taskId: string) => void, turns?: DaemonTurnBridge): DaemonDownlinkEntity[] {
+  forget: (taskId: string) => void, turns: DaemonTurnBridge = store.getDaemonTurnBridge()): DaemonDownlinkEntity[] {
   const ids = new Set(activeTaskIds);
   for (const task of store.listTaskRefs({ runtimeId,
     statuses: ["dispatched", "running", "waiting_local_directory", "awaiting_human"] })) ids.add(task.id);
@@ -18,7 +18,7 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
       continue;
     }
   }
-  if (turns && host) {
+  if (host) {
     const snapshot = turns.snapshot({ runtimeId, daemonId, workspaceId: host.workspaceId ?? "local" }, ids);
     for (const input of snapshot.messages) entities.push({
       key: `turn.message:${input.attempt_id}:${input.message.id}`, type: "turn.message", payload: { ...input },

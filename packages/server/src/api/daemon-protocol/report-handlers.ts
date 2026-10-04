@@ -113,7 +113,8 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
 export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
-  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void, turns?: DaemonTurnBridge): void {
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void,
+  turns: DaemonTurnBridge = store.getDaemonTurnBridge()): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -126,7 +127,6 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           || (reply.message_kind !== "reply" && reply.message_kind !== "final") || "output" in p || "task_id" in p) reject();
         const runtimeId = frame.rt ?? string(p.runtime_id);
         authorizeReportRuntime(store, session, runtimeId);
-        if (!turns) return { ok: false, code: "server_error", retryable: true, message: "unified turn store is not installed" };
         const fields = completionFields(p, string(p.attempt_id));
         if (fields) fields.final_reply_md = reply.body_md;
         const result = await turns.complete({ payload: p as unknown as DaemonTurnCompletePayload, completionFields: fields,

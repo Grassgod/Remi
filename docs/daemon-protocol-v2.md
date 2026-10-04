@@ -219,7 +219,8 @@ RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `turn.decision.get` 按 `p:{turn_id,attempt_id,message_id}` 读取 decision 消息及答复；
 创建、读取、过期都交给 S2 的 `DaemonTurnBridge.rpc`，写入时校验 runtime / 当前 attempt / turn。
 答复超时或取消走 `turn.decision.expire`；若答复先于过期提交，以返回的 reply 消息为准。
-服务端未安装适配器时返回可重试的 `server_error`，不访问旧请求表。
+服务端启动时默认取 `Store.getDaemonTurnBridge()`，将同一适配器接入 offer 输入、
+下行快照、decision/input RPC 与原子完成；绑定无效的尝试由 Store 拒绝，不访问旧请求表。
 
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
@@ -371,6 +372,8 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 decision 的答复通过 `turn.message` 投递，携带 `reply_to_id`。daemon 按 decision 消息 ID
 匹配等待中的 question 或 permission 回调，向 provider 返回答复，并在连续输入确认时推进游标；
 不把同一答复再注入为普通插话。断线重连由 S2 的消息快照重推。
+daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答复一起按 seq 排序确认，
+仍须等待更早的插话消费完成；权限题目不作为已有最终回复复用。
 旧 `task.human_request.settled` 已退役；旧 bot request hooks 显式返回 `report_shape_retired`，
 其卡片与答复调用方由 S4 改接 decision 消息后再集成，不提供旧表兼容读写。
 

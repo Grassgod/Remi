@@ -309,7 +309,7 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
 }
 
 export interface MultiremiApiOptions {
-  /** Unified store/lane integration. Missing integration rejects turn writes retryably. */
+  /** Override the Store-owned turn bridge for protocol integration tests. */
   daemonTurnBridge?: DaemonTurnBridge;
   /** Transport injection for protocol integration tests; no store subscriptions. */
   onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
@@ -1162,22 +1162,23 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
   });
+  const daemonTurnBridge = options.daemonTurnBridge ?? store.getDaemonTurnBridge();
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
     prepare: (task, supportsWikiFetch) => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki,
-      supportsWikiFetch, options.daemonTurnBridge?.offerInput(task)),
+      supportsWikiFetch, daemonTurnBridge.offerInput(task)),
     onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
     snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
       ...sessionArchiveRequestSnapshot(store, rt),
-      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id), options.daemonTurnBridge)] });
-  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), options.daemonTurnBridge);
+      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id), daemonTurnBridge)] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), daemonTurnBridge);
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
     effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
       ? createHubTraceSink(liveHub as HubImpl) : undefined);
-  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId), options.daemonTurnBridge);
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId), daemonTurnBridge);
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   registerSessionArchiveRequestHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);

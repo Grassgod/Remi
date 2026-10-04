@@ -7,7 +7,8 @@ import type { DaemonTurnBridge, DaemonTurnRpc } from "./turn-bridge.js";
 
 const denied = (code = "invalid_report") => ({ ok: false, code, retryable: false });
 
-export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: MultiremiStore, kick: (runtimeId: string) => void, turns?: DaemonTurnBridge): void {
+export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: MultiremiStore, kick: (runtimeId: string) => void,
+  turns: DaemonTurnBridge = store.getDaemonTurnBridge()): void {
   const authorized = async (frame: DaemonParsedFrame, session: DaemonProtocolSession): Promise<boolean> => {
     if (!frame.rt || !session.runtimeIds.includes(frame.rt)) return false;
     const runtime = await layer.authorizeRuntimeForTest({ accessToken: session.ownerAccessToken,
@@ -27,7 +28,6 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
         || (p.timeout_ms !== undefined && (typeof p.timeout_ms !== "number" || !Number.isFinite(p.timeout_ms) || p.timeout_ms < 0)))) return denied();
       if (type !== "turn.input" && type !== "turn.decision" && (typeof p.message_id !== "string" || !p.message_id)) return denied();
       if (type === "turn.decision.expire" && p.status !== "cancelled" && p.status !== "timeout") return denied();
-      if (!turns) return { ok: false, code: "server_error", retryable: true, message: "unified turn store is not installed" };
       const result = await turns.rpc(type as DaemonTurnRpc, p, { runtimeId: frame.rt!, daemonId: session.daemonId,
         workspaceId: store.getRuntimeLite(frame.rt!)!.workspaceId ?? "local" });
       kick(frame.rt!);

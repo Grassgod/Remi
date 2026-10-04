@@ -10,6 +10,7 @@ import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.j
 import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonTaskDownlinks } from "@multiremi/worker/daemon-downlinks.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { registerDaemonOfferHandler, type DaemonTurnTask } from "@multiremi/worker/daemon-offers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -103,6 +104,98 @@ const message = (seq: number, overrides: Partial<UnifiedMessage> = {}): UnifiedM
 } as UnifiedMessage);
 
 describe("turn input push inbox over native WS", () => {
+  it("starts with the Store bridge and persists offers, input, permissions, wrap-up and completion", async () => {
+    const store = createLocalStore();
+    const rt = "rt_store_inputs", daemonId = "dmn_store_inputs";
+    store.registerRuntime({ id: rt, daemonId, name: rt, provider: "claude", workspaceId: "local",
+      metadata: { parallel_agent_execution: 1 } });
+    const agent = store.createAgent({ name: "Store inputs", provider: "claude", runtimeId: rt });
+    const issue = store.createIssue({ title: "Store inputs", assigneeType: "agent", assigneeId: agent.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const send = (body: string) => store.sendMessage({ session_id: session.id,
+      sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
+      message_kind: "request", wake_requested: "now", body_md: body });
+    const seed = send("Prior attempt input");
+    // A retry gives this turn a distinct current attempt and exercises both IDs.
+    store.recordSessionAgentRangeRead(session.id, agent.id, { seq: 1, offset: 0 }, { seq: seed.message.seq + 1, offset: 0 });
+    store.cancelTurn(seed.turn_id!);
+    store.retryTurn(seed.turn_id!, true);
+    const initial = send("Start from the canonical message");
+    let layer!: DaemonProtocolLayer;
+    const server = startMultiremiServer({ store, hostname: "127.0.0.1", port: 0, authToken: "store-input-fixture",
+      onDaemonProtocol: value => { layer = value; } });
+    const sockets: WebSocket[] = [], frames: Array<Record<string, any>> = [], errors: Error[] = [];
+    const active: string[] = [];
+    let offered: DaemonTurnTask | undefined;
+    const client = new DaemonProtocolClient({ serverUrl: `http://127.0.0.1:${server.port}`, token: "store-input-fixture",
+      daemonId, cliVersion: DAEMON_MIN_CLI_VERSION,
+      onError: error => { errors.push(error); }, onFrame: frame => { frames.push(frame.raw); },
+      connect: (url, init) => { const socket = new WebSocket(url, init as never); sockets.push(socket); return socket; } });
+    const inbox = new DaemonTaskDownlinks(client, () => rt);
+    registerDaemonOfferHandler(client, { runtimeId: () => rt, rejection: () => null,
+      run: task => { offered = task; active.push(task.id); inbox.bindTurn(task); } });
+    const lane: DaemonProtocolLane = {
+      runtime: () => ({ runtime_id: rt, provider: "claude", max_concurrency: 1, active_task_ids: [...active] }),
+      heartbeat: () => ({ active_task_count: active.length }),
+      onHeartbeatAck: async () => {}, probeUpgrade: async () => {}, onTerminal: async () => {},
+      onStateChange: () => inbox.connectionChanged(),
+      onConnected: () => { client.send({ t: "runtime.ready", rt, p: { active_task_ids: [...active] } }); },
+    };
+    client.addLane(lane);
+    try {
+      client.startLane(lane);
+      await waitFor(() => offered !== undefined);
+      const task = offered!;
+      expect(task.turn_id).toBe(initial.turn_id!);
+      expect(task.attempt_id).toBe(store.getTurn(task.turn_id)!.current_attempt_id!);
+      expect(task.turn_id).not.toBe(task.attempt_id);
+      expect(task.input_messages.some(m => m.id === initial.message.id && m.body_md.includes(initial.message.body_md))).toBe(true);
+      const wire = frames.find(frame => frame.t === "task.offer")!.p;
+      expect(wire).not.toHaveProperty("id"); expect(wire).not.toHaveProperty("prompt");
+      expect(await client.event({ t: "task.start", seq: 1, rt, p: { task_id: task.id } })).toMatchObject({ ok: true });
+      expect(await inbox.rpc("turn.input", { ...inbox.turnInput(task.id),
+        message_ids: task.input_messages.map(m => m.id) })).toMatchObject({ ok: true });
+      expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(task.input_to_seq);
+
+      const interrupt = send("Process this live input");
+      await waitFor(() => inbox.pendingTaskSteerMessages(task.id).some(m => m.id === interrupt.message.id));
+      await inbox.consumeTaskSteerMessages(task.id, [interrupt.message.id]);
+      expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(interrupt.message.seq);
+
+      inbox.beginDecision(task.id);
+      const created = await inbox.rpc("turn.decision", { ...inbox.turnInput(task.id), body_md: "Allow tool?",
+        dedupe_key: "store-permission", options: [{ label: "Allow", value: "allow" }], metadata: { kind: "permission" } });
+      const decision = created.message as UnifiedMessage;
+      inbox.registerDecision(decision, task.id);
+      expect(store.getTurn(task.turn_id)!.status).toBe("awaiting_human");
+      expect(store.getMessage(decision.id)!.message_kind).toBe("decision");
+      const answered = store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: "Allow" });
+      const reply = await inbox.waitForDecisionReply(decision.id, new AbortController().signal, 2_000);
+      expect(reply?.id).toBe(answered.message.id);
+      expect(store.getTurn(task.turn_id)!.status).toBe("running");
+      expect(await inbox.rpc("turn.decision.get", { ...inbox.turnInput(task.id), message_id: decision.id })).toMatchObject({
+        ok: true, status: "resolved", reply: { id: answered.message.id } });
+      inbox.confirmDecisionReply(task.id, reply!); inbox.finishDecision(task.id);
+      await inbox.consumeTaskSteerMessages(task.id, []);
+      expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(answered.message.seq);
+
+      store.wrapUpTurn(task.turn_id);
+      await waitFor(() => inbox.pendingTaskSteerMessages(task.id).some(m => m.kind === "force_answer"));
+      const completion = { ...inbox.turnInput(task.id), reply: { body_md: "Store-backed final reply", message_kind: "final" } };
+      const done = await client.event({ t: "turn.complete", seq: 2, rt, p: completion });
+      expect(done).toMatchObject({ ok: true, turn_id: task.turn_id });
+      expect(store.getTurn(task.turn_id)).toMatchObject({ status: "completed", reply_message_id: done.reply_message_id });
+      expect(store.getMessage(String(done.reply_message_id))).toMatchObject({ body_md: completion.reply.body_md, message_kind: "final" });
+      expect(store.getMessage(decision.id)!.message_kind).toBe("decision");
+      expect(await client.event({ t: "turn.complete", seq: 3, rt, p: completion })).toEqual(done);
+      expect(errors).toEqual([]);
+    } finally {
+      client.stopLane(lane); await client.drain();
+      await waitFor(() => sockets.every(socket => socket.readyState === WebSocket.CLOSED) && layer.registry.size === 0);
+      layer.closeAll(); await layer.drain(); server.stop(true);
+    }
+  });
+
   it("resumes a permission decision from a reply message without get polling", async () => {
     const h = fixture(); const task = h.task(); const rpc = spyOn(h.client, "rpc");
     try {
