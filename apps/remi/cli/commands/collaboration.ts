@@ -330,7 +330,38 @@ function sessionCommandSpecs(): CommandSpec[] {
         since_seq: integerOption(invocation, "since-seq"), to_seq: integerOption(invocation, "to-seq"),
       });
     }),
-    nativeSpec("session.log.get", ["session", "log", "get"], "Read a complete Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
+    nativeSpec("session.log.get", ["session", "log", "get"], "Read a complete Session log entry or unread range", "read", HUMAN_TASK, [refPositional("session"), { name: "entry", required: false }], [
+      { name: "from", type: "integer", valueName: "seq", description: "Read entries after this sequence" },
+      { name: "to", type: "integer", valueName: "seq", description: "Last sequence to include; automatically reads every page" },
+    ], async (invocation) => {
+      const from = integerOption(invocation, "from"), to = integerOption(invocation, "to");
+      if (from !== null || to !== null) {
+        if (from == null || to == null || from < 0 || to < from || invocation.positionals[1]) {
+          throw new CliError("usage", "Use either an entry or --from <seq> --to <seq>");
+        }
+        const client = await clientFor(invocation);
+        const entries: Array<Record<string, any>> = [];
+        let cursor: string | null = null;
+        do {
+          const page: { entries: Array<Record<string, any>>; next_cursor: string | null } = (await client.request<typeof page>({
+            method: "GET", path: `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/entry`,
+            query: { from, to, ...(cursor ? { cursor } : {}) },
+          })).data;
+          for (const entry of page.entries) {
+            const previous = entries.at(-1);
+            if (entry.body_offset > 0 && previous && previous.seq === entry.seq) {
+              previous.body_md += entry.body_md;
+              previous.body_omitted_chars = entry.body_omitted_chars;
+            } else entries.push({ ...entry });
+          }
+          if (page.next_cursor && page.next_cursor === cursor) throw new CliError("conflict", "Session range cursor did not advance");
+          cursor = page.next_cursor;
+        } while (cursor);
+        const mode = outputMode(invocation);
+        if (mode !== "table") new CliRenderer().render(entries, { mode });
+        else for (const entry of entries) console.log(`${entry.seq} · ${entry.author_type} ${entry.author_id ?? ""}\n${entry.body_md}\n`);
+        return;
+      }
       const entry = positional(invocation, 1, "entry");
       const client = await clientFor(invocation);
       const response = await client.request<{

@@ -568,7 +568,7 @@ The server-injected agent prompt now uses only canonical commands in
 
 - `remi comment list|add`
 - `remi session result publish`
-- `remi session log get <session> <seq|entry-id>` expands a folded inbox entry; `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
+- `remi session log get <session> <seq|entry-id>` reads one complete entry. `remi session log get <session> --from X --to Y` reads the complete unread range `X < seq ≤ Y`, automatically follows pages and rejoins long bodies; task credentials omit the requesting agent's own history. These use the existing log-entry endpoint. `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
 - `remi memory search|get|create|update`
 
 The matching durable command examples use canonical commands in

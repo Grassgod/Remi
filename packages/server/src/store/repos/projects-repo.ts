@@ -713,15 +713,19 @@ export class ProjectsRepo {
     this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
   }
 
-  listProjectDocs(projectId: string, input: { kind?: string | null } = {}): MultiremiProjectDoc[] {
+  listProjectDocs(projectId: string, input: { kind?: string | null; includeBody?: boolean } = {}): MultiremiProjectDoc[] {
     if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
     const kind = cleanOptionalString(input.kind);
+    const columns = input.includeBody === false ? `id, project_id, workspace_id, kind, slug, path, title, summary,
+      tags, pinned, refs, source_task_id, source_issue_id, author_type, author_id, updated_by_type, updated_by_id,
+      version, storage_backend, content_uri, content_sha256, sync_status, sync_error, snapshot_oid,
+      compilation_run_id, created_at, updated_at` : "*";
     const rows = kind
       ? this.ctx.db.query(
-        "SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = ? ORDER BY pinned DESC, updated_at DESC",
+        `SELECT ${columns} FROM multiremi_project_docs WHERE project_id = ? AND kind = ? ORDER BY pinned DESC, updated_at DESC`,
       ).all(projectId, normalizeProjectDocKind(kind)) as Row[]
       : this.ctx.db.query(
-        "SELECT * FROM multiremi_project_docs WHERE project_id = ? ORDER BY pinned DESC, updated_at DESC",
+        `SELECT ${columns} FROM multiremi_project_docs WHERE project_id = ? ORDER BY pinned DESC, updated_at DESC`,
       ).all(projectId) as Row[];
     return rows.map(toProjectDoc);
   }
@@ -1197,7 +1201,8 @@ export class ProjectsRepo {
     ).all(projectId, PROJECT_DOC_MEMORY_INDEX_LIMIT) as Row[];
     // `_schema` rides its own field, so it never eats a slot in the wiki listing.
     const wiki = this.ctx.db.query(
-      `SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = 'wiki' AND slug <> ?
+      `SELECT id, slug, path, title, summary, kind, pinned, source_issue_id, updated_at
+       FROM multiremi_project_docs WHERE project_id = ? AND kind = 'wiki' AND slug <> ?
        ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
     ).all(projectId, PROJECT_DOC_SCHEMA_SLUG, PROJECT_DOC_WIKI_INDEX_LIMIT) as Row[];
     const schema = this.ctx.db.query(

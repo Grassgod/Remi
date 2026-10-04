@@ -292,7 +292,7 @@ export interface IssuesSurface {
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean },
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean; commentId?: string },
   ): CreatedIssueComment;
   /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
   runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;

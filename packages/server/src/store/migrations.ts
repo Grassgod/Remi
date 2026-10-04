@@ -3495,6 +3495,11 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       WHERE status = 'active' AND wake_hint_seq > swept_to_seq`);
     db.exec("DROP INDEX IF EXISTS idx_multiremi_lanes_sweep_order");
   });
+  runMigrationOnce(db, "20261004_session_agent_read_progress", () => {
+    // Provider checkpoints cannot acknowledge context that was only referenced.
+    // Shared session heads cover both Issue and Chat agents without changing lane identity.
+    addColumnIfMissing(db, "multiremi_conversation_heads", "agent_read_state TEXT");
+  });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 

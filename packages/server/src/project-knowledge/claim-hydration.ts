@@ -40,6 +40,7 @@ export async function hydrateClaimKnowledge(
   repository: RepositoryWikiServiceContract,
   budgetMs = 5_000,
   byteCap = CLAIM_KNOWLEDGE_BYTE_CAP,
+  metadataOnly = false,
 ): Promise<MultiremiTaskWithAgent> {
   const abort = new AbortController();
   let expire!: () => void;
@@ -49,7 +50,7 @@ export async function hydrateClaimKnowledge(
   const warnings: string[] = [];
   try {
     const projectResult = await Promise.race([
-      project.hydrateTaskKnowledge(result, abort.signal).catch(() => null), expired,
+      project.hydrateTaskKnowledge(result, abort.signal, metadataOnly).catch(() => null), expired,
     ]);
     if (projectResult) result = projectResult;
     else {
@@ -58,14 +59,14 @@ export async function hydrateClaimKnowledge(
         projectContexts: result.projectContexts.map(context => ({ ...context, docs: [] })) };
     }
     const repositoryResult = abort.signal.aborted ? null : await Promise.race([
-      repository.hydrateTaskWiki(result, abort.signal).catch(() => null), expired,
+      repository.hydrateTaskWiki(result, abort.signal, metadataOnly).catch(() => null), expired,
     ]);
     if (repositoryResult) result = repositoryResult;
     else {
       warnings.push("Repository Wiki loading failed or exceeded the startup budget. Repository Wiki content was not loaded; use remi wiki repository commands to retrieve it when needed. Do not claim to have read unavailable pages.");
       result = { ...result, repositoryWikiContexts: [] };
     }
-    const capped = applyClaimKnowledgeByteCap(result, byteCap);
+    const capped = metadataOnly ? { task: result, warnings: [] } : applyClaimKnowledgeByteCap(result, byteCap);
     warnings.push(...capped.warnings);
     return { ...capped.task, knowledgeWarnings: [...(task.knowledgeWarnings ?? []), ...warnings] };
   } finally {

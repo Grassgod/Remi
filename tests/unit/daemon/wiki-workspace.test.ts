@@ -317,13 +317,11 @@ describe("Issue Wiki workspace", () => {
     expect(manifest.docs.some((doc: { id: string }) => doc.id === "rwdoc_missing")).toBeFalse();
 
     const prompt = buildTaskPrompt(value);
-    expect(prompt).toContain("## Repository Wiki Availability Warnings");
-    expect(prompt).toContain("were not materialized as empty files");
-    expect(prompt).toContain("architecture/overview.md");
-    expect(prompt).toContain("checksum mismatch");
-    expect(prompt).toContain("operations/missing.md");
-    expect(prompt).toContain("object not found");
-    expect(prompt).toContain("report the page as blocked");
+    expect(prompt).toContain("2 页暂不可用，用 remi wiki 取");
+    expect(prompt.match(/暂不可用/g)).toHaveLength(1);
+    expect(prompt).not.toContain("checksum mismatch");
+    expect(prompt).not.toContain("object not found");
+    expect(prompt).not.toContain("## Repository Wiki Availability Warnings");
   });
 
   test("materializes repository Wiki for an SCM task without an Issue or Project", async () => {

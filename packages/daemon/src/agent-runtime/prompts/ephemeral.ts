@@ -103,10 +103,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   appendTriggerCommentSection(sections, task, opts.platform ?? process.platform);
 
   if (!privateChat || task.project) appendRepositoryWarnings(sections, opts.repoWarnings ?? [], privateChat);
-  appendRepositoryWikiAvailabilityWarnings(sections, task);
-  if (task.knowledgeWarnings?.length) {
-    sections.push("", "## Knowledge Availability Warnings", ...task.knowledgeWarnings);
-  }
+  appendKnowledgeAvailabilityWarnings(sections, task);
 
   appendProjectPromptSections(sections, task, mode, task.runtimeWorkspaceId ? false : opts.wikiMaterialized);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
@@ -304,20 +301,19 @@ function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[
   }
 }
 
-function appendRepositoryWikiAvailabilityWarnings(sections: string[], task: AgentTask): void {
+function appendKnowledgeAvailabilityWarnings(sections: string[], task: AgentTask): void {
   const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
   const unavailable = contexts.flatMap((context) => context.docs
     .filter(repositoryWikiDocUnavailable)
     .map((doc) => ({ repository: context.repository, doc })));
-  if (!unavailable.length) return;
-  sections.push("");
-  sections.push("## Repository Wiki Availability Warnings");
-  sections.push("The current published bodies below could not be loaded and were not materialized as empty files. Treat any existing local copy as last-known-good rather than current. Do not claim that you inspected the current contents; reconstruct only from repository evidence, or report the page as blocked with its diagnostic.");
-  for (const { repository, doc } of unavailable) {
-    const diagnostic = doc.syncError ?? doc.sync_error ?? doc.statusMessage ?? doc.status_message
-      ?? "repository Wiki body unavailable";
-    sections.push(`- Repository ${inlineCode(repository.name)} (${inlineCode(repository.id)}), page ${inlineCode(doc.path)} (${inlineCode(doc.id)}): ${repositoryWarningMessage(diagnostic)}`);
-  }
+  const wikiWarnings = (task.knowledgeWarnings ?? []).filter(warning => /wiki.*(?:failed|unavailable|omitted)|页暂不可用/i.test(warning));
+  const otherWarnings = (task.knowledgeWarnings ?? []).filter(warning => !wikiWarnings.includes(warning));
+  const reportedCount = wikiWarnings.reduce((total, warning) => total + Number(warning.match(/^(\d+) 页暂不可用/)?.[1] ?? 0), 0);
+  const count = Math.max(new Set(unavailable.map(({ doc }) => doc.id)).size, reportedCount);
+  if (!count && !wikiWarnings.length && !otherWarnings.length) return;
+  sections.push("", "## Knowledge Availability Warnings");
+  if (count || wikiWarnings.length) sections.push(`${count ? `${count} 页` : "Wiki"}暂不可用，用 remi wiki 取；已有本地副本仅代表上次成功版本。`);
+  sections.push(...otherWarnings);
 }
 
 function repositoryWikiDocUnavailable(doc: NonNullable<AgentTask["repositoryWikiContexts"]>[number]["docs"][number]): boolean {
@@ -476,6 +472,18 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("", "## Side Conversation Boundary", SIDE_CONVERSATION_INSTRUCTIONS);
   }
   if (projection?.jsonl?.trim()) {
+    const inputLines = projection.jsonl.split("\n");
+    let unreadInput: Record<string, any> | null = null;
+    try { const first = JSON.parse(inputLines[0] ?? ""); if (first.type === "unread_range") unreadInput = first; } catch {}
+    if (unreadInput) {
+      sections.push("", "## Current Session Context", unreadInput.instruction);
+      for (const line of inputLines.slice(1)) {
+        const message = JSON.parse(line);
+        sections.push("", `### Triggering Message ${message.seq} (${message.id})`,
+          `${message.author_type}: ${message.author_id ?? ""}`, message.body,
+          ...(message.expand_hint ? [message.expand_hint] : []));
+      }
+    } else {
     const inbox = projection.jsonl.split("\n", 2)[1];
     if (inbox) {
       try {
@@ -512,6 +520,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("Treat event order and author labels as authoritative. Do not claim another participant's words as your own.");
     sections.push("");
     sections.push(`\`\`\`jsonl\n${projection.jsonl.trim()}\n\`\`\``);
+    }
   }
 
   const results = task.issueSessionResults ?? task.issue_session_results ?? [];
@@ -605,7 +614,9 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask, platfo
 
   if (projection?.jsonl?.trim()) {
     sections.push("");
-    sections.push("The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
+    sections.push(projection.jsonl.startsWith('{"type":"unread_range"')
+      ? "动手前先执行 Current Session Context 中的范围读取命令，读完未读部分。"
+      : "The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
   } else {
     const readHint = buildCommentReadHint(issueId, triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
     if (readHint) {
