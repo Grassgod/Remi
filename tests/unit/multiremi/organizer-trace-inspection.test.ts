@@ -32,7 +32,7 @@ describe("organizer trace inspection", () => {
       expect(store.claimTask(runtime.id)?.id).toBe(task.id);
       store.startTask(task.id);
       store.completeTask(task.id, { output: "" });
-      db!.transaction(() => store.updateTurnCardWithinTransaction(task.id, counts))();
+      db!.transaction(() => store.recordAttemptOutcomeWithinTransaction(task.id, counts))();
       const app = createMultiremiApp({ store, authToken: "root-secret" });
       const response = await app.request(`/api/tasks/${task.id}/inspection`, { headers: { Authorization: "Bearer root-secret" } });
       expect(response.status).toBe(200);
@@ -65,7 +65,7 @@ describe("organizer trace inspection", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
     store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
     db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
-    db!.transaction(() => store.updateTurnCardWithinTransaction(task.id, {
+    db!.transaction(() => store.recordAttemptOutcomeWithinTransaction(task.id, {
       toolCallCount: 7, eventCount: 30, typeHistogram: [{ type: "tool_use", tool: "Read", count: 7 }],
     }))();
     expect(organizerTurnStats(store, task.id)).toMatchObject({ toolCallCount: 7, eventCount: 30 });

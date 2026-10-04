@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { createLogger } from "@shared/logger.js";
 import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_VERSION, meetsDaemonMinCliVersion } from "@multiremi/contracts/daemon-protocol.js";
 import type { RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
@@ -620,7 +621,7 @@ export class RuntimesRepo {
     const usageByRuntime = new Map<string, RuntimeUsageSummary>();
     const workspaceRuntimes = `SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?`;
     const usageRows = this.ctx.db.query(
-      `SELECT runtime_id, status, usage FROM multiremi_tasks WHERE runtime_id IN (${workspaceRuntimes})`,
+      `SELECT runtime_id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id IN (${workspaceRuntimes})`,
     ).all(workspaceId) as Row[];
     for (const row of usageRows) {
       const id = String(row.runtime_id);
@@ -810,7 +811,7 @@ export class RuntimesRepo {
       [now, id],
     );
     this.ctx.db.run(
-      `UPDATE multiremi_session_agent_lanes
+      `UPDATE multiremi_session_lanes
        SET provider_session_id = NULL,
            runtime_id = NULL,
            provider = NULL,
@@ -819,9 +820,9 @@ export class RuntimesRepo {
            cursor_seq = 0,
            parent_cursor_seq = 0,
            generation = generation + 1,
-           last_task_id = NULL,
+           last_attempt_id = NULL,
            updated_at = ?
-       WHERE runtime_id = ?`,
+       WHERE reader_type = 'agent' AND runtime_id = ?`,
       [now, id],
     );
     this.ctx.db.run(
@@ -859,7 +860,7 @@ export class RuntimesRepo {
     stillEligible?: (agent: MultiremiAgent) => boolean,
   ): void {
     const rows = this.ctx.db
-      .query("SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'")
+      .query("SELECT * FROM multiremi_turn_execution_records WHERE runtime_id = ? AND status = 'queued'")
       .all(runtimeId) as Row[];
     const now = nowIso();
     for (const row of rows) {
@@ -877,16 +878,14 @@ export class RuntimesRepo {
           const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
           const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
           if (targetId !== runtimeId) {
-            this.ctx.db.run(
-              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+            runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
               [targetId, now, String(row.id)],
             );
           }
         }
         continue;
       }
-      this.ctx.db.run(
-        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
       );
     }
@@ -1076,7 +1075,7 @@ export class RuntimesRepo {
 
   private hasUnrepoolableQueuedTasksForRuntime(runtimeId: string): boolean {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'",
+      "SELECT * FROM multiremi_turn_execution_records WHERE runtime_id = ? AND status = 'queued'",
     ).all(runtimeId) as Row[];
     for (const row of rows) {
       const daemonId = this.ctx.localDirectoryDaemonForTask(row);
@@ -1208,8 +1207,7 @@ export class RuntimesRepo {
         ), updated_at = ? WHERE runtime_id = ?`,
         [newRuntimeId, newRuntimeId, now, oldRuntimeId],
       ).changes;
-      const tasks = this.ctx.db.run(
-        "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+      const tasks = runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       ).changes;
       // Move the chat-session affinity metadata too, or the follow-up would
@@ -1220,7 +1218,7 @@ export class RuntimesRepo {
         [newRuntimeId, now, oldRuntimeId],
       );
       this.ctx.db.run(
-        "UPDATE multiremi_session_agent_lanes SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        "UPDATE multiremi_session_lanes SET runtime_id = ?, updated_at = ? WHERE reader_type = 'agent' AND runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       );
       this.ctx.db.run(
@@ -2450,7 +2448,7 @@ export class RuntimesRepo {
     if (!runtimeIds.length) return false;
     const dispatchedCutoff = new Date(Date.now() - RUNTIME_UPDATE_RECENT_DISPATCH_MS).toISOString();
     const row = this.ctx.db.query(
-      `SELECT id FROM multiremi_tasks
+      `SELECT id FROM multiremi_turn_execution_records
        WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
          AND (
            status IN ('running', 'waiting_local_directory', 'awaiting_human')
@@ -2549,7 +2547,7 @@ export class RuntimesRepo {
 
   private runtimeUsageSummaryScan(runtimeId: string): RuntimeUsageSummary {
     const rows = this.ctx.db.query(
-      "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+      "SELECT id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id = ?",
     ).all(runtimeId) as Row[];
     const stats = {
       taskCount: rows.length,
@@ -2587,7 +2585,7 @@ export class RuntimesRepo {
               COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
               ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
               (json_agg(usage) FILTER (WHERE status NOT IN (${settled})))::text AS open_usage
-       FROM multiremi_tasks
+       FROM multiremi_turn_execution_records
        WHERE runtime_id = ?`,
     ).get(...IN_FLIGHT_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, runtimeId) as Row;
     const settledTokens = this.settledTaskTokens(db, runtimeId, String(row.settled_version ?? ""));
@@ -2611,7 +2609,7 @@ export class RuntimesRepo {
     const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
     const row = db.query(
       `SELECT ${tasksVersionSql()} AS settled_version, json_agg(usage)::text AS settled_usage
-       FROM multiremi_tasks
+       FROM multiremi_turn_execution_records
        WHERE runtime_id = ? AND status IN (${settled})`,
     ).get(runtimeId, ...SETTLED_TASK_STATUSES) as Row;
     const tokens = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -2647,7 +2645,7 @@ const SETTLED_TASK_STATUSES: readonly MultiremiTaskStatus[] = ["completed", "fai
  * keeps the order independent of the database locale.
  */
 function tasksVersionSql(filter = ""): string {
-  return `md5(string_agg(id || ':' || xmin::text, ',' ORDER BY id COLLATE "C")${filter})`;
+  return `md5(string_agg(id || ':' || execution_version, ',' ORDER BY id COLLATE "C")${filter})`;
 }
 
 function addTaskUsage(stats: TaskTokenTotals, usage: unknown): void {

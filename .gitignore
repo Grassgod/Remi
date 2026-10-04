@@ -88,3 +88,7 @@ web/frontend/dist/
 frontend/apps/web/.source/
 .run-multiremi-server.sh
 .audit-result.json
+
+# Local cutover reports contain database-specific inventories.
+/reports/migrations/*_unified_message_turn_lane-*.json
+/reports/migrations/unified-model-*.json

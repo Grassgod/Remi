@@ -83,7 +83,7 @@ export class RuntimeWorkspacesRepo {
       const item = this.get(id);
       if (!item) throw new RuntimeWorkspaceError("Runtime workspace not found", 404);
       this.ctx.lockWorkspaceRuntimeLifecycle(item.workspaceId);
-      const busy = this.ctx.db.query(`SELECT id FROM multiremi_tasks WHERE runtime_workspace_id = ?
+      const busy = this.ctx.db.query(`SELECT id FROM multiremi_turn_execution_records WHERE runtime_workspace_id = ?
         AND status NOT IN ('completed', 'failed', 'cancelled') LIMIT 1`).get(id);
       if (busy) throw new RuntimeWorkspaceError("Finish or cancel tasks before archiving the runtime workspace", 409);
       this.ctx.db.run("UPDATE multiremi_runtime_workspaces SET archived_at = ?, updated_at = ? WHERE id = ?",
@@ -96,7 +96,7 @@ export class RuntimeWorkspacesRepo {
   assertIssueBindingChange(issueId: string, nextId: string | null, workspaceId: string): void {
     this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     if (nextId) this.require(nextId, workspaceId);
-    if (this.ctx.db.query("SELECT id FROM multiremi_tasks WHERE issue_id = ? LIMIT 1").get(issueId)) {
+    if (this.ctx.db.query("SELECT id FROM multiremi_turn_execution_records WHERE issue_id = ? LIMIT 1").get(issueId)) {
       throw new RuntimeWorkspaceError("An executed Issue keeps its runtime workspace; create a new Issue to use another directory", 409);
     }
   }

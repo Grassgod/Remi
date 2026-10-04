@@ -112,7 +112,7 @@ export function repositoryWikiObservability(ctx: StoreContext, workspaceId: stri
   // build-state query uses — so the rows the loop keeps are unchanged.
   const runs = ctx.db.query(`SELECT r.id, r.repository_id, r.schedule_target, r.task_id,
       r.completed_at, r.created_at
-    FROM multiremi_autopilot_runs r
+    FROM multiremi_autopilot_run_records r
     JOIN multiremi_autopilots a ON a.id = r.autopilot_id
     WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR
         (r.schedule_target IS NOT NULL AND EXISTS (

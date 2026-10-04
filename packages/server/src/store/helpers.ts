@@ -15,7 +15,7 @@ export function chatTaskRetryParentSql(child: string, parent: string, source: "l
     : `SELECT 1 FROM multiremi_conversation_log retry_input
       JOIN multiremi_chat_sessions retry_session ON retry_session.id = retry_input.session_id
       WHERE retry_input.task_id = ${child}.id AND retry_input.kind = 'message'
-        AND retry_input.author_type = 'member' AND retry_input.deleted_at IS NULL`;
+        AND retry_input.sender_type = 'member' AND retry_input.deleted_at IS NULL`;
   return `${child}.parent_task_id = ${parent}.id
     AND ${child}.workspace_id = ${parent}.workspace_id
     AND ${child}.agent_id = ${parent}.agent_id

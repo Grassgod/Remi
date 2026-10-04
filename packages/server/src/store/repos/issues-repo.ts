@@ -1,3 +1,5 @@
+import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Issues domain (issues, comments, activity/timeline, dependencies, subscribers, labels, inbox,
 // reactions, attachments and issue metadata), extracted verbatim from MultiremiStore (the facade
 // delegates every public method here).
@@ -463,6 +465,7 @@ type CreateIssueCommentOptions =
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
+    entryId?: string;
     withinTransaction?: false;
     deferredEvents?: CommitEventQueue;
   }
@@ -470,6 +473,7 @@ type CreateIssueCommentOptions =
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
+    entryId?: string;
     /**
      * The caller already owns a database transaction (the organizer action
      * facade). Every write inside must use the `WithinTransaction` flavour:
@@ -612,7 +616,7 @@ export class IssuesRepo {
           JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
           WHERE d.issue_id = ? AND d.status = 'escalated') +
         (SELECT COUNT(*) FROM multiremi_task_human_requests h
-          JOIN multiremi_tasks t ON t.id = h.task_id
+          JOIN multiremi_turn_execution_records t ON t.id = h.task_id
           JOIN multiremi_issues i ON i.id = t.issue_id
           WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)
             AND i.workspace_id = (SELECT workspace_id FROM multiremi_issues WHERE id = ?)) AS total`,
@@ -640,7 +644,7 @@ export class IssuesRepo {
     const requests = this.ctx.db.query(
       `SELECT h.id, h.kind, h.payload, h.status, h.created_at, t.issue_id, t.id AS task_id
        FROM multiremi_task_human_requests h
-       JOIN multiremi_tasks t ON t.id = h.task_id
+       JOIN multiremi_turn_execution_records t ON t.id = h.task_id
        JOIN multiremi_issues i ON i.id = t.issue_id
        WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)
          AND i.workspace_id = (SELECT workspace_id FROM multiremi_issues WHERE id = ?)`,
@@ -1531,7 +1535,7 @@ export class IssuesRepo {
     // Same predicate as cancelActiveIssueTasks, so unassigning unblocks the move.
     // Task creation locks this row first, so none can commit behind this read.
     const tasks = this.ctx.db.query(
-      `SELECT id, status, workspace_id FROM multiremi_tasks
+      `SELECT id, status, workspace_id FROM multiremi_turn_execution_records
        WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
        ORDER BY id`,
     ).all(current.id) as Row[];
@@ -1622,12 +1626,12 @@ export class IssuesRepo {
   private deleteIssueRowsWithinLifecycleLock(issue: MultiremiIssue, deferredEvents: CommitEventQueue): boolean {
     const id = issue.id;
     this.cancelActiveIssueTasks(id, "issue_deleted", deferredEvents);
-    this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'failed', completed_at = ?, failure_reason = ? WHERE issue_id = ? AND completed_at IS NULL", [
+    runAutopilotRunMutation(this.ctx.db, "UPDATE multiremi_autopilot_run_records SET status = 'failed', completed_at = ?, failure_reason = ? WHERE issue_id = ? AND completed_at IS NULL", [
       nowIso(),
       "issue deleted",
       id,
     ]);
-    this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+    runAutopilotRunMutation(this.ctx.db, "UPDATE multiremi_autopilot_run_records SET issue_id = NULL WHERE issue_id = ?", [id]);
     // Detach ledger rows first so the delete below only sweeps the actionable
     // notifications left behind. An empty registry would render `IN ()`, which
     // Postgres rejects — skipping the update then means "no ledger to keep".
@@ -1749,7 +1753,7 @@ export class IssuesRepo {
     // absence of the cleanup acknowledgement must fail closed.
     // cmt_v70r9qrr49uc: global evidence keeps the deletion gate unchanged by a move.
     const hasTask = Boolean(this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_tasks WHERE issue_id = ? LIMIT 1",
+      "SELECT 1 AS present FROM multiremi_turn_execution_records WHERE issue_id = ? LIMIT 1",
     ).get(id));
     const hasArchive = Boolean(this.ctx.db.query(
       "SELECT 1 AS present FROM multiremi_session_archives WHERE issue_id = ? LIMIT 1",
@@ -1761,7 +1765,7 @@ export class IssuesRepo {
          s.is_default = 0
          OR EXISTS (SELECT 1 FROM multiremi_conversation_log e WHERE e.session_id = s.id AND e.kind <> 'head' AND e.seq > 0)
          OR EXISTS (SELECT 1 FROM multiremi_session_participants p WHERE p.session_id = s.id)
-         OR EXISTS (SELECT 1 FROM multiremi_session_agent_lanes l WHERE l.session_id = s.id)
+         OR EXISTS (SELECT 1 FROM multiremi_agent_lane_records l WHERE l.session_id = s.id)
        )
        LIMIT 1`,
     ).get(id));
@@ -1843,7 +1847,7 @@ export class IssuesRepo {
 
   private searchIssueCommentSnippet(issueId: string, query: string): string | null {
     const rows = this.ctx.db.query(
-      "SELECT body FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at DESC",
+      "SELECT body FROM multiremi_issue_message_records WHERE issue_id = ? ORDER BY created_at DESC",
     ).all(issueId) as Row[];
     const match = rows.find((row) => searchMatch(String(row.body ?? ""), query));
     return match ? extractSearchSnippet(String(match.body ?? ""), query) : null;
@@ -2071,7 +2075,7 @@ export class IssuesRepo {
       const comments = this.ctx.db.query(
         `SELECT log.body_md AS body FROM multiremi_conversation_log log
          JOIN multiremi_issue_sessions session ON session.id = log.session_id
-         WHERE session.issue_id = ? AND log.author_type = 'agent' AND log.author_id = ? AND log.kind = 'message'
+         WHERE session.issue_id = ? AND log.sender_type = 'agent' AND log.sender_id = ? AND log.kind = 'message'
            AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.deleted_at IS NULL
            ${lastChildClosedAt ? "AND log.created_at >= ?" : ""}`,
       ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
@@ -2083,7 +2087,7 @@ export class IssuesRepo {
     // stored payload carries non-empty output text, so evaluate it in JS rather
     // than pattern-matching the serialized column in SQL.
     const rows = this.ctx.db.query(
-      `SELECT result FROM multiremi_tasks
+      `SELECT result FROM multiremi_turn_execution_records
        WHERE issue_id = ? AND agent_id = ? AND status = 'completed'
          AND result IS NOT NULL AND completed_at IS NOT NULL
          ${lastChildClosedAt ? "AND completed_at >= ?" : ""}
@@ -4229,18 +4233,14 @@ export class IssuesRepo {
     if (!issueSession || issueSession.issueId !== issueId) {
       throw new Error(`Issue session not found for system comment: ${issueSessionId}`);
     }
-    this.ctx.db.run(
-      `INSERT INTO multiremi_issue_comments (
-         id, issue_id, issue_session_id, author_type, author_id, task_id, parent_id, body, type, created_at, updated_at
-       ) VALUES (?, ?, ?, 'system', ?, ?, NULL, ?, 'system', ?, ?)`,
-      [id, issueId, issueSession.id, SYSTEM_AUTHOR_ID, taskId, body, now, now],
-    );
+
     this.ctx.issueSessions().appendSessionEventWithinTransaction(issueSession.id, {
       authorType: "system",
       authorId: SYSTEM_AUTHOR_ID,
       kind: "system",
       body,
       sourceCommentId: id,
+      taskId,
       metadata: data,
       createdAt: now,
     });
@@ -4848,19 +4848,11 @@ export class IssuesRepo {
     if (parent && parent.issueSessionId && parent.issueSessionId !== issueSessionId) {
       throw new Error("Reply must belong to the parent comment's session");
     }
-    const id = createId("cmt");
+    const id = options.entryId ?? createId("cmt");
     const now = nowIso();
     const body = rawBody.trim();
     const taskId = cleanOptionalString(input.taskId ?? input.task_id) ?? null;
-    this.ctx.db.run(
-      `INSERT INTO multiremi_issue_comments (
-         id, issue_id, issue_session_id, author_type, author_id, task_id, parent_id, body, type, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, issueId, issueSessionId, input.authorType ?? "member", input.authorId ?? null, taskId, parentId, body, "comment", now, now],
-    );
-    const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
-    if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
-    this.linkReferencedAttachmentsToComment(id, issueId, body);
+
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     if (parentId) this.unresolveThreadRoot(parentId);
     if (authorType === "agent" && input.authorId) {
@@ -4887,9 +4879,13 @@ export class IssuesRepo {
       kind: "message",
       body,
       sourceCommentId: id,
+      taskId,
       metadata: { parent_comment_id: parentId },
       createdAt: now,
     });
+    const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
+    if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
+    this.linkReferencedAttachmentsToComment(id, issueId, body);
     if (authorType === "member" && input.authorId) {
       // Member authors may use a member row id or a request user id. Resolve
       // explicitly for subscriptions without broadening authorization lookup.
@@ -4985,7 +4981,7 @@ export class IssuesRepo {
     const placeholders = commentIds.map(() => "?").join(", ");
     const lanes = this.ctx.db.query(`SELECT id AS "taskId", agent_id AS "agentId", issue_session_id AS "issueSessionId",
       execution_scope AS "executionScope", trigger_comment_id AS "commentId", trigger_summary AS "triggerSummary",
-      wake_seq AS "wakeSeq" FROM multiremi_tasks
+      wake_seq AS "wakeSeq" FROM multiremi_turn_execution_records
       WHERE workspace_id = ? AND trigger_comment_id IN (${placeholders})
         AND status NOT IN ('completed','failed','cancelled')`).all(issue.workspaceId, ...commentIds);
     return this.enqueueCommentDispatchIntent(issue, commentIds[0]!, "trigger_comment_changed", {
@@ -5145,10 +5141,7 @@ export class IssuesRepo {
     const body = (input.body ?? input.content ?? "").trim();
     if (!body) throw new Error("Comment body is required");
     const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_issue_comments SET body = ?, updated_at = ? WHERE id = ?",
-      [body, now, id],
-    );
+
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
     this.linkReferencedAttachmentsToComment(id, current.issueId, body);
@@ -5211,7 +5204,7 @@ export class IssuesRepo {
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE comment_id = ?", [commentId]);
     }
     for (const commentId of ids.slice().reverse()) {
-      this.ctx.db.run("DELETE FROM multiremi_issue_comments WHERE id = ?", [commentId]);
+
     }
     for (const comment of deletedComments) {
       if (!comment.issueSessionId) continue;
@@ -5264,12 +5257,7 @@ export class IssuesRepo {
     if (current.parentId) throw new Error("Only root comments can be resolved");
     if (current.resolvedAt) return this.getIssueComment(id)!;
     const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_issue_comments
-       SET resolved_at = ?, resolved_by_type = ?, resolved_by_id = ?, updated_at = ?
-       WHERE id = ?`,
-      [now, input.actorType ?? "member", input.actorId ?? "local", now, id],
-    );
+
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
       // The log resolves in place with `revision++`; the browser replica learns
@@ -5314,10 +5302,7 @@ export class IssuesRepo {
     if (current.parentId) throw new Error("Only root comments can be resolved");
     if (!current.resolvedAt) return this.getIssueComment(id)!;
     const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
-      [now, id],
-    );
+
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
       // Unresolve clears all three columns on the same row and bumps `revision`.
@@ -5353,7 +5338,7 @@ export class IssuesRepo {
       `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
          log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
          log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
-       FROM multiremi_issue_comments cmt
+       FROM multiremi_issue_message_records cmt
        LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
        WHERE cmt.id = ?`,
     ).get(id) as Row | null;
@@ -5365,7 +5350,7 @@ export class IssuesRepo {
       `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
          log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
          log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
-       FROM multiremi_issue_comments cmt
+       FROM multiremi_issue_message_records cmt
        LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
        WHERE cmt.issue_id = ? ORDER BY cmt.created_at ASC`,
     ).all(issueId) as Row[];
@@ -5373,17 +5358,7 @@ export class IssuesRepo {
   }
 
   private commentFromLogRow(row: Row): MultiremiIssueComment {
-    // B7 backfills historical comments. Until then, a missing log row retains
-    // the legacy wire while every newly mirrored comment reads its log revision.
-    if (row.log_id == null) return toIssueComment(row);
-    return toIssueComment({
-      ...row,
-      body: row.log_body_md,
-      updated_at: row.log_updated_at,
-      resolved_at: row.log_resolved_at,
-      resolved_by_type: row.log_resolved_by_type,
-      resolved_by_id: row.log_resolved_by_id,
-    });
+    return toIssueComment(row);
   }
 
   listIssueCommentsForGoCli(issueId: string, input: ListIssueCommentsInput = {}): ListIssueCommentsResult {
@@ -5619,7 +5594,7 @@ export class IssuesRepo {
     }
     commentParams.push(rowLimit);
     const commentRows = this.ctx.db.query(
-      `SELECT * FROM multiremi_issue_comments
+      `SELECT * FROM multiremi_issue_message_records
        WHERE ${commentWhere.join(" AND ")}
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
@@ -6090,7 +6065,7 @@ export class IssuesRepo {
   listCommentReactions(commentId: string): MultiremiCommentReaction[] {
     const rows = this.ctx.db.query(
       `SELECT reactions.*, comments.id AS __comment_exists
-       FROM multiremi_issue_comments comments
+       FROM multiremi_issue_message_records comments
        LEFT JOIN multiremi_comment_reactions reactions ON reactions.comment_id = comments.id
        WHERE comments.id = ?
        ORDER BY reactions.created_at ASC`,
@@ -6242,7 +6217,7 @@ export class IssuesRepo {
   listAttachmentsForComment(commentId: string): MultiremiAttachment[] {
     const rows = this.ctx.db.query(
       `SELECT attachments.*, comments.id AS __comment_exists
-       FROM multiremi_issue_comments comments
+       FROM multiremi_issue_message_records comments
        LEFT JOIN multiremi_attachments attachments ON attachments.comment_id = comments.id
        WHERE comments.id = ?
        ORDER BY attachments.created_at ASC`,
@@ -6484,12 +6459,11 @@ export class IssuesRepo {
 
   private cancelActiveIssueTasks(issueId: string, reason: string, deferredEvents: CommitEventQueue): number {
     const active = this.ctx.db.query(
-      "SELECT * FROM multiremi_tasks WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
+      "SELECT * FROM multiremi_turn_execution_records WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
     ).all(issueId) as Row[];
     if (!active.length) return 0;
     const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_tasks
+    runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
        SET status = 'cancelled', completed_at = ?, cancelled_at = ?, updated_at = ?
        WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
       [now, now, now, issueId],
@@ -6654,7 +6628,7 @@ export class IssuesRepo {
     const ids: string[] = [];
     const visit = (id: string) => {
       ids.push(id);
-      const rows = this.ctx.db.query("SELECT id FROM multiremi_issue_comments WHERE parent_id = ? ORDER BY created_at ASC").all(id) as Row[];
+      const rows = this.ctx.db.query("SELECT id FROM multiremi_issue_message_records WHERE parent_id = ? ORDER BY created_at ASC").all(id) as Row[];
       for (const row of rows) visit(String(row.id));
     };
     visit(commentId);
@@ -6666,10 +6640,7 @@ export class IssuesRepo {
     while (current?.parentId) current = this.ctx.getRawIssueComment(current.parentId);
     if (!current?.resolvedAt) return;
     const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
-      [now, current.id],
-    );
+
     const entry = this.ctx.conversationLog().getConversationLogEntryById(current.id);
     if (entry && current.issueSessionId) {
       this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, entry.seq, {
@@ -7186,7 +7157,7 @@ export class IssuesRepo {
       ? [issueId, agentId, delegatedByAgentId]
       : [issueId, agentId, delegatedByAgentId, issueSessionId];
     const row = this.ctx.db.query(
-      `SELECT id FROM multiremi_tasks
+      `SELECT id FROM multiremi_turn_execution_records
        WHERE issue_id = ? AND agent_id = ? AND delegated_by_agent_id = ?
          AND delegation_id IS NOT NULL
          AND ${sessionClause}

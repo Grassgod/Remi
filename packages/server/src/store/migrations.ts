@@ -1,3 +1,5 @@
+import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
+import { UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, chatTaskRetryParentSql } from "@multiremi/store/helpers.js";
 import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
 import { createHash } from "node:crypto";
@@ -62,9 +64,22 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
   // a finished migration or proceeds exactly as before (SQLite, where the lock
   // is a no-op). It releases on throw as well as on return, so a failed
   // migration cannot strand it.
-  advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () =>
-    runMigrationsForDialect(db, resolveSqlDialect(db, options.dialect)));
+  advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
+    const tables=existingTableNames(db);
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});return;}
+    // Inspect the existing snapshot before bootstrap migrations can touch it.
+    const checks=unifiedModelPreflight(db);
+    if(checks.some(c=>!c.ok)){
+      writeUnifiedModelReport(process.env.MULTIREMI_MIGRATION_REPORT_DIR??'reports/migrations','before',collectUnifiedBeforeReport(db));
+      throw new UnifiedModelPreflightError(checks);
+    }
+    runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
+    runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
+  });
 }
+
+/** Historical schema bootstrap used by offline migration fixtures, never a runtime read path. */
+export function bootstrapPreUnifiedSchema(db:SqlDatabase):void { runMigrationsForDialect(db,resolveSqlDialect(db,db.dialect)); }
 
 /**
  * The migration body. The dialect is resolved once, up front, from declared

@@ -33,7 +33,7 @@ export function resolveChatWorkspace(ctx: StoreContext, chat: MultiremiChatSessi
   let lineage: ChatWorkspaceLineage = source ?? { executionFingerprint: chat.sessionExecutionFingerprint,
     workDir: chat.workDir, runtimeId: chat.sessionRuntimeId };
   if (!lineage.executionFingerprint && !lineage.workDir) {
-    const previous = ctx.db.query(`SELECT execution_fingerprint, work_dir, runtime_id FROM multiremi_tasks
+    const previous = ctx.db.query(`SELECT execution_fingerprint, work_dir, runtime_id FROM multiremi_turn_execution_records
       WHERE chat_session_id = ? AND issue_id IS NULL AND execution_fingerprint IS NOT NULL
       ORDER BY created_at DESC, id DESC LIMIT 1`).get(chat.id) as Record<string, unknown> | null;
     if (previous) lineage = { executionFingerprint: String(previous.execution_fingerprint),

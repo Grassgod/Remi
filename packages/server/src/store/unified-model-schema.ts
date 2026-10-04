@@ -11,6 +11,13 @@ export const UNIFIED_MESSAGE_COLUMNS = [
   "card_token_hash TEXT", "card_token_recipient TEXT", "card_token_consumed_at TEXT",
 ] as const;
 
+export const UNIFIED_MESSAGE_INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_conversation_log_session_dedupe
+ ON multiremi_conversation_log(session_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_multiremi_conversation_log_member_inbox
+ ON multiremi_conversation_log(to_member_id, session_id, seq);
+`;
+
 export const UNIFIED_TURNS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS multiremi_turns (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -35,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_multiremi_turns_agent ON multiremi_turns(agent_id
 
 export const UNIFIED_LANES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS multiremi_session_lanes (
-  session_id TEXT NOT NULL, reader_type TEXT NOT NULL CHECK(reader_type IN ('agent','member')),
+  session_id TEXT NOT NULL, reader_type TEXT NOT NULL DEFAULT 'agent' CHECK(reader_type IN ('agent','member')),
   reader_id TEXT NOT NULL, execution_scope TEXT NOT NULL DEFAULT '',
   provider_session_id TEXT, runtime_id TEXT, provider TEXT, work_dir TEXT,
   execution_fingerprint TEXT, cursor_seq INTEGER NOT NULL DEFAULT 0,
