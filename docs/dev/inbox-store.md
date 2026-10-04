@@ -6,7 +6,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 # 统一消息与收件箱 Store
 
-该分支实现 [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md) 的消息状态机。Daemon 传输、新 CLI/API 和页面由各自消费者集成；本文的接口存在于 Store，不代表生产已经切换。
+该分支实现 [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md) 的消息状态机。S4 已将 message/inbox/turn HTTP 接到这些 Store 方法，页面契约见 [Message HTTP 接口](message-api.md)；不代表生产已经切换。
 
 ## 写入与事务
 
@@ -25,7 +25,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 | 功能 | Store 方法 | 结果或边界 |
 |---|---|---|
 | 消息发送、读取 | `sendMessage(input)`、`getMessage(id)`、`listMessages(sessionId,{from,to,limit,thread,unread_by})` | seq 范围为 `(from,to]`；发送返回实际 wake；读取过滤 tombstone |
-| 编辑、删除、解决、反应 | `editMessage(id,{body_md})`、`deleteMessage(id)`、`resolveMessage(id,actor,resolved)`、`reactMessage(id,input)` | 已消费或部分已消费内容不能编辑；删除保留 tombstone；反应幂等 |
+| 编辑、删除、解决、反应 | `editMessage(id,{body_md})`、`deleteMessage(id)`、`resolveMessage(id,actor,resolved)`、`reactMessage(id,input)` | 已消费或部分已消费内容不能编辑或删除；删除保留 tombstone；反应幂等 |
 | 人的收件箱 | `listMessageInbox(memberId,workspaceId,{limit})`、`readMessageInbox(memberId,sessionId,toSeq)`、`readAllMessageInbox(memberId,workspaceId)` | member lane，计数不受分页影响；priority≤2 且未解决进入 attention；读到哪只前进 |
 | 轮与尝试 | `getTurn(id)`、`listTurns(input)`、`getTurnInput(id)`、`listTurnAttempts(id)`、`getTurnTrace(id)` | trace 定位 current_attempt_id；历史输入范围保留 legacy_prompt |
 | 轮控制 | `cancelTurn(id)`、`wrapUpTurn(id)`、`retryTurn(id,cold)` | wrap-up 是标记；retry 同轮新 attempt，cold 清 provider 续接缓存，不改变 Issue |

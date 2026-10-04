@@ -5,7 +5,7 @@ import { bootstrapPreUnifiedSchema } from '@multiremi/store/migrations.js';
 import { createId } from '@multiremi/ids.js';
 
 /** Seed an actual historical schema without invoking current runtime writers. */
-function historicalWriters(db:SqlDatabase) {
+export function historicalWriters(db:SqlDatabase) {
   const at='2026-10-01T00:00:00.000Z';let number=0;
   const insert=(table:string,row:Record<string,unknown>)=>db.run(`INSERT INTO ${table}(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map(()=>'?').join(',')})`,Object.values(row));
   insert('multiremi_workspaces',{id:'local',name:'Local',slug:'local',created_at:at,updated_at:at});

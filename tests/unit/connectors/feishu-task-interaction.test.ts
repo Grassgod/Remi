@@ -20,7 +20,7 @@ function request(kind: "question" | "permission" = "question"): MultiremiTaskHum
 }
 const action = (name: string, form_value?: Record<string, unknown>, operator = "ou_owner") => ({
   operator: { open_id: operator }, context: { open_chat_id: "oc_group", open_message_id: "om_request" },
-  action: { tag: "button", name, value: { t: "card-token-fixture", r: "hr_test", task_id: "tsk_test" }, ...(form_value ? { form_value } : {}) },
+  action: { tag: "button", name, value: { t: "card-token-fixture", message_id: "hr_test" }, ...(form_value ? { form_value } : {}) },
 });
 const answered = (r: MultiremiTaskHumanRequest, response: Record<string, unknown>): MultiremiTaskHumanRequest =>
   ({ ...r, status: "responded", response, respondedAt: new Date().toISOString(), respondedBy: "feishu" });

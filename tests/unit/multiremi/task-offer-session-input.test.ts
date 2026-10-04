@@ -140,7 +140,7 @@ test("Chat input includes only this task's user trigger without a duplicate chat
   const claimed = f.store.claimTask(f.runtime.id)!;
   f.store.startTask(claimed.id);
   const second = f.store.sendChatMessage(chat.id, { body: "SECOND_CHAT_TRIGGER" });
-  expect(second.task.id).not.toBe(first.task.id);
+  expect(second.task.id).toBe(first.task.id);
   const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
   useTaskSessionInput(f.store, claimed, response);
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);

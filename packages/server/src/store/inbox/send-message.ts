@@ -159,7 +159,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     for(const id of input.attachment_ids){const attachment=ctx.issues().getAttachment(id);
       if(!attachment||attachment.workspaceId!==workspaceId)throw new Error('Attachment belongs to another workspace');
       if(attachment.commentId&&attachment.commentId!==message.id||attachment.chatMessageId&&attachment.chatMessageId!==message.id)throw new Error('Attachment already belongs to another message');}
-    if(originalSession)ctx.issues().linkAttachmentsToComment(message.id,originalSession.issueId,input.attachment_ids);else if(originalChat)ctx.issues().linkAttachmentsToChatMessage(originalChat.id,message.id,input.attachment_ids);else throw new Error('Automation attachments require an Issue or Chat');
+    const attachmentSession=ctx.issueSessions().getIssueSession(message.session_id),attachmentChat=ctx.chat().getChatSession(message.session_id);
+    if(attachmentSession)ctx.issues().linkAttachmentsToComment(message.id,attachmentSession.issueId,input.attachment_ids);else if(attachmentChat)ctx.issues().linkAttachmentsToChatMessage(attachmentChat.id,message.id,input.attachment_ids);else throw new Error('Automation attachments require an Issue or Chat');
   }
   if(recipientType==='agent'&&recipientId){
     // A downgraded message remains discoverable, but only now contributes a wake hint.

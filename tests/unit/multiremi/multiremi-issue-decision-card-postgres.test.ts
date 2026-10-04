@@ -369,8 +369,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     });
     const client = new MultiremiDaemonClient(server.url.origin, token.token);
     const marker = decisionInteractionMarker(scope.parent.id, decision.id);
-    const originalAnswer = store.answerIssueDecision.bind(store);
-    store.answerIssueDecision = (...args) => {
+    const originalAnswer = store.answerMessageDecision.bind(store);
+    store.answerMessageDecision = (...args) => {
       store.withdrawIssueDecision(scope.parent.id, decision.id, {
         type: "agent", id: scope.agentId, taskId: scope.task.id,
       });
@@ -379,9 +379,9 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     const registration = registerIssueDecisionCardInteraction({
       appId: "cli_pg412", chatId: "oc_pg412", messageId,
       recipientOpenId: scope.openId,
-      getDecision: () => client.getFeishuIssueDecision(scope.parent.id, decision.id),
+      getDecision: () => client.getFeishuIssueDecision(decision.id),
       submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-        scope.parent.id, decision.id, { answer, operatorOpenId, token },
+        decision.id, { answer, operatorOpenId, token },
       ),
     });
     try {
@@ -398,7 +398,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       expect(store.getIssueDecision(scope.parent.id, decision.id)?.status).toBe("withdrawn");
     } finally {
       registration.dispose();
-      store.answerIssueDecision = originalAnswer;
+      store.answerMessageDecision = originalAnswer;
       await server.stop(true);
     }
   });

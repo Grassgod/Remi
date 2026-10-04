@@ -424,6 +424,7 @@ export interface IssuesSurface {
   getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
   /** One decision scoped to the Issue it hangs on. */
   getIssueDecision(issueId: string, decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
+  answerIssueDecision: import("./repos/issues-repo.js").IssuesRepo["answerIssueDecision"];
 }
 
 export interface AgentsSurface {
@@ -642,6 +643,7 @@ export interface TasksSurface {
   listTasksForIssue(issueId: string): MultiremiTask[];
   /** Read one human request without going through the facade (MUL-407). */
   getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
+  respondTaskHumanRequest: import("./repos/tasks-repo.js").TasksRepo["respondTaskHumanRequest"];
   cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
@@ -801,6 +803,9 @@ export interface ConversationLogSurface {
 }
 
 export interface InboxSurface {
+  readMessageInbox: import("./inbox/operations.js").InboxOperations["readMessageInbox"];
+  resolveMessage: import("./inbox/operations.js").InboxOperations["resolveMessage"];
+  issueMessageCardToken: import("./inbox/operations.js").InboxOperations["issueMessageCardToken"];
   getMessage: import("./repos/inbox-repo.js").InboxRepo["getMessage"];
   sendEnvelopeWithinTransaction(
     env: import("@multiremi/contracts/inbox.js").Envelope,

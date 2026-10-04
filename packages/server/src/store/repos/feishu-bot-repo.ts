@@ -47,7 +47,7 @@ import { createLogger } from "@shared/logger.js";
 import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/config/background-jobs.js";
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
-import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
@@ -1570,15 +1570,9 @@ export class FeishuBotRepo {
     id: string,
     recipient: string | null,
   ): string {
-    const token = mintQuestionCardToken();
     const status = table === "multiremi_message_decision_records" ? "escalated" : "pending";
-    const updated = this.ctx.db.run(
-      `UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL
-       WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL AND id IN(SELECT id FROM ${table} WHERE status=?)`,
-      [hashQuestionCardToken(token), recipient, id, status],
-    );
-    if (updated.changes !== 1) throw new Error("question card is no longer pending");
-    return token;
+    if (!this.ctx.db.query(`SELECT id FROM ${table} WHERE id=? AND status=?`).get(id, status)) throw new Error("question card is no longer pending");
+    return this.ctx.inbox().issueMessageCardToken(id, recipient);
   }
 
   private rotatedQuestionCard(row: Row, recipientOpenId: string | null): Record<string, unknown> | null {
@@ -2870,6 +2864,7 @@ export class FeishuBotRepo {
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       // Read candidates before taking write locks. Each row is revalidated and
       // claimed by CAS below, so concurrent pollers can share this snapshot.
       const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
@@ -3272,11 +3267,10 @@ export class FeishuBotRepo {
         const action = card ? questionCardAction(card) : null;
         const recipient = cleanOptionalString(input.interactionOpenId);
         if (action && recipient && !input.degraded) {
-          const table = row.decision_id ? "multiremi_message_decision_records" : "multiremi_message_question_records";
           this.ctx.db.run(
             `UPDATE multiremi_conversation_log SET card_token_recipient=COALESCE(card_token_recipient,?)
              WHERE id=? AND card_token_hash=? AND card_token_consumed_at IS NULL`,
-            [recipient, String(action.r), hashQuestionCardToken(String(action.t))],
+            [recipient, String(action.message_id), hashQuestionCardToken(String(action.t))],
           );
         }
         // A degrade the host decided (a `group_owner` lookup that came back

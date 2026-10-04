@@ -43,7 +43,8 @@ pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
       expect(turns.find(t=>t.current_attempt_id===task.id)?.trigger_message_id).toBeTruthy();}
     const issueAuto=f.store.createAutopilot({title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
     expect(f.store.listMessages(f.store.getOrCreateDefaultIssueSession(run.issueId!).id)).toHaveLength(1);
-    expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.message_kind).toBe('status');
+    expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.message_kind).toBe('request');
+    expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.body_md).toBe('Issue request');
   });
 
 });

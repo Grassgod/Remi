@@ -553,8 +553,9 @@ with `wake_applied=next_turn` and `wake_reason=pair_round_trip_limit`.
 It reports the applied wake result, including six downgrade explanations:
 `agent_pair_not_privileged`, `pair_round_trip_limit`, `dependencies_unmet`,
 `self`, `recipient_unavailable` and `source_side_session`.
-The general message write API and its lane policy remain pending S2 integration;
-the CLI response contract does not imply that those writes are implemented.
+The message, inbox and turn APIs now call the S2 Store transaction methods.
+See [the HTTP interface contract](dev/message-api.md) for the page integration
+shapes, authenticated identities, pagination and decision replies.
 
 `scripts/migrations/rewrite-retired-cli-commands.ts --dry-run` reports platform
 instruction changes. Execute only after reviewing its entity / field / original /

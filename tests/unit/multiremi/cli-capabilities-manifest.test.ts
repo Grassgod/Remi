@@ -169,30 +169,28 @@ describe("CLI capabilities manifest", () => {
   });
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
-    // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
-    // machine-to-server protocol, so they raise the exempt count with the total.
-    // Merge (v): retain main's routes and B5's two mapped trace reads. Main's
-    // MUL-395 status-pages route is mapped too: 679 + 1 + 2 = 682.
     expect(cliCoverageReport(manifest)).toEqual({
-      // MUL-479's context-window PUT maps to `remi workspace relay context-window
-      // update`, so it raises the mapped count with the total.
-      // MUL-508 maps the complete Session message range to message.list.
-      mapped: 605,
-      // MUL-407 adds one daemon-internal route (turning decision cards back into
-      // click handlers after a host restart), which the existing `/api/daemon/`
-      // rule exempts rather than mapping to a user command.
-      // MUL-438 adds the browser trace socket (`GET /api/trace/ws`), exempt under
-      // the existing `websocket_transport` rule: a long-lived stream is not a CLI
-      // command surface.
-      //
-      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
-      // channel), also exempt under `daemon_internal_protocol`: machine-to-server
-      // traffic between two API processes with no user-facing command.
-      // The three retired human-request HTTP routes now use daemon RPC.
-      exempt: 165,
+      mapped: 618,
+      exempt: 164,
       missing: 0,
-      total: 770,
+      total: 782,
     });
+    for (const [route, command] of Object.entries({
+      "POST /api/sessions/:sessionId/messages": "message.send",
+      "GET /api/messages/:id": "message.get",
+      "PATCH /api/messages/:id": "message.edit",
+      "DELETE /api/messages/:id": "message.delete",
+      "POST /api/messages/:id/resolve": "message.resolve",
+      "POST /api/messages/:id/reactions": "message.react",
+      "GET /api/inbox": "inbox",
+      "POST /api/inbox/read": "inbox.read",
+      "GET /api/turns": "turn.list",
+      "GET /api/turns/:id": "turn.get",
+      "POST /api/turns/:id/cancel": "turn.cancel",
+      "POST /api/turns/:id/wrap-up": "turn.wrap-up",
+      "POST /api/turns/:id/retry": "turn.retry",
+      "GET /api/turns/:id/trace": "turn.trace.read",
+    })) expect(manifest.routes[route]).toEqual({ command });
     expect(manifest.routes["GET /api/sessions/:sessionId/messages"]).toEqual({ command: "message.list" });
     for (const path of ["chat message list", "issue run-messages", "task message list"]) {
       expect(manifest.aliases[`remi ${path}`]).toBeUndefined();
@@ -207,7 +205,8 @@ describe("CLI capabilities manifest", () => {
         category: "daemon_internal_protocol",
         reason: "Read-only v1 daemon upgrade bridge for plugin desired state is machine-to-server traffic, not a user CLI command.",
       });
-    expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"])
+    expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"]).toBeUndefined();
+    expect(manifest.routes["POST /api/daemon/messages/:id/card"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/issues/:id/workspace/abandon"])

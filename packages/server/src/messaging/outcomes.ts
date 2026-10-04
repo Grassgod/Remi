@@ -33,6 +33,7 @@ export type MessagingOutcomeHost = Pick<
   | "isNotificationMuted"
   | "issues"
   | "tasks"
+  | "inbox"
   | "emitCommitEvents"
   // MUL-405: the outcome service creates Issues, so it takes the workspace
   // lifecycle row lock before the number lock like every other creating path.
@@ -375,6 +376,7 @@ export class MessagingOutcomeService {
   proposeIssue(ref: MessageRef, input: MessageIssueProposalInput): MessageIssueProposalResult {
     const issueInput = normalizeIssueInput(input);
     return this.ctx.db.transaction(() => {
+      this.lockWorkspace(input.workspaceId);
       const message = this.requireMessage(ref, input.workspaceId);
       const taskId = cleanText(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
@@ -483,6 +485,7 @@ export class MessagingOutcomeService {
 
   rejectProposal(proposalId: string, input: { workspaceId: string; rejectedBy: string }): ResolveMessageProposalResult {
     return this.ctx.db.transaction(() => {
+      this.lockWorkspace(input.workspaceId);
       const proposal = this.requireProposal(proposalId, input.workspaceId);
       const ref = { connectionId: proposal.connectionId, externalMessageId: proposal.externalMessageId };
       this.lockMessage(ref);
@@ -662,10 +665,11 @@ export class MessagingOutcomeService {
 
   private markProposalInboxHandled(outcomeRef: string | null): void {
     if (!outcomeRef?.startsWith("inbox:")) return;
-    this.ctx.db.run(
-      "UPDATE multiremi_inbox_items SET read = 1, archived = 1 WHERE id = ?",
-      [outcomeRef.slice("inbox:".length)],
-    );
+    const id = outcomeRef.slice("inbox:".length);
+    const message = this.ctx.inbox().getMessage(id);
+    if (!message?.to_member_id) return;
+    this.ctx.inbox().readMessageInbox(message.to_member_id, message.session_id, message.seq);
+    this.ctx.inbox().resolveMessage(id, { type: "member", id: message.to_member_id });
   }
 
   private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {

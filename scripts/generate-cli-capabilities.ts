@@ -133,6 +133,16 @@ export function classifyRoute(route: string): CliManifestRoute {
   };
   if (route === "GET /api/inbox") return { command: "inbox" };
   if (route === "GET /api/sessions/:sessionId/messages") return { command: "message.list" };
+  const unified: Record<string, string> = {
+    "POST /api/sessions/:sessionId/messages": "message.send",
+    "GET /api/messages/:id": "message.get", "PATCH /api/messages/:id": "message.edit",
+    "DELETE /api/messages/:id": "message.delete", "POST /api/messages/:id/resolve": "message.resolve",
+    "POST /api/messages/:id/reactions": "message.react", "POST /api/inbox/read": "inbox.read",
+    "GET /api/turns": "turn.list", "GET /api/turns/:id": "turn.get",
+    "POST /api/turns/:id/cancel": "turn.cancel", "POST /api/turns/:id/wrap-up": "turn.wrap-up",
+    "POST /api/turns/:id/retry": "turn.retry", "GET /api/turns/:id/trace": "turn.trace.read",
+  };
+  if (unified[route]) return { command: unified[route]! };
   const mapped = mappedResourceCommand(route);
   if (mapped) return { command: mapped };
   const exempt = exemptRoute(route);

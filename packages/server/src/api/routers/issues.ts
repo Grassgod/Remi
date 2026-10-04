@@ -1,6 +1,7 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { readSessionLogRange } from "../session-log-range.js";
 import type { Context, Hono } from "hono";
+import { loadConversation, messageResponse } from "../helpers/conversations.js";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
   assigneeFrequencyQuery,
@@ -1573,12 +1574,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   const logSessionAccess = (c: Context): string | Response => {
     const sessionId = c.req.param("sessionId") ?? "";
-    const issueSession = store.getIssueSession(sessionId);
-    if (issueSession) {
-      return denyCurrentUserWorkspaceAccess(c, store, issueSession.workspaceId) ?? sessionId;
-    }
-    const chat = loadChatSessionForCurrentUser(c, store, sessionId);
-    return chat instanceof Response ? chat : chat.session.id;
+    const conversation = loadConversation(c, store, sessionId);
+    return conversation instanceof Response ? conversation : conversation.id;
   };
   const recordLogRead = (message: string, data: Record<string, unknown>): void => {
     // Optional read telemetry cannot make an authorized read fail.
@@ -1615,7 +1612,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         returned_from_seq: page.entries[0]?.seq ?? null, returned_to_seq: page.entries.at(-1)?.seq ?? null,
         read_start: page.read_start, read_end: page.read_end, next_cursor: page.next_cursor,
         read_high_water: progress?.seq ?? null, read_offset: progress?.offset ?? null });
-      return c.json(page);
+      return c.json({ ...page, entries: page.entries.map(entry => messageResponse(entry)) });
     } catch (error) {
       if (error instanceof SyntaxError || error instanceof Error && error.message.startsWith("Invalid range cursor")) {
         return c.json({ error: "invalid range cursor" }, 400);

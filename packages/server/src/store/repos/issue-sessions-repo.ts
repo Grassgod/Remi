@@ -109,6 +109,7 @@ export class IssueSessionsRepo {
   createIssueSessionWithinTransaction(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
     const title = input.title?.trim() || `Session ${this.listIssueSessions(issueId, true).length + 1}`;
     const id = input.id ?? createId("ises");
     const now = nowIso();
@@ -410,6 +411,7 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
     this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
     if(input.kind==='task_assigned'&&input.taskId){
       const pointer=this.ctx.conversationLog().findTurnEntry(input.taskId);

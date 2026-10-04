@@ -4796,7 +4796,7 @@ export class IssuesRepo {
       "New comment",
       body,
       authorType,
-      input.authorId ?? null,
+      comment.authorId,
       mentionedMemberIds,
       { comment_id: comment.id, issue_session_id: issueSessionId },
     );

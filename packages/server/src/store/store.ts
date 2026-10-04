@@ -5494,7 +5494,13 @@ runMigrations(this.db);
   listMessageInbox(...args: Parameters<InboxRepo["operations"]["listMessageInbox"]>) { return this.inbox.operations.listMessageInbox(...args); }
   readMessageInbox(...args: Parameters<InboxRepo["operations"]["readMessageInbox"]>) { return this.inbox.operations.readMessageInbox(...args); }
   readAllMessageInbox(...args: Parameters<InboxRepo["operations"]["readAllMessageInbox"]>) { return this.inbox.operations.readAllMessageInbox(...args); }
+  listReaderMessageInbox(...args: Parameters<InboxRepo["operations"]["listReaderMessageInbox"]>) { return this.inbox.operations.listReaderMessageInbox(...args); }
+  readAgentMessageInbox(...args: Parameters<InboxRepo["operations"]["readAgentMessageInbox"]>) { return this.inbox.operations.readAgentMessageInbox(...args); }
   getTurn(...args: Parameters<InboxRepo["operations"]["getTurn"]>) { return this.inbox.operations.getTurn(...args); }
+  getTurnForAttempt(attemptId: string) {
+    const row = this.db.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(attemptId);
+    return row ? this.getTurn(String(row.turn_id)) : null;
+  }
   listTurns(...args: Parameters<InboxRepo["operations"]["listTurns"]>) { return this.inbox.operations.listTurns(...args); }
   listTurnAttempts(...args: Parameters<InboxRepo["operations"]["listTurnAttempts"]>) { return this.inbox.operations.listTurnAttempts(...args); }
   getTurnTrace(...args: Parameters<InboxRepo["operations"]["getTurnTrace"]>) { return this.inbox.operations.getTurnTrace(...args); }
@@ -5506,9 +5512,21 @@ runMigrations(this.db);
   answerMessageDecision(...args: Parameters<InboxRepo["operations"]["answerMessageDecision"]>) { return this.inbox.operations.answerMessageDecision(...args); }
   getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
   getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
-  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput) {
+  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = []) {
     const events=createCommitEventQueue();
-    const result=this.db.transaction(()=>this.inbox.sendMessageWithinTransaction(input,events))();
+    const result=this.db.transaction(()=>{
+      if (uploads.length) this.ctx.lockWorkspaceRuntimeLifecycle(uploads[0]!.workspaceId!);
+      if (input.dedupe_key && this.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?").get(input.session_id, input.dedupe_key)) {
+        return this.inbox.sendMessageWithinTransaction(input, events);
+      }
+      const attachmentIds = uploads.map(upload => this.createAttachment(upload).id);
+      const sent = this.inbox.sendMessageWithinTransaction({ ...input, attachment_ids: [...(input.attachment_ids ?? []), ...attachmentIds] },events);
+      for (const id of attachmentIds) {
+        const attachment = this.getAttachment(id);
+        if (attachment && attachment.commentId !== sent.message.id && attachment.chatMessageId !== sent.message.id) this.deleteAttachment(id);
+      }
+      return sent;
+    })();
     afterCommit(this.db,()=>this.ctx.emitCommitEvents(events));
     return result;
   }

@@ -2,7 +2,7 @@ import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {createMultiremiApp} from '@multiremi/api.js';
 
-pendingTurnBackendTests('MUL-506 four dispatch entrypoints',fixture=>{
+pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
   for(const entry of ['task','session','rerun','mention'] as const){
     for(const terminal of ['completed','failed','cancelled'] as const){
     it(`${entry} derives delegation from the request and returns ${terminal} exactly once`,async()=>{
@@ -14,9 +14,12 @@ pendingTurnBackendTests('MUL-506 four dispatch entrypoints',fixture=>{
       const source=store.createTask({agentId:a!.id,issueId:sourceIssue.id,issueSessionId:s0.id,prompt:'Coordinate'});
       expect(store.claimTask(runtimes[0]!.id)?.id).toBe(source.id);store.startTask(source.id);
       const app=createMultiremiApp({store,authToken:'fixture-root'}),credential=(await store.createTaskAccessToken(source,'local')).token;
-      const path=entry==='task'?'/api/multiremi/tasks':entry==='session'?`/api/issues/${target.id}/sessions/${s1.id}/tasks`:entry==='rerun'?`/api/issues/${target.id}/rerun`:`/api/multiremi/issues/${target.id}/comments`;
-      const response=await app.request(path,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify(entry==='mention'?{issue_session_id:s1.id,body:`Verify [@Recipient](mention://agent/${b!.id})`}:{agentId:b!.id,issueId:target.id,issueSessionId:s1.id,prompt:'Verify'})});
-      expect(response.status).toBe(entry==='rerun'?202:201);
+      const session=entry==='rerun'?store.getOrCreateDefaultIssueSession(target.id):s1;
+      const response=await app.request(`/api/sessions/${session.id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify({
+        to:entry==='rerun'?{type:'role',ref:'issue_owner'}:{type:'agent',ref:b!.id},
+        message_kind:'request',wake_requested:'now',body_md:entry==='mention'?`Verify [@Recipient](mention://agent/${b!.id})`:'Verify',
+      })});
+      expect(response.status).toBe(200);
       const child=store.listTasksForIssue(target.id).find(t=>t.agentId===b!.id)!;
       const turn=store.listTurns({workspace_id:'local',issue_id:target.id}).find(t=>t.current_attempt_id===child.id)!;
       expect(turn.delegated_by_agent_id).toBe(a!.id);expect(turn.delegated_from_issue_session_id).toBe(s0.id);
@@ -69,10 +72,15 @@ pendingTurnBackendTests('MUL-506 four dispatch entrypoints',fixture=>{
     expect(store.countDelegationPairHops(source,b!.id)).toBe(10);
     const before=store.listTurns({workspace_id:'local'}).length,app=createMultiremiApp({store,authToken:'fixture-root'}),credential=(await store.createTaskAccessToken(source,'local')).token;
     for(const entry of ['task','session','rerun','mention'] as const){
-      const marker=`limited ${entry}`,path=entry==='task'?'/api/multiremi/tasks':entry==='session'?`/api/issues/${issue.id}/sessions/${session.id}/tasks`:entry==='rerun'?`/api/issues/${issue.id}/rerun`:`/api/multiremi/issues/${issue.id}/comments`;
-      const response=await app.request(path,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify(entry==='mention'?{issue_session_id:session.id,body:`${marker} [@B](mention://agent/${b!.id})`}:{agentId:b!.id,issueId:issue.id,issueSessionId:session.id,prompt:marker})});
-      expect(response.status).toBe(entry==='mention'?201:200);
-      if(entry!=='mention')expect(await response.json()).toMatchObject({task:null,wake_applied:'next_turn',wake_reason:'pair_round_trip_limit'});
+      const marker=`limited ${entry}`;
+      const response=await app.request(`/api/sessions/${session.id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify({
+        to:{type:'agent',ref:b!.id},message_kind:'request',wake_requested:'now',
+        body_md:entry==='mention'?`${marker} [@B](mention://agent/${b!.id})`:marker,
+      })});
+      expect(response.status).toBe(200);
+      const result=await response.json() as any;
+      expect(result).toMatchObject({wake_applied:'next_turn',wake_reason:'pair_round_trip_limit'});
+      expect(result).not.toHaveProperty('turn_id');
       const message=store.listMessages(session.id,{limit:1000}).find(m=>m.body_md.startsWith(marker))!;
       expect(message.wake_reason).toBe('pair_round_trip_limit');expect(message.wake_applied).toBe('next_turn');
       expect(store.listTurns({workspace_id:'local'})).toHaveLength(before);

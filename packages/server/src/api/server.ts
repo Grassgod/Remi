@@ -57,7 +57,8 @@ import { registerLabelRoutes } from "./routers/labels.js";
 import { registerPinRoutes } from "./routers/pins.js";
 import { registerIssueRoutes } from "./routers/issues.js";
 import { registerIssueShareRoutes } from "./routers/issue-shares.js";
-import { registerInboxRoutes } from "./routers/inbox.js";
+import { registerUnifiedRoutes } from "./routers/unified.js";
+import { registerMessageCardRoutes } from "./routers/message-cards.js";
 import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
@@ -962,11 +963,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerPinRoutes(app, deps);
 
+  registerUnifiedRoutes(app, deps);
+  registerMessageCardRoutes(app, deps);
   registerIssueRoutes(app, deps);
   registerIssueShareRoutes(app, deps);
 
 
-  registerInboxRoutes(app, deps);
 
   registerAttachmentRoutes(app, deps);
 

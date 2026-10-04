@@ -1517,7 +1517,6 @@ export class TasksRepo {
       catch(error){if(!(error as any)?.message_result)throw error;unscheduled=error;return null;}
     })();
     if(unscheduled){this.ctx.emitCommitEvents(deferredEvents);throw unscheduled;}
-    this.ctx.notifyTaskEnqueued(task!);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     return task!;
@@ -4294,11 +4293,12 @@ ${placementAfter.sql}
       const members=this.ctx.workspaces().listWorkspaceMembers(task.workspaceId);
       const recipient=members.find(m=>m.role==='owner'&&!m.archivedAt)??members.find(m=>!m.archivedAt);
       if(!recipient)throw new Error('Decision has no active member recipient');
-      sendMessageWithinTransaction(this.ctx,{id,session_id:turn.session_id,source_turn_id:turn.id,
+      const question = sendMessageWithinTransaction(this.ctx,{id,session_id:turn.session_id,source_turn_id:turn.id,
         sender:{type:'agent',id:task.agentId},to:{type:'member',ref:recipient.id},message_kind:'decision',wake_requested:'now',
         body_md:String(input.payload?.title??input.payload?.message??JSON.stringify(input.payload??{})),
         metadata:{human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
       },deferredEvents);
+      patchDecisionRecord(this.ctx,id,'human_request',{expires_at:new Date(Date.parse(question.message.created_at)+resolveHumanRequestTimeoutMs(input.timeoutMs)).toISOString()});
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
       const transition = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
          SET status = 'awaiting_human', wait_reason = ?, progress_summary = ?, updated_at = ?
@@ -4346,6 +4346,7 @@ ${placementAfter.sql}
     input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     let resumedTask: MultiremiTask | null = null;
+    let replyNotifiedInput = false;
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
@@ -4369,17 +4370,19 @@ ${placementAfter.sql}
       const member=this.ctx.workspaces().getWorkspaceMemberByRef(input.respondedBy??'local',source.workspaceId)
         ??this.ctx.workspaces().listWorkspaceMembers(source.workspaceId).find(m=>m.role==='owner');
       if(!member)throw new Error('Decision respondent is not a workspace member');
-      sendMessageWithinTransaction(this.ctx,{session_id:decision.session_id,sender:{type:'member',id:member.id},
+      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
+      if (resumedTask) this.ctx.db.run('UPDATE multiremi_turns SET waiting_on_message_id=NULL WHERE waiting_on_message_id=?',[decision.id]);
+      const reply = sendMessageWithinTransaction(this.ctx,{session_id:decision.session_id,sender:{type:'member',id:member.id},
         to:{type:'agent',ref:source.agentId},message_kind:'reply',wake_requested:'now',reply_to_id:decision.id,
         body_md:JSON.stringify(input.response??{}),metadata:{human_response:input.response??{}}},deferredEvents);
-      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
+      replyNotifiedInput = reply.turn_id === decision.task_id && ['running','awaiting_human'].includes(source.status);
       return responded;
     })();
     const taskToResume = resumedTask;
     if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
-    if (request) this.publishTaskInputChanged(request.taskId);
+    if (request && !replyNotifiedInput) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 

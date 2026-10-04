@@ -10210,6 +10210,9 @@
     "DELETE /api/labels/:id": {
       "command": "label.delete"
     },
+    "DELETE /api/messages/:id": {
+      "command": "message.delete"
+    },
     "DELETE /api/multiremi/agent-plugins/:id": {
       "command": "plugin.archive"
     },
@@ -10511,12 +10514,12 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/issues/:issueId/decisions/:decisionId": {
+    "GET /api/daemon/issues/:issueId/gc-check": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/issues/:issueId/gc-check": {
+    "GET /api/daemon/messages/:id": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10773,6 +10776,9 @@
     },
     "GET /api/me": {
       "command": "member.get"
+    },
+    "GET /api/messages/:id": {
+      "command": "message.get"
     },
     "GET /api/models": {
       "command": "runtime.model.catalog"
@@ -11286,6 +11292,15 @@
       "category": "websocket_transport",
       "reason": "Long-lived WebSocket transport is outside the CLI command surface."
     },
+    "GET /api/turns": {
+      "command": "turn.list"
+    },
+    "GET /api/turns/:id": {
+      "command": "turn.get"
+    },
+    "GET /api/turns/:id/trace": {
+      "command": "turn.trace.read"
+    },
     "GET /api/workspaces": {
       "command": "workspace.list"
     },
@@ -11522,6 +11537,9 @@
     "PATCH /api/me/onboarding": {
       "command": "member.onboarding.update"
     },
+    "PATCH /api/messages/:id": {
+      "command": "message.edit"
+    },
     "PATCH /api/multiremi/agent-plugins/:id": {
       "command": "plugin.update"
     },
@@ -11722,12 +11740,17 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer": {
+    "POST /api/daemon/issues/:issueId/workspace/cleaned": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/issues/:issueId/workspace/cleaned": {
+    "POST /api/daemon/messages/:id/answer": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/messages/:id/card": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11872,16 +11895,6 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/tasks/:taskId/start": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11929,6 +11942,9 @@
       "cli_exempt": true,
       "category": "retired_route",
       "reason": "已移除：改用 remi inbox read-all"
+    },
+    "POST /api/inbox/read": {
+      "command": "inbox.read"
     },
     "POST /api/invitations/:id/accept": {
       "command": "invite.accept"
@@ -12069,6 +12085,12 @@
     },
     "POST /api/me/onboarding/runtime-bootstrap": {
       "command": "member.onboarding.runtime-bootstrap"
+    },
+    "POST /api/messages/:id/reactions": {
+      "command": "message.react"
+    },
+    "POST /api/messages/:id/resolve": {
+      "command": "message.resolve"
     },
     "POST /api/multiremi/agent-plugins/:id/activate": {
       "command": "plugin.activate"
@@ -12389,6 +12411,9 @@
     "POST /api/runtimes/:id/workspaces": {
       "command": "runtime.workspace.create"
     },
+    "POST /api/sessions/:sessionId/messages": {
+      "command": "message.send"
+    },
     "POST /api/skills": {
       "command": "skill.create"
     },
@@ -12426,6 +12451,15 @@
     },
     "POST /api/tokens/current/renew": {
       "command": "token.renew"
+    },
+    "POST /api/turns/:id/cancel": {
+      "command": "turn.cancel"
+    },
+    "POST /api/turns/:id/retry": {
+      "command": "turn.retry"
+    },
+    "POST /api/turns/:id/wrap-up": {
+      "command": "turn.wrap-up"
     },
     "POST /api/upload-file": {
       "command": "issue.attachment.upload"
