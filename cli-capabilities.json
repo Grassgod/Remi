@@ -9642,7 +9642,7 @@
     },
     "remi issue rerun": {
       "command": "retired.issue.rerun",
-      "replacement": "remi message send <issue> --to issue-owner --kind request"
+      "replacement": "remi message send <conversation> --to issue-owner --kind request --content <prompt>"
     },
     "remi task steer": {
       "command": "retired.task.steer",
@@ -11205,18 +11205,18 @@
     },
     "GET /api/sessions/:sessionId/log": {
       "cli_exempt": true,
-      "category": "retired_route",
-      "reason": "已移除：改用 remi message list <conversation>"
+      "category": "pure_ui",
+      "reason": "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get."
     },
     "GET /api/sessions/:sessionId/log/entry": {
       "cli_exempt": true,
-      "category": "retired_route",
-      "reason": "已移除：改用 remi message get <message>"
+      "category": "pure_ui",
+      "reason": "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get."
     },
     "GET /api/sessions/:sessionId/log/locate": {
       "cli_exempt": true,
-      "category": "retired_route",
-      "reason": "已移除：改用 remi message get <message>"
+      "category": "pure_ui",
+      "reason": "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get."
     },
     "GET /api/sessions/:sessionId/messages": {
       "command": "message.list"

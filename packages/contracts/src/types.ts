@@ -1459,6 +1459,8 @@ export interface MultiremiBoundIssue {
 export interface MultiremiTask {
   runtimeWorkspaceId?: string | null;
   id: string;
+  /** Canonical turn containing this execution attempt. */
+  turn_id?: string | null;
   taskKind: "direct" | "quick_create";
   agentId: string;
   runtimeId: string | null;

@@ -1,7 +1,8 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 
 export function readSessionLogRange(store: MultiremiStore, sessionId: string,
-  from: number, to: number, cursor?: string, excludeAgentId?: string | null) {
+  from: number, to: number, cursor?: string, excludeAgentId?: string | null,
+  visible?: (entry: ReturnType<MultiremiStore['listConversationLogRangePage']>[number]) => boolean) {
   const start = cursor ? JSON.parse(cursor) as { seq: number; offset: number } : { seq: from + 1, offset: 0 };
   if (!start || !Number.isSafeInteger(start.seq) || start.seq < from + 1 || start.seq > to + 1
     || !Number.isSafeInteger(start.offset) || start.offset < 0) throw new Error("Invalid range cursor");
@@ -11,7 +12,7 @@ export function readSessionLogRange(store: MultiremiStore, sessionId: string,
   let remaining = 32_000;
   let next = { seq: start.seq, offset: start.offset };
   for (const entry of rows) {
-    if (entry.visibility !== "shown" || entry.deleted_at
+    if (entry.visibility !== "shown" || entry.deleted_at || visible && !visible(entry)
       || entry.author_type === "agent" && entry.author_id === excludeAgentId) {
       next = { seq: entry.seq + 1, offset: 0 };
       continue;

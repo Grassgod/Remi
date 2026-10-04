@@ -5512,15 +5512,16 @@ runMigrations(this.db);
   answerMessageDecision(...args: Parameters<InboxRepo["operations"]["answerMessageDecision"]>) { return this.inbox.operations.answerMessageDecision(...args); }
   getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
   getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
-  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = []) {
+  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = [],
+    authorizeRecipient?:(agent:MultiremiAgent)=>void) {
     const events=createCommitEventQueue();
     const result=this.db.transaction(()=>{
       if (uploads.length) this.ctx.lockWorkspaceRuntimeLifecycle(uploads[0]!.workspaceId!);
       if (input.dedupe_key && this.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?").get(input.session_id, input.dedupe_key)) {
-        return this.inbox.sendMessageWithinTransaction(input, events);
+        return this.inbox.sendMessageWithinTransaction(input, events, authorizeRecipient);
       }
       const attachmentIds = uploads.map(upload => this.createAttachment(upload).id);
-      const sent = this.inbox.sendMessageWithinTransaction({ ...input, attachment_ids: [...(input.attachment_ids ?? []), ...attachmentIds] },events);
+      const sent = this.inbox.sendMessageWithinTransaction({ ...input, attachment_ids: [...(input.attachment_ids ?? []), ...attachmentIds] },events,authorizeRecipient);
       for (const id of attachmentIds) {
         const attachment = this.getAttachment(id);
         if (attachment && attachment.commentId !== sent.message.id && attachment.chatMessageId !== sent.message.id) this.deleteAttachment(id);

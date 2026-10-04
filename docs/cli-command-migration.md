@@ -574,7 +574,7 @@ serve the new message and cursor contract. Old item IDs are rejected locally.
 | `remi task create` | `remi message send --to <agent> --kind request` |
 | `remi task continue` | `remi message send --to <agent> --kind request` |
 | `remi session task create` | `remi message send <conversation> --to <agent> --kind request` |
-| `remi issue rerun` | `remi message send <issue> --to issue-owner --kind request` |
+| `remi issue rerun` | `remi message send <conversation> --to issue-owner --kind request --content <prompt>` |
 | `remi task steer` | `remi message send --to <agent> (收尾用 remi turn wrap-up <turn>)` |
 | `remi task steer list` | `remi message list <conversation> --unread-by <agent>` |
 | `remi comment add` | `remi message send <conversation>` |

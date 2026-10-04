@@ -320,6 +320,9 @@ describe("CLI capabilities manifest", () => {
   });
 
   it("records every retired path without executable capability or alias", () => {
+    for (const suffix of ["", "/entry", "/locate"]) {
+      expect(manifest.routes[`GET /api/sessions/:sessionId/log${suffix}`]).toMatchObject({ cli_exempt: true, category: "pure_ui" });
+    }
     for (const [path, replacement] of Object.entries(RETIRED_CLI_COMMANDS)) {
       const entry = manifest.retired[`remi ${path}`]!;
       expect(entry.replacement).toBe(replacement);

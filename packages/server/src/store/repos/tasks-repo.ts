@@ -6681,6 +6681,7 @@ function toTask(row: Row): MultiremiTask {
   const taskResult = normalizeStoredTaskResult(row.result);
   return {
     id: String(row.id),
+    turn_id: nullableString(row.turn_id),
     taskKind: row.task_kind === "quick_create" ? "quick_create" : "direct",
     execution_scope: String(row.execution_scope ?? ""),
     agentId: String(row.agent_id),

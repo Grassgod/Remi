@@ -113,10 +113,10 @@ it("answers an awaiting human request and restores the same turn", async () => {
   const sent = await send("work"), turn = store.getTurn(sent.data.turn_id)!;
   db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [turn.id]);
   db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [turn.current_attempt_id!]);
-  const question = store.createTaskHumanRequest({ taskId: turn.current_attempt_id!, kind: "question", payload: { title: "Question" } });
+  const question = store.createTaskHumanRequest({ taskId: turn.current_attempt_id!, kind: "question", payload: { title: "Question", questions: [{ question: "Continue?" }] } });
   expect(store.getTurn(turn.id)?.status).toBe("awaiting_human");
   expect((await send("Yes", { reply_to_id: question.id })).status).toBe(200);
-  expect(store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "Yes" });
+  expect(store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "Yes", answers: { "Continue?": "Yes" } });
   expect(store.getTurn(turn.id)?.status).toBe("running");
   expect(store.listTurns({ workspace_id: "local" })).toHaveLength(1);
 });

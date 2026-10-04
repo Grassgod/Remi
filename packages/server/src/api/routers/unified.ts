@@ -2,11 +2,11 @@ import type { Context, Hono } from "hono";
 import { unlink } from "node:fs/promises";
 import { MESSAGE_KINDS, TURN_STATUSES, type SendMessageInput, type UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.js";
-import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canUserViewTaskMessages } from "../helpers/auth-guards.js";
+import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canCurrentUserAccessAgent } from "../helpers/auth-guards.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
-import { loadConversation, messageActor, messageResponse } from "../helpers/conversations.js";
+import { loadConversation, messageActor, messageResponse, canAccessConversationTask, conversationEntryVisibility } from "../helpers/conversations.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename, safeFilename, uploadedAttachmentPath } from "../helpers/uploads.js";
-import { currentTaskAccessToken, currentRequestUserId } from "../wire/context.js";
+import { currentTaskAccessToken } from "../wire/context.js";
 import { parseTraceWindow } from "../trace/request.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
@@ -49,7 +49,7 @@ function boolean(value: unknown, fallback: boolean): boolean {
   return value;
 }
 async function action(c: Context, run: () => unknown | Promise<unknown>): Promise<Response> {
-  try { return c.json(await run()); }
+  try { const result = await run(); return result instanceof Response ? result : c.json(result); }
   catch (error) {
     if (error instanceof InputError) return c.json({ error: error.message }, 400);
     if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
@@ -68,15 +68,19 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (!turn || turn.current_attempt_id !== token.taskId) throw new InputError("source attempt is no longer current");
     return turn.id;
   };
-  const publicMessage = (message: UnifiedMessage) => ({ ...messageResponse(message),
-    attachments: [...(store.listAttachmentsForComments([message.id]).get(message.id) ?? []), ...(store.listAttachmentsForChatMessages([message.id]).get(message.id) ?? [])],
-    reactions: store.listCommentReactionsForComments([message.id]).get(message.id) ?? [],
-  });
+  const publicMessages = (messages: UnifiedMessage[]) => {
+    const ids = messages.map(m => m.id);
+    const attachments = store.listAttachmentsForComments(ids), chatAttachments = store.listAttachmentsForChatMessages(ids);
+    const reactions = store.listCommentReactionsForComments(ids);
+    return messages.map(message => ({ ...messageResponse(message), attachments: [...(attachments.get(message.id) ?? []), ...(chatAttachments.get(message.id) ?? [])], reactions: reactions.get(message.id) ?? [] }));
+  };
+  const publicMessage = (message: UnifiedMessage) => publicMessages([message])[0]!;
   const loadMessage = (c: Context) => {
     const message = store.getMessage(c.req.param("id")!);
     if (!message || message.visibility !== "shown") return c.json({ error: "message not found" }, 404);
     const conversation = loadConversation(c, store, message.session_id);
-    return conversation instanceof Response ? conversation : { message, conversation };
+    if (conversation instanceof Response) return conversation;
+    return conversationEntryVisibility(c, store)(message) ? { message, conversation } : c.json({ error: "message not found" }, 404);
   };
   app.get("/api/sessions/:sessionId/messages", async (c, next) => {
     if (c.req.query("from") != null || c.req.query("to") != null) return next();
@@ -90,8 +94,15 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (unread && store.getAgent(unread)?.workspaceId !== conversation.workspaceId) throw new InputError("invalid unread_by");
       const thread = c.req.query("thread");
       if (thread && store.getMessage(thread)?.session_id !== conversation.id) throw new InputError("invalid thread");
-      const rows = store.listMessages(conversation.id, { from: after, limit: n + 1, thread, unread_by: unread, message_kind: kind });
-      return { messages: rows.slice(0, n).map(publicMessage), next_cursor: rows.length > n ? String(rows[n - 1]!.seq) : null };
+      const visible = conversationEntryVisibility(c, store), rows: UnifiedMessage[] = [];
+      let from = after;
+      for (;;) {
+        const page = store.listMessages(conversation.id, { from, limit: n + 1, thread, unread_by: unread, message_kind: kind });
+        rows.push(...page.filter(visible));
+        if (page.length < n + 1 || rows.length > n) break;
+        from = page.at(-1)!.seq;
+      }
+      return { messages: publicMessages(rows.slice(0, n)), next_cursor: rows.length > n ? String(rows[n - 1]!.seq) : null };
     });
   });
   app.post("/api/sessions/:sessionId/messages", async (c) => {
@@ -127,13 +138,15 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (selected != null && (!Array.isArray(selected) || selected.some((s: unknown) => typeof s !== "string"))) throw new InputError("invalid selected_options");
       if (input.response != null && (typeof input.response !== "object" || Array.isArray(input.response))) throw new InputError("invalid decision response");
       const text = input.body_md ?? "";
-      if (!text.trim() && !files.length && !selected?.length && !input.attachment_ids?.length) throw new InputError("message content is required");
+      if (!text.trim() && !files.length && !selected?.length && !input.response && !input.attachment_ids?.length) throw new InputError("message content is required");
       const reply = input.reply_to_id ? store.getMessage(input.reply_to_id) : null;
       if (input.reply_to_id && (!reply || reply.session_id !== conversation.id || reply.deleted_at)) throw new InputError("invalid reply target");
+      if (reply && !conversationEntryVisibility(c, store)(reply)) return c.json({ error: "message not found" }, 404);
+      if (input.response != null && (reply?.message_kind !== "decision" || kind !== "reply")) throw new InputError("response requires a decision reply");
       if (selected?.length && (!reply || reply.message_kind !== "decision" || reply.options && selected.some((s: string) => !reply.options!.some(o => o.value === s)))) throw new InputError("invalid selected option");
       if (reply?.message_kind === "decision" && kind === "reply") {
         if (files.length || input.attachment_ids?.length) throw new InputError("decision answers cannot include attachments");
-        const result = store.answerMessageDecision(reply.id, { sender, body_md: text || selected.join("\n"), source_turn_id: callerTurn(c),
+        const result = store.answerMessageDecision(reply.id, { sender, body_md: text || selected?.join("\n") || JSON.stringify(input.response), source_turn_id: callerTurn(c),
           response: input.response ?? (selected?.length ? { selected_options: selected, answer: text || selected.join("\n") } : undefined) });
         return { ...result, message: publicMessage(result.message) };
       }
@@ -147,13 +160,16 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const sendInput: SendMessageInput = { session_id: conversation.id, sender, to, body_md: text, message_kind: kind, wake_requested: wake,
         reply_to_id: input.reply_to_id, dedupe_key: input.dedupe_key, options, attachment_ids: attachmentIds, source_turn_id: callerTurn(c) };
       const unusedUploads: Array<{ workspaceId: string; id: string; filename: string }> = [];
+      const authorizeRecipient = (agent: Parameters<typeof canCurrentUserAccessAgent>[2]) => {
+        if (!canCurrentUserAccessAgent(c, store, agent)) throw new IssueDecisionError(403, "you do not have access to this agent");
+      };
       const result = files.length ? await persistUploadedAttachments(conversation.workspaceId, files.map(file => ({ filename: safeFilename(file.name),
         bytes: async () => new Uint8Array(await file.arrayBuffer()), contentType: file.type || detectContentTypeFromFilename(file.name) })),
         uploads => {
-          const sent = store.sendMessage(sendInput, uploads.map(upload => ({ ...upload, uploaderType: sender.type, uploaderId: sender.id })));
+          const sent = store.sendMessage(sendInput, uploads.map(upload => ({ ...upload, uploaderType: sender.type, uploaderId: sender.id })), authorizeRecipient);
           for (const upload of uploads) if (!store.getAttachment(upload.id!)) unusedUploads.push({ workspaceId: conversation.workspaceId, id: upload.id!, filename: upload.filename });
           return sent;
-        }) : store.sendMessage(sendInput);
+        }) : store.sendMessage(sendInput, [], authorizeRecipient);
       await Promise.all(unusedUploads.map(upload => unlink(uploadedAttachmentPath(upload))));
       return { ...result, message: publicMessage(result.message) };
     });
@@ -203,9 +219,13 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const scope = inboxScope(c);
     if (scope instanceof Response) return scope;
     return action(c, () => {
-      const options = { limit: limit(c), cursor: cursor(c), visible: (id: string) => !(loadConversation(c, store, id) instanceof Response) };
+      const visibility = new Map<string, boolean>();
+      const options = { limit: limit(c), cursor: cursor(c), visibleMessage: conversationEntryVisibility(c, store), visible: (id: string) => {
+        if (!visibility.has(id)) visibility.set(id, !(loadConversation(c, store, id) instanceof Response));
+        return visibility.get(id)!;
+      } };
       const page = scope.type === "member" ? store.listMessageInbox(scope.readerId, scope.workspaceId, options) : store.listReaderMessageInbox("agent", scope.readerId, scope.workspaceId, options);
-      return { ...page, items: page.items.map(publicMessage), next_cursor: encodeCursor(page.next_cursor) };
+      return { ...page, items: publicMessages(page.items), next_cursor: encodeCursor(page.next_cursor) };
     });
   });
   app.post("/api/inbox/read", async c => {
@@ -234,7 +254,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const conversation = loadConversation(c, store, turn.session_id);
     if (conversation instanceof Response) return conversation;
     const task = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
-    if (task && !canUserViewTaskMessages(store, currentRequestUserId(c), task)) return c.json({ error: "turn not found" }, 404);
+    if (task && !canAccessConversationTask(c, store, task)) return c.json({ error: "turn not found" }, 404);
     return turn;
   };
   app.get("/api/turns", c => {
@@ -254,7 +274,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         const chunk = store.listTurns({ workspace_id: workspaceId, issue_id: issue?.id, session_id: sessionId, agent_id: c.req.query("agent"), status, limit: n + 1, cursor: after });
         for (const turn of chunk) {
           const task = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
-          if (!(loadConversation(c, store, turn.session_id) instanceof Response) && (!task || canUserViewTaskMessages(store, currentRequestUserId(c), task))) turns.push(turn);
+          if (!(loadConversation(c, store, turn.session_id) instanceof Response) && (!task || canAccessConversationTask(c, store, task))) turns.push(turn);
         }
         if (chunk.length < n + 1 || turns.length > n) break;
         after = chunk.at(-1);
@@ -268,7 +288,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     return action(c, () => {
       for (const key of ["input", "attempts"]) if (c.req.query(key) != null && !["true", "false"].includes(c.req.query(key)!)) throw new InputError(`invalid ${key}`);
       const input = c.req.query("input") === "true" ? store.getTurnInput(turn.id) : null;
-      return { turn, ...(input ? { input: { ...input, messages: input.messages.map(publicMessage) } } : {}),
+      return { turn, ...(input ? { input: { ...input, messages: publicMessages(input.messages.filter(conversationEntryVisibility(c, store))) } } : {}),
         ...(c.req.query("attempts") === "true" ? { attempts: store.listTurnAttempts(turn.id) } : {}) };
     });
   });

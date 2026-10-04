@@ -71,8 +71,9 @@ export class InboxRepo {
   }
 
   getMessage(id:string) { return getMessage(this.ctx,id); }
-  sendMessageWithinTransaction(input:import("@multiremi/contracts/unified-model.js").SendMessageInput,events:CommitEventQueue) {
-    return sendMessageWithinTransaction(this.ctx,input,events);
+  sendMessageWithinTransaction(input:import("@multiremi/contracts/unified-model.js").SendMessageInput,events:CommitEventQueue,
+    authorizeRecipient?:(agent:import("@multiremi/contracts/types.js").MultiremiAgent)=>void) {
+    return sendMessageWithinTransaction(this.ctx,input,events,{},authorizeRecipient);
   }
 
   private issueRecipient(issueId: string, agentId?: string, issueSessionId?: string, executionScope = ""): EnvelopeRecipient {

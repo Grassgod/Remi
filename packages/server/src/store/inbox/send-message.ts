@@ -9,11 +9,16 @@ import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { lockLane } from './lane-machine.js';
 import { ensurePendingTurn } from './lane-machine.js';
 import { parseJson } from '../helpers.js';
+import { toConversationLogEntry } from '../repos/conversation-log-repo.js';
+import type { MultiremiAgent } from '@multiremi/contracts/types.js';
 
 export function getMessage(ctx:StoreContext,id:string):UnifiedMessage|null {
   const row=ctx.db.query("SELECT * FROM multiremi_conversation_log WHERE id=? AND kind='message'").get(id);
-  const entry=row?ctx.conversationLog().getConversationLogEntryById(id):null;
-  if(!row||!entry)return null;
+  return row ? messageFromRow(row) : null;
+}
+
+export function messageFromRow(row: Record<string, any>): UnifiedMessage {
+  const entry=toConversationLogEntry(row);
   const {author_type,author_id,parent_id,...base}=entry;
   return {...base,metadata:parseJson(row.metadata,{}),kind:'message',sender_type:row.sender_type,sender_id:row.sender_id,
     to_type:row.to_type,to_ref:row.to_ref,to_agent_id:row.to_agent_id,to_member_id:row.to_member_id,
@@ -38,7 +43,7 @@ export function countMessageDelegationPairHops(ctx:StoreContext,sourceId:string,
 }
 
 export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageInput,events:CommitEventQueue,
-  createInput:Partial<CreateTaskInput>={}):SendMessageResult {
+  createInput:Partial<CreateTaskInput>={}, authorizeRecipient?:(agent:MultiremiAgent)=>void):SendMessageResult {
   if(!ctx.db.inTransaction)throw new Error('sendMessageWithinTransaction requires a transaction');
   let sessionId=input.session_id;
   const originalSession=ctx.issueSessions().getIssueSession(sessionId);
@@ -95,6 +100,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const targetAgent=recipientType==='agent'&&recipientId?ctx.agents().getAgent(recipientId):null;
   const member=recipientType==='member'&&recipientId?ctx.workspaces().getWorkspaceMember(recipientId):null;
   if(targetAgent&&targetAgent.workspaceId!==workspaceId||member&&member.workspaceId!==workspaceId)throw new Error('Message recipient belongs to another workspace');
+  if(targetAgent)authorizeRecipient?.(targetAgent);
   // Serializing before dedupe makes a repeated message an idempotent result across PG instances.
   const table=originalSession||sessionId.startsWith('ises_')?'multiremi_issue_sessions':originalChat?'multiremi_chat_sessions':null;
   if(table)ctx.db.run(`UPDATE ${table} SET updated_at=updated_at WHERE id=?`,[sessionId]);
@@ -199,5 +205,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     body:policy.reason,data:{message_id:message.id,requested:input.wake_requested,applied:policy.applied,reason:policy.reason}},events);
   const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
   for(const id of affected)if(id)deriveIssueStatusWithinTransaction(ctx,id,events);
+  // Cross-conversation inbox caches need a workspace signal even without a log subscription.
+  ctx.emitWorkspaceEvent({type:'inbox:new',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
   return {message,wake_applied:policy.applied,wake_reason:policy.reason,...(turnId?{turn_id:turnId}:{})};
 }

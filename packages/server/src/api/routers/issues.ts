@@ -1,7 +1,7 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { readSessionLogRange } from "../session-log-range.js";
 import type { Context, Hono } from "hono";
-import { loadConversation, messageResponse } from "../helpers/conversations.js";
+import { loadConversation, messageResponse, conversationEntryVisibility } from "../helpers/conversations.js";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
   assigneeFrequencyQuery,
@@ -1587,7 +1587,21 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const id = c.req.query("id");
     if (!id) return c.json({ error: "id is required" }, 400);
     const location = store.locateConversationLogEntry(sessionId, id);
-    return location ? c.json(location) : c.json({ error: "entry not found" }, 404);
+    const entry = location ? store.getConversationLogEntry(sessionId, location.seq) : null;
+    return entry && conversationEntryVisibility(c, store)(entry) ? c.json(location) : c.json({ error: "entry not found" }, 404);
+  });
+  app.get("/api/sessions/:sessionId/log/entry", c => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const rawSeq = c.req.query("seq"), id = c.req.query("id");
+    if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
+    const seq = rawSeq == null ? store.locateConversationLogEntry(sessionId, id!)?.seq : /^(0|[1-9]\d*)$/.test(rawSeq) ? Number(rawSeq) : NaN;
+    if (rawSeq != null && (!Number.isSafeInteger(seq) || seq! < 0)) return c.json({ error: "invalid seq" }, 400);
+    const entry = seq == null ? null : store.getConversationLogEntry(sessionId, seq);
+    if (!entry || entry.visibility !== "shown" || entry.deleted_at || !conversationEntryVisibility(c, store)(entry)) return c.json({ error: "entry not found" }, 404);
+    const recipient = store.getMessage(entry.id)?.to_agent_id;
+    const delivered = recipient ? store.getSessionAgentMaxCursorSeq(sessionId, recipient) >= entry.seq || store.hasInboxReceiptCovering(sessionId, recipient, entry.seq) : null;
+    return c.json({ ...messageResponse(entry), delivered });
   });
   app.get("/api/sessions/:sessionId/messages", (c) => {
     const sessionId = logSessionAccess(c);
@@ -1600,7 +1614,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       || ["seq", "id", "after_seq", "limit", "thread", "message_kind", "unread_by", "query"].some(key => c.req.query(key) != null)) return c.json({ error: "invalid message range" }, 400);
     const token = currentTaskAccessToken(c);
     try {
-      const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
+      const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId, conversationEntryVisibility(c, store));
       let progress;
       if (token?.taskId && token.agentId) {
         try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
@@ -1623,6 +1637,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    if (c.req.query("from") != null || c.req.query("to") != null) return c.json({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" }, 400);
     const readNumber = (name: string): number | null | undefined => {
       const raw = c.req.query(name);
       if (raw == null) return undefined;
@@ -1636,6 +1651,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    window.entries = window.entries.filter(conversationEntryVisibility(c, store)).map(entry => messageResponse(entry));
     if (!store.getIssueSession(sessionId)) {
       const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
         .map(entry => entry.id);
