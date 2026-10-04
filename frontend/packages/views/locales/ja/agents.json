@@ -462,6 +462,7 @@
     "final_answer": "最終回答",
     "copy_answer": "コピー",
     "tokens_context": "{{value}} コンテキスト",
+    "context_usage": "コンテキスト {{value}}",
     "waiting_dispatch": "利用可能なランタイムを待機中...",
     "waiting_start": "タスクの開始を待機しています...",
     "waiting_local_directory": "ローカルディレクトリが利用可能になるのを待機中...",

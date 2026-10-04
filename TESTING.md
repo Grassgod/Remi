@@ -56,4 +56,6 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 `NODE_ENV`、`PATH`、`HOME`、`SHELL`、`USER`、`GIT_*` 和 `SQLITE_LIB_PATH` 等宿主能力仍保留；这不是文件系统或全局 Git 配置隔离。遇到 `core.hooksPath` 等环境差异，先定位实际影响，再在隔离进程中复现，不修改用户全局配置来掩盖失败。
 
+Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 `HOME` 不能代替显式注入（Bun 会缓存 `homedir()`）。启动真实 daemon 的子进程也必须使用临时 HOME。[回归测试](tests/integration/daemon-real-home-isolation.test.ts)用假 HOME 运行 steer 测试，核对 mesh 和 `.ssh` 的文件 SHA-256 与目录列表，包含锁目录；不覆盖 outbox 和 session archive 的 HOME 写入。
+
 [环境护栏测试](tests/arch/hermetic-test-env.test.ts)检查 preload 挂载、实际执行标记和变量泄漏；测试只导入 policy，不能通过直接导入 preload 自行清理后证明隔离成功。通过 `bun run` 执行的独立 harness 不加载该测试 preload，仍使用真实环境。
