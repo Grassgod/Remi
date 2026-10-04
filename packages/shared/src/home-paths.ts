@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /** A home fallback under test means the caller omitted its isolated path. */
 export function assertNotHomeDefaultInTest(knob: string, hint: string): void {
@@ -13,4 +13,14 @@ export function multiremiStateDir(defaultHome = homedir()): string {
   if (process.env.MULTIREMI_STATE_DIR != null) return process.env.MULTIREMI_STATE_DIR;
   assertNotHomeDefaultInTest("MULTIREMI_STATE_DIR", "pass an explicit state/outbox path");
   return join(defaultHome, ".multiremi");
+}
+
+/** Host workspace locks must be shared across daemons with different STATE_DIRs. */
+export function multiremiSharedLockPath(productionPath: string): string {
+  if (process.env.NODE_ENV !== "test") return productionPath;
+  const runRoot = process.env.MULTIREMI_TEST_RUN_ROOT;
+  if (!runRoot?.trim()) {
+    assertNotHomeDefaultInTest("MULTIREMI_TEST_RUN_ROOT", "use the hermetic test preload");
+  }
+  return join(runRoot!, "shared-locks", basename(productionPath));
 }

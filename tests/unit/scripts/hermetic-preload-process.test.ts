@@ -45,3 +45,40 @@ it("replaces inherited test roots, preserves test inputs and cleans only its own
     expect(readFileSync(join(untrustedRoot, "sentinel"), "utf8")).toBe("keep");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+it("keeps a shared run root through multiple files and their awaited afterAll children", () => {
+  const directory = mkdtempSync(join(tmpdir(), "preload-multiple-files-"));
+  const resultFile = join(directory, "events.jsonl");
+  const files = ["first", "second"].map(name => join(directory, `${name}.test.ts`));
+  try {
+    for (let index = 0; index < files.length; index++) {
+      writeFileSync(files[index]!, `import {test, expect, afterAll} from "bun:test";
+        import {appendFileSync, existsSync} from "node:fs";
+        const root = process.env.MULTIREMI_TEST_RUN_ROOT;
+        function record(phase) {
+          expect(existsSync(root)).toBe(true);
+          appendFileSync(${JSON.stringify(resultFile)}, JSON.stringify({phase, file:${index}, root}) + "\\n");
+        }
+        test("root available in file ${index}", () => record("test"));
+        afterAll(async () => {
+          const child = Bun.spawn([process.execPath, "-e", 'console.log(require("fs").existsSync(process.argv[1]))', root],
+            {env:{...process.env}, stdout:"pipe", stderr:"pipe"});
+          expect(await new Response(child.stdout).text()).toBe("true\\n");
+          expect(await child.exited).toBe(0);
+          record("afterAll");
+        });`);
+    }
+    const result = spawnSync(process.execPath, ["test", ...files], {
+      cwd: resolve(import.meta.dir, "../../.."), env: { ...process.env }, encoding: "utf8", timeout: 15_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const events = readFileSync(resultFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(events).toHaveLength(4);
+    for (const index of [0, 1]) {
+      expect(events.filter(event => event.file === index).map(event => event.phase).sort()).toEqual(["afterAll", "test"]);
+    }
+    const roots = new Set(events.map(event => event.root));
+    expect(roots.size).toBe(1);
+    expect(existsSync(events[0].root)).toBe(false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

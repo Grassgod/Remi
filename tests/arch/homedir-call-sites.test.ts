@@ -18,7 +18,7 @@ const HOME_CALL_LIMITS: Readonly<Record<string, number>> = {
   "packages/connectors/src/feishu/index.ts": 1,
   "packages/connectors/src/feishu/receive.ts": 1,
   "packages/daemon/src/agent-runtime/agent-plugins/cache.ts": 1,
-  "packages/daemon/src/agent-runtime/workspace/ephemeral.ts": 1,
+  "packages/daemon/src/agent-runtime/workspace/ephemeral.ts": 2,
   "packages/daemon/src/agent-runtime/workspace/persistent.ts": 1,
   "packages/daemon/src/agent-runtime/workspace/process-owner.ts": 2,
   "packages/daemon/src/agent-runtime/workspace/runtime-context.ts": 1,

@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { assertNotHomeDefaultInTest, multiremiStateDir } from "@shared/home-paths.js";
+import { assertNotHomeDefaultInTest, multiremiSharedLockPath } from "@shared/home-paths.js";
 
 const OWNER_LOCK_DIR = "owner.lock";
 const OWNER_FILE = "owner.json";
@@ -290,7 +290,8 @@ function prepareWorkspaceRoot(input: string): { workspaceRoot: string; identity:
 }
 
 function defaultSupervisorStateRoot(): string {
-  return join(multiremiStateDir(userInfo().homedir), "workspace-supervisors");
+  // All daemons must share ownership and owner enumeration across STATE_DIRs.
+  return multiremiSharedLockPath(join(userInfo().homedir, ".multiremi", "workspace-supervisors"));
 }
 
 function prepareSupervisorStateRoot(input?: string): string {

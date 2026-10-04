@@ -64,6 +64,8 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 清理后，preload 每次创建独立临时根，覆盖 `MULTIREMI_TEST_RUN_ROOT`（不信任继承值），并把 `HERMETIC_ENV_RUN_ROOT_PATHS` 中的七个现有路径开关指向该根：state、workspaces、session archives、plugin cache、uploads、config 文件和 REMI_HOME。退出时尝试删除自己的根；测试保存还原 env 时应恢复这些动态值。子进程 helper 再次 scrub 后必须转发这些路径开关。新增写入默认路径应优先挂在现有开关下，并登记到该表；只有 setter/构造参数的模块必须由测试显式注入临时路径，不新增生产开关。
 
+两类跨进程工作区锁必须由同一宿主 HOME 下的 daemon 共用，不能跟随各自的 MULTIREMI_STATE_DIR：生产 runtime lease 仍为 `join(homedir(), ".multiremi", "runtime-workspace-leases")`，supervisor 及活跃 owner 枚举仍为 `join(userInfo().homedir, ".multiremi", "workspace-supervisors")`。仅在 NODE_ENV=test 时，[共享锁路径](packages/shared/src/home-paths.ts)指向 `MULTIREMI_TEST_RUN_ROOT/shared-locks/` 的对应子目录，缺少运行根抛 real_home_default_in_test。测试子进程必须转发 MULTIREMI_TEST_RUN_ROOT；outbox 继续使用各自的 state 开关。[真实双进程回归](tests/unit/daemon/workspace-shared-locks.test.ts)以临时启动 HOME 验证不同 STATE_DIR 的竞争、活跃 owner 枚举与释放后重获。
+
 直接 `bun test <path>` 保留 `NODE_ENV`、`PATH`、`HOME`、`SHELL`、`USER`、`GIT_*` 和 `SQLITE_LIB_PATH` 等宿主能力，只提供上述进程内隔离。preload 不修改 HOME，不 mock OS；Bun 1.3.14 的 `homedir()` 和 `userInfo().homedir` 在启动时固定。workspaces、archive、state 的 HOME 兜底在 `NODE_ENV=test` 时抛 `real_home_default_in_test`，要求开关或显式参数。
 
 `bun run test <path> [bun test 参数]` 通过 [run-tests.ts](scripts/run-tests.ts) 在启动测试进程前换成假 HOME（Windows 同设 USERPROFILE），清除 XDG_*，把 Git 全局配置指向不存在的临时 .gitconfig，并将 Bun 转译/安装缓存放在仓库 `node_modules/.cache/bun/` 下。跑完递归检查假 HOME；任何文件、空目录或符号链接都逐行报告并返回 1，无白名单。HOME 为空时保留测试退出码，再清理假 HOME。CI 的 archive 专项、架构和后端全套均使用此包装；这层覆盖无路径开关及未来新增的 HOME 写入。遇到 Git 配置差异，定位实际影响并修测试夹具，不修改用户全局配置。
@@ -71,5 +73,7 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir` / `homedir()`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 HOME 不能代替显式注入。启动 daemon 的测试子进程也必须使用临时 HOME。[回归测试](tests/integration/daemon-real-home-isolation.test.ts)用假 HOME 运行 steer、approval-e2e、drain-outbox，比较整个 HOME 的目录列表、文件 SHA-256 和符号链接，保留原有 Mesh/OpenSSH sentinel，并以故意写入验证快照能检出变化。
 
 [环境护栏测试](tests/arch/hermetic-test-env.test.ts)检查 preload 挂载、实际执行标记和变量泄漏；测试只导入 policy，不能通过直接导入 preload 自行清理后证明隔离成功。[HOME 调用 ratchet](tests/arch/homedir-call-sites.test.ts)限制生产源码每文件的 HOME 读取数量，新增调用需要隔离审查。通过 `bun run` 执行的独立手动 harness 不加载该测试 preload，也不走 test 包装，仍使用真实环境。
+
+[包装信号回归](tests/unit/scripts/run-tests-signals.test.ts)实际转发 SIGINT/SIGTERM 并保留子进程退出码；[包装环境回归](tests/unit/scripts/run-tests.test.ts)核对 CI 的测试数据库 URL 与 lock sentinel 输入；[多文件 preload 回归](tests/unit/scripts/hermetic-preload-process.test.ts)验证多个文件及其 awaited afterAll 子进程结束前共享运行根仍在，整个套件结束才清理。
 
 [Remi core 测试](tests/unit/remi/core.test.ts)通过构造参数把旧 sessions.json 迁移和 metrics 写入临时 home；shared/config 的生产常量仍按原 HOME 解析，不读取 REMI_HOME 环境变量。[Claude wrapper 测试](tests/unit/acp/claude-runtime-wrapper.test.ts)为子进程设置 npm_config_logs_dir 与 npm_config_cache。[Lark CLI 集成测试](tests/integration/lark-cli-message-provider.test.ts)保留真实健康探测；无配置文件时将 CLI 配置、数据、日志目录放入测试运行根，避免未登录探测生成 HOME 缓存。直接 bun test 且存在 CLI 配置时保留原登录环境，继续运行真实 CLI 用例。

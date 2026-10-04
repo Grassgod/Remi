@@ -7,7 +7,7 @@ import { testProcessEnv } from "../../../scripts/run-tests.js";
 
 const ROOT = resolve(import.meta.dir, "../../..");
 
-function fixture(body: string, args: string[] = []) {
+function fixture(body: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   const directory = mkdtempSync(join(tmpdir(), "test-wrapper-fixture-"));
   const file = join(directory, "fixture.test.ts");
   try {
@@ -19,7 +19,7 @@ function fixture(body: string, args: string[] = []) {
       ${body}`);
     const result = spawnSync(process.execPath, ["run", "test", file, ...args], {
       cwd: ROOT, encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, XDG_CONFIG_HOME: "/untrusted", XDG_TEST_SENTINEL: "fixture" },
+      env: { ...process.env, XDG_CONFIG_HOME: "/untrusted", XDG_TEST_SENTINEL: "fixture", ...env },
     });
     const output = result.stdout + result.stderr;
     const home = /STARTUP_HOME=(.+)/.exec(output)?.[1];
@@ -30,6 +30,18 @@ function fixture(body: string, args: string[] = []) {
 }
 
 describe("test HOME wrapper", () => {
+  it("forwards CI database input and an explicitly disabled lock sentinel", () => {
+    const result = fixture(`test("CI inputs", () => {
+      expect(process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL).toBe("0");
+      expect(process.env.MULTIREMI_TEST_POSTGRES_URL).toBe("postgres://fixture.invalid/isolated");
+    });`, [], {
+      MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "0",
+      MULTIREMI_TEST_POSTGRES_URL: "postgres://fixture.invalid/isolated",
+    });
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("[test-home] residual paths: []");
+  });
+
   it("isolates startup HOME, clears XDG, forwards arguments and inherits test inputs", () => {
     const result = fixture(`
       test("selected with spaces", () => {
