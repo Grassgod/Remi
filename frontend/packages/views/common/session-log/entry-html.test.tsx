@@ -93,6 +93,18 @@ describe("EntryHtml file cards (MUL-518)", () => {
     expect(tryOpen).toHaveBeenCalledExactlyOnceWith({ kind: "full", attachment });
   });
 
+  it("preserves comment deduplication by filename, type and size (MUL-518 B1 scope)", () => {
+    const first = { ...attachment, filename: "same-name.txt", size_bytes: 2 };
+    const second = { ...first, id: "att_2", url: "/api/attachments/att_2/content" };
+    const markdown = `!file[same-name.txt](${first.url})`;
+    render(<Surface html={preprocessFileCards(markdown, "")} markdown={markdown} attachments={[first, second]} />);
+    expect(screen.getAllByText("same-name.txt")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Preview" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Download" })).toHaveLength(1);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Download" }));
+    expect(download).toHaveBeenCalledExactlyOnceWith("att_1");
+  });
+
   it("keeps fresh metadata and restores correctly when the body changes", () => {
     const { rerender, container } = render(<Surface {...props()} />);
     const newRecord = { ...attachment, id: "att_2", url: "/api/attachments/att_2/content", filename: "new.txt" };

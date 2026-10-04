@@ -33,9 +33,10 @@ const attachment: Attachment = {
 
 beforeEach(() => vi.clearAllMocks());
 
-function renderMessage(content: string, attachments: Attachment[]) {
+function renderMessage(content: string, attachments: Attachment[], role: "user" | "assistant" = "user") {
   const replica = new MemorySessionReplica({ cs: { entries: [{
-    session_id: "cs", id: "msg", seq: 1, revision: 1, kind: "message", author_type: "member",
+    session_id: "cs", id: "msg", seq: 1, revision: 1,
+    kind: role === "user" ? "message" : "turn", author_type: role === "user" ? "member" : "system",
     body_md: content, body_html: null, render_version: null, metadata: { attachments },
     created_at: "2026-10-04T00:00:00Z",
   } as SessionLogEntry] } });
@@ -75,5 +76,25 @@ describe("chat attachment presentation (MUL-499)", () => {
     renderMessage(`!file[notes.txt](${cdnUrl})`, [{ ...attachment, url: cdnUrl }]);
     expect(screen.getAllByText("notes.txt")).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Download" })).toHaveLength(1);
+  });
+
+  it.each(["user", "assistant"] as const)("keeps different same-name files in a mixed %s message (MUL-518 B1)", role => {
+    const files = ["A1", "B2"].map((content, index) => ({
+      content,
+      attachment: {
+        ...attachment, id: `att-${index + 1}`, filename: "same-name.txt", size_bytes: content.length,
+        url: `/api/attachments/att-${index + 1}/content`,
+        download_url: `/api/attachments/att-${index + 1}/download`,
+      },
+    }));
+    download.mockImplementation((id: string) => files.find(file => file.attachment.id === id)?.content);
+    renderMessage(`!file[same-name.txt](${files[0]!.attachment.url})`, files.map(file => file.attachment), role);
+    expect(screen.getAllByText("same-name.txt")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Preview" })).toHaveLength(2);
+    const buttons = screen.getAllByRole("button", { name: "Download" });
+    expect(buttons).toHaveLength(2);
+    buttons.forEach(button => fireEvent.mouseDown(button));
+    expect(download.mock.calls).toEqual([["att-1"], ["att-2"]]);
+    expect(download.mock.results.map(result => result.value)).toEqual(["A1", "B2"]);
   });
 });

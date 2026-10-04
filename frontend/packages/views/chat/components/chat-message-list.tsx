@@ -198,6 +198,7 @@ function MessageBubble({ message, isPending, isPush, visible }: { message: ChatM
           <AttachmentList
             attachments={message.attachments}
             content={markdown}
+            dedupe="url"
             className="mt-1.5"
           />
         </div>
@@ -257,6 +258,7 @@ function AssistantMessage({
       <AttachmentList
         attachments={message.attachments}
         content={message.content}
+        dedupe="url"
       />
       <MessageFooter
         message={message}

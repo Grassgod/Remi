@@ -36,7 +36,7 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 
-客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，附件列表沿用 URL 去重。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
+客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
 
 ## 一次任务读取与更新
 
