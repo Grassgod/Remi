@@ -41,6 +41,20 @@ function fixture() {
 }
 
 describe("Runtime workspace local execution", () => {
+  it("keeps default runtime leases in the configured state directory", async () => {
+    const { cwd, task, options } = fixture();
+    const resolved = await resolveTaskWorkDir(task, { ...options, runtimeWorkspaceLeaseRoot: undefined });
+    try {
+      const leasesRoot = join(process.env.MULTIREMI_STATE_DIR!, "runtime-workspace-leases");
+      const entries = readdirSync(leasesRoot);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.some(entry => {
+        const ownerPath = join(leasesRoot, entry, "owner.lock", "owner.json");
+        return existsSync(ownerPath) && JSON.parse(readFileSync(ownerPath, "utf8")).workspace_root === realpathSync(cwd);
+      })).toBe(true);
+    } finally { resolved.release?.(); }
+  });
+
   it("uses the original non-Git directory and retains ignored files across tasks", async () => {
     const { root, cwd, task, options } = fixture();
     const before = readdirSync(cwd);

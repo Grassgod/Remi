@@ -133,6 +133,14 @@ export class ApiChild {
 export interface FreshDatabase { name: string; url: string }
 export type ProcessPair = [ApiChild, ApiChild];
 
+export function twoProcessChildEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  scrubInheritedEnv(env);
+  for (const name of Object.keys(HERMETIC_ENV_RUN_ROOT_PATHS)) env[name] = process.env[name];
+  env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL ?? "1";
+  return env;
+}
+
 /** Database and spawn helpers copied from MUL-405's manual harness; that file stays untouched. */
 export class TwoProcessResources {
   private readonly databases = new Set<string>();
@@ -143,12 +151,7 @@ export class TwoProcessResources {
   private readonly childEnv: Record<string, string | undefined>;
 
   constructor() {
-    this.childEnv = { ...process.env };
-    scrubInheritedEnv(this.childEnv);
-    for (const name of Object.keys(HERMETIC_ENV_RUN_ROOT_PATHS)) {
-      this.childEnv[name] = process.env[name];
-    }
-    this.childEnv.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL ?? "1";
+    this.childEnv = twoProcessChildEnv();
   }
 
   private async admin<T>(fn: (sql: InstanceType<typeof Bun.SQL>) => Promise<T>): Promise<T> {

@@ -6,7 +6,7 @@
 
 | 范围 | 测试位置 / 入口 | 命令和前提 |
 |---|---|---|
-| 后端单元、接口、架构 | [tests](tests)：`unit/`、`integration/`、`arch/` 中的 `*.test.ts` | `bun test`；单文件用 `bun test <path>` |
+| 后端单元、接口、架构 | [tests](tests)：`unit/`、`integration/`、`arch/` 中的 `*.test.ts` | `bun run test`；单文件用 `bun run test <path>` |
 | 前端单元与组件 | 源码旁的 `*.test.ts(x)`，各包 Vitest 配置 | `bun run test:frontend`；单包用 `bun run --filter @multiremi/core test` |
 | 类型 | [后端 tsconfig](tsconfig.json)、前端各包配置 | `bunx tsc --noEmit`、`bun run typecheck:frontend` |
 | 开发上下文 | [检查器测试](scripts/check-dev-context.test.mjs) | `npm run docs:test`、`npm run docs:check`；Node.js 22+，无需安装依赖 |
@@ -17,8 +17,8 @@
 ## 后端测试入口
 
 ```bash
-bun test tests/unit/multiremi/multiremi-api-issues.test.ts
-bun test tests/arch/
+bun run test tests/unit/multiremi/multiremi-api-issues.test.ts
+bun run test tests/arch/
 ```
 
 API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api-issues.test.ts)的进程内 `app.request()`，共享夹具在 [helpers.ts](tests/unit/multiremi/helpers.ts)。需要真实服务的测试应在自身入口明确配置和隔离方式，不能把本地凭据或生产数据作为普通单测前提。
@@ -51,10 +51,10 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 `release-build-check.yml` 在合并请求和 main 上跑的内容不同（MUL-516）：
 
 - 合并请求只跑快检查：架构守卫、CLI 能力、前端类型/测试、CLI 和容器构建、平台专项检查。`build` job 里的「Backend test suite」显示为跳过（skipped），job 仍正常报告结果。同一个合并请求推送新提交时，未跑完的旧运行会被自动取消。
-- 后端全套 `bun test` 在合入 main 后的 push 运行里跑。main 上的运行互不取消，每个 main 提交都有自己的完整结果。
+- 后端全套 `bun run test` 在合入 main 后的 push 运行里跑。main 上的运行互不取消，每个 main 提交都有自己的完整结果。
 - 发版门禁不变：打 tag 前，目标 main SHA 必须有一次全绿的 main push 运行或 main 上的手动运行（都含后端全套）。合并请求上的绿灯不能代替。检查停用后重新打开时，main 不会自动补跑，用 `gh workflow run release-build-check.yml --ref main` 手动跑一次。
 - main 上后端全套变红时，带头大哥当天定位到对应的合并，修复或回滚。QA 维护测试集的职责不变：测试本身的问题由 QA 修复或暂时隔离，代码问题开单处理。
-- 合并请求作者仍应在本地跑与改动相关的测试文件（`bun test <path>`）。
+- 合并请求作者仍应在本地跑与改动相关的测试文件（`bun run test <path>`）。
 
 真实 provider、飞书和浏览器 harness 的成功不能由普通单测或构建绿灯推断。报告验证时写明实际命令、环境、结果和未覆盖项。
 
@@ -62,8 +62,12 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 `bun test` 通过 [bunfig.toml](bunfig.toml) 的 preload 在测试模块加载前执行 [hermetic-env.ts](tests/setup/hermetic-env.ts)，清除继承的产品配置和凭据。精确范围以纯模块 [hermetic-env-policy.ts](tests/setup/hermetic-env-policy.ts) 为准：清除 `MULTIREMI_*`、`REMI_*`、`ANTHROPIC_*`、`FEISHU_*` 及列明的独立变量，保留 `MULTIREMI_TEST_*`、`FEISHU_TEST_*` 测试输入。测试需要的环境变量由测试自己设置并还原；显式指定的测试数据库连接失败不能当作未配置而跳过。
 
-`NODE_ENV`、`PATH`、`HOME`、`SHELL`、`USER`、`GIT_*` 和 `SQLITE_LIB_PATH` 等宿主能力仍保留；这不是文件系统或全局 Git 配置隔离。遇到 `core.hooksPath` 等环境差异，先定位实际影响，再在隔离进程中复现，不修改用户全局配置来掩盖失败。
+清理后，preload 每次创建独立临时根，覆盖 `MULTIREMI_TEST_RUN_ROOT`（不信任继承值），并把 `HERMETIC_ENV_RUN_ROOT_PATHS` 中的七个现有路径开关指向该根：state、workspaces、session archives、plugin cache、uploads、config 文件和 REMI_HOME。退出时尝试删除自己的根；测试保存还原 env 时应恢复这些动态值。子进程 helper 再次 scrub 后必须转发这些路径开关。新增写入默认路径应优先挂在现有开关下，并登记到该表；只有 setter/构造参数的模块必须由测试显式注入临时路径，不新增生产开关。
 
-Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 `HOME` 不能代替显式注入（Bun 会缓存 `homedir()`）。启动真实 daemon 的子进程也必须使用临时 HOME。[回归测试](tests/integration/daemon-real-home-isolation.test.ts)用假 HOME 运行 steer 测试，核对 mesh 和 `.ssh` 的文件 SHA-256 与目录列表，包含锁目录；不覆盖 outbox 和 session archive 的 HOME 写入。
+直接 `bun test <path>` 保留 `NODE_ENV`、`PATH`、`HOME`、`SHELL`、`USER`、`GIT_*` 和 `SQLITE_LIB_PATH` 等宿主能力，只提供上述进程内隔离。preload 不修改 HOME，不 mock OS；Bun 1.3.14 的 `homedir()` 和 `userInfo().homedir` 在启动时固定。workspaces、archive、state 的 HOME 兜底在 `NODE_ENV=test` 时抛 `real_home_default_in_test`，要求开关或显式参数。
 
-[环境护栏测试](tests/arch/hermetic-test-env.test.ts)检查 preload 挂载、实际执行标记和变量泄漏；测试只导入 policy，不能通过直接导入 preload 自行清理后证明隔离成功。通过 `bun run` 执行的独立 harness 不加载该测试 preload，仍使用真实环境。
+`bun run test <path> [bun test 参数]` 通过 [run-tests.ts](scripts/run-tests.ts) 在启动测试进程前换成假 HOME（Windows 同设 USERPROFILE），清除 XDG_*，把 Git 全局配置指向不存在的临时 .gitconfig，并将 Bun 转译/安装缓存放在仓库 `node_modules/.cache/bun/` 下。跑完递归检查假 HOME；任何文件、空目录或符号链接都逐行报告并返回 1，无白名单。HOME 为空时保留测试退出码，再清理假 HOME。CI 的 archive 专项、架构和后端全套均使用此包装；这层覆盖无路径开关及未来新增的 HOME 写入。遇到 Git 配置差异，定位实际影响并修测试夹具，不修改用户全局配置。
+
+Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir` / `homedir()`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 HOME 不能代替显式注入。启动 daemon 的测试子进程也必须使用临时 HOME。[回归测试](tests/integration/daemon-real-home-isolation.test.ts)用假 HOME 运行 steer、approval-e2e、drain-outbox，比较整个 HOME 的目录列表、文件 SHA-256 和符号链接，保留原有 Mesh/OpenSSH sentinel，并以故意写入验证快照能检出变化。
+
+[环境护栏测试](tests/arch/hermetic-test-env.test.ts)检查 preload 挂载、实际执行标记和变量泄漏；测试只导入 policy，不能通过直接导入 preload 自行清理后证明隔离成功。[HOME 调用 ratchet](tests/arch/homedir-call-sites.test.ts)限制生产源码每文件的 HOME 读取数量，新增调用需要隔离审查。通过 `bun run` 执行的独立手动 harness 不加载该测试 preload，也不走 test 包装，仍使用真实环境。
