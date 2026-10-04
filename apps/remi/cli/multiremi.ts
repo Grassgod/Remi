@@ -46,6 +46,7 @@ import { feishuTransportError } from "@connectors/feishu/native-cot.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import { formatMentionForCard } from "@connectors/feishu/mention.js";
 import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
+import { FeishuTaskMetadata } from "@connectors/feishu/task-metadata.js";
 import {
   registerDecisionCardInteraction,
   registerIssueDecisionCardInteraction,
@@ -684,7 +685,7 @@ export function controlPlaneConciergeHost(deps: {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
       if (delivery.kind === "receipt") return sendReceiptLane(handle, delivery, options);
-      if (delivery.kind === "result_card") return sendResultCardLane(handle, delivery, options);
+      if (delivery.kind === "result_card") return sendResultCardLane(handle, delivery, options, deps.daemon());
       if (delivery.kind === "interaction_card") return sendInteractionCardLane(handle, delivery, options, deps.daemon(), displayName);
       if (delivery.kind && delivery.kind !== "cot") {
         // Two card families share the lane and the kinds (MUL-407, MUL-412).
@@ -779,18 +780,64 @@ export async function sendReceiptLane(handle: FeishuChannelHandle, delivery: Mul
 }
 
 export async function sendResultCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
-  options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
+  options?: FeishuOutboundOptions, daemon?: Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">): Promise<{ messageId: string }> {
   options?.signal.throwIfAborted();
   let mentionOpenId = delivery.mention?.resolvedOpenId;
   if (delivery.mention && mentionOpenId === undefined) {
     if (!options?.prepareMention) throw new Error("Feishu mention checkpoint is unavailable");
     mentionOpenId = await options.prepareMention(await handle.resolveProactiveMention(delivery.chatId, delivery.mention, options.signal));
   }
-  const cardInput = JSON.parse(delivery.body) as Parameters<typeof buildFinalCard>[0];
+  let cardInput = JSON.parse(delivery.body) as Parameters<typeof buildFinalCard>[0] & { elapsedSeconds?: number };
+  if (daemon && delivery.taskId) {
+    try {
+      const metadata = await readFeishuResultMetadata(daemon, delivery.taskId, cardInput.agentName,
+        cardInput.elapsedSeconds ?? 0, options?.signal);
+      cardInput = { ...cardInput, ...metadata };
+    } catch {
+      options?.signal.throwIfAborted();
+      // Metadata is optional. An offline trace must not suppress the answer.
+      log.warn(`Feishu result metadata unavailable for ${delivery.taskId}; sending the durable answer`);
+    }
+  }
+  options?.signal.throwIfAborted();
   const sent = await handle.sendProactiveCard({ chatId: delivery.chatId, replyToMessageId: delivery.replyToMessageId ?? undefined,
     card: buildFinalCard({ ...cardInput, mentionOpenId: mentionOpenId ?? undefined }), idempotencyKey: delivery.idempotencyKey });
   if (!sent.messageId || sent.messageId === "unknown") throw new FeishuDeliveryError("Result acknowledgement missing", true);
   return sent;
+}
+
+/** Read canonical trace on the host, outside the server's synchronous DB path. */
+export async function readFeishuResultMetadata(
+  daemon: Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">,
+  taskId: string, agentName: string | null | undefined, elapsed: number,
+  signal?: AbortSignal, timeoutMs = 5_000,
+): Promise<ReturnType<FeishuTaskMetadata["render"]>> {
+  const abort = new AbortController();
+  const bounded = AbortSignal.any([abort.signal, ...(signal ? [signal] : [])]);
+  bounded.throwIfAborted();
+  const metadata = new FeishuTaskMetadata(agentName);
+  const timer = setTimeout(() => abort.abort(new Error("Feishu result metadata timed out")), timeoutMs);
+  let onAbort!: () => void;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(bounded.reason);
+    bounded.addEventListener("abort", onAbort, { once: true });
+  });
+  const reading = (async () => {
+    for await (const event of subscribeFeishuTask(daemon, taskId, bounded)) {
+      if (event.kind === "message") metadata.accept(event.message);
+      else {
+        const start = Date.parse(event.snapshot.startedAt ?? ""), end = Date.parse(event.snapshot.completedAt ?? "");
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) elapsed = Math.round((end - start) / 1000);
+      }
+    }
+    return metadata.render(elapsed);
+  })();
+  try { return await Promise.race([reading, interrupted]); }
+  finally {
+    clearTimeout(timer);
+    bounded.removeEventListener("abort", onAbort);
+    abort.abort();
+  }
 }
 
 export async function sendInteractionCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
