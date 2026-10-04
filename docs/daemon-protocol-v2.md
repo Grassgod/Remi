@@ -28,6 +28,49 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 | `packages/server/src/worker/daemon-protocol-client.ts` | 进程级 socket、定时器、RPC、去重接口与升级等待 | A-2 接线，业务泵待 A-3 至 A-6 |
 | `tests/integration/daemon-protocol-v2/` | 真实 daemon/API/SQLite 与断线、重启、服务端入站 ledger | A-2 脚手架 |
 
+### MUL-498：评论交付、门铃唤醒与按需输入
+
+daemon 的任务 `output` 只保留最后一条顶层 assistant 消息。顶层工具调用、工具结果、
+compaction 与 steer 切分消息段，连续文本 chunk 合并；同段存在 final 时只取 final。
+子 agent 的正文及工具事件不参与结果，完整执行过程仍保留在 trace。
+
+委派终态信封保留三种英文首行和独立 `Status:` 行，后面只写结论评论 id、
+`remi comment list <issue> --thread <comment>` 与最多 500 字的摘要。自动回复沿用
+「本轮自己发过评论就不再自动贴」的判定；未评论时，自动回复与终态在同一事务写入，
+门铃引用实际写成的 id。自动回复写入失败时给任务读取入口，不引用未写成的评论。
+委派门铃目标小于 2 KiB，同类信封在统一写入口限制为 4 KiB；子单的
+`<KEY> 有新日志：`、`状态 <x>` 及 envelope metadata 保持原格式，供前端解析。
+
+服务端在既有 `session_projection.jsonl` 中提供两类记录：`unread_range` 和
+`triggering_message`。会话 prompt 只包含本轮触发消息、未读范围和读取命令，
+合并唤醒保留每条触发消息。其他未读消息的正文、标题、摘要和 inbox 目录均不内联。
+触发消息通常内联 8,000 个 JavaScript 字符，超长保留开头、准确省略数和
+`remi session log get <session> <seq>`。冷启动范围从 0 开始，未读统计与范围读取
+排除 agent 自己的历史消息；提示词明确要求动手前先读未读部分。
+
+现有命令增加 `remi session log get <session> --from X --to Y`，语义为 `X < seq ≤ Y`。
+沿用 `GET /api/sessions/:id/log/entry`，不新增 API 或 CLI 命令路径。
+服务端按最多 100 条、32,000 正文字符分页，超长条目按字符偏移分片，不切开代理对；
+CLI 自动读取全部页并拼回完整正文。使用任务 token 的成功读取写结构化日志
+`session_log_range_read`；单条读取写 `session_log_entry_expanded`。
+记录 task/agent/session、范围或 seq、读取完成状态，不记录凭证或正文，不拦截任务。
+
+daemon 在 `hello.caps` 声明 `wiki.fetch` 时，offer 只携带 Wiki 元数据、version 和
+`content_sha256`。新 daemon 用任务 token 调用既有 Project/Repository Wiki GET 接口，
+在物化前下载正文。经过校验的本地 baseline 缓存 version/sha；未变页不重复拉取。
+下载失败保留上次成功版本、路径与本地编辑，并附 warning，首次失败不造空正文。
+没有该能力的旧 daemon 得到不可用标记/读取提示；服务端仍移除 Wiki 正文，防止超帧。
+新范围命令需要包含这些 flags 的 CLI；平台更新不会自动证明所有 daemon/CLI 已升级。
+
+`task.offer` 在服务端发送前按完整 JSON 帧加预留开销计量，软预算为 512 KiB，硬限
+仍为 1 MiB。依次移除 Wiki/重复文档正文、收缩触发消息、折叠长描述、移除过大的
+可选执行上下文。按最新输入约定，旧投影正文在预算检查前已被范围指针替换。
+日志 `daemon_offer_budget` 记录各字段字节及降级阶段。合法帧超过软预算仍可下发；
+仍超过硬限的任务撤回派发、保持 queued，记录 `daemon_offer_transport_capacity`，
+按已有 cooldown 重试，不调用 `failTask`，不改变 Issue 为 blocked。
+不可缩减的必要字段仍可能持续排队，需要依据尺寸诊断修正来源。
+具体决策见 [ADR 0013](adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)。
+
 ## 1. 连接与帧
 
 ### 1.1 一个进程一条 socket
@@ -888,7 +931,7 @@ v2 显式设置：
 |---|---|---|
 | `window_full` | 未确认帧数或字节数已到窗口上限 | 等 ack 腾出空间，从 DB 重新推导后重推 |
 | `paused` | socket 处于背压暂停 | 等 drain 后重推 |
-| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | **不要重试**：ack 不能让它变小。置任务失败或丢弃该实体，不能无限等 ack |
+| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | `task.offer` 先降级；仍超限则撤回派发、记录尺寸并按 cooldown 保持排队，不置失败或 blocked。其他实体丢弃并记录诊断；不等 ack |
 | `closed` | 连接已关闭或 socket 丢弃了帧 | 放弃这条连接，等重连后重建 |
 
 `too_large` 是服务端内部类型（`DaemonSessionSendRefusal`），不是协议契约的一部分。ack 腾出空间后
