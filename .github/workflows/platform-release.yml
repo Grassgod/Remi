@@ -53,9 +53,9 @@ jobs:
           test "$TAG" = "v$VERSION"
           test "$(git merge-base "$SHA" origin/main)" = "$SHA"
           test "$(gh release view "$TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | any')" = "false"
-          # Main-push runs only: pull request runs skip the backend suite
-          # (MUL-516), so one that went green on this head SHA proves less.
-          SUCCESS_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-build-check.yml/runs?head_sha=$SHA&event=push&branch=main&status=success&per_page=1" --jq '.total_count')"
+          # A main push or a manual run on main; pull request runs skip the
+          # backend suite (MUL-516) and never count.
+          SUCCESS_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-build-check.yml/runs?head_sha=$SHA&branch=main&status=success&per_page=100" --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')"
           test "$SUCCESS_RUNS" -ge 1
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
