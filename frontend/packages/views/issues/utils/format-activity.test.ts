@@ -45,6 +45,37 @@ describe("statusLabel / priorityLabel", () => {
 });
 
 describe("formatActivity", () => {
+  it("renders historical fields without inventing old values and keeps relationship IDs out of the copy", () => {
+    expect(formatActivity(activity("issue_field_changed", { details: { field: "status", to: "done" } }), t))
+      .toBe('activity.status_set {"status":"status.done"}');
+    expect(formatActivity(activity("issue_field_changed", { details: { field: "priority", from: "low", to: "high" } }), t))
+      .toBe('activity.priority_changed {"from":"priority.low","to":"priority.high"}');
+    expect(formatActivity(activity("issue_field_changed", { details: { field: "due_date", to: "2026-06-01" } }), t))
+      .toBe('activity.due_date_set {"date":"2026-06-01"}');
+    expect(formatActivity(activity("issue_field_changed", { details: { field: "start_date", to: null } }), t))
+      .toBe("activity.start_date_removed");
+    for (const field of ["project_id", "parent_issue_id"]) {
+      expect(formatActivity(activity("issue_field_changed", { details: { field, to: "iss_secret" } }), t)).not.toContain("iss_secret");
+    }
+    expect(formatActivity(activity("issue_assigned", { details: { toType: "agent", toId: "agt_1" } }), t, () => "Alice"))
+      .toBe('activity.assigned_to {"name":"Alice"}');
+    expect(formatActivity(activity("label_attached", { details: { label_id: "lbl_1", body: "Bug" } }), t))
+      .toBe('activity.label_attached {"name":"Bug"}');
+  });
+
+  it.each(["zh-Hans", "en", "ja", "ko"])("has translated activity group and field copy in %s", async locale => {
+    const bundle = await import(`../../locales/${locale}/issues.json`);
+    const copy = bundle.default.activity as Record<string, string>;
+    for (const key of ["recent_limit", "system_activity", "parent_changed", "project_changed"]) expect(copy[key]).toBeTruthy();
+    expect(copy.group_summary).toContain("{{count}}");
+    expect(copy.group_summary).toContain("{{summary}}");
+    expect(copy.status_set).toContain("{{status}}");
+    expect(copy.priority_set).toContain("{{priority}}");
+    expect(copy.title_set).toContain("{{title}}");
+    expect(copy.label_attached).toContain("{{name}}");
+    expect(copy.label_detached).toContain("{{name}}");
+  });
+
   it("renders a status change with both localized ends", () => {
     expect(
       formatActivity(activity("status_changed", { details: { from: "todo", to: "done" } }), t),

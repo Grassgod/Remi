@@ -477,6 +477,16 @@
     "loading": "Loading..."
   },
   "activity": {
+    "group_summary": "{{count}} activities · {{summary}} and more",
+    "recent_limit": "Showing the latest 200 activities in this window",
+    "status_set": "changed status to {{status}}",
+    "priority_set": "changed priority to {{priority}}",
+    "title_set": "changed title to {{title}}",
+    "project_changed": "changed the project",
+    "parent_changed": "changed the parent issue",
+    "label_attached": "added label {{name}}",
+    "label_detached": "removed label {{name}}",
+    "system_activity": "updated system details",
     "expand_earlier": "Load {{count}} earlier entries",
     "expand_newer": "Load {{count}} newer entries",
     "remaining_earlier": "{{count}} earlier entries",

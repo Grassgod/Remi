@@ -1,4 +1,5 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
+import { ISSUE_ACTIVITY_TYPES } from "@multiremi/contracts";
 import type { Context, Hono } from "hono";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
@@ -1722,7 +1723,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
-    if (!store.getIssueSession(sessionId)) {
+    const issueSession = store.getIssueSession(sessionId);
+    if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
+      Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
+        fromInclusive: window.prev_entry_created_at,
+        toExclusive: window.has_more_after ? window.entries.at(-1)?.created_at : null,
+        types: ISSUE_ACTIVITY_TYPES, limit: 200,
+      }));
+    }
+    if (!issueSession) {
       const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
         .map(entry => entry.id);
       const attachments = store.listAttachmentsForChatMessages(messageIds);

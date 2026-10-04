@@ -4106,6 +4106,10 @@ runMigrations(this.db);
     return this.issues.listIssueActivity(issueId);
   }
 
+  listIssueActivityBetween(...args: Parameters<IssuesRepo["listIssueActivityBetween"]>) {
+    return this.issues.listIssueActivityBetween(...args);
+  }
+
   recordIssueDispatchSkipped(issueId: string, input: {
     reason: string;
     error?: string | null;

@@ -87,7 +87,7 @@ export interface SessionLogListProps {
   /** Additional content above the anchor must settle before the list reveals. */
   contentReady?: boolean;
   onRevealed?: () => void;
-  afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
+  afterEntry?: (entry: SessionLogEntry, context: { highlightedId: string | null }) => React.ReactNode;
   header?: React.ReactNode;
   footer?: React.ReactNode;
   transformEntries?: (entries: readonly SessionLogEntry[]) => readonly SessionLogEntry[];
@@ -396,7 +396,7 @@ export function SessionLogList({
                       fallback={renderFallback ? renderFallback(entry) : null}
                     />
                   )}
-                {afterEntry?.(entry)}
+                {afterEntry?.(entry, { highlightedId: highlighted ? anchorId : null })}
               </div>
             );
           })}

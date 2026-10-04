@@ -79,7 +79,7 @@ describe("Issue SSR missing-comment fallback", () => {
     expect(bootstrap?.log).toMatchObject({ sessionId: selected ?? "main", missingCommentId: target });
     expect(bootstrap?.log.targetCommentId).toBeUndefined();
     expect(bootstrap?.log.window.entries[0]?.id).toBe("retained");
-    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith(`/sessions/${selected ?? "main"}/log?before=30`))).toBe(true);
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith(`/sessions/${selected ?? "main"}/log?before=30${selected ? "" : "&with_activity=1"}`))).toBe(true);
   });
 
   it.each([503, "network"])("does not treat %s as a missing comment", async failure => {
@@ -98,6 +98,15 @@ describe("Issue SSR missing-comment fallback", () => {
     expect(bootstrap?.log).toMatchObject({ sessionId: "side", targetCommentId: "retained" });
     expect(bootstrap?.log.missingCommentId).toBeUndefined();
     expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/sessions/side/log?anchor=1&before=15&after=15"))).toBe(true);
+    expect(fetcher.mock.calls.some(([url]) => new URL(String(url)).searchParams.has("with_activity"))).toBe(false);
+  });
+
+  it("requests default-session activities in the SSR window, without changing the head read", async () => {
+    const fetcher = mockReads(() => Response.json({ id: "retained", seq: 1, head_seq: 1 }));
+    await readIssueLogBootstrap("test", "issue", "main", "retained");
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/sessions/main/log?anchor=1&before=15&after=15&with_activity=1"))).toBe(true);
+    expect(fetcher.mock.calls.filter(([url]) => new URL(String(url)).searchParams.get("anchor") === "0")
+      .every(([url]) => !new URL(String(url)).searchParams.has("with_activity"))).toBe(true);
   });
 
   it("does not seed a fallback when another session could not be checked", async () => {

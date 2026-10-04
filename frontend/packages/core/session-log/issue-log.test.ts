@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionLogEntrySchema, type SessionLogWindow } from "../api/schemas/session-log";
+import { SessionLogEntrySchema, SessionLogWindowSchema, type SessionLogWindow } from "../api/schemas/session-log";
+import type { IssueActivityEntry } from "@multiremi/contracts";
 import { ApiError } from "../api/http";
 const mocks = vi.hoisted(() => ({ read: vi.fn(), locate: vi.fn() }));
 vi.mock("../api", () => ({ api: { getSessionLog: mocks.read, locateSessionLogEntry: mocks.locate } }));
@@ -9,8 +10,87 @@ const row = (seq: number, kind = "message") => SessionLogEntrySchema.parse({ ses
   revision: 1, body_md: `body ${seq}`, body_html: `<p>body ${seq}</p>`, render_version: "v", author_type: "member", author_id: "u",
   metadata: { attachments: [{ id: "att" }], reactions: [] } });
 const windowOf = (entries = [row(80), row(81)]): SessionLogWindow => ({ entries, head_seq: 81, log_version: 4, has_more_before: true, has_more_after: false });
+const audit = (id: string): IssueActivityEntry => ({ type: "activity", id, action: "issue_created", details: null, actor_type: "system", actor_id: null, created_at: "2026-10-04T00:00:00.000Z" });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+describe("activity sidecar", () => {
+  it("parses optional sidecar fields, rejects invalid activity data, and accepts older windows", () => {
+    expect(SessionLogWindowSchema.parse(windowOf()).activities).toBeUndefined();
+    expect(SessionLogWindowSchema.parse({ ...windowOf(), activities: [audit("a")], prev_entry_created_at: null, activities_truncated: true }).activities).toEqual([audit("a")]);
+    expect(SessionLogWindowSchema.safeParse({ ...windowOf(), activities: [{ ...audit("a"), details: "invalid" }] }).success).toBe(false);
+  });
+  it("unions activity pages by id and replaces the sidecar on readTail", async () => {
+    mocks.read.mockReset();
+    mocks.read.mockImplementation(async (_id: string, params: { anchor?: number; with_activity?: number }) => {
+      if (params.anchor === 0) return windowOf([row(0, "head")]);
+      if (params.anchor === 79) return { ...windowOf([row(78), row(79)]), activities: [audit("old"), audit("same")], prev_entry_created_at: "older" };
+      if (params.anchor === 81) return { ...windowOf([row(82)]), activities: [audit("new"), audit("same")], activities_truncated: true };
+      return { ...windowOf(), activities: [audit("tail")] };
+    });
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: { ...windowOf(), activities: [audit("same")] } }, false, true);
+    await replica.earlier(); await replica.newer();
+    expect(replica.window?.activities?.map(a => a.id).sort()).toEqual(["new", "old", "same"]);
+    expect(replica.window?.activities_truncated).toBe(true);
+    expect(replica.window?.prev_entry_created_at).toBe("older");
+    expect(mocks.read.mock.calls.filter(([, p]) => p.anchor !== 0).every(([, p]) => p.with_activity === 1)).toBe(true);
+    await replica.loadTail();
+    expect(replica.window?.activities?.map(a => a.id)).toEqual(["tail"]);
+    expect(replica.window?.activities_truncated).toBeUndefined();
+  });
+  it("keeps activity on preserve-window refresh, but 404 fallback replaces it", async () => {
+    mocks.read.mockReset(); mocks.locate.mockReset();
+    mocks.locate.mockResolvedValue({ id: "r80", seq: 80, head_seq: 81 });
+    mocks.read.mockImplementation(async (_id, p) => p.anchor === 0 ? windowOf([row(0, "head")]) : { ...windowOf(), activities: [audit("fresh")] });
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: { ...windowOf(), activities: [audit("held")] } }, false, true);
+    await replica.loadAround("r80", true);
+    expect(replica.window?.activities?.map(a => a.id)).toEqual(["fresh", "held"]);
+    mocks.locate.mockRejectedValue(new ApiError("missing", 404, "Not Found"));
+    await replica.loadAround("deleted", true);
+    expect(replica.missingCommentId).toBe("deleted");
+    expect(replica.window?.activities?.map(a => a.id)).toEqual(["fresh"]);
+    expect(mocks.read).toHaveBeenCalledWith("s", { before: 30, with_activity: 1 });
+  });
+  it("appends live activity only to an enabled tail, without changing seq/head or freshness", () => {
+    const seed = { sessionId: "s", head: row(0, "head"), window: windowOf() };
+    for (const enabled of [false, true]) for (const middle of [false, true]) {
+      const replica = new IssueLogReplica("s", { ...seed, window: { ...seed.window, has_more_after: middle } }, false, enabled);
+      const before = replica.getSnapshot("s");
+      replica.appendActivity(audit("live")); replica.appendActivity(audit("live"));
+      replica.appendActivity({ ...audit("ignore"), action: "comment_created" });
+      expect(replica.window?.activities?.map(a => a.id) ?? []).toEqual(enabled && !middle ? ["live"] : []);
+      expect(replica.getSnapshot("s")).toMatchObject({ head: before.head, ready: before.ready, fresh: before.fresh, entries: before.entries });
+    }
+  });
+  it("refreshes an expanded default-session history with activities from every intervening page", async () => {
+    const seed = { ...windowOf([row(3), row(4)]), prev_entry_created_at: "held-boundary", before_visible_count: 2,
+      activities: [audit("held")] };
+    mocks.read.mockImplementation(async (_id, params) => params.anchor === 2
+      ? { ...windowOf([row(3), row(4), row(5), row(6)]), activities: [audit("bridge"), audit("held")] }
+      : { ...windowOf([row(7), row(8)]), activities: [audit("tail")], head_seq: 8 });
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: seed }, false, true);
+    await replica.refreshVisible();
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 3, 4, 5, 6, 7, 8]);
+    expect(replica.window?.activities?.map(entry => entry.id)).toEqual(["bridge", "held", "tail"]);
+    expect(replica.window).toMatchObject({ prev_entry_created_at: "held-boundary", before_visible_count: 2 });
+    expect(mocks.read.mock.calls.map(([, params]) => params)).toEqual([
+      { before: 30, with_activity: 1 }, { anchor: 2, after: 100, with_activity: 1 },
+    ]);
+    expect(replica.getSnapshot("s")).toMatchObject({ ready: true, fresh: true, head: 8 });
+  });
+  it("removes deleted comments and refreshes edited comments without dropping loaded activities", async () => {
+    const seed = { ...windowOf([row(3), row(4), row(80), row(81)]), activities: [audit("held")] };
+    const edited = { ...row(80), revision: 2, body_md: "edited" };
+    mocks.read.mockImplementation(async (_id, params) => params.anchor === 2
+      ? { ...windowOf([row(4)]), activities: [audit("held")] }
+      : { ...windowOf([edited]), activities: [audit("fresh")] });
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: seed }, false, true);
+    await replica.refreshVisible();
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 4, 80]);
+    expect(replica.getSnapshot("s").entries.at(-1)).toMatchObject({ revision: 2, body_md: "edited" });
+    expect(replica.window?.activities?.map(entry => entry.id)).toEqual(["fresh", "held"]);
+  });
+});
+
+afterEach(() => { vi.unstubAllGlobals(); mocks.read.mockReset(); mocks.locate.mockReset(); });
 
 describe("Issue log presentation over C7", () => {
   it("imports SSR rows into C7 without a second network read or losing display fields", async () => {
