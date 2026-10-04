@@ -45,7 +45,7 @@ async function setup({ store }: PendingTurnTestFixture) {
   store.startTask(claimed.id);
   const attempt = store.getTaskWithAgent(claimed.id)!;
   const offer = store.getDaemonTurnBridge().offerInput(attempt);
-  store.recordSessionAgentRangeRead(session.id, agent.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 });
+  store.recordSessionAgentRangeRead(session.id, agent.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 }, attempt.id);
   const server = startMultiremiServer({ store, hostname: "127.0.0.1", port: 0, authToken: "callback-fixture" });
   const frames: Array<Record<string, any>> = [];
   const client = new DaemonProtocolClient({ serverUrl: `http://127.0.0.1:${server.port}`, token: "callback-fixture",
@@ -72,8 +72,17 @@ async function setup({ store }: PendingTurnTestFixture) {
   client.startLane(lane);
   await until(() => client.connectionState() === "connected");
   expect((await inbox.rpc("turn.input", { ...inbox.turnInput(attempt.id), message_ids: offer.input_messages.map(m => m.id) })).ok).toBe(true);
+  const { token } = await store.createTaskAccessToken(attempt, "local");
   return { store, rt, agent, issue, session, attempt, offer, send, frames, inbox, feed, permission, question,
     serverUrl: `http://127.0.0.1:${server.port}`,
+    async readRange(from: number, to: number) {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/log/entry?from=${from}&to=${to}`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      const page = await response.json() as { entries: Array<{ id: string; body_md: string }>; next_cursor: string | null };
+      expect(page.next_cursor).toBeNull();
+      return page.entries;
+    },
     async decision() {
       await until(() => store.getTurn(offer.turn_id)?.status === "awaiting_human");
       return store.getMessage(store.getTurn(offer.turn_id)!.waiting_on_message_id!)!;
@@ -137,11 +146,10 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           await expect(h.inbox.consumeTaskSteerMessages(h.attempt.id, [])).rejects.toThrow("unconfirmed turn input gap");
           expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
           // A full range read sees the omitted ordinary body and advances its checkpoint.
-          const range = h.store.listMessages(h.session.id, { from: h.offer.input_to_seq, to: answer.message.seq });
+          await expect(h.inbox.consumeTaskSteerMessages(h.attempt.id, hints.map(m => m.id))).rejects.toMatchObject({ code: "input_gap" });
+          const range = await h.readRange(h.offer.input_to_seq, answer.message.seq);
           if (ordinary) expect(range.find(m => m.id === ordinary.message.id)?.body_md).toBe(ordinary.message.body_md);
           expect(range.find(m => m.id === answer.message.id)?.body_md).toBe(body);
-          h.store.recordSessionAgentRangeRead(h.session.id, h.agent.id,
-            { seq: h.offer.input_to_seq + 1, offset: 0 }, { seq: answer.message.seq + 1, offset: 0 });
           await h.inbox.consumeTaskSteerMessages(h.attempt.id, hints.map(m => m.id));
         } else {
           expect(h.inbox.pendingTaskSteerMessages(h.attempt.id)).toEqual([]);
@@ -152,11 +160,11 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     }, 120_000);
   }
 
-  it("runs the provider with the unread range before acknowledging its injected batch", async () => {
+  for (const scenario of ["read", "unread", "late_interrupt"] as const) it(`provider HTTP range receipt: ${scenario}`, async () => {
     const h = await setup(fixture());
     const workDir = mkdtempSync(join(tmpdir(), "decision-range-run-"));
     let permission!: (params: RequestPermissionParams) => Promise<PermissionOutcome>;
-    let turns = 0, answerSeq = 0, text = "";
+    let turns = 0, answerSeq = 0, lateSeq = 0, text = "";
     const provider: MultiremiTaskProvider = {
       setPermissionHandler: handler => { permission = handler; },
       typedSessionFailures: true,
@@ -172,15 +180,31 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
           expect(h.store.getMessage(ordinary.message.id)?.body_md).toBe("Still-unread ordinary context");
           text = "Permission received";
-        } else {
+        } else if (turns === 2) {
           expect(turns).toBe(2);
           expect(prompt).toContain("remi message list");
           expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
-          const range = h.store.listMessages(h.session.id, { from: h.offer.input_to_seq, to: answerSeq });
-          expect(range.some(m => m.body_md === "Still-unread ordinary context")).toBe(true);
-          h.store.recordSessionAgentRangeRead(h.session.id, h.agent.id,
-            { seq: h.offer.input_to_seq + 1, offset: 0 }, { seq: answerSeq + 1, offset: 0 });
+          expect(h.store.getSessionAgentReadProgress(h.session.id, h.agent.id).seq).toBe(h.offer.input_to_seq);
+          if (scenario !== "unread") {
+            const range = await h.readRange(h.offer.input_to_seq, answerSeq);
+            expect(range.some(m => m.body_md === "Still-unread ordinary context")).toBe(true);
+            expect(range.some(m => m.body_md === "allow")).toBe(true);
+          }
+          if (scenario === "late_interrupt") {
+            const late = h.send("Second directive during provider execution");
+            lateSeq = late.message.seq;
+            await until(() => h.inbox.pendingTaskSteerMessages(h.attempt.id).some(m => m.id === late.message.id));
+          }
           text = "Ordinary context handled";
+        } else {
+          expect(scenario).toBe("late_interrupt");
+          expect(turns).toBe(3);
+          expect(prompt).toContain("Second directive during provider execution");
+          expect(h.store.getSessionAgentReadProgress(h.session.id, h.agent.id).seq).toBe(answerSeq);
+          expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBeLessThan(lateSeq);
+          const range = await h.readRange(answerSeq, lateSeq);
+          expect(range.some(m => m.body_md === "Second directive during provider execution")).toBe(true);
+          text = "Both directives handled";
         }
         yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text }] };
       },
@@ -201,14 +225,41 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     state.enqueueTaskReport = () => {};
     state.ensureTrace = () => ({ append: (_attempt: string, _runtime: string, events: unknown[]) => events });
     try {
-      const result = await state.runAgent({ ...h.attempt, holdsWorkspace: false }, new AbortController().signal,
+      const run = state.runAgent({ ...h.attempt, holdsWorkspace: false }, new AbortController().signal,
         { workDir, ensureDir: false });
+      if (scenario === "unread") {
+        await expect(run).rejects.toMatchObject({ code: "input_gap" });
+        expect(turns).toBe(2);
+        expect(h.store.getSessionAgentReadProgress(h.session.id, h.agent.id).seq).toBe(h.offer.input_to_seq);
+        expect(h.store.getTurn(h.offer.turn_id)).toMatchObject({ status: "running", input_to_seq: h.offer.input_to_seq, reply_message_id: null });
+        return;
+      }
+      const result = await run;
       expect(result.completed).toBe(true);
-      expect(turns).toBe(2);
-      expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(answerSeq);
+      expect(turns).toBe(scenario === "late_interrupt" ? 3 : 2);
+      expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(lateSeq || answerSeq);
       expect(h.store.getTurn(h.offer.turn_id)?.status).toBe("completed");
-      expect(h.store.getMessage(h.store.getTurn(h.offer.turn_id)!.reply_message_id!)?.body_md).toBe("Ordinary context handled");
+      expect(h.store.getMessage(h.store.getTurn(h.offer.turn_id)!.reply_message_id!)?.body_md)
+        .toBe(scenario === "late_interrupt" ? "Both directives handled" : "Ordinary context handled");
     } finally { await drain(); await h.close(); rmSync(workDir, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it("range receipts allow omitted read IDs but reject foreign, duplicate and reordered IDs", async () => {
+    const h = await setup(fixture());
+    try {
+      const first = h.send("First HTTP-only input", "next_turn");
+      const second = h.send("Second HTTP-only input", "next_turn");
+      const offer = h.store.getDaemonTurnBridge().offerInput(h.store.getTaskWithAgent(h.attempt.id)!);
+      const input = { ...h.inbox.turnInput(h.attempt.id), input_to_seq: offer.input_to_seq };
+      await expect(h.inbox.rpc("turn.input", { ...input, message_ids: [] })).rejects.toMatchObject({ code: "input_gap" });
+      expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
+      await h.readRange(h.offer.input_to_seq, offer.input_to_seq);
+      for (const ids of [["foreign"], [first.message.id, first.message.id], [second.message.id, first.message.id]]) {
+        await expect(h.inbox.rpc("turn.input", { ...input, message_ids: ids })).rejects.toMatchObject({ code: "input_gap" });
+        expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
+      }
+      expect(await h.inbox.rpc("turn.input", { ...input, message_ids: [] })).toMatchObject({ ok: true, input_to_seq: offer.input_to_seq });
+    } finally { await h.close(); }
   }, 120_000);
 
   it("delivers, downloads and injects a mid-run attachment under the current attempt", async () => {

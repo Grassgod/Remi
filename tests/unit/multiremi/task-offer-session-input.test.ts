@@ -131,18 +131,19 @@ test("a long prompt without an explicit trigger points to its task instead of re
   expect(response.prompt).not.toContain("--from 0");
 });
 
-test("Chat input includes only this task's user trigger without a duplicate chat_message body", () => {
+test("coalesced Chat input includes all triggering messages once without a duplicate chat_message body", () => {
   const f = fixture(); const chat = f.store.createChatSession({ agentId: f.agent.id });
   const first = f.store.sendChatMessage(chat.id, { body: "FIRST_CHAT_TRIGGER" });
   const second = f.store.sendChatMessage(chat.id, { body: "SECOND_CHAT_TRIGGER" });
-  expect(second.task.id).not.toBe(first.task.id);
+  expect(second.task.id).toBe(first.task.id);
   const claimed = f.store.claimTask(f.runtime.id)!;
   const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
   useTaskSessionInput(f.store, claimed, response);
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
-  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).not.toContain("SECOND_CHAT_TRIGGER");
+  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).toContain("SECOND_CHAT_TRIGGER");
   expect(response.chat_message).toBeUndefined();
   expect(prompt.match(/FIRST_CHAT_TRIGGER/g)).toHaveLength(1);
+  expect(prompt.match(/SECOND_CHAT_TRIGGER/g)).toHaveLength(1);
 });
 
 test("range reads every page, rejoins long Unicode bodies, and excludes own history", async () => {

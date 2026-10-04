@@ -92,7 +92,14 @@ export class DaemonTurnBridge {
         const to=Number(payload.input_to_seq),from=this.cursor(turn);
         if(!Number.isSafeInteger(to)||to<0||to>Number(turn.offered_to??0)||!Array.isArray(payload.message_ids))throw new Error('input_gap');
         const replay=this.ctx.db.query('SELECT input_trigger_ack,attempt_no,session_id FROM multiremi_turn_attempts WHERE id=?').get(turn.current_attempt_id);
-        if(to>from||Number(replay.attempt_no)>1&&!replay.session_id&&!replay.input_trigger_ack){const expected=this.inputMessages(turn,from,to).map(message=>message.id);
+        if(to>from||Number(replay.attempt_no)>1&&!replay.session_id&&!replay.input_trigger_ack){
+          // Range reads can deliver ordinary context that snapshots never push.
+          // Only this attempt's full-body receipt may replace an explicit ID;
+          // unread IDs, foreign IDs, duplicates and ordering still need validation.
+          const read=attemptInputState(this.ctx,turn).read;
+          const messageIds=new Set(payload.message_ids);
+          const expected=this.inputMessages(turn,from,to)
+            .filter(message=>message.seq>read||messageIds.has(message.id)).map(message=>message.id);
           if(JSON.stringify(expected)!==JSON.stringify(payload.message_ids))throw new Error('input_gap');
           assertOfferedInputRead(this.ctx,turn,to);}
         acknowledgeInput(this.ctx,turn.id,Math.min(from,to),to);
