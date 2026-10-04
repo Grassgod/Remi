@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -26,6 +27,31 @@ const workflow = readFileSync(resolve(deployRoot, "ppe/workflow.sh"), "utf8");
 const collector = readFileSync(resolve(deployRoot, "ppe/gc.sh"), "utf8");
 const dockerfileWeb = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.web"), "utf8");
 const nextConfig = readFileSync(resolve(repoRoot, "frontend/apps/web/next.config.ts"), "utf8");
+const versionResolutionStart = workflow.indexOf('  package_json_url=');
+const versionResolution = workflow.slice(
+  versionResolutionStart,
+  workflow.indexOf('\nelse\n  : "${PPE_LEASE_ID', versionResolutionStart),
+);
+
+function parsePpeVersion(packageJson: string, curlStatus = 0) {
+  return spawnSync("bash", ["-c", `
+set -euo pipefail
+curl() {
+  printf '%s\\n' "$PPE_TEST_PACKAGE_JSON"
+  return "$PPE_TEST_CURL_STATUS"
+}
+${versionResolution}
+printf 'Version: %s\\n' "$multiremi_version"
+`], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_COMMIT: "adcaf571d842b93578f010f85e7cbcd2231348fd",
+      PPE_TEST_PACKAGE_JSON: packageJson,
+      PPE_TEST_CURL_STATUS: String(curlStatus),
+    },
+  });
+}
 
 describe("Zadig PPE deployment", () => {
   test("pins external dependencies and keeps data on /data00", () => {
@@ -117,6 +143,51 @@ describe("Zadig PPE deployment", () => {
     expect(workflow).toContain("wait-for-postgres");
     expect(workflow).toContain("wait-for-api");
     expect(workflow).toContain("ppe-fake-acp-only");
+  });
+
+  test("pins API builds and both deployed containers to the target commit version (MUL-502)", () => {
+    expect(versionResolutionStart).toBeGreaterThan(workflow.indexOf('if [[ "${PPE_ACTION}" == "deploy" ]]; then'));
+    expect(versionResolutionStart).toBeLessThan(workflow.indexOf("\nselect_slot\n"));
+    expect(versionResolution).toContain('https://raw.githubusercontent.com/Grassgod/Remi/${GIT_COMMIT}/package.json');
+    expect(versionResolution).toContain("curl -fsSL --retry 3");
+    expect(versionResolution).toContain("sed -n");
+    expect(versionResolution).toContain('^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$');
+    expect(versionResolution).not.toMatch(/\b(jq|bun)\b/u);
+    expect(workflow).toMatch(/run_build ppe-build-api[^\n]*\\\n\s+"MULTIREMI_VERSION=\$\{multiremi_version\}"/u);
+    for (const name of ["api", "daemon"]) {
+      const deployment = workflow.split(/^---$/mu).find((block) =>
+        block.includes(`kind: Deployment\nmetadata:\n  name: ${name}\n`),
+      );
+      expect(deployment).toContain('- { name: MULTIREMI_VERSION, value: "${multiremi_version}" }');
+    }
+    expect(workflow).toContain("Commit: %s\\nVersion: %s\\nMode: %s");
+    expect(workflow).toContain('"${GIT_COMMIT}" "${multiremi_version}" "${PPE_MODE}"');
+  });
+
+  test.each(["0.2.85", "0.2.85-rc.1", "0.2.85+build.2"])("resolves PPE package version %s", (version) => {
+    const result = parsePpeVersion(JSON.stringify({ name: "remi", version }, null, 2));
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`Version: ${version}\n`);
+  });
+
+  test.each([
+    "{}",
+    '{ "name": "remi" }',
+    '  "version": "",',
+    '  "version": "dev",',
+    '  "version": "0.2.85 unsafe",',
+  ])("rejects missing or invalid PPE version: %s", (packageJson) => {
+    const result = parsePpeVersion(packageJson);
+    expect(result.status).toBe(64);
+    expect(result.stderr).toContain("Missing or invalid package.json version for commit adcaf571");
+    expect(result.stdout).toBe("");
+  });
+
+  test("fails explicitly if the target package.json fetch fails", () => {
+    const result = parsePpeVersion('  "version": "0.2.85",', 22);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Failed to fetch package.json for commit adcaf571");
+    expect(result.stdout).toBe("");
   });
 
   test("atomically leases PPEs per Issue and reclaims them after 24 hours", () => {

@@ -86,7 +86,11 @@ Issue reuses its lease. Images already present for that exact Commit
 are reused. `platform-daemon` also starts an isolated daemon from the same API
 image with a deterministic fake ACP bridge and an ephemeral, non-secret Codex
 test identity. This proves runtime registration and transport without copying a
-real Codex/Claude credential into PPE. The workflow emits a structured
+real Codex/Claude credential into PPE. The control plane and daemon both use the
+version from the target Commit's `package.json`, including when reusing existing
+images, because the server rejects daemons below `DAEMON_MIN_CLI_VERSION`.
+After changing `ppe/workflow.sh`, rerun `configure-ppe.sh` as root on 209 so Zadig
+loads the updated workflow definition. The workflow emits a structured
 `PPE_RESULT` containing its slot, lease ID, URL, state, and expiry. Browser URLs
 are `http://10.37.117.209:32101` through `:32106`; PPE intentionally has no
 Feishu SSO, needs no custom Header, and must never receive a production Web token.
