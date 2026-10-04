@@ -288,6 +288,7 @@ const mockApiObj = vi.hoisted(() => ({
   }),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
+  listIssueDependencies: vi.fn().mockResolvedValue([]),
   listIssueDecisions: vi.fn().mockResolvedValue({
     waiting_on_human: [],
     owner_and_answered: { pending: [], answered: [] },
@@ -689,6 +690,35 @@ describe("IssueDetail (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  describe("first-screen dependencies (MUL-499)", () => {
+    it("does not request dependencies for a top-level issue", async () => {
+      renderIssueDetail();
+      await waitForReveal();
+      expect(mockApiObj.listIssueDependencies).not.toHaveBeenCalled();
+    });
+
+    it("requests dependencies once for the child issue editor", async () => {
+      mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, parent_issue_id: "issue-parent" });
+      renderIssueDetail();
+      await waitForReveal();
+      expect(mockApiObj.listIssueDependencies).toHaveBeenCalledExactlyOnceWith("issue-1");
+    });
+
+    it.each(["backlog", "in_progress"] as const)("uses blocked_by count only in backlog (%s)", async status => {
+      mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status, blocked_by: ["prerequisite-1", "prerequisite-2"] });
+      renderIssueDetail();
+      await waitForReveal();
+      const count = screen.queryByText("Waiting for 2 prerequisites");
+      if (status === "backlog") {
+        expect(count).toBeInTheDocument();
+        expect(count).toHaveClass("h-[18px]");
+      } else {
+        expect(count).not.toBeInTheDocument();
+      }
+      expect(mockApiObj.listIssueDependencies).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps the detail skeleton until member and child gates resolve", async () => {

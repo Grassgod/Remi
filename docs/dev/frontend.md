@@ -64,7 +64,7 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 任务列表包含按状态分页的缓存结构；详情只需要已有列表中的某个对象时，使用 `findCachedIssue`，避免为查缓存额外挂载完整列表查询。列表、看板、我的单的「显示子单」偏好由各自的 view store 持久化，默认关闭；查询键与请求都包含服务端 `top_level_only` 过滤值，不能在客户端裁掉子单。父单进度从服务端 child-progress buckets 显示。工作台复用查询缓存区分待人工输入与待验收，不能只根据单个任务的完成状态自行推导整个 issue 的展示。
 
-Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked_by`，没有提示时不挂载提示槽。兼容详情仅在 backlog 查询未完成前置单；其他状态返回空数组，保留普通首屏的查询预算。负责人自己拍板和已回答记录不触发横条；依赖编辑和强制开始失效详情缓存，WS 的部分更新保留详情独有字段。
+Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked_by`，没有提示时不挂载提示槽。横条渲染不依赖 decisions / dependencies 的响应。侧栏未完成前置单计数和横条共用 `blocked_by`，保留固定高度槽位；兼容详情仅在 backlog 查询未完成前置单，其他状态返回空数组。非子单首屏没有 dependencies 请求；子单允许编辑器发一次，读取包括已完成项的完整依赖列表。负责人自己拍板和已回答记录不触发横条；依赖编辑和强制开始失效详情缓存，WS 的部分更新保留详情独有字段。
 
 Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/packages/views/issues/components/issue-log-head.tsx) 用详情标题渲染只读标题，按同一 head 行的 `metadata.title` 精确移除一次 Markdown 前缀，避免改标题时混用版本。描述交给 `ReadonlyContent`，复用已有附件查询缓存并启用普通代码块复制；编辑和保存都只包含描述，不消费带标题的 `body_html`。服务端与 agent 的日志契约不变。
 
