@@ -6,8 +6,8 @@
 
 ```bash
 bun install --registry https://registry.npmjs.org --frozen-lockfile
-bun test
-bun test tests/unit/daemon/agent-runtime-send-options.test.ts
+bun run test
+bun run test tests/unit/daemon/agent-runtime-send-options.test.ts
 bunx tsc --noEmit
 bun run test:frontend
 bun run typecheck:frontend
@@ -25,7 +25,7 @@ Web、API、daemon 是独立入口。API 的生产启动先校验必要配置，
 ```bash
 npm run docs:test
 npm run docs:check
-bun test tests/arch/
+bun run test tests/arch/
 bun run scripts/snapshot-api-routes.ts --check
 bun run cli:capabilities:check
 bun run build:multiremi

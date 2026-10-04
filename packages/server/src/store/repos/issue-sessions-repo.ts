@@ -109,6 +109,7 @@ export class IssueSessionsRepo {
   createIssueSessionWithinTransaction(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
     const title = input.title?.trim() || `Session ${this.listIssueSessions(issueId, true).length + 1}`;
     const id = input.id ?? createId("ises");
     const now = nowIso();
@@ -410,6 +411,7 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
     this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
     if(input.kind==='task_assigned'&&input.taskId){
       const pointer=this.ctx.conversationLog().findTurnEntry(input.taskId);
@@ -575,7 +577,7 @@ export class IssueSessionsRepo {
         targetAgentId: task.agentId,
         events,
         expandableSeqs,
-        cursorSeq: lane.cursorSeq,
+        cursorSeq: Number(this.ctx.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(task.issueSessionId,task.agentId,taskExecutionScope(task))?.provider_cursor_seq??0),
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
         tokenBudget: tokenBudget - inheritedTokenBudget,
         currentTaskId: task.id,

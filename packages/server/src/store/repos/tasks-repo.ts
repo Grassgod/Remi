@@ -1,3 +1,4 @@
+import { acknowledgeAttemptInput } from '../inbox/attempt-input.js';
 import { assertOfferedInputRead, lockLane,reRingAfterTurnEnd,sweepIdleLanes,acknowledgeInput } from "../inbox/lane-machine.js";
 import { countMessageDelegationPairHops, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
@@ -541,6 +542,7 @@ export interface DelegationWakeupResult {
 
 interface DelegationTerminalReport {
   source: MultiremiTask;
+  sourceTurnId: string;
   sourceAgentName: string;
   sourceIssueKey: string | null;
   crossIssue: boolean;
@@ -2201,7 +2203,7 @@ export class TasksRepo {
            provider = NULL,
            execution_fingerprint = NULL,
            work_dir = NULL,
-           cursor_seq = 0,
+           provider_cursor_seq = 0,
            parent_cursor_seq = 0,
            generation = generation + 1,
            last_attempt_id = NULL,
@@ -3177,7 +3179,7 @@ export class TasksRepo {
     if (!relay) return;
     this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
     this.ctx.db.run(`UPDATE multiremi_session_lanes
-      SET cursor_seq = CASE WHEN cursor_seq < ? THEN ? ELSE cursor_seq END,
+      SET provider_cursor_seq = CASE WHEN provider_cursor_seq < ? THEN ? ELSE provider_cursor_seq END,
           last_attempt_id = ?, updated_at = ?
       WHERE reader_type = 'agent' AND session_id = ? AND reader_id = ? AND execution_scope = ?`,
       [toSeq, toSeq, task.id, nowIso(), relay.sessionId, task.agentId, relay.executionScope]);
@@ -4179,11 +4181,11 @@ ${placementAfter.sql}
 
       const task = this.getTask(String(row.id))!;
       if (task.issueSessionId && task.wakeSource !== null) {
-        const cursorSeq = this.ctx.issueSessions().getSessionAgentLane(
-          task.issueSessionId, task.agentId, taskExecutionScope(task),
-        )?.cursorSeq ?? 0;
+        // Reading a request is not completing its work. Only committed business
+        // input coverage can retire an obsolete first-attempt wake.
+        const cursorSeq=Number(this.ctx.db.query("SELECT COALESCE(MAX(input_to_seq),0) AS seq FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status='completed'").get(task.issueSessionId,task.agentId,taskExecutionScope(task))?.seq??0);
         const wakeSeq = Number(row.wake_seq ?? 0);
-        if (wakeSeq > 0 && cursorSeq >= wakeSeq
+        if (task.attempt === 1 && wakeSeq > 0 && cursorSeq >= wakeSeq
           && this.unreadNowMessageSeq(task.issueSessionId, task.agentId, taskExecutionScope(task), cursorSeq) === null) {
           const cancelledAt = nowIso();
           runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'cancelled', completed_at = ?,
@@ -4284,7 +4286,7 @@ ${placementAfter.sql}
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
-      const expiresAt = new Date(Date.now() + resolveHumanRequestTimeoutMs(input.timeoutMs)).toISOString();
+      const expiresAt = new Date(Date.parse(now) + resolveHumanRequestTimeoutMs(input.timeoutMs)).toISOString();
       const task=this.getTask(input.taskId);
       if(!task)throw new Error('Decision source attempt not found');
       this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
@@ -4298,6 +4300,8 @@ ${placementAfter.sql}
         body_md:String(input.payload?.title??input.payload?.message??JSON.stringify(input.payload??{})),
         metadata:{human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
       },deferredEvents);
+      // Keep the advertised lifetime anchored to the persisted creation time.
+      this.ctx.db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',[now,id]);
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
       const transition = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
          SET status = 'awaiting_human', wait_reason = ?, progress_summary = ?, updated_at = ?
@@ -4378,7 +4382,7 @@ ${placementAfter.sql}
     if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
-    if (request) this.publishTaskInputChanged(request.taskId);
+    // The canonical decision reply publishes its input event after commit.
     return request;
   }
 
@@ -4745,12 +4749,13 @@ ${placementAfter.sql}
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
       const turn=this.ctx.db.query('SELECT * FROM multiremi_turns WHERE current_attempt_id=?').get(taskId);
       if(turn){lockLane(this.ctx,turn.session_id,turn.agent_id,turn.execution_scope);
-        if(input.turnInputToSeq===undefined){const to=current.projectionToSeq??turn.wake_seq??0;if(to>=Number(turn.input_to_seq??0))acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),to);}
+        if(input.turnInputToSeq===undefined){const to=current.projectionToSeq??turn.wake_seq??0;if(to>=Number(turn.input_to_seq??0))acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),to,false);}
         if(input.turnInputToSeq!==undefined){
           const offered=this.ctx.db.query('SELECT projection_to_seq FROM multiremi_turn_attempts WHERE id=?').get(taskId)?.projection_to_seq??0;
           if(turn.current_attempt_id!==taskId||input.turnInputToSeq>offered||input.turnInputToSeq<Number(turn.input_to_seq??0))throw new Error('stale_attempt');
           assertOfferedInputRead(this.ctx,turn,input.turnInputToSeq);
-          acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),input.turnInputToSeq);
+          acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),input.turnInputToSeq,false);
+          acknowledgeAttemptInput(this.ctx,turn,input.turnInputToSeq);
         }}
       const now = nowIso();
       const existingReply=turn&&!current.chatSessionId&&current.issueId
@@ -5600,6 +5605,7 @@ ${placementAfter.sql}
         : this.lastDelegationResultCommentId(source);
       return {
         source,
+        sourceTurnId: String(row.turn_id),
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,
         sourceIssueKey: source.issueId ? this.ctx.issues().getIssue(source.issueId)?.key ?? null : null,
         crossIssue,
@@ -5739,17 +5745,19 @@ ${placementAfter.sql}
   getTaskWakeSequences(taskId: string): number[] {
     const task = this.getTask(taskId);
     if (!task) return [];
+    const turn=this.ctx.db.query('SELECT t.id,t.created_at FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?').get(taskId);
+    if(!turn)return [];
     const rows = task.issueId
       ? this.ctx.db.query(`SELECT data AS payload FROM multiremi_issue_activity
           WHERE issue_id = ? AND type IN ('turn_created', 'turn_merged') AND created_at >= ?`)
-        .all(task.issueId, task.createdAt) as { payload: string }[]
+        .all(task.issueId, turn.created_at) as { payload: string }[]
       : this.ctx.db.query(`SELECT payload FROM multiremi_system_events WHERE resource_id = ?
           AND event IN ('turn_created', 'turn_merged')`)
-        .all(task.id) as { payload: string }[];
+        .all(turn.id) as { payload: string }[];
     const seqs = new Set<number>();
     for (const row of rows) {
       const data = parseJson<Record<string, unknown>>(row.payload, {});
-      if (data.task_id === taskId && Number.isSafeInteger(data.seq) && Number(data.seq) > 0) seqs.add(Number(data.seq));
+      if (data.task_id === turn.id && Number.isSafeInteger(data.seq) && Number(data.seq) > 0) seqs.add(Number(data.seq));
     }
     if (task.triggerCommentId) {
       const entry = this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId);
@@ -5972,7 +5980,7 @@ ${placementAfter.sql}
         // Cancelling stops the current turn; it does not corrupt the provider transcript
         // the lane points at, so keep the lane exactly as-is (chat sessions already behave
         // this way — see promoteSession above). Deliberately neither promote nor reset:
-        // promoting would advance cursor_seq to projectionToSeq, and a task cancelled
+        // promoting would advance provider_cursor_seq to projectionToSeq, and a task cancelled
         // before the provider ever consumed its prompt would silently drop those events.
         // Replaying a few events twice is cheap; losing them is not. Config/runtime drift
         // is still caught by laneResumable() at claim time, and a genuinely unresumable
@@ -6285,7 +6293,7 @@ ${placementAfter.sql}
     const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
     // Input receipts may advance beyond the original provider projection.
     // Retaining the provider session must not rewind the unified inbox cursor.
-    const cursorSeq = Math.max(lane.cursorSeq, task.projectionToSeq ?? 0);
+    const cursorSeq = Math.max(Number(this.ctx.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(task.issueSessionId,task.agentId,taskExecutionScope(task))?.provider_cursor_seq??0), task.projectionToSeq ?? 0);
     // The provider lineage and its cursor are one checkpoint. For a warm turn,
     // only the lineage used by the task may advance; for a cold turn the lane
     // must still be empty. This prevents a late completion from overwriting a
@@ -6305,7 +6313,7 @@ ${placementAfter.sql}
           provider = ?,
           execution_fingerprint = ?,
           work_dir = ?,
-          cursor_seq = ?,
+          provider_cursor_seq = ?,
           parent_cursor_seq = ?,
           last_attempt_id = ?,
           updated_at = ?
@@ -6594,7 +6602,7 @@ function delegationTerminalReportSection(report: DelegationTerminalReport, comme
     ...(report.crossIssue && report.sourceIssueKey ? [`来源：${report.sourceIssueKey}`] : []),
     report.resultCommentId
       ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
-      : `结论评论：无；结果见 remi turn get ${report.source.id}`,
+      : `结论评论：无；结果见 remi turn get ${report.sourceTurnId}`,
     `摘要：${envelopeSummary(report.terminalStatus === "cancelled" ? null
       : report.terminalStatus === "completed" ? commentBody ?? report.terminalBody : report.terminalBody)}`,
     "请读该评论后继续负责父任务；本轮所有委派都终态后再发一次轮次总结。",

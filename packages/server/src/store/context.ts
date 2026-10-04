@@ -10,6 +10,7 @@ import { sendMessageWithinTransaction } from './inbox/send-message.js';
 // expose publicly (today: the analytics recorders) are instead registered on this object by the
 // facade's constructor and resolved at call time.
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
+import { issueActivityDetails } from "@multiremi/contracts";
 import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
 import { afterCommit, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
@@ -1454,7 +1455,7 @@ export class StoreContext {
             actor_id: input.actorId ?? null,
             created_at: now,
             action: input.type,
-            details: input.data ?? (input.body == null ? null : { body: input.body }),
+            details: issueActivityDetails(input.data, input.body ?? null),
           },
         },
       };

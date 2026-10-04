@@ -27,6 +27,25 @@ const savedEnv = {
 };
 const specs = collaborationCommandSpecs();
 
+it("session log window forwards --with-activity and retains the sidecar in JSON", async () => {
+  useCliEnv();
+  const spec = specById("session.log.window");
+  const queries: URLSearchParams[] = [];
+  globalThis.fetch = capabilityFetch(spec.id, request => {
+    const query = new URL(request.url).searchParams;
+    queries.push(query);
+    return Response.json({ entries: [], ...(query.get("with_activity") === "1" ? { activities: [{ id: "act_test" }], activities_truncated: true } : {}) });
+  });
+  const registry = registryFor([spec]);
+  expect(registry.renderHelp(spec.path)).toContain("--with-activity");
+  const result = await capture(() => registry.execute([...spec.path, "ises_test", "--with-activity", "--before", "7", "--json"]));
+  expect(queries[0]?.get("with_activity")).toBe("1");
+  expect(queries[0]?.get("before")).toBe("7");
+  expect(JSON.parse(result.stdout)).toMatchObject({ activities: [{ id: "act_test" }], activities_truncated: true });
+  await capture(() => registry.execute([...spec.path, "ises_test", "--json"]));
+  expect(queries[1]?.has("with_activity")).toBe(false);
+});
+
 afterEach(() => {
   globalThis.fetch = realFetch;
   console.log = realLog;

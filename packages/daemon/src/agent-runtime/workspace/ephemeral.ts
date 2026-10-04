@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
+import { multiremiSharedLockPath } from "@shared/home-paths.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { isPathWithinWorkspacesRoot, resolveWorkDir } from "./persistent.js";
 import { acquireWorkspaceSupervisorLease, WorkspaceSupervisorOwnedError } from "./process-owner.js";
@@ -177,7 +178,9 @@ export async function resolveTaskWorkDir(
         opts.signal.throwIfAborted();
         try {
           const lease = acquireWorkspaceSupervisorLease(workReal, {
-            stateRoot: opts.runtimeWorkspaceLeaseRoot ?? join(homedir(), ".multiremi", "runtime-workspace-leases"),
+            // Host workspace locks cannot follow a daemon's private STATE_DIR.
+            stateRoot: opts.runtimeWorkspaceLeaseRoot
+              ?? multiremiSharedLockPath(join(homedir(), ".multiremi", "runtime-workspace-leases")),
           });
           return {
             workDir, runtimeWorkspaceRoot: rootReal, localDirectory: true, ensureDir: false,

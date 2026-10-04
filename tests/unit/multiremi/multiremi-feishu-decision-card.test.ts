@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-407 (parent MUL-400 E5): an Issue task's human request becomes a decision
  * card in the Issue's Feishu topic instead of waking a relay Agent to ask in
@@ -114,8 +116,21 @@ function issueWithTopic(store: MultiremiStore, agentId: string, title = "Decisio
 function sourceTask(store: MultiremiStore, agentId: string, issueId: string): string {
   const task = store.createTask({ agentId, issueId, workspaceId: "local", prompt: "Work the Issue" });
   store.registerRuntime({ id: `rt_worker_${task.id}`, name: "Executor", provider: "claude", workspaceId: "local", daemonId: `worker-${task.id}` });
-  db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [`rt_worker_${task.id}`, task.id]);
+  runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [`rt_worker_${task.id}`, task.id]);
   return task.id;
+}
+
+/** Settled history fixture on the canonical message axis, with unique log sequences. */
+function cloneSettledRequest(id: string, sourceId: string, respondedAt?: string) {
+  const source = db!.query("SELECT * FROM multiremi_conversation_log WHERE id = ?").get(sourceId) as any;
+  const head = db!.query("SELECT MAX(seq) AS seq FROM multiremi_conversation_log WHERE session_id = ?").get(source.session_id) as any;
+  const metadata = JSON.parse(source.metadata);
+  metadata.human_request.status = "responded";
+  if (respondedAt) metadata.human_request.responded_at = respondedAt;
+  const row = { ...source, id, card_token_hash: null, dedupe_key: null, seq: Number(head.seq) + 1, metadata: JSON.stringify(metadata) };
+  const keys = Object.keys(row);
+  db!.run(`INSERT INTO multiremi_conversation_log (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`, keys.map(key => row[key]));
+  db!.run("UPDATE multiremi_conversation_heads SET head_seq = ? WHERE session_id = ?", [row.seq, row.session_id]);
 }
 
 function askQuestion(store: MultiremiStore, taskId: string, timeoutMs?: number) {
@@ -395,7 +410,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: sent.claimToken, status: "sent", externalMessageId: "om_short_card",
       interactionOpenId: "ou_the_person",
     });
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
       .toEqual({ reminder_sent_at: null });
     // Then the nudge still arrives, exactly once, inside the window.
     const expiryMs = Date.parse(expiresAt);
@@ -420,7 +435,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       [new Date(expiresAt + 3_600_000).toISOString(), card.id]);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 9 * 60_000))).toBeNull();
     // The absent card must not have consumed the one reminder.
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
       .toEqual({ reminder_sent_at: null });
     // The host comes back, the card finally goes out inside the window, and the
     // nudge follows instead of having been silently spent.
@@ -483,7 +498,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     const issue = issueWithTopic(store, agentId);
     // Execution is pinned to another machine, exactly as it is in production.
     const taskId = sourceTask(store, agentId, issue.id);
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_exec", taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", ["rt_exec", taskId]);
     const request = askQuestion(store, taskId);
     const hostToken = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const host = { Authorization: `Bearer ${hostToken.token}`, "content-type": "application/json" };
@@ -684,9 +699,9 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(snapshot("rt_stranger", "stranger")).toEqual([]);
     expect(snapshot("rt_foreign", "foreign")).toEqual([]);
     expect(snapshot("rt_bot", "stranger")).toEqual([]);
-    db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = 'rt_bot' WHERE id = ?", [taskId]);
     expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
-    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET metadata = json_set(metadata, '$.human_request.responded_at', ?) WHERE id = ?",
       ["2000-01-01T00:00:00.000Z", request.id]);
     expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
@@ -752,7 +767,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     });
     store.registerRuntime({ id: "rt_chat_executor", name: "Chat executor", provider: "claude",
       workspaceId: "local", daemonId: "chat-executor" });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
     const request = askQuestion(store, chat.taskId);
     expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(true);
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
@@ -762,10 +777,10 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => []))
       .toEqual([expect.objectContaining({ payload: { task_id: chat.taskId, request: settled } })]);
     expect(taskInputSnapshot(store, "rt_bot", "other-daemon", new Set(), () => [])).toEqual([]);
-    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET metadata = json_set(metadata, '$.human_request.responded_at', ?) WHERE id = ?",
       ["2000-01-01T00:00:00.000Z", request.id]);
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
-    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET metadata = json_set(metadata, '$.human_request.responded_at', ?) WHERE id = ?",
       [new Date().toISOString(), request.id]);
     store.upsertFeishuBotConfig("local", { agentId, runtimeId: "rt_bot", appId: config.appId,
       appSecretOp: "keep", domain: "feishu", enabled: false });
@@ -823,16 +838,12 @@ describe("Feishu decision cards for Issue human requests", () => {
       interactionOpenId: "ou_the_person",
     });
     store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
-    db!.run("UPDATE multiremi_task_human_requests SET responded_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET metadata = json_set(metadata, '$.human_request.responded_at', ?) WHERE id = ?",
       ["2000-01-01T00:00:00.000Z", request.id]);
     db!.transaction(() => {
       for (let index = 0; index < 1024; index++) {
         const id = `hrq_replay_${index}`;
-        db!.run(`INSERT INTO multiremi_task_human_requests
-          (id, task_id, kind, payload, status, created_at, responded_at)
-          SELECT ?, task_id, kind, payload, 'responded', created_at, ?
-          FROM multiremi_task_human_requests WHERE id = ?`,
-        [id, "2026-09-30T00:00:00.000Z", request.id]);
+        cloneSettledRequest(id, request.id, "2026-09-30T00:00:00.000Z");
         db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
           (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
            created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
@@ -880,10 +891,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     db!.transaction(() => {
       for (let index = 0; index < 1023; index++) {
         const id = `hrq_budget_${index}`;
-        db!.run(`INSERT INTO multiremi_task_human_requests
-          (id, task_id, kind, payload, status, created_at, responded_at)
-          SELECT ?, task_id, kind, payload, 'responded', created_at, responded_at
-          FROM multiremi_task_human_requests WHERE id = ?`, [id, request.id]);
+        cloneSettledRequest(id, request.id);
         db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
           (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
            created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
@@ -942,7 +950,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     try {
       for (const status of ["responded", "timeout", "cancelled"] as const) {
         const request = askQuestion(store, taskId);
-        db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
+        runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'awaiting_human' WHERE id = ?", [taskId]);
         events.length = 0;
         taskEvents.length = 0;
         storeDb.transaction(() => {
@@ -956,7 +964,7 @@ describe("Feishu decision cards for Issue human requests", () => {
         expect(store.getTaskHumanRequest(request.id)?.status).toBe(status);
       }
       const rolledBack = askQuestion(store, taskId);
-      db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human' WHERE id = ?", [taskId]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'awaiting_human' WHERE id = ?", [taskId]);
       events.length = 0;
       taskEvents.length = 0;
       expect(() => storeDb.transaction(() => {
@@ -975,7 +983,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     const issue = issueWithTopic(store, agentId);
     const makePending = () => {
       const taskId = sourceTask(store, agentId, issue.id);
-      db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [taskId]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [taskId]);
       return { taskId, request: askQuestion(store, taskId) };
     };
     const committed = makePending();
@@ -1103,7 +1111,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     // 30s and 20s left are both inside the window but too late to be useful.
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 30_000))).toBeNull();
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 20_000))).toBeNull();
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
       .toEqual({ reminder_sent_at: null });
     // 61s left clears the floor and produces the one reminder.
     const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))!;
@@ -1137,7 +1145,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 80_000))!;
     expect(reminder.kind).toBe("decision_reminder");
     // But the same late card with only 30s left would not have.
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
       .toMatchObject({ reminder_sent_at: expect.any(String) });
   });
 
@@ -1783,7 +1791,7 @@ describe("Feishu decision card heartbeat delivery", () => {
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
     // The Task stays in `local`; only its Issue pointer moves.
-    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [otherIssue.id, taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, taskId]);
     const request = askQuestion(store, taskId);
 
     expect(db!.query(
@@ -1794,6 +1802,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     ).get(request.id)).toEqual({ n: 0 });
     expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(0);
     // Same-workspace requests are unaffected.
+    store.cancelTask(taskId);
     const okRequest = askQuestion(store, sourceTask(store, agentId, issue.id));
     expect(store.claimFeishuBotOutbound("local", "rt_bot")!.humanRequestId).toBe(okRequest.id);
   });
@@ -1815,17 +1824,17 @@ describe("Feishu decision card heartbeat delivery", () => {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
-    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [otherIssue.id, request.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, request.taskId]);
 
     const expiresAt = Date.parse(request.expiresAt!);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))).toBeNull();
     // Nothing was sent, nothing was written, and the one slot is still free.
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
       .toEqual({ reminder_sent_at: null });
     expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type.startsWith("decision_card"))).toHaveLength(0);
 
     // Point the Task back and the same request still gets its reminder.
-    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, request.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [issue.id, request.taskId]);
     const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))!;
     expect(reminder.kind).toBe("decision_reminder");
     expect(reminder.humanRequestId).toBe(request.id);

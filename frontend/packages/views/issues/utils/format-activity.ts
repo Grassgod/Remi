@@ -2,6 +2,7 @@ import type { IssueStatus, IssuePriority, TimelineEntry } from "@multiremi/core/
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multiremi/core/issues/config";
 import { formatDateOnly } from "@multiremi/core/issues/date";
 import type { useT } from "../../i18n";
+import { issueActivityLayer } from "@multiremi/contracts/issue-activity";
 
 export type IssuesT = ReturnType<typeof useT<"issues">>["t"];
 
@@ -114,8 +115,33 @@ export function formatActivity(
 ): string {
   const details = (entry.details ?? {}) as Record<string, string>;
   switch (entry.action) {
+    case "issue_created":
     case "created":
       return t(($) => $.activity.created);
+    case "issue_field_changed": {
+      const to = typeof details.to === "string" ? details.to : "";
+      const from = typeof details.from === "string" ? details.from : "";
+      switch (details.field) {
+        case "status": return "from" in details ? t($ => $.activity.status_changed, { from: statusLabel(from || "?", t), to: statusLabel(to || "?", t) })
+          : t($ => $.activity.status_set, { status: statusLabel(to || "?", t) });
+        case "priority": return "from" in details ? t($ => $.activity.priority_changed, { from: priorityLabel(from || "?", t), to: priorityLabel(to || "?", t) })
+          : t($ => $.activity.priority_set, { priority: priorityLabel(to || "?", t) });
+        case "title": return "from" in details ? t($ => $.activity.title_renamed, { from, to }) : t($ => $.activity.title_set, { title: to });
+        case "description": return t($ => $.activity.description_updated);
+        case "project_id": return t($ => $.activity.project_changed);
+        case "parent_issue_id": return t($ => $.activity.parent_changed);
+        case "start_date": return to ? t($ => $.activity.start_date_set, { date: to }) : t($ => $.activity.start_date_removed);
+        case "due_date": return to ? t($ => $.activity.due_date_set, { date: to }) : t($ => $.activity.due_date_removed);
+      }
+      return t($ => $.activity.system_activity);
+    }
+    case "label_attached": return t($ => $.activity.label_attached, { name: details.body ?? details.name ?? "" });
+    case "label_detached": return t($ => $.activity.label_detached, { name: details.body ?? details.name ?? "" });
+    case "issue_unassigned": return t($ => $.activity.removed_assignee);
+    case "issue_assigned": return formatActivity({ ...entry, action: "assignee_changed", details: {
+      ...details, to_type: details.to_type ?? details.toType ?? details.assignee_type ?? details.assigneeType,
+      to_id: details.to_id ?? details.toId ?? details.assignee_id ?? details.assigneeId,
+    } }, t, resolveActorName);
     case "status_changed":
       return t(($) => $.activity.status_changed, {
         from: statusLabel(details.from ?? "?", t),
@@ -326,6 +352,6 @@ export function formatActivity(
       }
     }
     default:
-      return entry.action ?? "";
+      return issueActivityLayer(entry.action ?? "") === "system" ? t($ => $.activity.system_activity) : entry.action ?? "";
   }
 }

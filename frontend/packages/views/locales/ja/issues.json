@@ -474,6 +474,16 @@
     "loading": "読み込み中..."
   },
   "activity": {
+    "group_summary": "{{count}} 件の履歴 · {{summary}} など",
+    "recent_limit": "このウィンドウの最新 200 件の履歴を表示",
+    "status_set": "ステータスを {{status}} に変更しました",
+    "priority_set": "優先度を {{priority}} に変更しました",
+    "title_set": "タイトルを {{title}} に変更しました",
+    "project_changed": "プロジェクトを変更しました",
+    "parent_changed": "親イシューを変更しました",
+    "label_attached": "ラベル {{name}} を追加しました",
+    "label_detached": "ラベル {{name}} を削除しました",
+    "system_activity": "システム詳細を更新しました",
     "expand_earlier": "前の {{count}} 件を表示",
     "expand_newer": "新しい {{count}} 件を表示",
     "remaining_earlier": "前に {{count}} 件あります",

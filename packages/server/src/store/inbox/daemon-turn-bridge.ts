@@ -1,3 +1,4 @@
+import { attemptInputState,acknowledgeAttemptInput } from './attempt-input.js';
 import type { StoreContext,CommitEventQueue } from '../context.js';
 import { createCommitEventQueue } from '../context.js';
 import { afterCommit } from '../db/postgres.js';
@@ -29,9 +30,20 @@ export class DaemonTurnBridge {
     lockLane(this.ctx,row.session_id,row.agent_id,row.execution_scope);return row;
   }
   private messages(sessionId:string,from:number,to:number):UnifiedMessage[]{return this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND seq<=? AND kind='message' AND deleted_at IS NULL AND visibility='shown' ORDER BY seq").all(sessionId,from,to).map(row=>getMessage(this.ctx,row.id)!);}
+  private inputMessages(turn:any,from:number,to:number):UnifiedMessage[] {
+    const messages=this.messages(turn.session_id,from,to);
+    const attempt=this.ctx.db.query('SELECT session_id,attempt_no,input_trigger_ack FROM multiremi_turn_attempts WHERE id=?').get(turn.current_attempt_id);
+    // A cold provider needs the original task even when the reader has already
+    // acknowledged it. Supply it separately from the unread interval.
+    if(Number(attempt.attempt_no)>1&&!attempt.session_id&&!attempt.input_trigger_ack){
+      const replayTo=Math.min(from,Number(turn.input_to_seq??turn.wake_seq));
+      const replay=this.messages(turn.session_id,Number(turn.input_from_seq??0),replayTo);
+      messages.unshift(...replay);
+    }
+    return messages;
+  }
   private cursor(turn:any):number {
-    const lane=this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(turn.session_id,turn.agent_id,turn.execution_scope);
-    return Math.max(Number(lane?.cursor_seq??0),Number(turn.input_to_seq??0));
+    return attemptInputState(this.ctx,turn).ack;
   }
   /** Offers carry receipts for every visible message, but only inline triggering bodies.
    * The original bodies remain in the log and range reads own partial-body progress. */
@@ -43,7 +55,7 @@ export class DaemonTurnBridge {
       let body=triggers.has(message.seq)?message.body_md:'';
       const omitted=Math.max(0,body.length-TRIGGER_MESSAGE_INLINE_CHARS);
       if(omitted)body=body.slice(0,TRIGGER_MESSAGE_INLINE_CHARS)+'\n'+expandHint(omitted,`remi message list ${turn.session_id} --from ${message.seq-1} --to ${message.seq}`);
-      return {...message,body_md:(index===0?range+'\n':'')+body,body_html:null,metadata:{execution_scope:turn.execution_scope},
+      return {...message,body_md:(index===0?range+'\n'+(message.seq<=from?`原始输入：remi message list ${turn.session_id} --from ${Number(turn.input_from_seq??0)} --to ${from}\n`:''):'')+body,body_html:null,metadata:{execution_scope:turn.execution_scope},
         options:null,card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
     });
   }
@@ -52,10 +64,9 @@ export class DaemonTurnBridge {
       this.ctx.lockWorkspaceRuntimeLifecycle(attempt.workspaceId);
       const turn=this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id').get(attempt.id);
       if(!turn)throw new Error('stale_attempt');lockLane(this.ctx,turn.session_id,turn.agent_id,turn.execution_scope);
-      const lane=this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(turn.session_id,turn.agent_id,turn.execution_scope);
-      const from=Math.max(Number(turn.input_to_seq??0),Number(lane.cursor_seq)),to=this.ctx.conversationLog().getConversationLogHead(turn.session_id)?.headSeq??from;
+      const from=this.cursor(turn),to=this.ctx.conversationLog().getConversationLogHead(turn.session_id)?.headSeq??from;
       this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',[to,to,attempt.id]);
-      return {turn_id:turn.id,attempt_id:attempt.id,input_from_seq:from,input_to_seq:to,input_messages:this.project(this.messages(turn.session_id,from,to),turn,from,to)};
+      return {turn_id:turn.id,attempt_id:attempt.id,input_from_seq:from,input_to_seq:to,input_messages:this.project(this.inputMessages(turn,from,to),turn,from,to)};
     });
   }
   snapshot(scope:DaemonTurnScope,activeAttemptIds:ReadonlySet<string>) {
@@ -80,10 +91,12 @@ export class DaemonTurnBridge {
       if(type==='turn.input'){
         const to=Number(payload.input_to_seq),from=this.cursor(turn);
         if(!Number.isSafeInteger(to)||to<0||to>Number(turn.offered_to??0)||!Array.isArray(payload.message_ids))throw new Error('input_gap');
-        if(to>from){const expected=this.messages(turn.session_id,from,to).map(message=>message.id);
+        const replay=this.ctx.db.query('SELECT input_trigger_ack,attempt_no,session_id FROM multiremi_turn_attempts WHERE id=?').get(turn.current_attempt_id);
+        if(to>from||Number(replay.attempt_no)>1&&!replay.session_id&&!replay.input_trigger_ack){const expected=this.inputMessages(turn,from,to).map(message=>message.id);
           if(JSON.stringify(expected)!==JSON.stringify(payload.message_ids))throw new Error('input_gap');
           assertOfferedInputRead(this.ctx,turn,to);}
         acknowledgeInput(this.ctx,turn.id,Math.min(from,to),to);
+        acknowledgeAttemptInput(this.ctx,turn,to);
         return {ok:true,input_to_seq:Math.max(from,to)};
       }
       if(type==='turn.decision'){

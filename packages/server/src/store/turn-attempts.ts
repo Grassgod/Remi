@@ -23,7 +23,7 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
   if (!db.run("UPDATE multiremi_turns SET current_attempt_id=current_attempt_id WHERE id=?",[turnId]).changes) {
     throw new Error(`Turn not found: ${turnId}`);
   }
-  const turn=db.query("SELECT current_attempt_id,status FROM multiremi_turns WHERE id=?").get(turnId);
+  const turn=db.query("SELECT current_attempt_id,status,input_to_seq,session_id,agent_id,execution_scope FROM multiremi_turns WHERE id=?").get(turnId);
   const previous=db.query("SELECT * FROM multiremi_turn_attempts WHERE id=? AND turn_id=?").get(turn.current_attempt_id,turnId);
   if (!previous) throw new Error(`Current attempt not found for turn: ${turnId}`);
   if (turn.status==="completed" || (turn.status==="cancelled" && !input.allowCancelledTurn)) throw new Error("A completed or cancelled turn cannot be retried");
@@ -38,6 +38,11 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
   const value: Record<string,unknown>=Object.fromEntries(carry.map(k=>[k,previous[k]]));
   if (input.cold) Object.assign(value,{runtime_id:null,session_id:null,work_dir:null,execution_fingerprint:null,
     plugin_snapshot:"[]",codex_profile:null,claude_profile:null});
+  const lane=db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(turn.session_id,turn.agent_id,turn.execution_scope);
+  const cold=input.cold||!previous.session_id;
+  const from=cold?0:Number(previous.input_ack_seq??turn.input_to_seq??lane?.cursor_seq??0);
+  Object.assign(value,{input_ack_seq:from,input_read_seq:cold?0:Number(previous.input_read_seq??from),
+    input_read_offset:cold?0:Number(previous.input_read_offset??0),input_trigger_ack:cold?0:1});
   Object.assign(value,{id,turn_id:turnId,attempt_no:attemptNo,status:"offered" satisfies TurnAttemptStatus,created_at:now,updated_at:now});
   const keys=Object.keys(value);
   db.run(`INSERT INTO multiremi_turn_attempts(${keys.join(",")}) VALUES(${keys.map(()=>"?").join(",")})`,keys.map(k=>value[k] ?? null));
@@ -59,7 +64,7 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
   const start=row.attempt_started_at ? Date.parse(row.attempt_started_at) : NaN;
   const end=row.attempt_ended_at ? Date.parse(row.attempt_ended_at) : NaN;
   const metadata: ConversationLogTurnMetadata={
-    status,summary:row.progress_summary ?? null,event_count:row.event_count ?? null,tool_call_count:row.tool_call_count ?? null,
+    status,summary:row.progress_summary ?? null,event_count:row.event_count==null?null:Number(row.event_count),tool_call_count:row.tool_call_count==null?null:Number(row.tool_call_count),
     type_histogram:parseJson(row.type_histogram,null),model:parseJson(row.model,null),trace_ref:parseJson(row.trace_ref,null),
     usage:parseJson(row.usage,[]),failure_reason:row.failure_reason ?? null,
     final_entry_id:row.reply_message_id ?? null,

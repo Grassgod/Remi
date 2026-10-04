@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-400 S1 on real PostgreSQL: the same transaction-depth ceiling the SQLite
  * suite asserts, plus the two cases that only a second connection can produce —
@@ -126,7 +128,7 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const execute = target.execute.bind(database);
   target.execute = (sql, params) => {
     const command = sql.trim().toUpperCase();
-    if (/INSERT\s+INTO\s+MULTIREMI_TASKS\b/.test(command)) {
+    if (/INSERT\s+INTO\s+MULTIREMI_TURN_ATTEMPTS\b/.test(command)) {
       counter.taskInserts.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
     }
     if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
@@ -243,9 +245,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     const task = store.createSessionTask(session.id, { agentId: agent, prompt: "Claim stale lane" });
     store.getOrCreateSessionAgentLane(session.id, agent);
     db.run(
-      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
-       provider = 'claude', runtime_id = ?, cursor_seq = 1,
-       execution_fingerprint = 'expired' WHERE session_id = ? AND agent_id = ?`,
+      `UPDATE multiremi_session_lanes SET provider_session_id = 'expired',
+       provider = 'claude', runtime_id = ?, provider_cursor_seq = 1,
+       execution_fingerprint = 'expired' WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`,
       [runtime, session.id, agent],
     );
     return { issue, task, runtime };
@@ -284,7 +286,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
       try {
         const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'session_agent_lane_reset'").all(issue.id);
-        const selected = reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(task.id) as { status: string };
+        const selected = reader.query("SELECT status FROM multiremi_turn_execution_records WHERE id = ?").get(task.id) as { status: string };
         observedBeforeRollback = rows.length === 0 && selected.status === "queued";
       } finally {
         reader.close();
@@ -358,7 +360,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         try {
           const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = ?").all(issue.id, action);
           const task = taskId
-            ? reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(taskId) as { status: string }
+            ? reader.query("SELECT status FROM multiremi_turn_execution_records WHERE id = ?").get(taskId) as { status: string }
             : null;
           invisibleBeforeRollback = rows.length === 0 && (!task || task.status === "queued");
         } finally {
@@ -389,7 +391,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeId: agent,
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const child = store.createIssue({
       title: "PG busy child",
       workspaceId,
@@ -1084,7 +1086,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         });
         if (busy) {
           const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-          db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+          runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
         }
         const child = store.createIssue({ title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
         check(`updateIssue ${status}, busy=${busy}`, () => { store.updateIssue(child.id, { status }); });
@@ -1186,7 +1188,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeId: agent,
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const first = store.createIssue({
       title: "PG coalesce child A",
       workspaceId,

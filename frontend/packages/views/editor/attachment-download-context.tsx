@@ -24,6 +24,7 @@ const AttachmentDownloadContext = createContext<ResolvedDownload | null>(null);
 
 interface ProviderProps {
   attachments?: Attachment[];
+  loadAttachments?: () => Promise<Attachment[]>;
   children: ReactNode;
 }
 
@@ -32,7 +33,7 @@ interface ProviderProps {
  * `ContentEditor`. Without a provider the consumer falls back to opening the
  * raw URL via `openExternal` — same behaviour as before this hook existed.
  */
-export function AttachmentDownloadProvider({ attachments, children }: ProviderProps) {
+export function AttachmentDownloadProvider({ attachments, loadAttachments, children }: ProviderProps) {
   const download = useDownloadAttachment();
   const value = useMemo<ResolvedDownload>(
     () => ({
@@ -44,18 +45,24 @@ export function AttachmentDownloadProvider({ attachments, children }: ProviderPr
         if (!url || !attachments?.length) return undefined;
         return attachments.find((a) => a.url === url);
       },
-      openByUrl: (url) => {
-        const att = url && attachments?.length
-          ? attachments.find((a) => a.url === url)
-          : undefined;
+      openByUrl: async (url) => {
+        if (!url) return;
+        let att = attachments?.find((a) => a.url === url);
+        if (!att && loadAttachments) {
+          try {
+            att = (await loadAttachments()).find((a) => a.url === url);
+          } catch {
+            // Unmanaged links remain usable if metadata cannot be loaded.
+          }
+        }
         if (att) {
-          download(att.id);
+          void download(att.id);
           return;
         }
-        if (url) openExternal(url);
+        openExternal(url);
       },
     }),
-    [attachments, download],
+    [attachments, loadAttachments, download],
   );
   return (
     <AttachmentDownloadContext.Provider value={value}>

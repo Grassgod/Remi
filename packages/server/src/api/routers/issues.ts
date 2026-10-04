@@ -1,4 +1,5 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
+import { ISSUE_ACTIVITY_TYPES } from "@multiremi/contracts";
 import { readSessionLogRange } from "../session-log-range.js";
 import type { Context, Hono } from "hono";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
@@ -1702,7 +1703,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
         let progress;
         if (token?.taskId && token.agentId) {
-          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end, token.taskId); }
           catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
         }
         if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
@@ -1760,7 +1761,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
-    if (!store.getIssueSession(sessionId)) {
+    const issueSession = store.getIssueSession(sessionId);
+    if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
+      Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
+        fromInclusive: window.prev_entry_created_at,
+        toExclusive: window.has_more_after ? window.entries.at(-1)?.created_at : null,
+        types: ISSUE_ACTIVITY_TYPES, limit: 200,
+      }));
+    }
+    if (!issueSession) {
       const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
         .map(entry => entry.id);
       const attachments = store.listAttachmentsForChatMessages(messageIds);

@@ -215,10 +215,10 @@ export function resetMultiremiTestEnv(): void {
   if (uploadDir) {
     rmSync(uploadDir, { recursive: true, force: true });
     uploadDir = null;
+    if (previousUploadDir === undefined) delete process.env.MULTIREMI_UPLOAD_DIR;
+    else process.env.MULTIREMI_UPLOAD_DIR = previousUploadDir;
+    previousUploadDir = undefined;
   }
-  if (previousUploadDir === undefined) delete process.env.MULTIREMI_UPLOAD_DIR;
-  else process.env.MULTIREMI_UPLOAD_DIR = previousUploadDir;
-  previousUploadDir = undefined;
   if (previousFetch) {
     globalThis.fetch = previousFetch;
     previousFetch = null;

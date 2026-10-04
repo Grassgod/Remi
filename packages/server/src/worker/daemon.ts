@@ -9,6 +9,7 @@ import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.j
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
+import { multiremiStateDir } from "@shared/home-paths.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport, daemonOutboxHasPriority } from "./report-transport.js";
 import { acquireDaemonTrace, releaseDaemonTrace, daemonTraceStore, type DaemonTraceTransport } from "./trace-transport.js";
@@ -1071,7 +1072,7 @@ export class MultiremiDaemon {
     this.legacyOutboxPath = options.outboxPath
       ?? join(
         process.env.MULTIREMI_OUTBOX_DIR
-          ?? join(process.env.MULTIREMI_STATE_DIR ?? join(homedir(), ".multiremi"), "outbox"),
+          ?? join(multiremiStateDir(), "outbox"),
         `${this.options.provider}-${outboxIdentity}.db`,
       );
     const processOutboxIdentity = createHash("sha256").update([

@@ -17,11 +17,12 @@ export function foldAgentReadState(db: SqlDatabase): void {
         const progress = value as { seq: number; offset: number };
         db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,created_at,updated_at)
           VALUES(?,'agent',?,'',?,?) ON CONFLICT DO NOTHING`, [head.session_id, agentId, at, at]);
-        db.run(`UPDATE multiremi_session_lanes SET
-          cursor_offset=CASE WHEN cursor_seq < ? THEN ? WHEN cursor_seq = ? AND cursor_offset < ? THEN ? ELSE cursor_offset END,
-          cursor_seq=CASE WHEN cursor_seq < ? THEN ? ELSE cursor_seq END
-          WHERE session_id=? AND reader_type='agent' AND reader_id=?`,
-          [progress.seq, progress.offset ?? 0, progress.seq, progress.offset ?? 0, progress.offset ?? 0, progress.seq, progress.seq, head.session_id, agentId]);
+        // The old lane cursor is a provider checkpoint, copied separately by
+        // the preceding migration. Preserve the actual read position exactly.
+        // A global historical read receipt belongs only to the default scope.
+        db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?
+          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,
+          [progress.seq, progress.offset ?? 0, head.session_id, agentId]);
       }
     }
     db.run("UPDATE multiremi_turns SET trigger_message_id=trigger_comment_id WHERE trigger_comment_id IS NOT NULL");

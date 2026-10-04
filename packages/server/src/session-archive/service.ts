@@ -21,6 +21,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
+import { assertNotHomeDefaultInTest } from "@shared/home-paths.js";
 import {
   basename,
   dirname,
@@ -142,9 +143,13 @@ function parseByteLimit(value: string | undefined, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-export function sessionArchiveStorageConfigFromEnv(): SessionArchiveStorageConfig {
+export function sessionArchiveStorageConfigFromEnv(explicitRoot?: string): SessionArchiveStorageConfig {
+  const configuredRoot = explicitRoot ?? (process.env.MULTIREMI_SESSION_ARCHIVE_ROOT?.trim() || undefined);
+  if (configuredRoot == null) {
+    assertNotHomeDefaultInTest("MULTIREMI_SESSION_ARCHIVE_ROOT", "pass the archive root");
+  }
   return {
-    root: resolve(process.env.MULTIREMI_SESSION_ARCHIVE_ROOT?.trim() || DEFAULT_ROOT),
+    root: resolve(configuredRoot ?? DEFAULT_ROOT),
     maxBytes: parseByteLimit(process.env.MULTIREMI_SESSION_ARCHIVE_MAX_BYTES, DEFAULT_MAX_BYTES),
     minFreeBytes: parseByteLimit(
       process.env.MULTIREMI_SESSION_ARCHIVE_MIN_FREE_BYTES,
@@ -319,7 +324,7 @@ export class SessionArchiveService {
     private readonly store: MultiremiStore,
     config: Partial<SessionArchiveStorageConfig> = {},
   ) {
-    this.config = { ...sessionArchiveStorageConfigFromEnv(), ...config };
+    this.config = { ...sessionArchiveStorageConfigFromEnv(config.root), ...config };
   }
 
   rootHint(): string {

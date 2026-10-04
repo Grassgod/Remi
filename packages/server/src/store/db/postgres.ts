@@ -57,7 +57,10 @@ export interface SqlDatabase {
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
-  transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  transaction<T>(fn: (...args: any[]) => T): ((...args: any[]) => T) & {
+    /** SQLite read snapshots can opt out of the default immediate writer lock. */
+    deferred?: (...args: any[]) => T;
+  };
   /** Isolate an optional operation inside the current transaction without owning a new transaction. */
   savepoint?<T>(fn: () => T): T;
   /**

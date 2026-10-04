@@ -121,6 +121,7 @@ export class InboxOperations {
   }
   listTurnAttempts(id:string):MultiremiTurnAttempt[]{
     return this.ctx.db.query('SELECT * FROM multiremi_turn_attempts WHERE turn_id=? ORDER BY attempt_no').all(id).map(row=>({...row,
+      event_count:row.event_count==null?null:Number(row.event_count),tool_call_count:row.tool_call_count==null?null:Number(row.tool_call_count),
       usage:JSON.parse(row.usage??'[]'),plugin_snapshot:JSON.parse(row.plugin_snapshot??'[]'),fallback_switched:!!row.fallback_switched,
       projection_truncated:!!row.projection_truncated,codex_profile:row.codex_profile?JSON.parse(row.codex_profile):null,
       claude_profile:row.claude_profile?JSON.parse(row.claude_profile):null,type_histogram:row.type_histogram?JSON.parse(row.type_histogram):null,

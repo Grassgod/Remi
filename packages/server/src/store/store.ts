@@ -4107,6 +4107,10 @@ runMigrations(this.db);
     return this.issues.listIssueActivity(issueId);
   }
 
+  listIssueActivityBetween(...args: Parameters<IssuesRepo["listIssueActivityBetween"]>) {
+    return this.issues.listIssueActivityBetween(...args);
+  }
+
   recordIssueDispatchSkipped(issueId: string, input: {
     reason: string;
     error?: string | null;
@@ -4588,8 +4592,8 @@ runMigrations(this.db);
     return this.conversationLog.getHead(sessionId, query);
   }
 
-  getSessionAgentReadProgress(sessionId: string, agentId: string) {
-    return this.conversationLog.getSessionAgentReadProgress(sessionId, agentId);
+  getSessionAgentReadProgress(sessionId: string, agentId: string, attemptId?: string) {
+    return this.conversationLog.getSessionAgentReadProgress(sessionId, agentId, attemptId);
   }
 
   recordSessionAgentRangeRead(...args: Parameters<ConversationLogRepo["recordSessionAgentRangeRead"]>) {
