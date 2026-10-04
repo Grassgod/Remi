@@ -384,12 +384,11 @@ describe("task-level agent delegation return", () => {
       .toMatchObject({ reason: "unlinked_agent_comment", agentId: qa.id });
   });
 
-  it("derives direct-task delegation lineage only from a qualifying task credential", async () => {
+  it("derives direct-task delegation lineage from the task credential even without a squad", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
-    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
-    const issue = store.createIssue({ title: "Direct delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = store.createIssue({ title: "Direct delegation" });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -431,7 +430,7 @@ describe("task-level agent delegation return", () => {
     expect(delegated.delegationId).not.toBe("dlg_forged");
   });
 
-  it("does not mislabel an ordinary task-token task creation as a skipped return", async () => {
+  it("delegates an ordinary task-token dispatch to an agent outside the squad", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
@@ -448,14 +447,16 @@ describe("task-level agent delegation return", () => {
     });
     expect(response.status).toBe(201);
     const taskId = ((await response.json()) as { task: { id: string } }).task.id;
-    expect(store.getTask(taskId)).toMatchObject({ delegationId: null, delegatedByAgentId: null });
+    expect(store.getTask(taskId)).toMatchObject({ delegatedByAgentId: leader.id,
+      delegatedFromIssueSessionId: leaderTask.issueSessionId });
+    expect(store.getTask(taskId)!.delegationId).toBeTruthy();
     expect(store.listIssueActivity(issue.id)
       .some((activity) => activity.type === "delegation_return_skipped"
         && (activity.data as Record<string, unknown>).taskId === taskId))
       .toBeFalse();
   });
 
-  it("lets only the assigned squad leader richly mention a squad teammate", () => {
+  it("lets a task-linked agent richly mention agents inside and outside the squad", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
@@ -476,10 +477,9 @@ describe("task-level agent delegation return", () => {
       taskId: leaderTask.id,
       body: `Please help [@Outsider](mention://agent/${outsider.id})`,
     });
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
-    expect(store.listIssueActivity(issue.id)
-      .find((activity) => activity.type === "comment_mention_skipped")?.data)
-      .toMatchObject({ reason: "unsupported_direction", agentId: outsider.id });
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(2);
+    expect(store.listTasksForIssue(issue.id).find(task => task.agentId === outsider.id))
+      .toMatchObject({ delegatedByAgentId: leader.id, delegatedFromIssueSessionId: leaderTask.issueSessionId });
 
     store.createIssueComment(issue.id, {
       authorType: "agent",
@@ -489,7 +489,7 @@ describe("task-level agent delegation return", () => {
     });
 
     const tasks = store.listTasksForIssue(issue.id);
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(3);
     const delegated = tasks.find((task) => task.agentId === qa.id)!;
     expect(delegated).toMatchObject({ agentId: qa.id, delegatedByAgentId: leader.id });
     expect(delegated.delegationId).toBeTruthy();

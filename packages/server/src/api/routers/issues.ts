@@ -89,6 +89,7 @@ import {
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
+import { DelegationRoundTripLimitError } from "@multiremi/store/repos/tasks-repo.js";
 import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
@@ -1186,6 +1187,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       dependencyForce: human
         ? { source: "rerun", actorMemberId: human.memberId }
         : undefined,
+      authorAgentId: currentTaskAccessToken(c)?.agentId ?? null,
     });
     if ("error" in result) {
       // MUL-400 E3: the task-creation gate reports the same 409 code as the
@@ -1969,6 +1971,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {
+      if (error instanceof DelegationRoundTripLimitError) {
+        store.recordDelegationRoundTripLimited(error);
+        return c.json({ error: error.message, code: error.code }, 409);
+      }
       const dependencyResponse = issueDependencyErrorResponse(c, error);
       if (dependencyResponse) return dependencyResponse;
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);

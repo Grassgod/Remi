@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted (MUL-400 S1b, child issue MUL-456). Ships stacked on S2
+Accepted (MUL-400 S1b, child issue MUL-456). Decision 1 is superseded by
+[ADR 0014](0014-every-agent-dispatch-is-a-delegation.md); decision 2's dispatch
+skip reasons are revised there. Decision 7's report body and result-comment
+contract is superseded by [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md).
+Ships stacked on S2
 (`docs/adr/0004-issue-dependency-semantics.md`), which ships on S1
 (`docs/adr/0003-parent-status-derived-from-children.md`).
 

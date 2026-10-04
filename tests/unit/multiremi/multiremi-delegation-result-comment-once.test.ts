@@ -487,12 +487,17 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     }, 201);
     const manual = store.getTask(manualResponse.task.id)!;
     expect(manual.parentTaskId).toBe(childTask.id);
-    expect(manual.delegationSkipReason).toBe("source_not_squad_leader");
+    expect(manual.delegationSkipReason).toBeNull();
+    expect(manual.delegationId).toBeTruthy();
+    expect(manual.delegatedByAgentId).toBe(f.worker.id);
+    expect(manual.delegatedFromIssueSessionId).toBe(childTask.issueSessionId);
 
     const selects = countResultCommentSelectsForTask(store, childTask.id);
     await reportThroughDaemon(store, credentials.daemon, childTask.id, "complete",
       { output: "Automatic result comment C" });
-    expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manual.id);
+    const firstReturn = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+    expect(firstReturn.id).not.toBe(manual.id);
+    expect(firstReturn.delegatedByAgentId).toBe(f.leader.id);
     const bridge = () => store.listSessionEvents(f.leaderSession.id)
       .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
     const bridgeBeforeCancel = JSON.stringify(bridge());
@@ -502,8 +507,9 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     expect(selects.count()).toBe(1);
     expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
 
-    await requestJson(base, `/api/tasks/${manual.id}/cancel`, credentials.member);
+    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+    expect(replacement.id).not.toBe(firstReturn.id);
     expect(replacement.id).not.toBe(manual.id);
     expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${resultCommentId}`);
     if (inRunCommentId) expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`结论评论：${automaticComment.id}`);
@@ -513,7 +519,7 @@ async function runSkippedManualWakeCancellationSnapshotCase(
       activity.type === "delegation_return_skipped"
       && (activity.data as Record<string, unknown>).sourceTaskId === manual.id
       && (activity.data as Record<string, unknown>).reason === "source_not_squad_leader"
-    )).toBe(true);
+    )).toBe(false);
   });
 }
 

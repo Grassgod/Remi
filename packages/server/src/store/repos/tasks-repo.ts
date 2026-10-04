@@ -547,8 +547,51 @@ type DelegationSkipReason =
   | "no_lineage" | "delegator_unavailable" | "already_covered"
   | "coalesced_into_pending_return" | "covered_by_queued_task" | "deferred_lane_busy"
   | "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
-  | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch"
+  | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | "target_not_issue_task"
   | "covered_by_delegate_wakeup" | "delegator_issue_closed" | "delegator_session_missing";
+
+export function pairRoundTripLimit(): number {
+  const value = Number(process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT);
+  return Number.isSafeInteger(value) && value > 0 ? value : 5;
+}
+
+/** Count the existing alternating pair segment, including delegated return turns. */
+export function countDelegationPairHops(
+  source: MultiremiTask,
+  targetAgentId: string,
+  getParent: (id: string) => MultiremiTask | null,
+  lastMemberMessageAt: string | null,
+  maxHops: number,
+): number {
+  let task: MultiremiTask | null = source;
+  let expectedAgentId = source.agentId;
+  let hops = 0;
+  const seen = new Set<string>();
+  while (task && hops < maxHops) {
+    if (seen.has(task.id) || task.workspaceId !== source.workspaceId
+      || task.agentId !== expectedAgentId || !task.delegationId || !task.delegatedByAgentId
+      || (lastMemberMessageAt !== null && task.createdAt <= lastMemberMessageAt)) break;
+    seen.add(task.id);
+    hops += 1;
+    expectedAgentId = expectedAgentId === source.agentId ? targetAgentId : source.agentId;
+    task = task.parentTaskId ? getParent(task.parentTaskId) : null;
+  }
+  return hops;
+}
+
+export class DelegationRoundTripLimitError extends Error {
+  readonly code = "pair_round_trip_limit";
+  constructor(
+    readonly sourceTask: MultiremiTask,
+    readonly targetAgentId: string,
+    readonly targetIssueId: string,
+    readonly hops: number,
+    readonly limit: number,
+  ) {
+    super(`Agent pair round-trip limit (${limit}) reached; wait for human intervention`);
+    this.name = "DelegationRoundTripLimitError";
+  }
+}
 
 interface DelegationReturnDrainResult {
   createdTasks: MultiremiTask[];
@@ -1049,6 +1092,51 @@ function fallbackSwitchPlan(parent: MultiremiTask, agent: MultiremiAgent | null,
 export class TasksRepo {
   private readonly acceptedOfferLeases = new Set<string>();
   constructor(private ctx: StoreContext) {}
+
+  countDelegationPairHops(source: MultiremiTask, targetAgentId: string, limit = pairRoundTripLimit()): number {
+    const lastMember = this.ctx.db.query(`SELECT MAX(created_at) AS created_at
+      FROM multiremi_conversation_log WHERE session_id = ? AND author_type = 'member'`)
+      .get(source.issueSessionId) as { created_at: string | null };
+    return countDelegationPairHops(source, targetAgentId, (id) => this.getTask(id), lastMember.created_at, 2 * limit);
+  }
+
+  recordDelegationRoundTripLimited(error: DelegationRoundTripLimitError): void {
+    const events = createCommitEventQueue();
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(error.sourceTask.workspaceId);
+      this.recordDelegationRoundTripLimitedWithinTransaction(error, [], events);
+    })();
+    this.ctx.emitCommitEvents(events);
+  }
+
+  recordDelegationRoundTripLimitedWithinTransaction(
+    error: DelegationRoundTripLimitError,
+    collector: ChildStatusChangeCollector,
+    events: CommitEventQueue,
+  ): void {
+    const source = error.sourceTask;
+    const sourceAgent = this.ctx.agents().getAgent(source.agentId);
+    const targetAgent = this.ctx.agents().getAgent(error.targetAgentId);
+    const dedupeKey = `pair_round_trip_limit:${source.id}:${error.targetAgentId}`;
+    const delivery = this.ctx.inbox().sendEnvelopeWithinTransaction({
+      to: { role: "agent", issueSessionId: source.issueSessionId!, agentId: source.agentId },
+      kind: "lifecycle", wake: "inbox_only", dedupeKey,
+      body: `${sourceAgent?.name ?? source.agentId} 与 ${targetAgent?.name ?? error.targetAgentId} 的自动来回已达 ${error.limit} 次上限（MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT），已停止自动叫醒，等人介入。来源任务：${source.id}；已有跳数：${error.hops}。`,
+      source: { issueId: source.issueId!, taskId: source.id },
+    }, collector, events)[0];
+    if (!delivery || delivery.deduplicated) return;
+    for (const issueId of new Set([source.issueId!, error.targetIssueId])) {
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "system", actorId: null, type: "delegation_round_trip_limited",
+        body: error.message,
+        data: { reason: error.code, sourceTaskId: source.id, sourceAgentId: source.agentId,
+          sourceAgentName: sourceAgent?.name ?? source.agentId, targetAgentId: error.targetAgentId,
+          targetAgentName: targetAgent?.name ?? error.targetAgentId, sourceIssueId: source.issueId,
+          sourceIssueSessionId: source.issueSessionId, targetIssueId: error.targetIssueId,
+          hops: error.hops, limit: error.limit, dedupeKey },
+      }, events);
+    }
+  }
 
   recordTaskOffered(taskId: string, runtimeId: string, at = nowIso()): boolean {
     return Boolean(this.ctx.db.query(
@@ -7000,6 +7088,7 @@ function delegationTerminalReportSection(report: DelegationTerminalReport, comme
         ? `${report.sourceAgentName} could not complete a task you delegated.`
         : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
     `Status: ${report.terminalStatus}`,
+    ...(report.crossIssue ? [`Issue: ${report.sourceIssueKey} (${report.source.issueId})`] : []),
     report.resultCommentId
       ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
       : `结论评论：无；结果见 remi task get ${report.source.id}`,

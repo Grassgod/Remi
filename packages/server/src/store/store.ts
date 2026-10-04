@@ -4699,14 +4699,20 @@ runMigrations(this.db);
     return this.tasks.listTasksForIssue(issueId);
   }
 
-  isSquadLeaderDelegation(input: {
-    issue: MultiremiIssue;
-    sourceTask: MultiremiTask | null;
-    authorAgentId: string | null;
-    targetAgentId: string;
-    issueSessionId: string | null;
-  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision {
-    return this.issues.isSquadLeaderDelegation(input);
+  resolveAgentDelegation(input: Parameters<IssuesRepo["resolveAgentDelegation"]>[0]): import("./repos/issues-repo.js").AgentDelegationDecision {
+    return this.issues.resolveAgentDelegation(input);
+  }
+
+  countDelegationPairHops(...args: Parameters<TasksRepo["countDelegationPairHops"]>): number {
+    return this.tasks.countDelegationPairHops(...args);
+  }
+
+  recordDelegationRoundTripLimited(...args: Parameters<TasksRepo["recordDelegationRoundTripLimited"]>): void {
+    this.tasks.recordDelegationRoundTripLimited(...args);
+  }
+
+  recordDelegationRoundTripLimitedWithinTransaction(...args: Parameters<TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"]>): void {
+    this.tasks.recordDelegationRoundTripLimitedWithinTransaction(...args);
   }
 
   getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
