@@ -311,7 +311,7 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
     expect(backlinkIds(await tolerated.json())).toEqual(docs.slice(1).map((doc) => doc.id).filter((id) => id !== skipped.id).sort());
   });
 
-  it("answers a hung legacy list shim with 504 inside the budget and one timeout line", async () => {
+  it("serves metadata to Bun clients without reading a hung OpenViking body", async () => {
     const { openviking, docs, request, budgets } = await setup({ pages: 3 });
     openviking.hang = ({ op }) => op === "GET /api/v1/content/read";
     const started = Date.now();
@@ -319,23 +319,19 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
       headers: { "User-Agent": "Bun/1.3.14" },
     }));
     expect(Date.now() - started).toBeLessThan(TEST_BUDGET_MS + 500);
-    expect(response.status).toBe(504);
-    expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "DEADLINE_EXCEEDED" });
-    expect(openviking.reads()).toBe(3);
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({
-      event: "openviking_request_timeout",
-      method: "GET",
-      route: "/api/workspaces/:id/repos/:repositoryId/wiki",
-      code: "DEADLINE_EXCEEDED",
-      operation: "GET /api/v1/content/read",
-    });
-    expect(budgets).toEqual([undefined]);
+    expect(response.status).toBe(200);
+    const metadata = (await response.json() as any).docs;
+    expect(metadata.map((doc: any) => doc.id)).toEqual(docs.map(doc => doc.id));
+    for (const doc of metadata) expect(doc).not.toHaveProperty("body");
+    expect(openviking.reads()).toBe(0);
+    expect(lines).toEqual([]);
+    expect(budgets).toEqual([]);
 
     openviking.hang = () => false;
     const healthy = await request(WIKI_ROOT, { headers: { "User-Agent": "Bun/1.3.14" } });
     expect(healthy.status).toBe(200);
-    expect((await healthy.json() as any).docs.map((doc: any) => doc.body)).toEqual(docs.map((_, index) => `Body ${index}`));
+    expect((await healthy.json() as any).docs).toEqual(metadata);
+    expect(openviking.reads()).toBe(0);
   });
 
   it("sizes the backlinks hydration bound to finish the largest repository inside the budget", async () => {

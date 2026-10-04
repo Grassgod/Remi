@@ -576,19 +576,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       if (query && (includeBody || ids)) {
         return c.json({ error: "q cannot be combined with include_body or ids" }, 400);
       }
-      // Transitional shim for daemons predating the metadata contract; see
-      // docs/adr/0002-repository-wiki-list-without-bodies.md. The old CLI
-      // cannot announce its own version, so the Bun runtime UA is the only
-      // mark that separates it from a browser or from the new CLI.
-      //
-      // Only the default list shape is served this way. A request that carries
-      // the new bounded contract (`include_body` / `ids`) is answered strictly
-      // even under `always`: a tolerant legacy reply would hand an upgraded CLI
-      // an unreadable page as `body: ""` and let it merge against nothing.
-      if (!query && !includeBody && !ids && repositoryWikiLegacyListEnabled(c)) {
-        const docs = await deps.repositoryWiki.withRequestDeadline().list(workspaceId, repositoryId);
-        return c.json({ docs: docs.map((doc) => repositoryWikiDocResponse(doc, true)) });
-      }
       if (query) {
         const docs = await deps.repositoryWiki.withRequestDeadline()
           .search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20));
@@ -1667,19 +1654,6 @@ function botMenuError(c: Context, error: unknown): Response {
   }
   const message = error instanceof Error ? error.message : "bot menu operation failed";
   return c.json({ error: message }, 400);
-}
-
-/**
- * Selects the transitional legacy response for the repository Wiki list.
- * `auto` (default) serves the pre-ADR-0002 full-body response to requests whose
- * User-Agent identifies a Bun runtime, i.e. a daemon CLI that predates the
- * metadata contract. `always` / `never` override the sniff without a redeploy.
- */
-function repositoryWikiLegacyListEnabled(c: Context): boolean {
-  const mode = (process.env.MULTIREMI_REPOSITORY_WIKI_LEGACY_LIST ?? "auto").trim().toLowerCase();
-  if (mode === "always") return true;
-  if (mode === "never") return false;
-  return (c.req.header("user-agent") ?? "").trim().startsWith("Bun/");
 }
 
 function readRepositoryWikiIncludeBody(c: Context): boolean {
