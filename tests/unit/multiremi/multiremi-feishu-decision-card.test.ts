@@ -5,6 +5,7 @@
  * reach another daemon's request, the downgrade path for older hosts, the text
  * degradation, reminder dedupe, and the terminal in-place rewrite.
  */
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { receiveNormalizedRuntimeInputs, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { bindReportFrames } from "../../fixtures/report-session.js";
@@ -2053,6 +2054,7 @@ function outboundHost(handle: FeishuChannelHandle, daemon: MultiremiDaemon) {
  */
 function outboundDaemon(store: MultiremiStore, client?: MultiremiDaemonClient): MultiremiDaemon {
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: "http://local",
     token: "shared-by-fixture",
     provider: "codex",

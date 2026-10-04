@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -21,6 +22,7 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
   const server = startMultiremiServer({ store, scheduler: null, authToken: "profile-test-master", hostname: "127.0.0.1", port: 0 });
   const observations: { url: unknown; model: unknown; key: string | undefined; home: string }[] = [];
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: `http://127.0.0.1:${server.port}`, token: daemonToken.token, daemonId: "profile-daemon", runtimeName: "Profile daemon", provider: "codex", workspaceId: "local",
     daemonPort: 0, pollIntervalMs: 20, gcEnabled: false, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"), inProcessRuntimeModelDiscoveryEnabled: true,
     providerFactory: options => ({

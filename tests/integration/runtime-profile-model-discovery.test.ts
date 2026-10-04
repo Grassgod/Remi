@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -51,6 +52,7 @@ for (const provider of ["codex", "claude"] as const) {
     store.updateRuntimeModels = (...args) => { reports++; return updateModels(...args); };
     const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token, daemonId: "catalog-daemon", runtimeId: runtime.id,
       runtimeName: "Catalog", provider, workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
       protocolClientOptions: { clock: protocolClock },

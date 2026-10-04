@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { describe, expect, it } from "bun:test";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
@@ -21,6 +22,7 @@ const bundled: AcpModelCapability = {
 function fixture(catalogState: CodexModelCatalogState, discover: () => Promise<AcpModelCapability[]>) {
   let closed = 0;
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: "http://127.0.0.1:1", token: "fixture-token", runtimeId: "fixture-runtime",
     provider: "codex", daemonId: "fixture-daemon", workspaceId: "local", gcEnabled: false,
     inProcessRuntimeModelDiscoveryEnabled: true,
