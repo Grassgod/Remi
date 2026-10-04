@@ -541,10 +541,10 @@ is a report, and decisions use `--kind decision --option ...`; an answer uses
 execution evidence. Session result publishing and project knowledge commands retain
 their separate responsibilities.
 
-`scripts/migrations/rewrite-retired-cli-commands.ts --dry-run` reports platform
-instruction changes. Execute only after reviewing its entity / field / original /
-replacement output; optimistic locking protects concurrent edits and successful
-writes record an activity. This operator script never runs at startup.
+- `remi comment list|add`
+- `remi session result publish`
+- `remi session log get <session> <seq|entry-id>` reads one complete entry. `remi session log get <session> --from X --to Y` reads the complete unread range `X < seq ≤ Y`, automatically follows pages and rejoins long bodies; task credentials omit the requesting agent's own history. These use the existing log-entry endpoint. `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
+- `remi memory search|get|create|update`
 
 ## Retired in the unified model release (MUL-493)
 

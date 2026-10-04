@@ -138,7 +138,7 @@ export class PlatformMaintenanceRepo {
         daemonId: row.daemon_id ? String(row.daemon_id) : null,
       }));
     const activeRow = this.db.query(
-      `SELECT COUNT(*) AS n FROM multiremi_tasks
+      `SELECT COUNT(*) AS n FROM multiremi_turn_execution_records
        WHERE status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
     ).get() as { n?: number } | null;
     const activeTasks = Number(activeRow?.n ?? 0);

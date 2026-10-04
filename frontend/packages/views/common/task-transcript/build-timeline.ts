@@ -180,7 +180,8 @@ export function isStepRunning(status?: string): boolean {
 }
 
 function canMergeStreamingText(prev: TimelineItem, next: TimelineItem): boolean {
-  return (prev.type === "thinking" || prev.type === "text") && prev.type === next.type;
+  return (prev.type === "thinking" || prev.type === "text") && prev.type === next.type
+    && prev.meta?.parent_tool_call_id === next.meta?.parent_tool_call_id;
 }
 
 /** Merge adjacent text/thinking fragments that were split only by daemon flush timing. */
@@ -221,6 +222,31 @@ function redactTimelineItems(items: TimelineItem[]): TimelineItem[] {
 }
 
 const USAGE_TYPES = new Set(["usage"]);
+
+/** Current context occupancy, separate from the task's input/output token totals. */
+export interface ContextUsage {
+  used: number;
+  size?: number;
+}
+
+/** Latest context snapshot by trace sequence, including legacy JSON-in-content events. */
+export function extractContextUsage(events: readonly TraceEvent[]): ContextUsage | null {
+  let last: TraceEvent | undefined;
+  for (const event of events) {
+    if (USAGE_TYPES.has(event.type) && (!last || event.seq > last.seq)) last = event;
+  }
+  if (!last) return null;
+  const src = last.meta ?? parseUsageContent(last.content ?? undefined);
+  if (!src) return null;
+  const nested = src.usage;
+  const usage = nested && typeof nested === "object" ? nested as Record<string, unknown> : src;
+  const { used, size } = usage;
+  if (typeof used !== "number" || !Number.isFinite(used) || used < 0) return null;
+  return {
+    used,
+    ...(typeof size === "number" && Number.isFinite(size) && size > 0 ? { size } : {}),
+  };
+}
 
 /**
  * Last usage snapshot (not a sum — ACP usage_update reports the current total,
@@ -267,33 +293,31 @@ function parseUsageContent(content?: string): Record<string, unknown> | null {
   }
 }
 
-/**
- * Build a chronologically ordered timeline from raw task messages. `usage`
- * rows are dropped here — they carry no per-event display value and drove the
- * "(empty)" rows; the header shows the rolled-up totals instead.
- */
+function finalizeTimeline(items: TimelineItem[]): TimelineItem[] {
+  // Filter before merging: context snapshots between flushes are not prose
+  // boundaries. Redact after merging so split credentials cannot escape.
+  const visible = items.filter((item) => !["usage", "execution"].includes(item.type));
+  return redactTimelineItems(coalesceTimelineItems(visible));
+}
+
+/** Build a display timeline; metadata rows belong in the header, not the event list. */
 export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
-  const items: TimelineItem[] = [];
-  for (const msg of msgs) {
-    if (USAGE_TYPES.has(msg.type) || msg.type === "execution") continue;
-    items.push({
-      seq: msg.seq,
-      type: msg.type as TimelineItem["type"],
-      tool: msg.tool,
-      content: msg.content,
-      input: msg.input,
-      output: msg.output,
-      createdAt: msg.created_at,
-      toolCallId: msg.tool_call_id,
-      status: msg.status,
-      meta: msg.meta,
-    });
-  }
-  return redactTimelineItems(coalesceTimelineItems(items));
+  return finalizeTimeline(msgs.map((msg) => ({
+    seq: msg.seq,
+    type: msg.type as TimelineItem["type"],
+    tool: msg.tool,
+    content: msg.content,
+    input: msg.input,
+    output: msg.output,
+    createdAt: msg.created_at,
+    toolCallId: msg.tool_call_id,
+    status: msg.status,
+    meta: msg.meta,
+  })));
 }
 
 export function buildTraceTimeline(events: readonly TraceEvent[]): TimelineItem[] {
-  return redactTimelineItems(events.map((event) => ({
+  return finalizeTimeline(events.map((event) => ({
     seq: event.seq,
     type: event.type as TimelineItem["type"],
     tool: event.tool ?? undefined,
@@ -304,5 +328,5 @@ export function buildTraceTimeline(events: readonly TraceEvent[]): TimelineItem[
     toolCallId: event.tool_call_id ?? undefined,
     status: event.status ?? undefined,
     meta: event.meta ?? undefined,
-  })).sort((a, b) => a.seq - b.seq));
+  })));
 }

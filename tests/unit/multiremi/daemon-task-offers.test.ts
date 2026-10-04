@@ -43,11 +43,64 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
     await send("res", { ok: true }, { re: String(frame.seq), ack: frame.seq });
     await layer.drain();
   };
-  return { store, runtimeIds, clock, layer, offers, session, send, hello, task, offered, frames, accept,
+  return { store, runtimeIds, agentIds, clock, layer, offers, session, send, hello, task, offered, frames, accept,
     setSendStatus: (value: number | null) => { sendStatus = value; } };
 }
 
 describe("A-3 task offers", () => {
+  it("dispatches irreducible structure that exceeds the soft budget but fits the actual protocol hard limit", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, repos: new Array(300_000).fill(0) }));
+    const task = h.task(); await h.hello();
+    expect(h.offered()[0]!.p.id).toBe(task.id);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeGreaterThan(512 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(1_048_576);
+    expect(h.store.getTask(task.id)).toMatchObject({ status: "dispatched", failureReason: null });
+  });
+
+  it("folds a pathological repository URL and releases the runtime for its next task", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, auth_token: "fixture-capability",
+      agent: { id: task.agentId }, repos: [{ url: task.prompt === "huge" ? "x".repeat(1_100_000) : "https://github.com/example/repo.git" }] }));
+    const huge = h.task(0, "huge"); const next = h.task();
+    await h.hello();
+    expect(h.offered()[0]!.p.id).toBe(huge.id);
+    expect(h.offered()[0]!.p.repos[0].url).toContain("还有");
+    expect(h.offered()[0]!.p.auth_token).toBe("fixture-capability");
+    expect(h.offered()[0]!.p.agent.id).toBe(huge.agentId);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(1_048_576);
+    await h.accept(); h.store.startTask(huge.id); h.store.completeTask(huge.id, { output: "done" });
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered().map(frame => frame.p.id)).toEqual([huge.id, next.id]);
+  });
+
+  it("fails only irreducible structure with size diagnostics and continues the same runtime queue", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt,
+      repos: task.prompt === "structure" ? new Array(600_000).fill(0) : [] }));
+    const issue = h.store.createIssue({ title: "Structural capacity", status: "in_progress" });
+    const huge = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "structure", maxAttempts: 3 });
+    const next = h.task(); await h.hello();
+    expect(h.store.getTask(huge.id)).toMatchObject({ status: "failed", failureReason: "offer_too_large" });
+    expect(h.store.getTask(huge.id)!.error).toContain("parts=repos:");
+    expect(h.store.getIssue(issue.id)!.status).not.toBe("blocked");
+    expect(h.offered().map(frame => frame.p.id)).toEqual([next.id]);
+    await h.accept();
+    h.clock.advance(120_000); h.offers.kick(); await h.layer.drain();
+    expect(h.offered().map(frame => frame.p.id)).toEqual([next.id]);
+    expect(h.store.listTasks().filter(task => task.issueId === issue.id)).toHaveLength(1);
+  });
+
+  it("degrades an oversized offer and dispatches without failing or blocking the Issue", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: "触发".repeat(200_000),
+      issue: { id: task.issueId, description: "description".repeat(100_000) },
+      repository_wiki_contexts: [{ docs: [{ body: "wiki".repeat(200_000) }] }] }));
+    const issue = h.store.createIssue({ title: "Oversized offer" });
+    const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "work" });
+    await h.hello();
+    expect(h.offered()).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    expect(h.offered()[0]!.p.knowledge_warnings.join("\n")).toContain("1 页暂不可用");
+    expect(h.store.getTask(task.id)?.status).toBe("dispatched");
+    expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
+  });
   it("clears only capacity cooldown when the active count changes on heartbeat", async () => {
     const h = fixture(); const task = h.task(); await h.hello();
     const first = h.offered()[0]!;
@@ -274,12 +327,41 @@ describe("A-3 task offers", () => {
     expect(h.store.claimTask(h.runtimeIds[0]!)?.id).toBe(task.id);
   });
 
-  it("fails a >1MiB offer and offers the next task without blocking the runtime", async () => {
+  it("folds a >1MiB request without failing the task", async () => {
     const h = fixture(async task => ({ id: task.id, prompt: task.prompt }));
     const huge = h.task(0, "x".repeat(1_048_576)); const next = h.task(); await h.hello();
-    expect(h.store.getTask(huge.id)?.status).toBe("failed");
-    expect(h.store.getTask(huge.id)?.error).toContain("1 MiB");
-    expect(h.offered()).toHaveLength(1); expect(h.offered()[0]!.p.id).toBe(next.id);
+    expect(h.store.getTask(huge.id)?.status).toBe("dispatched");
+    expect(h.store.getTask(huge.id)?.error).toBeNull();
+    expect(h.offered()).toHaveLength(1);
+    expect(h.offered()[0]!.p.id).toBe(huge.id);
+    expect(h.offered()[0]!.p.prompt).toContain("还有");
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    await h.accept(); h.store.startTask(huge.id); h.store.completeTask(huge.id, { output: "done" });
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered()[1]!.p.id).toBe(next.id);
+  });
+
+  it("dispatches huge agent instructions and then the next task on the same runtime", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, auth_token: "fixture-capability",
+      agent: { id: task.agentId, provider: "claude", instructions: "😀中文\\\n\"".repeat(200_000) } }));
+    const issue = h.store.createIssue({ title: "Irreducible input" });
+    const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "request" });
+    const next = h.task();
+    await h.hello();
+    expect(h.offered()).toHaveLength(1);
+    expect(h.store.getTask(task.id)?.status).toBe("dispatched");
+    expect(h.store.getTask(task.id)?.failureReason).toBeNull();
+    expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
+    const payload = h.offered()[0]!.p;
+    expect(payload.agent.instructions).toContain("还有");
+    expect(payload.agent.instructions).toContain(`remi agent get ${task.agentId}`);
+    const prefixLength = payload.agent.instructions.lastIndexOf("\n只看到了开头");
+    expect(Number(payload.agent.instructions.match(/还有 (\d+) 字/)![1])).toBe("😀中文\\\n\"".repeat(200_000).length - prefixLength);
+    expect(payload.auth_token).toBe("fixture-capability");
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    await h.accept(); h.store.startTask(task.id); h.store.completeTask(task.id, { output: "done" });
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered()[1]!.p.id).toBe(next.id);
   });
 
   it("does not reset an accepted Chat dispatch through the stale workspace recovery path", async () => {

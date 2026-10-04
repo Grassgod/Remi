@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, parseJson, toJson } from "@multiremi/store/helpers.js";
@@ -79,7 +80,7 @@ export class KnowledgeRepo {
     return this.ctx.db.transaction(() => {
       // Serialize with task completion so an outcome cannot arrive after its
       // terminal notifications and silently rewrite another execution's result.
-      this.ctx.db.run("UPDATE multiremi_tasks SET updated_at = updated_at WHERE id = ?", [input.taskId]);
+      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET updated_at = updated_at WHERE id = ?", [input.taskId]);
       const task = this.ctx.tasks().getTask(input.taskId);
       if (!task || task.workspaceId !== input.workspaceId || task.agentId !== input.agentId
         || !["queued", "dispatched", "running"].includes(task.status)) {
@@ -393,7 +394,7 @@ export class KnowledgeRepo {
        ORDER BY created_at, id`,
     ).all(issue.workspaceId, issue.id) as Row[]).map((row) => String(row.id));
     const tasks = (this.ctx.db.query(
-      `SELECT id, status, result FROM multiremi_tasks
+      `SELECT id, status, result FROM multiremi_turn_execution_records
        WHERE issue_id = ? ORDER BY created_at, id`,
     ).all(issue.id) as Row[]).map((row) => ({
       id: String(row.id),

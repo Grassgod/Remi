@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -224,8 +225,8 @@ describe("daemon Session archive GC orchestration", () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-multi-provider-lifecycle-"));
     roots.push(root);
     const [claude, codex] = instantiateCoResidentWorkerDaemons([
-      { serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
-      { serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
     ]) as unknown as Array<{ issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker }>;
     if (!claude || !codex) throw new Error("Expected both provider daemons");
 
@@ -253,8 +254,8 @@ describe("daemon Session archive GC orchestration", () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-multi-provider-gc-leader-"));
     roots.push(root);
     const daemons = instantiateCoResidentWorkerDaemons([
-      { serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
-      { serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
     ]) as unknown as Array<{ options: { gcEnabled: boolean } }>;
 
     expect(daemons.map((daemon) => daemon.options.gcEnabled)).toEqual([true, false]);
@@ -264,8 +265,8 @@ describe("daemon Session archive GC orchestration", () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-multi-provider-ready-"));
     roots.push(root);
     const daemons = instantiateCoResidentWorkerDaemons([
-      { serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
-      { serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
+      { sshMeshManager: disabledSshMeshRuntime(), serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
     ]) as unknown as Array<{
       onReadyChange(ready: boolean): void;
       supervisorReady(): boolean;

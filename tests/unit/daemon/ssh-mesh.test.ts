@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   MultiremiDaemonSshMeshConfig,
@@ -29,6 +29,7 @@ import {
   type SshMeshCommandRunner,
   type SshMeshLocalIdentity,
 } from "@daemon/ssh-mesh.js";
+import { MultiremiDaemon } from "@multiremi/daemon.js";
 
 const roots: string[] = [];
 const TEST_PUBLIC_KEY = `ssh-ed25519 ${"A".repeat(64)} mesh-test`;
@@ -607,6 +608,34 @@ describe("SSH Mesh file reconciliation", () => {
 });
 
 describe("SSH Mesh helpers", () => {
+  it("rejects the startup home for both default and service-root paths in tests", () => {
+    expectProtectedHomeError(() => defaultSshMeshPaths("ws"));
+    expectProtectedHomeError(() => sshMeshPathsForRoot("ws", tempHome()));
+  });
+
+  it("rejects a symlink alias of the protected home", () => {
+    const alias = join(tempHome(), "home-alias");
+    symlinkSync(homedir(), alias, process.platform === "win32" ? "junction" : "dir");
+    expectProtectedHomeError(() => defaultSshMeshPaths("ws", alias));
+    expectProtectedHomeError(() => sshMeshPathsForRoot("ws", tempHome(), alias));
+  });
+
+  it("constructs a manager with an explicit temporary home without resolving the real home", () => {
+    expect(() => new SshMeshManager({
+      workspaceId: "ws",
+      daemonId: "test",
+      paths: { home: tempHome() },
+      getConfig: async () => enabledConfig(),
+    })).not.toThrow();
+  });
+
+  it("rejects a daemon that forgets to inject its SSH Mesh runtime", () => {
+    expectProtectedHomeError(() => new MultiremiDaemon({
+      serverUrl: "http://127.0.0.1:1",
+      workspacesRoot: tempHome(),
+    }));
+  });
+
   it("discovers standard host public-key files while rejecting unsafe entries", () => {
     const root = tempHome();
     const ecdsaHostKey = `ecdsa-sha2-nistp256 ${"E".repeat(64)}`;
@@ -658,6 +687,17 @@ describe("SSH Mesh helpers", () => {
     expect(classifySshProbeFailure({ exitCode: 255, stdout: "", stderr: "Permission denied (publickey)." }).status).toBe("auth_failed");
   });
 });
+
+function expectProtectedHomeError(operation: () => unknown): void {
+  let error: unknown;
+  try { operation(); } catch (caught) { error = caught; }
+  expect(error).toMatchObject({
+    name: "SshMeshError",
+    code: "ssh_mesh_real_home_in_test",
+    status: "error",
+  });
+  expect((error as Error).message).toContain("sshMeshManager");
+}
 
 function tempHome(): string {
   const root = mkdtempSync(join(tmpdir(), "ssh-mesh-"));

@@ -199,6 +199,7 @@ export interface AgentTaskProjectDoc {
   title: string;
   summary: string | null;
   body: string;
+  content_sha256?: string | null;
   tags: string[];
   pinned: boolean;
   refs?: Array<{ type: string; value: string }>;
@@ -222,6 +223,7 @@ export interface AgentTaskRepositoryWikiDoc {
   title: string;
   summary: string | null;
   body: string;
+  content_sha256?: string | null;
   tags: string[];
   refs?: Array<{ type: string; value: string }>;
   sourceRevision?: string | null;

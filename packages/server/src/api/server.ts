@@ -1159,7 +1159,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
-    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki),
+    prepare: (task, supportsWikiFetch) => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki, supportsWikiFetch),
     onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),

@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
 import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { createId } from "@multiremi/ids.js";
+import { clampEnvelopeBody } from "../envelope-body.js";
 import type { CommitEventQueue, StoreContext } from "@multiremi/store/context.js";
 import { afterCommit } from "@multiremi/store/db/postgres.js";
 import type { ChildStatusChangeCollector, EnsurePendingTurnResult, PendingTurnLane } from "./tasks-repo.js";
@@ -36,7 +37,8 @@ export class InboxRepo {
     const deliveries: EnvelopeDelivery[] = [];
     const sourceComment = env.source.commentId ? this.ctx.issues().getIssueComment(env.source.commentId) : null;
     const sourceTask = env.source.taskId ? this.ctx.tasks().getTask(env.source.taskId) : null;
-    const { body, ...envelope } = env;
+    const { body: rawBody, ...envelope } = env;
+    const body = clampEnvelopeBody(rawBody);
     const envelopeMetadata: EnvelopeMetadata["envelope"] = {
       ...envelope,
       priority: envelopePriority({ ...env, senderType: sourceComment?.authorType,
@@ -48,21 +50,19 @@ export class InboxRepo {
       if (recipient.issueSessionId) {
         this.ctx.issueSessions().getOrCreateSessionAgentLane(sessionId, recipient.agentId, recipient.executionScope);
       }
-      const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
+      const recipientBody = clampEnvelopeBody(env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
         ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
           this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
           recipient.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${recipient.chatSessionId}`,
         ).cursorSeq))
-        : body;
+        : body);
       if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId
         || sourceTask && sourceTask.workspaceId !== recipient.workspaceId) {
         throw new Error("Envelope source belongs to another workspace");
       }
       let stored = entries.get(sessionId);
       if (!stored) {
-        const id = env.dedupeKey !== undefined
-          ? `cmt_env_${createHash("sha256").update(`${sessionId}:${env.dedupeKey}`).digest("hex").slice(0, 20)}`
-          : createId("cmt_env");
+        const id = createId('cmt');
         // Legacy appenders lock the session row before its log head. Keep that
         // order while they coexist with the new writer.
         const sessionTable = recipient.issueSessionId ? "multiremi_issue_sessions" : "multiremi_chat_sessions";
@@ -73,7 +73,8 @@ export class InboxRepo {
           WHERE session_id = ?`, [sessionId]).changes !== 1) {
           throw new Error(`Envelope session head is missing: ${sessionId}`);
         }
-        const previous = this.ctx.conversationLog().getConversationLogEntryById(id);
+        const duplicate=env.dedupeKey===undefined?null:this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?').get(sessionId,env.dedupeKey);
+        const previous = duplicate?this.ctx.conversationLog().getConversationLogEntryById(duplicate.id):null;
         if (previous) {
           if (previous.session_id !== sessionId) throw new Error("Envelope id belongs to another session");
           stored = { entry: previous, deduplicated: true };
@@ -105,9 +106,9 @@ export class InboxRepo {
       if (recipient.issueSessionId && stored.entry.metadata.envelope?.wake === "now") {
         // Persist the addressed lane's discovery hint with the envelope. A
         // deduplicated delivery must never move the hint backwards.
-        this.ctx.db.run(`UPDATE multiremi_session_agent_lanes
+        this.ctx.db.run(`UPDATE multiremi_session_lanes
           SET wake_hint_seq = CASE WHEN wake_hint_seq < ? THEN ? ELSE wake_hint_seq END
-          WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+          WHERE reader_type = 'agent' AND session_id = ? AND reader_id = ? AND execution_scope = ?`,
           [stored.entry.seq, stored.entry.seq, sessionId, recipient.agentId, recipient.executionScope]);
       }
       const lane: PendingTurnLane = recipient.issueSessionId
@@ -150,7 +151,7 @@ export class InboxRepo {
       if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
       if (turn.action === "coalesced" && turn.task!.wakeSource === "re_ring") {
         // Replace the recovery range with the concrete entry that just arrived.
-        this.ctx.db.run("UPDATE multiremi_tasks SET prompt = ? WHERE id = ? AND status = 'queued'", [
+        runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET prompt = ? WHERE id = ? AND status = 'queued'", [
           `读收件箱\n\n${sessionId}:${stored.entry.seq} (${stored.entry.id})`, turn.task!.id,
         ]);
         turn.task = this.ctx.tasks().getTask(turn.task!.id)!;
@@ -197,7 +198,7 @@ export class InboxRepo {
       }
       case "chat": return [this.chatRecipient(address.chatSessionId, address.agentId)];
       case "delegator": {
-        const sourceId = env.source.taskId ?? (this.ctx.db.query(`SELECT id FROM multiremi_tasks
+        const sourceId = env.source.taskId ?? (this.ctx.db.query(`SELECT id FROM multiremi_turn_execution_records
           WHERE delegation_id = ? AND delegated_from_issue_session_id IS NOT NULL
             AND agent_id <> delegated_by_agent_id ORDER BY created_at DESC, id DESC LIMIT 1`)
           .get(address.delegationId) as { id: string } | null)?.id;

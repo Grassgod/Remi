@@ -39,7 +39,7 @@ import {
   insertSyntheticTask,
   truncatedJsonText,
   type SyntheticMessage,
-} from "../../../scripts/lib/task-trace-synthetic.js";
+} from "./trace-backfill-fixtures.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { traceBackfillBackends, type OpenedStore, type StoreBackend } from "./trace-backfill-backends.js";
 
@@ -191,18 +191,18 @@ function task(id: string, extra: Partial<Parameters<typeof insertSyntheticTask>[
  */
 function seedWorld(db: SqlDatabase): void {
   seedBase(db);
-  insertSyntheticChat(db, { id: "chs_bf", agentId: AGENT, createdAt: T0 });
+  insertSyntheticChat(db, { id: "chat_bf", agentId: AGENT, createdAt: T0 });
   insertSyntheticIssue(db, { id: "iss_new", number: 1, createdAt: T0 });
   insertSyntheticIssue(db, { id: "iss_old", number: 2, createdAt: T0 });
   insertSyntheticIssue(db, { id: "iss_gone", number: 3, createdAt: T0, lifecycleState: "deleting" });
 
-  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chs_bf" }));
+  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chat_bf" }));
   insertSyntheticMessages(db, "tsk_chat_a", rows([1, 2, 5]));
-  insertSyntheticTask(db, task("tsk_chat_b", { chatSessionId: "chs_bf" }));
+  insertSyntheticTask(db, task("tsk_chat_b", { chatSessionId: "chat_bf" }));
 
   insertSyntheticTask(db, task("tsk_one", { runtimeId: null, status: "failed", provider: "claude" }));
   insertSyntheticMessages(db, "tsk_one", rows([1, 2, 3], (seq) => (seq === 2 ? { content: BIG_CONTENT } : {})));
-  insertSyntheticTask(db, task("tsk_orphan_chat", { chatSessionId: "chs_missing", status: "cancelled" }));
+  insertSyntheticTask(db, task("tsk_orphan_chat", { chatSessionId: "chat_missing", status: "cancelled" }));
   insertSyntheticMessages(db, "tsk_orphan_chat", rows([2, 4]));
 
   insertSyntheticTask(db, task("tsk_issue_a", { issueId: "iss_new", issueSessionId: "ises_a" }));
@@ -433,7 +433,7 @@ for (const backend of backends) {
         const report = await world.run({
           hooks: { afterStage: (subject) => { staged.push(`${subject.kind}:${subject.id}`); } },
         });
-        expect(staged).toEqual(["chat:chs_bf", "task:tsk_one", "task:tsk_orphan_chat", "issue:iss_new", "issue:iss_old"]);
+        expect(staged).toEqual(["chat:chat_bf", "task:tsk_one", "task:tsk_orphan_chat", "issue:iss_new", "issue:iss_old"]);
         expect(world.logs.filter((line) => line.startsWith("execute:")).map((line) => line.split(":")[1]!.trim()))
           .toEqual([...TRACE_BACKFILL_GROUPS]);
         expect(report.execution!.chat).toMatchObject({
@@ -461,9 +461,9 @@ for (const backend of backends) {
         });
 
         const { store } = world.opened;
-        const [chatArchive] = backfillArchives(world, "chat", "chs_bf");
+        const [chatArchive] = backfillArchives(world, "chat", "chat_bf");
         expect(chatArchive).toMatchObject({
-          status: "ready", subjectKind: "chat", subjectId: "chs_bf", runtimeId: RUNTIME, daemonId: DAEMON,
+          status: "ready", subjectKind: "chat", subjectId: "chat_bf", runtimeId: RUNTIME, daemonId: DAEMON,
           metadata: expect.objectContaining({ kind: "trace_backfill", task_count: 1, none_count: 1, row_count: 3 }),
         });
         expect(backfillArchives(world, "task", "tsk_one")[0]).toMatchObject({ runtimeId: "", daemonId: "" });
@@ -549,7 +549,7 @@ for (const backend of backends) {
           },
         })).rejects.toThrow("simulated crash");
         const { store } = world.opened;
-        expect(store.getTraceBackfillProgress("chat", "chs_bf")).toMatchObject({ status: "done" });
+        expect(store.getTraceBackfillProgress("chat", "chat_bf")).toMatchObject({ status: "done" });
         expect(store.getTraceBackfillProgress("issue", "iss_new")).toMatchObject({ status: "running", archiveId: null });
         expect(store.getTraceBackfillProgress("issue", "iss_old")).toBeNull();
         expect(backfillArchives(world, "issue", "iss_new")).toEqual([]);
@@ -580,7 +580,7 @@ for (const backend of backends) {
         await expect(world.run({
           hooks: {
             afterStage: (subject) => {
-              if (subject.id === "chs_bf") insertSyntheticMessages(world.db, "tsk_one", rows([9]));
+              if (subject.id === "chat_bf") insertSyntheticMessages(world.db, "tsk_one", rows([9]));
             },
           },
         })).rejects.toBeInstanceOf(TraceBackfillSourceChangedError);
@@ -660,7 +660,7 @@ for (const backend of backends) {
           member_unreadable: 0,
           archive_missing: 0,
           progress: 6,
-          turn_card: 0,
+          turn_card: 1,
         });
         expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
           category: "line_digest", task_id: "tsk_chat_a", first_seq: 2,
@@ -671,15 +671,22 @@ for (const backend of backends) {
         expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
           category: "pointer", task_id: "tsk_one", reason: "pointer disagrees with the index entry",
         }));
+        // One-shot attempts now carry the summary too. Deleting its source row
+        // must report the stale card as well as the original archive mismatches.
+        expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
+          category: "turn_card", task_id: "tsk_one", fields: ["event_count", "type_histogram"],
+          expected: expect.objectContaining({ event_count: 2, type_histogram: [{ type: "text", tool: null, count: 2 }] }),
+          actual: expect.objectContaining({ event_count: 3, type_histogram: [{ type: "text", tool: null, count: 3 }] }),
+        }));
       });
     }, TIMEOUT);
 
     it("writes `none` only for tasks that meet all five conditions", async () => {
       const seedNone = (db: SqlDatabase) => {
         seedBase(db);
-        insertSyntheticChat(db, { id: "chs_none", agentId: AGENT, createdAt: T0 });
+        insertSyntheticChat(db, { id: "chat_none", agentId: AGENT, createdAt: T0 });
         const chat = (id: string, extra: Partial<Parameters<typeof insertSyntheticTask>[1]> = {}) =>
-          insertSyntheticTask(db, task(id, { chatSessionId: "chs_none", ...extra }));
+          insertSyntheticTask(db, task(id, { chatSessionId: "chat_none", ...extra }));
         chat("tsk_n_ok");
         chat("tsk_n_daemon");
         insertPointer(db, { taskId: "tsk_n_daemon", location: "daemon", eventCount: 0 });
@@ -691,7 +698,7 @@ for (const backend of backends) {
         chat("tsk_n_late", { endedAt: AFTER_CUTOFF });
         chat("tsk_n_bad_date", { endedAt: "not a date" });
         chat("tsk_n_member");
-        insertDaemonArchive(db, { id: "sar_daemon_chat", kind: "chat", subjectId: "chs_none", traceTaskIds: ["tsk_n_member"] });
+        insertDaemonArchive(db, { id: "sar_daemon_chat", kind: "chat", subjectId: "chat_none", traceTaskIds: ["tsk_n_member"] });
         chat("tsk_n_count");
         insertPointer(db, { taskId: "tsk_n_count", location: "daemon", eventCount: 3 });
         chat("tsk_n_rows");
@@ -787,8 +794,8 @@ for (const backend of backends) {
     it("stops before writing anything when JSON does not parse for an unexplained reason", async () => {
       const seedBad = (db: SqlDatabase) => {
         seedBase(db);
-        insertSyntheticChat(db, { id: "chs_ok", agentId: AGENT, createdAt: T0 });
-        insertSyntheticTask(db, task("tsk_ok", { chatSessionId: "chs_ok" }));
+        insertSyntheticChat(db, { id: "chat_ok", agentId: AGENT, createdAt: T0 });
+        insertSyntheticTask(db, task("tsk_ok", { chatSessionId: "chat_ok" }));
         insertSyntheticMessages(db, "tsk_ok", rows([1]));
         insertSyntheticTask(db, task("tsk_bad"));
         insertSyntheticMessages(db, "tsk_bad", [

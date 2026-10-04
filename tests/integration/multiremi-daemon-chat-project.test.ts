@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -88,6 +89,7 @@ describe("Project-bound Chat daemon startup", () => {
       let cwd = "";
       let envProject: string | undefined;
       const daemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
         daemonId, runtimeId: "rt_chat_project", runtimeName: "Chat Project runtime", provider: "claude", workspaceId: "local",
         once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -191,6 +193,7 @@ describe("Project-bound Chat daemon startup", () => {
     const prompts: string[] = [];
     const cwds: string[] = [];
     const createDaemon = () => new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
       daemonId, runtimeId, runtimeName: "Chat repo runtime", provider: "claude", workspaceId: "local",
       once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -316,6 +319,7 @@ describe("Project-bound Chat daemon startup", () => {
         const runTurn = async (turn: number) => {
           const sent = store.sendChatMessage(chat.id, { body: `Run turn ${turn}.` });
           const daemon = new MultiremiDaemon({
+            sshMeshManager: disabledSshMeshRuntime(),
             serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
             daemonId, runtimeId, runtimeName: "Preserved Chat runtime", provider: "claude", workspaceId: "local",
             once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -448,6 +452,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       expect(host).toBeDefined();
       let observed: { cwd: string; sessionId: string | null; prompt: string } | undefined;
       const daemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`, token: credentials.get(runtimeId)!,
         ...host, runtimeName: host.runtimeId, provider: "claude", workspaceId: "local",
         once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
@@ -563,6 +568,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
           // Every turn starts a new daemon, so successful continuation cannot
           // depend on an in-memory directory or provider-session cache.
           const daemon = new MultiremiDaemon({
+            sshMeshManager: disabledSshMeshRuntime(),
             serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
             daemonId, runtimeId, runtimeName: "Directory transition runtime", provider: "claude", workspaceId: "local",
             once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
@@ -661,11 +667,13 @@ describe("Daemon-only inherited Chat path rejection", () => {
       const server = startMultiremiServer({ store, scheduler: null, authToken: "unsafe-delta-test", hostname: "127.0.0.1", port: 0 });
       const seen: Array<{ cwd: string; sessionId: string | null; prompt: string }> = [];
       let providerCreations = 0;
+      let recoveredReadSeq = 0;
       const realNow = Date.now;
       let clockOffset = 0;
       const clock = spyOn(Date, "now").mockImplementation(() => realNow() + clockOffset);
       const runDaemon = async (run: number, rejectInheritedPath = false) => {
         const daemon = new MultiremiDaemon({
+          sshMeshManager: disabledSshMeshRuntime(),
           serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
           daemonId, runtimeId, runtimeName: "Unsafe delta runtime", provider: "claude", workspaceId: "local",
           once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
@@ -689,6 +697,22 @@ describe("Daemon-only inherited Chat path rejection", () => {
             return {
               async *sendStream(message, sendOptions) {
                 seen.push({ cwd: options.cwd!, sessionId: sendOptions?.sessionId ?? null, prompt: message });
+                if (run === 2) {
+                  const range = message.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+                  expect(range[1]).toBe(chat.id); expect(range[2]).toBe("0");
+                  expect(message).not.toContain("你上次读到");
+                  expect(store.getSessionAgentReadProgress(chat.id, agent.id)).toEqual({ seq: 0, offset: 0 });
+                  const running = store.listTasks().find(task => task.chatSessionId === chat.id && task.status === "running")!;
+                  const access = await store.createTaskAccessToken(running, "local");
+                  const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${chat.id}/log/entry?from=${range[2]}&to=${range[3]}`,
+                    { headers: { Authorization: `Bearer ${access.token}` } });
+                  expect(response.status).toBe(200);
+                  const page = await response.json() as any;
+                  expect(page.next_cursor).toBeNull();
+                  expect(page.entries.map((entry: any) => entry.body_md)).toContain("Earlier managed Chat message.");
+                  recoveredReadSeq = Number(range[3]);
+                  expect(store.getSessionAgentReadProgress(chat.id, agent.id)).toEqual({ seq: recoveredReadSeq, offset: 0 });
+                }
                 yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: run === 0 ? "Earlier managed Chat answer." : "Recovered Chat answer." }] } as any;
               },
               getLastResponse: () => ({ text: run === 0 ? "Earlier managed Chat answer." : "Recovered Chat answer.", sessionId: run === 0 ? "safe-original-provider" : "safe-recovered-provider", requestId: `unsafe-delta-request-${run}` }),
@@ -731,8 +755,8 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(seen[1]).toMatchObject({ cwd: chatPath, sessionId: null });
         expect(seen[1]!.prompt).toStartWith("# Bootstrap Prompt");
         expect(seen[1]!.prompt).toContain(instructions);
-        expect(seen[1]!.prompt).toContain('"body":"Earlier managed Chat message."');
-        expect(seen[1]!.prompt).toContain('"body":"Earlier managed Chat answer."');
+        expect(seen[1]!.prompt).not.toContain('"body":"Earlier managed Chat message."');
+        expect(seen[1]!.prompt).not.toContain('"body":"Earlier managed Chat answer."');
         expect(seen[1]!.prompt).toContain("Recover this conversation safely.");
         expect(directoryContents(userPath)).toEqual(userBefore);
 
@@ -742,6 +766,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(seen).toHaveLength(3);
         expect(seen[2]).toMatchObject({ cwd: chatPath, sessionId: "safe-recovered-provider" });
         expect(seen[2]!.prompt).toStartWith("# Delta Prompt");
+        expect(seen[2]!.prompt).toContain(`remi session log get ${chat.id} --from ${recoveredReadSeq} --to`);
         expect(directoryContents(userPath)).toEqual(userBefore);
         expect(JSON.parse(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
         expect(existsSync(join(userPath, "wiki"))).toBe(false);

@@ -11,11 +11,13 @@ import { systemClock, type DaemonProtocolClock, type DaemonProtocolTimer } from 
 import type { DaemonProtocolLayer } from "./index.js";
 import { DaemonProtocolSession } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
+import { fitTaskOfferToBudget, useTaskSessionInput } from "./offer-budget.js";
 
 export const DAEMON_OFFER_SWEEP_MS = 60_000;
 
 export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTaskWithAgent,
-  project: ProjectKnowledgeServiceContract, repository: RepositoryWikiServiceContract): Promise<Record<string, unknown> | null> {
+  project: ProjectKnowledgeServiceContract, repository: RepositoryWikiServiceContract,
+  supportsWikiFetch = false): Promise<Record<string, unknown> | null> {
   const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
   for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {
     if (!remotes.has(canonicalRepositoryRemote(repo.url))) {
@@ -23,11 +25,13 @@ export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTas
       remotes.add(canonicalRepositoryRemote(repo.url));
     }
   }
-  const hydrated = await hydrateClaimKnowledge(task, project, repository);
+  const hydrated = await hydrateClaimKnowledge(task, project, repository, 5_000,
+    undefined, supportsWikiFetch);
   invalidateRequestReadCache();
   const current = store.getTaskIdentity(task.id);
   if (current?.status !== "dispatched" || current.runtimeId !== task.runtimeId) return null;
   const response = daemonTaskClaimResponse(store, hydrated, store.getTaskTriggerMetadata(task));
+  useTaskSessionInput(store, task, response);
   const runtime = store.getRuntimeLite(task.runtimeId!);
   const token = await store.createTaskAccessToken(task, cleanString(runtime?.ownerId) ?? "local");
   response.auth_token = token.token;
@@ -42,7 +46,8 @@ interface RuntimePump {
   cooldownReason: string | null;
   cooldownTimer: DaemonProtocolTimer | null;
   preparing: string | null;
-  pending: { taskId: string; session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
+  pending: { taskId: string; agentId: string; inlineRead: { sessionId: string; seqs: number[]; toSeq: number; coldStart: boolean } | null;
+    session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
   accepted: Set<string>;
   sweep: boolean;
 }
@@ -59,7 +64,7 @@ export class DaemonTaskOffers {
   constructor(private readonly options: {
     store: MultiremiStore;
     layer: DaemonProtocolLayer;
-    prepare(task: MultiremiTaskWithAgent): Promise<Record<string, unknown> | null>;
+    prepare(task: MultiremiTaskWithAgent, supportsWikiFetch?: boolean): Promise<Record<string, unknown> | null>;
     clock?: DaemonProtocolClock;
     sweepMs?: number;
     onRuntimeReady?(runtimeId: string, activeTaskIds: string[]): void;
@@ -213,17 +218,30 @@ export class DaemonTaskOffers {
     if (!task) return;
     pump.preparing = task.id;
     try {
-      const payload = await this.options.prepare(task);
+      const payload = await this.options.prepare(task, session.supportsWikiFetch);
       invalidateRequestReadCache();
       const current = store.getTaskIdentity(task.id);
       if (!payload || current?.status !== "dispatched" || current.runtimeId !== runtimeId) return;
       if (this.session(runtimeId) !== session) { this.rescind(runtimeId, pump, task.id); return; }
-      const sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: payload }, { pausable: true });
+      const budgeted = fitTaskOfferToBudget(payload, runtimeId, undefined, session.supportsWikiFetch);
+      console.info(JSON.stringify({ event: "daemon_offer_budget", task_id: task.id, runtime_id: runtimeId, ...budgeted.report }));
+      let report = budgeted.report;
+      const failSize = () => {
+        const parts = Object.entries(report.parts).sort((a, b) => b[1] - a[1]);
+        const error = `offer_too_large: bytes=${report.bytes}; parts=${parts.map(([key, size]) => `${key}:${size}`).join(",")}`;
+        store.failTask(task.id, { error, failureReason: "offer_too_large" });
+        pump.dirty = true;
+      };
+      let sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: payload }, { pausable: true });
+      if (!sent.ok && sent.reason === "too_large") {
+        const compact = fitTaskOfferToBudget(payload, runtimeId, 16 * 1024, session.supportsWikiFetch);
+        report = compact.report;
+        console.warn(JSON.stringify({ event: "daemon_offer_transport_capacity", task_id: task.id, ...compact.report }));
+        sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: compact.response }, { pausable: true });
+      }
       if (!sent.ok) {
-        if (sent.reason === "too_large") {
-          store.failTask(task.id, { error: "task.offer exceeds the 1 MiB daemon protocol frame limit" });
-          pump.dirty = true;
-        } else if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
+        if (sent.reason === "too_large") failSize();
+        else if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
         else {
           pump.waiting = true;
           store.requeueTaskOffer(task.id, runtimeId);
@@ -237,7 +255,13 @@ export class DaemonTaskOffers {
       }
       const timer = this.clock.setTimeout(() => this.rescind(runtimeId, pump, task.id), DAEMON_OFFER_TIMEOUT_MS);
       (timer as ReturnType<typeof setTimeout>).unref?.();
-      pump.pending = { taskId: task.id, session, seq: sent.seq, timer };
+      const projection = payload.session_projection as { session_id?: string; to_seq: number; jsonl?: string; mode?: string } | undefined;
+      const inlineRead = projection?.session_id && projection.jsonl ? { sessionId: projection.session_id, toSeq: projection.to_seq,
+        coldStart: projection.mode === "bootstrap",
+        seqs: projection.jsonl.split("\n").filter(Boolean).map(line => JSON.parse(line))
+          .filter(entry => entry.type === "triggering_message" && !entry.body_folded && !entry.body_omitted_chars)
+          .map(entry => Number(entry.seq)) } : null;
+      pump.pending = { taskId: task.id, agentId: task.agentId, inlineRead, session, seq: sent.seq, timer };
     } catch (error) {
       const current = store.getTaskIdentity(task.id);
       if (current?.status === "dispatched" && current.runtimeId === runtimeId) this.rescind(runtimeId, pump, task.id);
@@ -259,6 +283,11 @@ export class DaemonTaskOffers {
       pump.pending = null;
       if (this.options.store.acceptTaskOffer(pending.taskId, runtimeId, new Date(this.clock.now()).toISOString())) {
         pump.accepted.add(pending.taskId);
+        if (pending.inlineRead) {
+          try { this.options.store.recordSessionAgentInlineRead(pending.inlineRead.sessionId, pending.agentId,
+            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart); }
+          catch { console.warn(JSON.stringify({ event: "session_log_read_progress_failed", task_id: pending.taskId })); }
+        }
       }
       this.kick(runtimeId);
       return;
