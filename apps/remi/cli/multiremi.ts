@@ -95,6 +95,7 @@ import {
   shellQuote,
 } from "./multiremi/service.js";
 import { showHelp } from "./multiremi/help.js";
+import { assertNotRetired } from "./core/retired-commands.js";
 import { prepareDaemonEnvironment } from "./multiremi/environment.js";
 import { repo } from "./multiremi/commands/repo.js";
 import { attachment } from "./multiremi/commands/attachment.js";
@@ -133,6 +134,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const SUPERVISOR_INSTANCE_ENV = "MULTIREMI_SUPERVISOR_INSTANCE_ID";
 
 export async function runMultiremi(args: string[], runOptions: RunMultiremiOptions = {}): Promise<void> {
+  assertNotRetired(args);
   const parsed = parseArgs(args);
   setLogLevel(String(parsed.options.logLevel ?? parsed.options["log-level"] ?? process.env.REMI_LOG_LEVEL ?? "INFO"));
   const programName = runOptions.programName ?? "remi multiremi";

@@ -2,6 +2,8 @@
 
 ## Status
 
+被 ADR 0013 修订：消息、收件箱与轮的当前模型取代旧命令和任务入口；下文保留决策史实。
+
 Proposed (MUL-402, message architecture v2-B). Ships in the same release as
 MUL-401 (daemon protocol v2) and MUL-403 (Live Hub and web). The four legacy
 tables are dropped by a separately approved script after the release has run

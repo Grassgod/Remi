@@ -1,16 +1,8 @@
 # CLI command migration
 
-`remi issue decision request <source-issue> --kind <kind> --title <title>
-[--body-stdin] [--option <choice>...]` records a non-blocking decision on the
-source issue's parent (or on the source issue itself when it has no parent).
-The requesting task can end its current round after the command returns. The
-parent owner agent answers with `remi issue decision answer <parent> <decision>
---text <answer> --reason <why> --overturn <how>`, or hands it to a member with
-`remi issue decision escalate <parent> <decision>`. Members can answer or revise
-any decision. `remi issue decision list <parent>` shows the waiting-on-human and
-owner/answered groups; `remi issue decision withdraw <parent> <decision>` removes
-an unanswered request. The answer record ID must be cited as `decision:<id>` in
-subsequent work.
+Communication uses `remi message`, addressed unread messages use `remi inbox`,
+and execution uses `remi turn`. Issue, Chat and Autopilot remain conversation containers.
+A decision is a message with options; its answer is a reply to that message.
 
 This document is the user-facing migration contract for the Registry-based Remi CLI.
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
@@ -139,18 +131,12 @@ the connection's configured model remains the default when no model is selected.
 The canonical tree includes a focused top-level Attachment download command;
 Issue and Comment keep their scoped attachment listing and management commands.
 
-`remi task list` accepts `--limit` and `--offset`. The limit applies to the
-tasks the caller is allowed to see, not to the scanned rows: `GET
-/api/multiremi/tasks` walks candidates in chunks, applies the same per-task
-visibility filter as before, and stops once the page is full. Omitting
-`--limit` returns at most 100 tasks (the server cap is 500) and reports
-`has_more` / `next_offset` for the next page. List entries omit `result`,
-`prompt`, `pluginSnapshot` / `plugin_snapshot`, `executionFingerprint` /
-`execution_fingerprint` and `usage`; `remi task get` and
-`GET /api/multiremi/tasks/:id` still return the full task.
+`remi turn list --limit <n> --cursor <cursor>` lists authorized turns.
+`remi turn get <turn> --input --attempts` reads the input range and attempt history;
+`remi turn trace read <turn> --attempt <attempt>` reads a selected attempt's trace.
 
 Chat Tasks can deliver files to their current conversation with
-`remi chat attachment send --attachment report.html --attachment chart.png`.
+`remi message send --attachment report.html --attachment chart.png`.
 `--content`, `--content-file`, and `--content-stdin` optionally add a caption.
 The server resolves the destination from the Task credential; no Feishu chat ID
 is needed. Each file must be non-empty, at most 20MB, and pass the server's file type allowlist.
@@ -159,7 +145,7 @@ order. A retry keeps later files waiting; a permanent failure marks the remainin
 files failed with the reason. Raster images larger than 10MB use file cards;
 smaller images use inline image messages. SVG files always use file cards.
 The response includes attachment IDs and queued delivery IDs; queueing does not
-mean Feishu has acknowledged delivery. This command requires a Chat Task credential.
+mean Feishu has acknowledged delivery. The current conversation comes from CLI context when no conversation is supplied.
 
 ```text
 remi context
@@ -175,14 +161,14 @@ remi memory
 remi wiki
 
 remi issue
-remi comment
+remi message
 remi session
 remi share
 remi label
 remi attachment download
 
 remi chat
-remi task
+remi turn
 
 remi agent
 remi squad
@@ -282,10 +268,9 @@ worktree HEAD, or null when no common ancestor can be resolved.
 
 Chat management uses `remi chat pin|unpin|archive|restore <chat>`. Archiving stops
 unfinished runs and makes the conversation read-only until restored. While a
-Chat is running, `remi chat queue list|update|remove|clear|prioritize` manages its
-queued follow-ups. `prioritize <chat> <task>` moves the selected message next and
-stops the current run; `update <chat> <task> --content-file <path>` edits only a
-message that has not started. See the [Chat contract](chat.md).
+Chat is running, directed now messages join the running turn. Unread follow-ups
+are listed with `remi message list <chat> --unread-by <agent>` and edited or deleted
+by message ID; order follows seq. See the [Chat contract](chat.md).
 
 The Feishu ingestion domain exposes source administration through
 `remi feishu source list|get|status|add|update` and task-safe processing through
@@ -483,12 +468,9 @@ has not upgraded yet, which is how this incident happened twice. The path is
 therefore removed outright and replaced by the guard above, so an un-upgraded CLI
 is the only way to still reach the old behavior.
 
-The same audit found `remi task steer <task>` (write) sharing a prefix with
-`remi task steer list <task>` (read). A bare steer with no `--content`,
-`--content-file`, `--content-stdin`, or `--force-answer` would POST an empty
-directive that the server rejects with 400; the CLI now fails locally before
-sending anything. A Registry constraint test keeps any command that has
-subcommands read-only, with `task.steer` the only registered exception.
+Running turns receive directed messages through `remi message send`; explicit
+finish requests use `remi turn wrap-up`. Missing send input fails locally before
+capability negotiation or any mutation.
 
 ## Deprecated aliases
 
@@ -500,8 +482,7 @@ do not fail. It must be removed after that compatibility window.
 All aliases below are deprecated since `0.3.0`. They remain executable for at
 least one complete release cycle. Removal requires all supported platform and
 daemon versions to advertise the canonical capability, prompt and skill audits
-to remain clean, and a separately approved release change. This branch does not
-remove any alias.
+to remain clean, and a separately approved release change. Commands explicitly retired below have no executable alias.
 
 | Deprecated command | Canonical replacement | Lifecycle |
 | --- | --- | --- |
@@ -519,12 +500,6 @@ remove any alias.
 | `remi project knowledge backfill` | `remi memory migration backfill` | One-release compatibility alias |
 | `remi project knowledge verify` | `remi memory migration verify` | One-release compatibility alias |
 | `remi project knowledge retry-failed` | `remi memory migration retry` | One-release compatibility alias |
-| `remi issue comment list` | `remi comment list` | One-release compatibility alias |
-| `remi issue comment add` | `remi comment add` | One-release compatibility alias |
-| `remi issue comment update` | `remi comment update` | One-release compatibility alias |
-| `remi issue comment delete` | `remi comment delete` | One-release compatibility alias |
-| `remi issue comment resolve` | `remi comment resolve` | One-release compatibility alias |
-| `remi issue comment unresolve` | `remi comment unresolve` | One-release compatibility alias |
 | `remi issue session list` | `remi session list` | One-release compatibility alias |
 | `remi issue session result list` | `remi session result list` | One-release compatibility alias |
 | `remi issue session result publish` | `remi session result publish` | One-release compatibility alias |
@@ -533,10 +508,6 @@ remove any alias.
 | `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
 | `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
-| `remi task message list` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
-| `remi task messages` | `remi task trace read` | One-release compatibility alias |
-| `remi issue run-messages` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
-| `remi chat message list` | `remi session log window` | One-release compatibility alias; use sequence `--anchor`/`--before`/`--after` instead of the retired timestamp cursor |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
 | `remi agent edit` | `remi agent update` | One-release compatibility alias |
@@ -563,18 +534,92 @@ they cannot become undocumented bypasses.
 
 ## Prompt and documentation migration
 
-The server-injected agent prompt now uses only canonical commands in
-`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`:
+Prompts and durable examples use message / inbox / turn commands. Folded messages
+expand with `remi message get <message>`. Delegation is a directed request, progress
+is a report, and decisions use `--kind decision --option ...`; an answer uses
+`--reply-to <message> --option ...`. Use `remi turn get --input --attempts` for
+execution evidence. Session result publishing and project knowledge commands retain
+their separate responsibilities.
 
-- `remi comment list|add`
-- `remi session result publish`
-- `remi session log get <session> <seq|entry-id>` expands a folded inbox entry; `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
-- `remi memory search|get|create|update`
+`scripts/migrations/rewrite-retired-cli-commands.ts --dry-run` reports platform
+instruction changes. Execute only after reviewing its entity / field / original /
+replacement output; optimistic locking protects concurrent edits and successful
+writes record an activity. This operator script never runs at startup.
 
-The matching durable command examples use canonical commands in
-`docs/project-wiki-memory-spec.md`, `docs/issue-key-results.md`, and the frontend
-Session-result convention comment. The repository-maintained
-[Remi skill](../.agents/skills/remi/SKILL.md) provides CLI workflows with
-task-specific references; keep its examples aligned with this command contract.
-Legacy handler usage strings remain unchanged because they document commands
-that are deliberately supported during the compatibility period.
+## Retired in the unified model release (MUL-493)
+
+Each entry remains in Registry and `cli-capabilities.json.retired`. Execution
+raises one removal error before any network request. Old API routes return 410
+with `code: route_retired` and a replacement. The reused inbox list/read paths
+serve the new message and cursor contract. Old item IDs are rejected locally.
+
+| Retired command | Replacement |
+| --- | --- |
+| `remi task create` | `remi message send --to <agent> --kind request` |
+| `remi task continue` | `remi message send --to <agent> --kind request` |
+| `remi session task create` | `remi message send <conversation> --to <agent> --kind request` |
+| `remi issue rerun` | `remi message send <issue> --to issue-owner --kind request` |
+| `remi task steer` | `remi message send --to <agent> (收尾用 remi turn wrap-up <turn>)` |
+| `remi task steer list` | `remi message list <conversation> --unread-by <agent>` |
+| `remi comment add` | `remi message send <conversation>` |
+| `remi issue comment add` | `remi message send <conversation>` |
+| `remi session message create` | `remi message send <conversation>` |
+| `remi chat message create` | `remi message send <conversation>` |
+| `remi chat attachment send` | `remi message send --attachment <path>` |
+| `remi issue decision request` | `remi message send --kind decision --option <option>` |
+| `remi issue decision answer` | `remi message send --reply-to <message> --option <option>` |
+| `remi issue decision list` | `remi message list <conversation> --kind decision` |
+| `remi issue decision escalate` | `remi message send --kind decision --to <member>` |
+| `remi issue decision withdraw` | `remi message delete <message>` |
+| `remi task request list` | `remi inbox` |
+| `remi task request respond` | `remi message send --reply-to <message> --option <option>` |
+| `remi comment list` | `remi message list <conversation>` |
+| `remi comment update` | `remi message edit <message>` |
+| `remi comment delete` | `remi message delete <message>` |
+| `remi comment resolve` | `remi message resolve <message>` |
+| `remi comment unresolve` | `remi message resolve <message> --no-resolved` |
+| `remi comment reaction list` | `remi message get <message>` |
+| `remi comment reaction add` | `remi message react <message> --emoji <emoji>` |
+| `remi comment reaction remove` | `remi message react <message> --emoji <emoji> --remove` |
+| `remi comment attachment list` | `remi message get <message>` |
+| `remi session log get` | `remi message get <message>` |
+| `remi session log window` | `remi message list <conversation>` |
+| `remi session log locate` | `remi message get <message>` |
+| `remi session event list` | `remi message list <conversation>` |
+| `remi chat message list` | `remi message list <conversation>` |
+| `remi chat queue list` | `remi message list <conversation> --unread-by <agent>` |
+| `remi chat queue update` | `remi message edit <message>` |
+| `remi chat queue remove` | `remi message delete <message>` |
+| `remi chat queue clear` | `remi message list <conversation> --unread-by <agent> 后逐条 remi message delete <message>` |
+| `remi chat queue prioritize` | `remi message delete <message> 后重新 remi message send <conversation>（按消息顺序）` |
+| `remi chat pending` | `remi message list <conversation> --unread-by <agent>` |
+| `remi chat read` | `remi inbox read <conversation>` |
+| `remi inbox list` | `remi inbox` |
+| `remi inbox page` | `remi inbox --limit <n> --cursor <cursor>` |
+| `remi inbox summary` | `remi inbox` |
+| `remi inbox unread-count` | `remi inbox` |
+| `remi inbox archive` | `remi inbox read <conversation>` |
+| `remi inbox mark-all-read` | `remi inbox read-all` |
+| `remi inbox archive-all` | `remi inbox read-all` |
+| `remi inbox archive-all-read` | `remi inbox read-all` |
+| `remi inbox archive-completed` | `remi inbox read-all` |
+| `remi task list` | `remi turn list` |
+| `remi task get` | `remi turn get <turn>` |
+| `remi task inspect` | `remi turn get <turn> --attempts` |
+| `remi task cancel` | `remi turn cancel <turn>` |
+| `remi task prompt` | `remi turn get <turn> --input` |
+| `remi task redispatch` | `remi turn retry <turn> --cold` |
+| `remi task trace read` | `remi turn trace read <turn>` |
+| `remi task message list` | `remi turn trace read <turn>` |
+| `remi task messages` | `remi turn trace read <turn>` |
+| `remi issue run-messages` | `remi turn trace read <turn>` |
+| `remi issue runs` | `remi turn list --issue <issue>` |
+| `remi issue active-task` | `remi turn list --issue <issue>` |
+| `remi issue cancel-task` | `remi turn cancel <turn>` |
+| `remi session task list` | `remi turn list --session <conversation>` |
+| `remi issue comment list` | `remi message list <conversation>` |
+| `remi issue comment update` | `remi message edit <message>` |
+| `remi issue comment delete` | `remi message delete <message>` |
+| `remi issue comment resolve` | `remi message resolve <message>` |
+| `remi issue comment unresolve` | `remi message resolve <message> --no-resolved` |
+| `remi inbox read <inb_item>` | `remi inbox read <conversation> [--to <seq>]` |

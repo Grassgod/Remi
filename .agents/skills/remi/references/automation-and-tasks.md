@@ -53,6 +53,10 @@ remi autopilot run list <autopilot-id> --json
 
 `schedule_targets` 的更新替换整个目标选择，`null` 清除；修改其中一个项目或仓库时先保留其余目标。Webhook 的 token / secret 不出现在报告中；重放投递与 `autopilot run-now` 都会实际执行，只有用户要求时才触发，不拿来当保存成功的探针。
 
+## Message、Inbox 与 Turn
+
+`run-now` 向自动化的 `auto_*` 对话发送 request 消息，Issue 模式执行轮仍在 Issue 对话。`remi message list <conversation>` 看消息，`remi inbox` 看发给我的未读，`remi turn get <turn> --attempts` 看执行与尝试。按 turn 判断终态；重试不新增轮。
+
 ## 运行与 Webhook
 
 查看运行记录（只读）：
@@ -82,6 +86,6 @@ remi autopilot delivery get --help
 remi autopilot delivery replay --help
 ```
 
-用户要求立即执行时，按 `run-now` 帮助触发一次，记录 run ID 与关联 Issue/Task，沿 [Task 查询](chats-and-tasks.md) 检查执行终态。仅要求设置定时任务时，读回定义、trigger 和 scheduler 即可，不额外跑一轮。
+用户要求立即执行时，按 `run-now` 帮助触发一次，记录 run ID 与关联 Issue/Turn，沿 [轮查询](chats-and-tasks.md) 检查执行终态。仅要求设置定时任务时，读回定义、trigger 和 scheduler 即可，不额外跑一轮。
 
 Webhook 使用 trigger 配置，密钥维护入口为 trigger rotate-token/set-secret，投递查询与重放使用 delivery 命令。保留 trigger ID 和 delivery ID。投递被接收、通过鉴权与派发成功是不同状态；先查投递及对应 run，再判断是否重放。调整或撤销 Webhook 时保留用户尚需使用的其他触发器。

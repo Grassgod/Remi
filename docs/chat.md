@@ -74,13 +74,9 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 
 ## 消息与执行队列
 
-每次发送创建独立任务。消息、任务和附件绑定在同一事务中保存；运行中的会话可继续接收后续消息。
-同一会话的任务串行执行，后续任务在领取时取得最新可续接的 provider 会话，而非沿用入队时的旧指针。
-当前轮的上下文投影排除尚未处理的后续输入。
+消息写入对话日志。正在运行的轮收到定向的 now 消息会插话；pending 轮合并后续消息，领取时读取连续输入范围。同一 lane 只有一个 pending 轮。
 
-队列支持编辑文本、移除、清空和立即处理。立即处理将选中消息排到下一位，并取消当前运行；服务端负责这两个动作。
-系统唤醒任务的 `wake_source` 非空，不属于可编辑、置顶或移除的用户消息队列，也不会在队列中显示为用户输入。转述信封在已有排队任务上搭车，运行中则事务内 steer；`next_turn` 只搭车或 steer，不新建任务。
-已经进入执行的消息不能按排队消息修改，状态冲突返回 409。取消保留已有 task transcript；它不等于撤销已执行的工具操作。
+队列是未读消息，按 seq 顺序读取。未读消息可编辑或删除，已进入轮输入的消息修改返回 409；编辑和删除留下日志标记。收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
 输入框在发送失败时保留草稿，删除失败时保持会话选择。
 
 聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文；无法续接时，Remi 使用有预算的聊天历史投影，
@@ -106,16 +102,16 @@ remi chat create --agent <id>
 remi chat create --agent <id> --project <project-id>
 remi chat create --agent <id> --runtime-workspace <runtime-workspace-id>
 remi chat update <chat> --title <title>
-remi chat message create <chat> --content-file <path>
+remi message send <chat> --to <agent> --content-file <path>
 remi chat pin <chat>
 remi chat unpin <chat>
 remi chat archive <chat>
 remi chat restore <chat>
-remi chat queue list <chat>
-remi chat queue update <chat> <task> --content-file <path>
-remi chat queue remove <chat> <task>
-remi chat queue clear <chat>
-remi chat queue prioritize <chat> <task>
+remi message list <chat> --unread-by <agent>
+remi message edit <message> --content-file <path>
+remi message delete <message> --yes
+remi inbox read <chat>
+remi turn list --chat <chat>
 ```
 
 接口实现见 [Chat 路由](../packages/server/src/api/routers/chat.ts)、

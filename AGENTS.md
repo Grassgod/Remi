@@ -20,6 +20,7 @@
 - 新增顶层主题域需同步 Registry 帮助与 `docs/cli-command-migration.md`；
   弃用旧命令路径必须注册 deprecated alias 并保留至少一个发版周期，
   服务端注入 prompt 与文档只使用 canonical 命令。
+  用户明确要求一步到位时，旧命令登记为 `retired`（只报替代命令、不执行），仍纳入 Registry 与 manifest。
 
 ## 云友与 Skill 配置规范
 

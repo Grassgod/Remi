@@ -1,4 +1,5 @@
 import type { CommandInventoryEntry } from "../apps/remi/cli/core/command-registry.js";
+import { RETIRED_CLI_ROUTES } from "../packages/server/src/api/retired-cli-routes.js";
 
 export const CLI_EXEMPT_CATEGORIES = [
   "daemon_internal_protocol",
@@ -8,6 +9,7 @@ export const CLI_EXEMPT_CATEGORIES = [
   "stripe_internal_callback",
   "platform_updater_internal",
   "public_bootstrap_asset",
+  "retired_route",
 ] as const;
 
 export type CliExemptCategory = typeof CLI_EXEMPT_CATEGORIES[number];
@@ -43,6 +45,7 @@ export interface CliCapabilitiesManifest {
   domains: string[];
   commands: Record<string, CliManifestCommand>;
   aliases: Record<string, CliManifestAlias>;
+  retired: Record<string, { command: string; replacement: string }>;
   routes: Record<string, CliManifestRoute>;
 }
 
@@ -93,6 +96,8 @@ export function validateCliCapabilities(
   inventory?: readonly CommandInventoryEntry[],
 ): string[] {
   const errors: string[] = [];
+  const retiredEntries = manifest.retired && typeof manifest.retired === "object" && !Array.isArray(manifest.retired)
+    ? manifest.retired : {};
   if (manifest.schema_version !== 1) errors.push(`unsupported schema_version ${manifest.schema_version}`);
   if (manifest.generated_from !== "scripts/api-routes.golden.json") {
     errors.push("generated_from must be scripts/api-routes.golden.json");
@@ -113,6 +118,10 @@ export function validateCliCapabilities(
   }
   const exemptCategories = new Set<string>(CLI_EXEMPT_CATEGORIES);
   for (const [route, mapping] of Object.entries(manifest.routes)) {
+    const retiredRoute = "cli_exempt" in mapping && mapping.category === "retired_route";
+    if (Boolean(RETIRED_CLI_ROUTES[route]) !== retiredRoute) {
+      errors.push(`${route} retired_route classification differs from the retired HTTP inventory`);
+    }
     const discriminators = ["command", "planned_command", "cli_exempt"]
       .filter((field) => field in mapping);
     if (discriminators.length !== 1) {
@@ -144,6 +153,18 @@ export function validateCliCapabilities(
     if (!manifest.commands[alias.command]) errors.push(`${path} references unknown alias command ${alias.command}`);
     if (!alias.deprecated_since.trim() || !alias.replacement.trim()) errors.push(`${path} alias lifecycle is incomplete`);
   }
+  if (!manifest.retired || typeof manifest.retired !== "object" || Array.isArray(manifest.retired)) errors.push("retired inventory is required");
+  for (const [path, entry] of Object.entries(retiredEntries)) {
+    if (!entry || typeof entry.command !== "string" || typeof entry.replacement !== "string") {
+      errors.push(`${path} retired entry is invalid`);
+      continue;
+    }
+    if (!path.startsWith("remi ") || !entry.replacement?.trim()) errors.push(`${path} retired replacement is required`);
+    const command = manifest.commands[entry.command];
+    if (!command || command.command !== path || command.capability !== null || command.aliases.length) {
+      errors.push(`${path} retired command must be registered without capability or aliases`);
+    }
+  }
   if (inventory) {
     const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
     const registryAliases = new Map<string, CliManifestAlias>();
@@ -157,6 +178,12 @@ export function validateCliCapabilities(
         continue;
       }
       const expectedPath = `remi ${entry.path.join(" ")}`;
+      if (entry.retired) {
+        const retired = manifest.retired?.[expectedPath];
+        if (!retired || retired.command !== entry.id || retired.replacement !== entry.retired.replacement) {
+          errors.push(`${expectedPath} retired entry differs from Registry`);
+        }
+      } else if (manifest.retired?.[expectedPath]) errors.push(`${expectedPath} is retired in manifest but active in Registry`);
       if (command.command !== expectedPath) errors.push(`${entry.id} path differs: ${command.command} != ${expectedPath}`);
       if (command.hidden !== entry.hidden) errors.push(`${entry.id} hidden flag differs from Registry`);
       if (command.capability !== entry.capability) errors.push(`${entry.id} capability differs from Registry`);
@@ -190,6 +217,9 @@ export function validateCliCapabilities(
     }
     for (const path of Object.keys(manifest.aliases)) {
       if (!registryAliases.has(path)) errors.push(`manifest alias missing from Registry: ${path}`);
+    }
+    for (const [path, entry] of Object.entries(retiredEntries)) {
+      if (!entry || !inventoryById.get(entry.command)?.retired) errors.push(`${path} retired entry missing from Registry`);
     }
   }
   return errors;

@@ -58,10 +58,8 @@ import { registerPinRoutes } from "./routers/pins.js";
 import { registerIssueRoutes } from "./routers/issues.js";
 import { registerIssueShareRoutes } from "./routers/issue-shares.js";
 import { registerInboxRoutes } from "./routers/inbox.js";
-import { registerCommentRoutes } from "./routers/comments.js";
 import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
-import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
 import {
   evaluateStartupEnv,
@@ -70,6 +68,7 @@ import {
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
+import { registerRetiredCliRoutes } from "./retired-cli-routes.js";
 import {
   createHub,
   type HubFillReader,
@@ -776,6 +775,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     analytics_environment: process.env.NODE_ENV ?? "development",
   }));
   registerCliRoutes(app, deps);
+  registerRetiredCliRoutes(app);
   registerCliLatestVersionRoutes(app, deps);
   registerAuthRoutes(app, deps);
   app.get("/health/realtime", (c) => c.json({
@@ -968,12 +968,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerInboxRoutes(app, deps);
 
-  registerCommentRoutes(app, deps);
   registerAttachmentRoutes(app, deps);
 
   registerChatRoutes(app, deps);
 
-  registerTaskRoutes(app, deps);
 
   for (const { method, path } of RETIRED_DAEMON_HTTP_ROUTES) {
     app.on(method, path, retiredDaemonRouteHandler);

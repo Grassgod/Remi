@@ -5,6 +5,7 @@
  * Extracted verbatim from the former single-file `cli/multiremi.ts`.
  */
 
+import { assertNotRetired } from "../../core/retired-commands.js";
 import {
   type CliOptions,
   addQueryParam,
@@ -65,6 +66,7 @@ export interface CliIssueComment {
 export const SESSION_RESULT_KINDS = ["mr", "report", "deploy", "decision", "doc", "other"] as const;
 
 export async function issue(positional: string[], options: CliOptions): Promise<void> {
+  assertNotRetired(["issue", ...positional]);
   const action = positional[0] ?? "";
   if (action === "list") {
     const query = buildIssueListQuery(options);
@@ -396,6 +398,7 @@ export function sessionResultMetadata(options: CliOptions): Record<string, unkno
 }
 
 export async function issueComment(positional: string[], options: CliOptions): Promise<void> {
+  assertNotRetired(["issue", "comment", ...positional]);
   const action = positional[0] ?? "";
   const issueId = positional[1]?.trim();
   if (action === "list") {

@@ -31,3 +31,5 @@ One of `mr` | `branch` | `report` | `deploy` | `decision` | `doc` | `other`.
   the lenient readers used by the UI.
 - `packages/views/issues/components/issue-key-results-section.tsx` — 关键结果 panel section
   (icon by kind, refs as badges).
+
+最终回复是对话中的 final 消息，用 `remi message get <message>` 读取；`remi turn get <turn>` 的 reply_message_id 指向它。Session result publish 发布可复用成果，不代替轮的最终回复。
