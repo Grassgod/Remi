@@ -2,21 +2,26 @@
 
 ## Status
 
-Accepted (MUL-387, child of MUL-383 §6 C.3). The transitional User-Agent shim
-described below is removed by a follow-up issue once the daemon fleet has
-upgraded; see "Consequences".
+Accepted (MUL-387, child of MUL-383 §6 C.3). MUL-398 D removes the transitional
+User-Agent shim after both removal gates were met. The gate evidence is
+MUL-398 comment `cmt_uaw9ews1a8tm`: at 2026-10-04 06:37:53 +08:00, all eight
+online runtimes reported CLI v0.2.85 (above v0.2.83, the first release with
+the `remi-cli/` User-Agent). Continuous list-route access logs last recorded a
+`Bun/` User-Agent at 2026-09-27 06:36:25 +08:00, with none in the following
+seven days. These observations were supplied by the coordinator's read-only
+production check.
 
 ## Context
 
-`GET /api/workspaces/:id/repos/:repositoryId/wiki` is served by
-`RepositoryWikiService.list()`. In `MULTIREMI_PROJECT_KNOWLEDGE_MODE=openviking`
-(production) it runs `Promise.all(docs.map(hydrateTolerant))`, one OpenViking
+Before MUL-387, `GET /api/workspaces/:id/repos/:repositoryId/wiki` was served
+by `RepositoryWikiService.list()`. In `MULTIREMI_PROJECT_KNOWLEDGE_MODE=openviking`
+(production) it ran `Promise.all(docs.map(hydrateTolerant))`, one OpenViking
 `content/read` per document at roughly 0.7 s each. Explorer's read-only
 diagnosis on 209 (MUL-383, 2026-09-26) measured 236 calls in a day with
 p50 1.99 s, p95 13.8 s and max 22.9 s while `db_ms` stayed at 4–6 ms. The
 largest repositories hold 138–146 pages.
 
-Callers that actually read `body` from the list response:
+Before this decision, callers that read `body` from the list response were:
 
 - the web repository wiki page and knowledge page render the selected
   document straight from the list row;
@@ -40,7 +45,9 @@ path.
 
 1. **The list is metadata only.** Without query parameters the route returns
    the DB rows (`id`, `path`, `version`, `content_sha256`, `sync_status`, …)
-   and omits `body` entirely. Omitting the field, rather than sending `""`,
+   and omits `body` entirely for every User-Agent, including `Bun/`,
+   `remi-cli/`, browsers and requests without that header. Omitting the field,
+   rather than sending `""`,
    keeps "not included" distinguishable from "empty document".
 2. **Bodies are an explicit, bounded request.** `include_body=true` requires
    `ids=` with 1–20 unique document ids; more than 20, or `include_body`
@@ -51,16 +58,7 @@ path.
    The parameter is spelled `include_body` to match `include_body` on
    `GET /api/projects/:id/docs` and the `include_closed` / `include_archived`
    family, amending the `?include=body` wording in the MUL-383 plan.
-3. **Legacy CLIs get today's response through a transitional shim.** The
-   router (not the service) serves the old full-body, tolerant response when
-   the request `User-Agent` starts with `Bun/` — that is, a CLI predating this
-   change. The new CLI identifies itself with `User-Agent: remi-cli/<VERSION>`
-   on every request and therefore takes the metadata path. Requests without a
-   User-Agent (tests, curl) take the metadata path. An environment switch
-   `MULTIREMI_REPOSITORY_WIKI_LEGACY_LIST=auto|always|never` (default `auto`)
-   forces the old behaviour for every caller (`always`) or disables the sniff
-   (`never`) without a redeploy.
-4. **The CLI reuses its baseline instead of re-reading unchanged pages.**
+3. **The CLI reuses its baseline instead of re-reading unchanged pages.**
    `remi wiki status|pull|push` fetch the metadata list, compare each manifest
    entry's `version` with the remote row, and only request bodies (in `ids=`
    batches of ≤ 20, ≤ 2 batches in flight per repository) for documents whose
@@ -79,8 +77,8 @@ path.
   the default contract slow for at least one more release, and the flip has
   exactly the same compatibility window against any daemon that is offline
   during the gate and comes back with an old CLI — with no mitigation. The
-  shim converges automatically and stays safe for unidentified clients until
-  it is deliberately deleted.
+  transitional shim preserved complete responses for old clients until the
+  fleet upgrade and seven-day access-log gates were met.
 - **Server-side body cache keyed by `contentUri` + `contentSha256`.** Keeps
   the contract, but every publish and every API restart produces cold misses
   above 200 ms, the browser still downloads 140+ bodies to show one page, and
@@ -110,12 +108,10 @@ path.
   daemon-prepared task workspace) fetches every body in batches and costs
   about what the list costs today; the daemon prepares the manifest for task
   workspaces, so this is the rare path.
-- **Negative:** the shim is a User-Agent branch in a router and must not be
-  allowed to outlive its purpose. Removal gate: every runtime reported by
-  `remi runtime list` has `cli_version` at or above the release carrying the
-  `remi-cli/` User-Agent, and nginx logs show no `Bun/` requests on the route
-  for a week. A misclassified Bun client only receives the slow, complete
-  response, never a truncated one.
+- **Compatibility:** the User-Agent shim has been removed after the gates
+  recorded in "Status". Every client must request bodies explicitly before
+  using remote text for a merge; the list response no longer depends on the
+  client's User-Agent or a compatibility override.
 - **Neutral / open:** a new CLI talking to an older server receives bodies it
   did not ask for; the CLI must tolerate a superset response. `backlinks`,
   `hydrateTaskWiki` and the write path still hydrate every page and are out of

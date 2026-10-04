@@ -82,6 +82,8 @@ export interface SessionLogListProps {
   perfScroll?: "session-log" | "issue-detail";
   latestAnchor?: "latest-message" | "latest-comment";
   initialPositioned?: boolean;
+  /** Local display preferences must be applied before the SSR list is shown. */
+  initialDisplayReady?: boolean;
   /** Additional content above the anchor must settle before the list reveals. */
   contentReady?: boolean;
   onRevealed?: () => void;
@@ -146,6 +148,7 @@ export function SessionLogList({
   perfScroll = "session-log",
   latestAnchor = "latest-message",
   initialPositioned = false,
+  initialDisplayReady = true,
   contentReady = true,
   onRevealed,
   afterEntry,
@@ -217,7 +220,7 @@ export function SessionLogList({
     scrollEl,
     contentEl,
     resetKey: resetKey ?? `${sessionId}:${anchorId ?? "bottom"}`,
-    dataReady: (snapshot.ready || localDataReady) && contentReady,
+    dataReady: (snapshot.ready || localDataReady) && contentReady && initialDisplayReady,
     anchor,
     // Trivially true: the flat list has no virtualizer whose measurement window
     // has to close before the anchor position is final (plan 3/6 §3).
@@ -285,7 +288,7 @@ export function SessionLogList({
   // The window's own identity: a seq list plus the revision of each row, so a
   // patch that changes a row's height re-scans without an array prop.
   const windowVersion = useMemo(
-    () => entries.map((entry) => `${entry.seq}.${entry.revision}`).join(","),
+    () => entries.map((entry) => `${entry.seq}.${entry.revision}.${entry.render_version ?? ""}`).join(","),
     [entries],
   );
 
@@ -340,6 +343,7 @@ export function SessionLogList({
         data-tab-scroll-root=""
         data-session-log-scroll=""
         data-ssr-initial={initialPositioned ? "" : undefined}
+        data-ssr-display-ready={initialPositioned ? (initialDisplayReady ? "1" : "0") : undefined}
         data-ssr-expected={initialPositioned ? entries.length : undefined}
         data-ssr-anchor-id={initialPositioned ? anchorId ?? undefined : undefined}
         data-session-log-degraded={degradedCount}

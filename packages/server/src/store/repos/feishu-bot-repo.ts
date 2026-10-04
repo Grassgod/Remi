@@ -246,7 +246,13 @@ export class FeishuBotConfigError extends Error {
 }
 
 export class FeishuBotRepo {
+  private replayingOutboundOperation = false;
   constructor(private readonly ctx: StoreContext) {}
+
+  /** A host claim may replay durable intent even on a process with timers disabled. */
+  private canWriteOutbound(): boolean {
+    return this.replayingOutboundOperation || backgroundJobsEnabled();
+  }
 
   listTaskReceiptMessageIds(workspaceId: string, taskId: string): string[] {
     return (this.ctx.db.query(`SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d
@@ -791,7 +797,7 @@ export class FeishuBotRepo {
         const operation: Extract<DeferredOutboundOperation, { kind: "attachments" }> = { kind: "attachments",
           bindingId: String(binding.id), chatId: String(binding.chat_id), threadId: cleanOptionalString(binding.thread_id),
           replyToMessageId: cleanOptionalString(binding.reply_to_message_id), deliveries };
-        if (backgroundJobsEnabled()) this.writeAttachmentDeliveriesWithinTransaction(task.workspaceId, operation);
+        if (this.canWriteOutbound()) this.writeAttachmentDeliveriesWithinTransaction(task.workspaceId, operation);
         else this.deferOutboundOperation(task.workspaceId, message.id, operation);
       }
       return { message, attachments, delivery_ids: deliveryIds };
@@ -1044,7 +1050,7 @@ export class FeishuBotRepo {
         input.deliveryMode === "native_cot_v1" && chatId ? 1 : 0,
         outboundContext ? toJson(outboundContext) : null,
       );
-      if (backgroundJobsEnabled() && input.deliveryMode === "native_cot_v1" && chatId && !steered) {
+      if (this.canWriteOutbound() && input.deliveryMode === "native_cot_v1" && chatId && !steered) {
         // Use the same leased queue as proactive replies. A lost inbound WS
         // consumer must not strand a running Task's result or question card.
         const openId = isFeishuOpenId(input.senderOpenId) ? input.senderOpenId : null;
@@ -1179,7 +1185,7 @@ export class FeishuBotRepo {
   }
 
   prepareIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
-    if (!backgroundJobsEnabled()) { this.deferOutboundOperation(issue.workspaceId, issue.id, { kind: "topic", issue }); return false; }
+    if (!this.canWriteOutbound()) { this.deferOutboundOperation(issue.workspaceId, issue.id, { kind: "topic", issue }); return false; }
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return false;
     // A stored config the current validation would reject must not abort the
@@ -1264,7 +1270,7 @@ export class FeishuBotRepo {
   prepareHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
     const sourceTask = this.ctx.tasks().getTask(request.taskId);
     if (!sourceTask) return null;
-    if (!backgroundJobsEnabled()) {
+    if (!this.canWriteOutbound()) {
       this.deferOutboundOperation(sourceTask.workspaceId, request.id, { kind: "human_request", request });
       return null;
     }
@@ -2103,7 +2109,7 @@ export class FeishuBotRepo {
    * original send or the request's own status.
    */
   enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest, nowInput: string | Date = new Date()): void {
-    if (!backgroundJobsEnabled()) {
+    if (!this.canWriteOutbound()) {
       const task = this.ctx.tasks().getTask(request.taskId);
       if (task) this.deferOutboundOperation(task.workspaceId, request.id, { kind: "decision_patch", request });
       return;
@@ -2514,7 +2520,7 @@ export class FeishuBotRepo {
   }): MultiremiTask[] {
     const childStatusChanges = input.childStatusChanges;
     const deferredEvents = input.deferredEvents;
-    if (!backgroundJobsEnabled()) {
+    if (!this.canWriteOutbound()) {
       this.deferOutboundOperation(input.issue.workspaceId, input.leaderTask.id,
         { kind: "round", issue: input.issue, leaderTask: input.leaderTask });
       return [];
@@ -2599,7 +2605,7 @@ export class FeishuBotRepo {
 
   /** Caller owns the failed-task transaction. */
   retargetRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void {
-    if (!backgroundJobsEnabled()) {
+    if (!this.canWriteOutbound()) {
       const task = this.ctx.tasks().getTask(fromTaskId);
       if (task) this.deferOutboundOperation(task.workspaceId, fromTaskId, { kind: "retarget", fromTaskId, toTaskId });
       return;
@@ -2637,7 +2643,7 @@ export class FeishuBotRepo {
 
   /** Enqueue at task creation; completion fills in the legacy final-body fallback. */
   upsertRoundPushDeliveryWithinTransaction(task: MultiremiTask, body: string): void {
-    if (!backgroundJobsEnabled()) {
+    if (!this.canWriteOutbound()) {
       this.deferOutboundOperation(task.workspaceId, task.id, { kind: "round_delivery", task, body });
       return;
     }
@@ -2683,7 +2689,7 @@ export class FeishuBotRepo {
   }
 
   materializeTaskDeliveries(taskId: string): void {
-    if (!backgroundJobsEnabled()) return;
+    if (!this.canWriteOutbound()) return;
     if (!this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
       WHERE task_id = ? AND kind = 'cot' AND delivery_mode = 'split'`).get(taskId)) return;
     this.ctx.db.transaction(() => this.materializeTaskDeliveriesWithinTransaction(taskId))();
@@ -2729,26 +2735,31 @@ export class FeishuBotRepo {
       try {
         const op = parseJson<DeferredOutboundOperation | null>(row.operation, null);
         if (!op) throw new Error('Deferred outbound operation is invalid');
-        // Each established entry point owns its transaction and commit events.
-        switch (op.kind) {
-          case 'topic':
-            if (this.ctx.issues().getIssue(op.issue.id)) this.prepareIssueTopicWithinTransaction(op.issue);
-            break;
-          case 'human_request': {
-            const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
-            if (request?.status === 'pending') this.prepareHumanRequestPush(request);
-            break;
+        // Replay synchronously through the established writers. Without this
+        // scope, jobs=0 would re-defer the same intent instead of materializing
+        // it. Restore the scope on failures; no global scheduler flag changes.
+        this.replayingOutboundOperation = true;
+        try {
+          switch (op.kind) {
+            case 'topic':
+              if (this.ctx.issues().getIssue(op.issue.id)) this.prepareIssueTopicWithinTransaction(op.issue);
+              break;
+            case 'human_request': {
+              const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
+              if (request?.status === 'pending') this.prepareHumanRequestPush(request);
+              break;
+            }
+            case 'decision_patch': {
+              const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
+              if (request) this.enqueueDecisionCardPatch(request);
+              break;
+            }
+            case 'round': this.prepareIssueRoundPushes({ issue: op.issue, leaderTask: op.leaderTask }); break;
+            case 'retarget': this.ctx.db.transaction(() => this.retargetRoundPushTaskWithinTransaction(op.fromTaskId, op.toTaskId))(); break;
+            case 'round_delivery': this.ctx.db.transaction(() => this.upsertRoundPushDeliveryWithinTransaction(op.task, op.body))(); break;
+            case 'attachments': this.ctx.db.transaction(() => this.writeAttachmentDeliveriesWithinTransaction(workspaceId, op))(); break;
           }
-          case 'decision_patch': {
-            const request = this.ctx.tasks().getTaskHumanRequest(op.request.id);
-            if (request) this.enqueueDecisionCardPatch(request);
-            break;
-          }
-          case 'round': this.prepareIssueRoundPushes({ issue: op.issue, leaderTask: op.leaderTask }); break;
-          case 'retarget': this.ctx.db.transaction(() => this.retargetRoundPushTaskWithinTransaction(op.fromTaskId, op.toTaskId))(); break;
-          case 'round_delivery': this.ctx.db.transaction(() => this.upsertRoundPushDeliveryWithinTransaction(op.task, op.body))(); break;
-          case 'attachments': this.ctx.db.transaction(() => this.writeAttachmentDeliveriesWithinTransaction(workspaceId, op))(); break;
-        }
+        } finally { this.replayingOutboundOperation = false; }
         this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'done', claim_token = NULL,
           leased_until = NULL, updated_at = ? WHERE id = ? AND claim_token = ?`, [at, row.id, token]);
       } catch {
@@ -2760,7 +2771,7 @@ export class FeishuBotRepo {
     }
   }
 
-  /** Catch up writes made on an API process with background jobs disabled. */
+  /** A host claim catches up lifecycle writes made with background jobs disabled. */
   private reconcileTaskDeliveriesWithinTransaction(workspaceId: string): void {
     const missed = this.ctx.db.query(`SELECT d.*, COALESCE(d.outbound_task_id, d.task_id) AS target_task_id,
       b.chat_id, b.thread_id, s.open_id
@@ -2822,7 +2833,7 @@ export class FeishuBotRepo {
     }
     let resultId: string | null = null;
     if (terminal) {
-      const result = buildFeishuTaskResult(task, this.ctx.tasks().listTaskMessages(taskId), this.ctx.agents().getAgent(task.agentId)?.name ?? null);
+      const result = buildFeishuTaskResult(task, this.ctx.agents().getAgent(task.agentId)?.name ?? null);
       resultId = insert('result_card', '', toJson(result), String(primary.id)).id;
     }
     const receiptMessages = this.ctx.db.query(`SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d
@@ -2850,7 +2861,8 @@ export class FeishuBotRepo {
     supportsKinds = false,
     downlink?: "peek" | { id: string; claimToken: string },
   ): MultiremiFeishuBotOutboundDelivery | null {
-    if (!backgroundJobsEnabled()) return null;
+    // This is authenticated host-request work, not a scheduled background job.
+    // Runtime API processes must drain it while their schedulers stay disabled.
     const now = nowInput instanceof Date ? new Date(nowInput) : new Date(nowInput ?? Date.now());
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
     const config = this.getConfig(workspaceId);

@@ -24,16 +24,28 @@ never predecessors. A receipt's final failure writes audit evidence and a log,
 without changing the binding or other deliveries. Each row has the existing
 six-attempt limit and its own backoff.
 
-Writers and claims are gated by `MULTIREMI_BACKGROUND_JOBS` (default enabled).
-When process roles are introduced, ui runs these jobs and api-runtime explicitly
-sets this variable to `0`; the code does not select a role. Background claims
-reconcile lifecycle writes missed by a process with jobs disabled. Existing
-topic, E5, round and attachment entry points persist their original operation in
-`multiremi_feishu_bot_outbound_operations` while jobs are disabled. The background
-process replays each under a separate operation lease, using stable delivery IDs
-and established idempotent writers. This avoids silently dropping attachments
-or topic/round operations during process handover. No Hub or
+`MULTIREMI_BACKGROUND_JOBS` (default enabled) controls scheduled jobs and whether
+lifecycle entry points materialize immediately. It does **not** disable an
+authenticated Feishu host's outbound claim. In the split deployment, api-runtime
+keeps this variable at `0`, while the host claim reconciles inbound carriers and
+Task terminal rows. Topic, E5, round and attachment entry points persist their
+original operation in `multiremi_feishu_bot_outbound_operations` while immediate
+writes are disabled. The claiming process replays these intents under separate
+operation leases, through the same idempotent writers with stable delivery IDs.
+The replay scope is synchronous and restored on failure; it never changes the
+process scheduler flag. Host identity, enabled config, online state and applied
+revision still gate claims before any replay. No additional scheduler or
 peer-channel dependency is introduced.
+
+The server stores the terminal answer and elapsed time in `result_card.body`;
+it does not load `multiremi_task_messages`. Before sending, the host reads
+canonical trace from seq 0 through the existing paged trace subscription and
+projects only execution identity, latest main-agent context occupancy and unique
+tool-call IDs. This restores the independent result footer without persisting
+another transcript. Metadata retrieval has a five-second deadline: unavailable
+trace falls back to the durable answer and elapsed-time footer; connector
+shutdown/cancellation still aborts the send. Historical queued bodies without
+elapsed seconds can obtain timing from the terminal Task snapshot.
 
 ## Schema and retained data
 
@@ -64,7 +76,7 @@ migrations reuse these definitions without creating additional indexes.
 ## Rollback
 
 The supported behavior rollback is `MULTIREMI_FEISHU_OUTBOUND_KINDS=0` on the
-background-writing process. This pins newly claimed Tasks to `legacy`, including
+claiming process. This pins newly claimed Tasks to `legacy`, including
 claims by upgraded daemons. Keep capable daemons online until already pinned
 split Tasks and their interaction/result/receipt rows reach terminal delivery
 states. Their existing IDs, leases and checkpoints do not change. The added

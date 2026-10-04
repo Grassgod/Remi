@@ -681,15 +681,7 @@ describe("Repository Wiki availability and migration safeguards", () => {
 
 });
 
-describe("Repository Wiki list is metadata only (MUL-387)", () => {
-  const legacyEnv = "MULTIREMI_REPOSITORY_WIKI_LEGACY_LIST";
-  const previousLegacy = process.env[legacyEnv];
-
-  afterEach(() => {
-    if (previousLegacy === undefined) delete process.env[legacyEnv];
-    else process.env[legacyEnv] = previousLegacy;
-  });
-
+describe("Repository Wiki list is metadata only (MUL-387, MUL-398 D)", () => {
   async function fixture(pageCount: number, options: { readDelayMs?: number } = {}) {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -702,10 +694,11 @@ describe("Repository Wiki list is metadata only (MUL-387)", () => {
     }]);
     const client = new FakeOpenViking();
     const service = new RepositoryWikiService(store, client, "openviking");
-    const docs = (await service.applyBatch("local", "repo_list", Array.from({ length: pageCount }, (_, index) => ({
+    const operations = Array.from({ length: pageCount }, (_, index) => ({
       kind: "create" as const,
       input: { path: `page-${index}.md`, title: `Page ${index}`, body: `Body ${index}` },
-    })))).map(result => result.doc);
+    }));
+    const docs = operations.length ? (await service.applyBatch("local", "repo_list", operations)).map(result => result.doc) : [];
     await service.runStorageJobs();
     // The delay models the OpenViking read the list must not perform, so it is
     // applied after the fixture is published.
@@ -783,32 +776,88 @@ describe("Repository Wiki list is metadata only (MUL-387)", () => {
       expect({ path, status: response.status }).toEqual({ path, status: 400 });
     }
     // 20 unique ids is inside the limit even when one id repeats.
-    const twenty = [...f.docs.slice(0, 19).map(doc => doc.id), f.docs[0]!.id];
+    const twenty = [...f.docs.slice(0, 20).map(doc => doc.id), f.docs[0]!.id];
     expect((await f.app.request(`${root}?include_body=true&ids=${twenty.join(",")}`, { headers: f.authorization })).status).toBe(200);
   });
 
-  it("keeps the full-body response for a Bun User-Agent and honours the env switch", async () => {
+  it("returns only metadata for Bun/1.3.14 without reading bodies", async () => {
     const f = await fixture(2);
     const root = "/api/workspaces/local/repos/repo_list/wiki";
 
-    const legacy = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" } });
-    expect(legacy.status).toBe(200);
-    expect((await legacy.json() as any).docs[0].body).toBe("Body 0");
-
-    const upgraded = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "remi-cli/0.2.83" } });
-    expect((await upgraded.json() as any).docs[0]).not.toHaveProperty("body");
-
-    const noAgent = await f.app.request(root, { headers: f.authorization });
-    expect((await noAgent.json() as any).docs[0]).not.toHaveProperty("body");
-
-    process.env[legacyEnv] = "always";
-    const forced = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "remi-cli/0.2.83" } });
-    expect((await forced.json() as any).docs[0].body).toBe("Body 0");
-
-    process.env[legacyEnv] = "never";
-    const disabled = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" } });
-    expect((await disabled.json() as any).docs[0]).not.toHaveProperty("body");
+    const response = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" } });
+    expect(response.status).toBe(200);
+    const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+    expect(docs).toHaveLength(2);
+    for (const doc of docs) {
+      expect(doc).not.toHaveProperty("body");
+      expect(doc.version).toBe(1);
+      expect(typeof doc.content_sha256).toBe("string");
+      expect(doc.sync_status).toBe("ready");
+    }
+    expect(f.client.readCalls).toEqual([]);
   });
+
+  it.each(["Bun/1.2.23", "remi-cli/0.2.83", "remi-cli/0.2.85", "Mozilla/5.0"])(
+    "returns only metadata for User-Agent %s",
+    async (userAgent) => {
+      const f = await fixture(2);
+      const response = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", {
+        headers: { ...f.authorization, "User-Agent": userAgent },
+      });
+      expect(response.status).toBe(200);
+      const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+      expect(docs).toHaveLength(2);
+      for (const doc of docs) expect(doc).not.toHaveProperty("body");
+      expect(f.client.readCalls).toEqual([]);
+      const baseline = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", { headers: f.authorization });
+      expect((await baseline.json() as any).docs).toEqual(docs);
+    },
+  );
+
+  it("returns an empty metadata list for every User-Agent", async () => {
+    const f = await fixture(0);
+    for (const userAgent of [undefined, "Bun/1.3.14", "remi-cli/0.2.85", "Mozilla/5.0"]) {
+      const response = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", {
+        headers: { ...f.authorization, ...(userAgent ? { "User-Agent": userAgent } : {}) },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ docs: [] });
+    }
+    expect(f.client.readCalls).toEqual([]);
+  });
+
+  it.each(["Bun/1.3.14", "remi-cli/0.2.85", "Mozilla/5.0"])(
+    "keeps explicit body requests and document details for User-Agent %s",
+    async (userAgent) => {
+      const f = await fixture(3);
+      const root = "/api/workspaces/local/repos/repo_list/wiki";
+      const headers = { ...f.authorization, "User-Agent": userAgent };
+      const requested = [f.docs[0]!, f.docs[2]!];
+      const ids = requested.map(doc => doc.id);
+      for (const query of ["include_body=false", "include_body=0", `ids=${ids[0]},${ids[0]}&ids=rwdoc_missing&ids=${ids[1]}`]) {
+        const response = await f.app.request(`${root}?${query}`, { headers });
+        expect(response.status).toBe(200);
+        const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+        expect(docs.map(doc => doc.id).sort()).toEqual(query.startsWith("ids=") ? [...ids].sort() : f.docs.map(doc => doc.id).sort());
+        for (const doc of docs) expect(doc).not.toHaveProperty("body");
+        expect(f.client.readCalls).toEqual([]);
+      }
+      for (const includeBody of ["true", "1"]) {
+        f.client.readCalls.length = 0;
+        const response = await f.app.request(`${root}?include_body=${includeBody}&ids=${ids.join(",")}`, { headers });
+        expect(response.status).toBe(200);
+        const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+        expect(docs.map(doc => doc.id).sort()).toEqual([...ids].sort());
+        for (const doc of docs) expect(doc.body).toBe(requested.find(row => row.id === doc.id)?.body);
+        expect(new Set(f.client.readCalls)).toEqual(new Set(requested.map(doc => doc.contentUri!)));
+      }
+      f.client.readCalls.length = 0;
+      const detail = await f.app.request(`${root}/${f.docs[1]!.id}`, { headers });
+      expect(detail.status).toBe(200);
+      expect((await detail.json() as any).doc.body).toBe("Body 1");
+      expect(f.client.readCalls).toEqual([f.docs[1]!.contentUri!]);
+    },
+  );
 
   it("fails the whole batch with 503 when one requested body is unreadable", async () => {
     const f = await fixture(3);
@@ -845,7 +894,7 @@ describe("Repository Wiki list is metadata only (MUL-387)", () => {
     expect(p95).toBeLessThan(200);
   }, 60_000);
 
-  it("keeps the non-Bun legacy path tolerant so an old daemon still lists", async () => {
+  it("does not hydrate unreadable bodies when a Bun client lists metadata", async () => {
     const f = await fixture(2);
     f.client.failReadUris.add(f.docs[0]!.contentUri!);
     const response = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", {
@@ -854,8 +903,11 @@ describe("Repository Wiki list is metadata only (MUL-387)", () => {
     expect(response.status).toBe(200);
     const docs = (await response.json() as any).docs;
     expect(docs).toHaveLength(2);
-    expect(docs[0]).toMatchObject({ body: "", sync_status: "failed" });
-    expect(docs[1].body).toBe("Body 1");
+    for (const doc of docs) {
+      expect(doc).not.toHaveProperty("body");
+      expect(doc.sync_status).toBe("ready");
+    }
+    expect(f.client.readCalls).toEqual([]);
   });
 });
 
