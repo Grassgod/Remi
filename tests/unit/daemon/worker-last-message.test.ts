@@ -36,5 +36,7 @@ describe("task output's last assistant message", () => {
     reply.push({ type: "text", content: " ", meta: { phase: "final" } });
     reply.push({ type: "text", content: "child", meta: { parent_tool_call_id: "child" } });
     expect(reply.text).toBe("");
+    expect(reply.result("child")).toBe("Task completed.");
+    expect(new LastAssistantMessage().result("unstreamed reply")).toBe("unstreamed reply");
   });
 });

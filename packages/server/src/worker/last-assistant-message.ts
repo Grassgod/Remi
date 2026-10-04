@@ -5,8 +5,10 @@ export class LastAssistantMessage {
   private segment = "";
   private finalSegment = "";
   private lastSegment = "";
+  private sawText = false;
 
   push(message: TaskMessageInput): void {
+    if (message.type === "text") this.sawText = true;
     if (message.meta?.parent_tool_call_id) return;
     if (message.type === "text") {
       this.segment += message.content ?? "";
@@ -25,5 +27,9 @@ export class LastAssistantMessage {
 
   get text(): string {
     return this.finalSegment.trim() || this.segment.trim() || this.lastSegment;
+  }
+
+  result(fallback?: string): string {
+    return this.text || (!this.sawText ? fallback?.trim() : "") || "Task completed.";
   }
 }

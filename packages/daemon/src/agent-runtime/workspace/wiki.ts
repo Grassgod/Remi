@@ -21,6 +21,27 @@ import type {
 export const ISSUE_WIKI_DIRECTORY = "wiki";
 export const ISSUE_WIKI_BASE_DIRECTORY = ".multiremi/wiki-base";
 
+export function readWikiFetchCache(workDir: string): Map<string, { body: string; version: number; contentSha256?: string | null; doc: Partial<AgentTaskProjectDoc | AgentTaskRepositoryWikiDoc> }> {
+  const cache = new Map<string, { body: string; version: number; contentSha256?: string | null; doc: Partial<AgentTaskProjectDoc | AgentTaskRepositoryWikiDoc> }>();
+  const root = join(workDir, ISSUE_WIKI_BASE_DIRECTORY);
+  const project = readManifest(workDir, join(root, "manifest.json"));
+  for (const entry of project?.docs ?? []) {
+    const body = readVerifiedBase(workDir, join(root, "files", entry.path), entry);
+    cache.set(entry.id, { body, version: entry.version, contentSha256: entry.contentSha256,
+      doc: { ...entry, body, projectId: project!.projectId, kind: "wiki", content_sha256: entry.contentSha256 } });
+  }
+  const repository = readRepositoryManifest(workDir, join(root, "repositories", "manifest.json"));
+  for (const entry of repository?.docs ?? []) {
+    const body = readRegularText(workDir, join(root, "repositories", "files", entry.path), "Wiki fetch baseline");
+    if (body !== null && sha256(body) === entry.sha256) {
+      cache.set(entry.id, { body, version: entry.version, contentSha256: entry.contentSha256,
+        doc: { ...entry.doc, body, path: entry.doc?.path ?? entry.path.split("/").slice(1).join("/"),
+          status: "healthy", updatedAt: entry.updatedAt, content_sha256: entry.contentSha256 } });
+    }
+  }
+  return cache;
+}
+
 export interface IssueWikiManifestEntry {
   id: string;
   slug: string;
@@ -32,6 +53,7 @@ export interface IssueWikiManifestEntry {
   refs: Array<{ type: string; value: string }>;
   version: number;
   sha256: string;
+  contentSha256?: string | null;
   updatedAt: string;
 }
 
@@ -162,6 +184,8 @@ interface RepositoryWikiManifestEntry {
   version: number;
   sourceRevision: string | null;
   sha256: string;
+  contentSha256?: string | null;
+  doc?: Omit<AgentTaskRepositoryWikiDoc, "body">;
   updatedAt: string;
 }
 
@@ -248,6 +272,7 @@ function repositoryManifestEntry(
   path: string,
   text: string,
 ): RepositoryWikiManifestEntry {
+  const { body: _body, ...metadata } = doc;
   return {
     id: doc.id,
     repositoryId,
@@ -256,6 +281,8 @@ function repositoryManifestEntry(
     version: Math.max(1, Math.floor(Number(doc.version ?? 1))),
     sourceRevision: doc.sourceRevision ?? null,
     sha256: sha256(text),
+    contentSha256: doc.content_sha256,
+    doc: metadata,
     updatedAt: doc.updatedAt,
   };
 }
@@ -299,6 +326,7 @@ function manifestEntry(doc: AgentTaskProjectDoc, path: string, text: string): Is
       ? Math.max(1, Math.floor(Number((doc as { version?: number }).version)))
       : 1,
     sha256: sha256(text),
+    contentSha256: doc.content_sha256,
     updatedAt: doc.updatedAt,
   };
 }

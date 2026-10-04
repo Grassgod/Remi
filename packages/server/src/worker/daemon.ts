@@ -142,6 +142,7 @@ import {
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { fetchTaskWikiBodies } from "@daemon/agent-runtime/workspace/wiki-fetch.js";
 import { prepareChatRepositories } from "@daemon/agent-runtime/workspace/chat-repos.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
@@ -1072,6 +1073,7 @@ export class MultiremiDaemon {
       daemonId: this.options.daemonId ?? this.options.runtimeName,
       cliVersion: multiremiVersion,
       launchedBy: this.options.launchedBy,
+      caps: ["offer", "steer.push", "trace.read", "trace.subscribe", "wiki.fetch"],
       log,
       ...options.protocolClientOptions,
     });
@@ -3747,7 +3749,7 @@ export class MultiremiDaemon {
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       let wikiMaterialized = false;
-      if (!resolvedWorkDir.localDirectory && !task.issueSessionId) {
+      if (!resolvedWorkDir.localDirectory) {
         wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task));
       }
       return { ...prepared, wikiMaterialized };
@@ -4133,6 +4135,10 @@ export class MultiremiDaemon {
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const chatRepoAutoCheckout = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
+    if (!task.runtimeWorkspaceId && !resolvedWorkDir.localDirectory
+      && task.knowledgeWarnings?.some(warning => warning.startsWith("Wiki bodies omitted from task offer."))) {
+      await fetchTaskWikiBodies(codeWorkDir, task, path => this.client.readTaskWiki(path, task.authToken ?? "", signal));
+    }
     const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>
       chatRepoAutoCheckout
         ? this.prepareChatTaskWorkspace(task, resolvedWorkDir, signal)
@@ -4402,7 +4408,7 @@ export class MultiremiDaemon {
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
         }
-        const candidate = output.text || last?.text || "Task completed.";
+        const candidate = output.result(last?.text);
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
