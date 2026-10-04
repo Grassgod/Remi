@@ -72,6 +72,7 @@ interface AgentTranscriptDialogProps {
    * The dialog stays generic — slot content is the caller's concern.
    */
   headerSlot?: React.ReactNode;
+  initialView?: "execution" | "prompt";
   traceResult?: TaskTraceRead | null;
   traceLoading?: boolean;
   traceError?: boolean;
@@ -93,6 +94,7 @@ export function AgentTranscriptDialog({
   agentName,
   isLive = false,
   headerSlot,
+  initialView = "execution",
   traceResult,
   traceLoading = false,
   traceError = false,
@@ -103,7 +105,7 @@ export function AgentTranscriptDialog({
   const [elapsed, setElapsed] = useState("");
   const [copied, setCopied] = useState(false);
   const [copiedWorkdir, setCopiedWorkdir] = useState(false);
-  const [activeView, setActiveView] = useState<"execution" | "prompt">("execution");
+  const [activeView, setActiveView] = useState<"execution" | "prompt">(initialView);
   const [promptCopied, setPromptCopied] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent | null>(null);
   const [runtimeInfo, setRuntimeInfo] = useState<AgentRuntime | null>(null);
@@ -613,6 +615,8 @@ export function AgentTranscriptDialog({
           </div>
         </div>
 
+        {headerSlot && <div className="shrink-0 border-b bg-muted/20 px-4 py-3">{headerSlot}</div>}
+
         {onTraceRetry && (
           <div
             role={traceError || traceResult?.state === "unreachable" ? "alert" : "status"}
@@ -738,13 +742,6 @@ export function AgentTranscriptDialog({
                 );
               })}
             </div>
-          </div>
-        )}
-
-        {/* ── Optional header slot (e.g. webhook payload preview) ── */}
-        {headerSlot && (
-          <div className="border-b px-4 py-3 shrink-0 bg-muted/20">
-            {headerSlot}
           </div>
         )}
 

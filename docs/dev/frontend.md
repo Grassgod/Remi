@@ -72,9 +72,9 @@ Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/pack
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 
-Issue 活动区的非评论日志由 [IssueLogEventRow](../../frontend/packages/views/issues/components/issue-log-event-row.tsx) 显示为固定单行摘要。派活行只在点击后挂载完整正文；收件箱唤醒和委派回程只显示人可读状态，发布结果使用已加载的结果列表解析发布者并打开结果面板。Chat 的内部进展通知由 [ChatLogEventRow](../../frontend/packages/views/chat/components/chat-log-event-row.tsx) 摘要显示，信封带 Issue ID 时使用工作区路径链接到详情。摘要不运行 Markdown 渲染，不新增逐行查询，普通评论和聊天气泡沿用原路径。
+Issue 活动区默认显示普通评论、固定单行的派活和 `workspace_move_cleared` 动态。派活和被派 agent 的首条回应引用在点击后打开既有任务弹窗，初始停在「输入 Prompt」，评论流内不展开正文。回应关联只用当前窗口中唯一的同 task 派活记录，首次出现时确定，翻页不向已显示的评论追加引用；任务列表只在点击时复用缓存或读取。系统细节开关按用户和工作区在本地同步持久化，渲染前过滤结果发布、信封、收件箱唤醒及未知非评论类型。SSR 列表在本地偏好 hydration 完成前保持隐藏，定位脚本通过 `data-ssr-display-ready` 门禁等待最终显示集合，避免默认集合先显现再变化；用户切换开关时在绘制前保持 released 阅读锚点或 pinned 贴底。打开后 [IssueLogEventRow](../../frontend/packages/views/issues/components/issue-log-event-row.tsx) 显示固定一行人话，发布结果使用已有结果列表并打开右侧结果面板。信封按 `dedupeKey` 来源优先、`kind/to.role` 次之分类，永不使用正文兜底。Chat 永久过滤内部条目，无系统细节开关；普通评论交互和用户/assistant 气泡沿用原路径。
 
-摘要与展开正文通过现有 `transformEntries` 在列表内区分行高缓存的 `render_version`，不更改副本中的服务端日志。`SessionLogList` 在渲染版本变化时重新扫描可见行；展开和收起沿用原贴底状态机，pinned 时保持到末尾的距离，released 时保留阅读位置。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[Chat 日志行测试](../../frontend/packages/views/chat/components/chat-log-event-row.test.tsx) 和现有滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。
+固定摘要通过 `transformEntries` 使用新的行高缓存 `render_version`，不重用旧全文或展开态测量，也不更改副本日志。开关切换由用户触发，弹窗不增加评论流高度，姓名和标题更新只替换单行文字。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[偏好测试](../../frontend/packages/core/issues/stores/activity-preferences-store.test.ts)、现有 Chat、任务弹窗及滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。前端隐藏仍占服务端分页条数；补回状态动态和显示层分页属于后续改动。
 
 ## 实时更新与性能定位
 

@@ -14,11 +14,6 @@
     "send_failed": "消息未发送。草稿已保留，请重试。"
   },
   "message_list": {
-    "event_generic": "会话有新进展",
-    "issue_update": "{{key}} 有新进展",
-    "issue_update_completed": "{{key}} 有新进展（已完成）",
-    "issue_update_failed": "{{key}} 有新进展（失败）",
-    "issue_update_cancelled": "{{key}} 有新进展（取消）",
     "show_details": "查看详情",
     "replied_in": "{{elapsed}} 内回复",
     "failed_after": "{{elapsed}} 后失败",

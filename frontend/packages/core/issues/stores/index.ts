@@ -1,5 +1,6 @@
 export { useIssueSelectionStore } from "./selection-store";
 export { useIssueDetailPreferencesStore } from "./detail-preferences-store";
+export { useActivityPreferences } from "./activity-preferences-store";
 export {
   useCreateModeStore,
   openCreateIssueWithPreference,

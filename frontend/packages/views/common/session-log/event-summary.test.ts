@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { MemorySessionReplica, rowHeightKey } from "@multiremi/core/replica";
 import { reservedRowHeight } from "./use-row-heights";
-import { chatIssueUpdate, delegationReporter, eventLayoutEntry, eventSummary, isInboxTurn } from "./event-summary";
+import { envelopeType, eventLayoutEntry, eventSummary, INTERNAL_ID_PREFIXES, isInboxTurn } from "./event-summary";
 
 describe("event summaries", () => {
   it("uses the first nonempty plain line, removes markdown and internal identities", () => {
@@ -18,34 +20,48 @@ describe("event summaries", () => {
     expect(eventSummary("First\nSecond", 3)).toBe("Fir…");
   });
 
-  it("recognizes inbox prompts and sanitizes delegation names", () => {
+  it("recognizes inbox prompts", () => {
     expect(isInboxTurn("# 读收件箱 ises_123:82 (cmt_env_456)")).toBe(true);
     expect(isInboxTurn("## A normal task")).toBe(false);
-    expect(delegationReporter("QA completed a task you delegated.\nRead the latest updates")).toBe("QA");
-    expect(delegationReporter("QA could not complete a task you delegated.")).toBe("QA");
-    expect(delegationReporter("A task you delegated to QA was cancelled.")).toBe("QA");
-    expect(delegationReporter("agt_123 completed a task you delegated.")).toBe("");
   });
 
-  it("gets Chat outcomes and links from envelope metadata with a legacy body fallback", () => {
-    const body = "MUL-501 有新日志：会话 ises_123，seq (0, 10]；本次轮次 tsk_123 状态 failed";
-    expect(chatIssueUpdate(body, { envelope: { outcome: "done", source: { issueId: "iss_501" } } }))
-      .toEqual({ key: "MUL-501", issueId: "iss_501", outcome: "completed" });
-    expect(chatIssueUpdate(body, { envelope: { source: { issueId: 123 } } }))
-      .toEqual({ key: "MUL-501", issueId: "", outcome: "failed" });
-    expect(chatIssueUpdate("Ordinary message", null)).toBeNull();
+  it("covers every server createId prefix and strips legacy identities", () => {
+    const source = resolve(process.cwd(), "../../../packages/server/src");
+    const prefixes = new Set<string>();
+    for (const path of readdirSync(source, { recursive: true })) {
+      if (typeof path !== "string" || !path.endsWith(".ts")) continue;
+      const body = readFileSync(resolve(source, path), "utf8");
+      for (const match of body.matchAll(/createId\(["']([a-z_]+)["']\)/g)) prefixes.add(match[1]!);
+    }
+    expect(prefixes.size).toBeGreaterThan(80);
+    for (const prefix of [...prefixes, "dec", "mem", "usr", "hrq", "cses"]) {
+      expect(INTERNAL_ID_PREFIXES).toContain(prefix);
+      expect(eventSummary("# Update " + prefix + "_abc123")).toBe("Update");
+    }
   });
 
-  it("never reserves full-body or expanded heights for a collapsed row", () => {
+  it("classifies report roles and prioritizes source prefixes over kind", () => {
+    expect(envelopeType({ kind: "report", to: { role: "delegator" } })).toBe("delegation");
+    expect(envelopeType({ kind: "report", to: { role: "parent_owner" } })).toBe("child");
+    expect(envelopeType({ kind: "report", to: { role: "relay" } })).toBe("relay");
+    expect(envelopeType({ kind: "report", to: { role: "issue_owner" } })).toBe("generic");
+    expect(envelopeType({ kind: "report", dedupeKey: "dependency_failed:x", to: { role: "delegator" } })).toBe("dependency_failed");
+    expect(envelopeType({ kind: "reply", to: { role: "delegator" } })).toBe("delegation_progress");
+    expect(envelopeType({ kind: "child_status" })).toBe("child");
+    expect(envelopeType({ kind: "dependency_failed" })).toBe("dependency_failed");
+    expect(envelopeType(null)).toBe("generic");
+  });
+
+  it("never reserves full-body or old disclosure heights for the fixed row", () => {
     const row: SessionLogEntry = { session_id: "s", id: "r", seq: 1, revision: 1,
       kind: "turn", body_md: "# Task", body_html: "<h1>Task</h1>", render_version: "md-v1" };
     const replica = new MemorySessionReplica({ s: { entries: [row] } });
-    const collapsed = eventLayoutEntry(row, "issue");
-    const expanded = eventLayoutEntry(row, "issue", true);
+    const collapsed = eventLayoutEntry(row);
     replica.writeRowHeight("s", 1, rowHeightKey({ revision: 1, renderVersion: row.render_version, widthPx: 800 }), 900);
-    replica.writeRowHeight("s", 1, rowHeightKey({ revision: 1, renderVersion: expanded.render_version, widthPx: 800 }), 700);
+    replica.writeRowHeight("s", 1, rowHeightKey({ revision: 1, renderVersion: "md-v1:issue-event-v1:expanded", widthPx: 800 }), 700);
     expect(reservedRowHeight(replica, "s", collapsed, 800)).toBeNull();
-    expect(reservedRowHeight(replica, "s", expanded, 800)).toBe(700);
+    replica.writeRowHeight("s", 1, rowHeightKey({ revision: 1, renderVersion: collapsed.render_version, widthPx: 800 }), 32);
+    expect(reservedRowHeight(replica, "s", collapsed, 800)).toBe(32);
     expect(row.render_version).toBe("md-v1");
   });
 });

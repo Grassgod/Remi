@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { MemorySessionReplica } from "@multiremi/core/replica";
 import { useWSEvent } from "@multiremi/core/realtime";
-import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import { SessionLogEntrySchema, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import { activityPreferencesStore } from "@multiremi/core/issues/stores/activity-preferences-store";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
@@ -337,7 +338,8 @@ vi.mock("@multiremi/core/issues/config", () => ({
 
 // Mock recent issues store
 const mockRecordVisit = vi.fn();
-vi.mock("@multiremi/core/issues/stores", () => ({
+vi.mock("@multiremi/core/issues/stores", async importOriginal => ({
+  ...await importOriginal<typeof import("@multiremi/core/issues/stores")>(),
   useIssueDetailPreferencesStore: (selector: any) =>
     selector({
       sessionSidebarOpen: true,
@@ -599,6 +601,7 @@ async function waitForReveal() {
 
 describe("IssueDetail (shared)", () => {
   beforeEach(() => {
+    activityPreferencesStore("user-1", "ws-1").getState().setShowSystemDetails(false);
     vi.clearAllMocks();
     issueLogOverride.current = null;
     timelinePageControl.hasMore = false;
@@ -632,7 +635,7 @@ describe("IssueDetail (shared)", () => {
       const timeline = params.anchor !== undefined && params.anchor > 0 && timelinePageControl.olderEntries.length
         ? timelinePageControl.olderEntries : await mockApiObj.listTimeline("issue-1", sessionId);
       const rows = (timeline as TimelineEntry[]).map((item, index) => ({
-        session_id: sessionId, id: item.id, seq: index + 1, kind: item.type === "comment" ? "message" : "system",
+        session_id: sessionId, id: item.id, seq: index + 1, kind: item.details?.log_kind ?? (item.type === "comment" ? "message" : "system"),
         revision: 1, visibility: "shown", author_type: item.actor_type ?? "system", author_id: item.actor_id ?? null,
         task_id: item.task_id ?? null, parent_id: item.parent_id ?? null, body_md: item.content ?? "", body_html: null,
         render_version: null, metadata: { ...item.details, attachments: item.attachments ?? [], reactions: item.reactions ?? [] },
@@ -1246,7 +1249,7 @@ describe("IssueDetail (shared)", () => {
     // …placed immediately before the content, i.e. on the panel's far left.
     expect(scrollRoot!.parentElement!.parentElement!.previousElementSibling).toContainElement(sessionsLabel);
     // The timeline itself stays inside the scroll container.
-    expect(scrollRoot!.contains(screen.getAllByText("Activity")[0]!)).toBe(true);
+    expect(scrollRoot!.contains(screen.getAllByText("Comments and activity")[0]!)).toBe(true);
   });
 
   it("opens participant management from a session row's actions menu", async () => {
@@ -1405,13 +1408,18 @@ describe("IssueDetail (shared)", () => {
       published_by_id: "agent-1",
       created_at: "2025-01-03T00:00:00Z",
     }]);
+    mockApiObj.listTimeline.mockResolvedValue([...mockTimeline, { type: "activity", id: "published-result", actor_type: "system",
+      content: "Duplicate result body", details: { log_kind: "result_published", result_id: "result-1", title: "Architecture decision" } }]);
     renderIssueDetail();
 
     // The result itself lives in the right panel's key-results section; the
     // timeline only carries a one-line pointer at it.
     expect(await screen.findByText("Architecture decision")).toBeInTheDocument();
+    await waitForReveal();
+    expect(screen.queryByText(/published the result/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Show system details" }));
     expect(
-      screen.getByText('published the result "Architecture decision"'),
+      screen.getByText(/published the result "Architecture decision"/),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("Use an append-only canonical event log."),
@@ -1440,14 +1448,19 @@ describe("IssueDetail (shared)", () => {
       published_by_id: "user-1",
       created_at: "2025-01-03T00:00:00Z",
     }]);
+    mockApiObj.listTimeline.mockResolvedValue([...mockTimeline, { type: "activity", id: "published-result", actor_type: "system",
+      content: "Duplicate result body", details: { log_kind: "result_published", result_id: "result-1", title: "Architecture decision" } }]);
     renderIssueDetail();
 
     // Panel section carries the typed card...
     expect(await screen.findByText("Key results")).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByRole("img", { name: "Decision" })).toBeInTheDocument();
 
     // ...and the timeline line scrolls to it.
-    fireEvent.click(screen.getByText('published the result "Architecture decision"'));
+    expect(screen.queryByText(/published the result/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Show system details" }));
+    fireEvent.click(screen.getByText(/published the result "Architecture decision"/));
     expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
     expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe("issue-key-results");
   });
@@ -1784,7 +1797,7 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Activity").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("Comments and activity").length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -1799,6 +1812,108 @@ describe("IssueDetail (shared)", () => {
   });
 
   describe("flat session stream", () => {
+    function activityRow(seq: number, kind: string, extra: Partial<SessionLogRow> = {}): SessionLogRow {
+      return SessionLogEntrySchema.parse({ session_id: "session-main", seq, id: "row-" + seq, revision: 1, kind,
+        author_type: "system", body_md: "Event " + seq, body_html: null, render_version: "test", metadata: {}, ...extra });
+    }
+    function renderActivityRows(entries: SessionLogRow[], userId: string) {
+      const queryClient = createTestQueryClient();
+      const makeView = () => <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <QueryClientProvider client={queryClient}>
+          <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null}
+            members={[]} agents={[{ id: "agent-1", name: "QA" } as any]} currentUserId={userId}
+            canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
+            sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()} scrollContainerEl={null}
+            onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
+            initialLog={{ sessionId: "session-main", head: null, window: { entries: [], head_seq: 10, log_version: 1, has_more_before: false, has_more_after: false } }} />
+        </QueryClientProvider>
+      </I18nProvider>;
+      const install = (rows: SessionLogRow[]) => {
+        const replica = new MemorySessionReplica({ "session-main": { entries: rows, ready: true, fresh: true } });
+        issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
+      };
+      install(entries);
+      const view = render(makeView());
+      return { ...view, replaceRows: (rows: SessionLogRow[]) => { install(rows); view.rerender(makeView()); } };
+    }
+
+    it("filters all system detail types before rendering and only inserts them after the user's toggle", async () => {
+      const head = activityRow(0, "head", { body_md: "" });
+      const assignment = activityRow(1, "turn", { task_id: "task", body_md: "# Assignment\nFull task instructions", metadata: { assignee_agent_id: "agent-1", status: "completed" } });
+      const comment = activityRow(2, "message", { author_type: "member", author_id: "user-1", body_md: "Ordinary comment", body_html: "<p>Ordinary comment</p>" });
+      const hidden = [
+        activityRow(3, "turn", { body_md: "读收件箱 ises_x cmt_env_x", metadata: { assignee_agent_id: "agent-1" } }),
+        activityRow(4, "system", { body_md: "Read internal instructions dec_x", metadata: { envelope: { kind: "decision_needed" } } }),
+        activityRow(5, "result_published", { body_md: "# Duplicate body", metadata: { title: "Result title" } }),
+        activityRow(6, "follow_frozen", { body_md: "# Frozen tsk_x" }),
+      ];
+      const view = renderActivityRows([head, assignment, comment, ...hidden], "detail-filter");
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(document.getElementById("comment-row-1")).not.toBeNull();
+      expect(document.getElementById("comment-row-2")).toHaveTextContent("Ordinary comment");
+      for (const row of hidden) expect(document.getElementById("comment-" + row.id)).toBeNull();
+      const toggle = screen.getByRole("switch", { hidden: true });
+      expect(toggle).toHaveAttribute("aria-label", "Show system details");
+      fireEvent.click(toggle);
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(4);
+      expect(view.container).not.toHaveTextContent(/Full task instructions|Read internal instructions|Duplicate body|ises_x|cmt_env_x|tsk_x|dec_x/);
+      fireEvent.click(toggle);
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(document.getElementById("comment-row-2")).toHaveTextContent("Ordinary comment");
+      await act(async () => {});
+    });
+
+    it("applies a persisted preference on the first client render and keeps it across remounts", () => {
+      const preference = activityPreferencesStore("detail-persist", "ws-1");
+      preference.getState().setShowSystemDetails(true);
+      const rows = [activityRow(0, "head"), activityRow(1, "system", { body_md: "Visible from first render" })];
+      const first = renderActivityRows(rows, "detail-persist");
+      expect(first.container.querySelector("[data-system-detail]")).not.toBeNull();
+      first.unmount();
+      const second = renderActivityRows(rows, "detail-persist");
+      expect(second.container.querySelector("[data-system-detail]")).not.toBeNull();
+      second.unmount();
+      const differentUser = renderActivityRows(rows, "detail-other");
+      expect(differentUser.container.querySelector("[data-system-detail]")).toBeNull();
+    });
+
+    it("preserves a released reader's anchor when the user toggles details and keeps pinned scrolling at the end", async () => {
+      const view = renderActivityRows([activityRow(0, "head"), activityRow(1, "system"),
+        activityRow(2, "message", { author_type: "member", body_md: "Reader anchor", body_html: "<p>Reader anchor</p>" })], "detail-anchor");
+      const root = view.container.querySelector<HTMLDivElement>("[data-session-log-scroll]")!;
+      const comment = document.getElementById("comment-row-2")!;
+      root.dataset.stickState = "released";
+      root.scrollTop = 200;
+      root.getBoundingClientRect = () => ({ top: 50, bottom: 500 } as DOMRect);
+      comment.getBoundingClientRect = () => {
+        const top = view.container.querySelector("[data-system-detail]") ? 100 : 60;
+        return { top, bottom: top + 20 } as DOMRect;
+      };
+      const toggle = screen.getByRole("switch", { hidden: true });
+      fireEvent.click(toggle);
+      expect(root.scrollTop).toBe(240);
+      root.dataset.stickState = "pinned";
+      Object.defineProperty(root, "scrollHeight", { configurable: true, value: 800 });
+      fireEvent.click(toggle);
+      expect(root.scrollTop).toBe(800);
+      await act(async () => {});
+    });
+
+    it("marks only the first assignee reply and does not retrofit references after earlier paging", () => {
+      const head = activityRow(0, "head");
+      const turn = activityRow(1, "turn", { task_id: "task", body_md: "# Task title", metadata: { assignee_agent_id: "agent-1" } });
+      const first = activityRow(2, "message", { task_id: "task", author_type: "agent", author_id: "agent-1", body_md: "First reply", body_html: "<p>First reply</p>" });
+      const second = activityRow(3, "message", { ...first, seq: 3, id: "second", body_md: "Second reply", body_html: "<p>Second reply</p>" });
+      const view = renderActivityRows([head, turn, first, second], "detail-response");
+      expect(view.container.querySelectorAll("[data-assignment-ref]")).toHaveLength(1);
+      expect(document.getElementById("comment-row-2")?.querySelector("[data-assignment-ref]")).toHaveTextContent("Responding to assignment: Task title");
+      expect(document.getElementById("comment-second")?.querySelector("[data-assignment-ref]")).toBeNull();
+      view.unmount();
+      const lateTurn = renderActivityRows([head, first, second], "detail-window");
+      expect(lateTurn.container.querySelector("[data-assignment-ref]")).toBeNull();
+      lateTurn.replaceRows([head, turn, first, second]);
+      expect(lateTurn.container.querySelector("[data-assignment-ref]")).toBeNull();
+    });
     it.each(["no rows", "protocol head only"])("marks an answered empty log ready immediately with %s", (caseName) => {
       const head: SessionLogRow = {
         session_id: "session-main", id: "head-session-main", seq: 0, kind: "head", revision: 1,
@@ -1828,8 +1943,8 @@ describe("IssueDetail (shared)", () => {
 
     it("publishes a log 500 immediately, replacing old session content with a retry view", () => {
       const oldRow: SessionLogRow = {
-        session_id: "session-main", id: "old-row", seq: 1, kind: "system", revision: 1,
-        visibility: "shown", author_type: "system", author_id: null, task_id: null, parent_id: null,
+        session_id: "session-main", id: "old-row", seq: 1, kind: "message", revision: 1,
+        visibility: "shown", author_type: "member", author_id: "user-1", task_id: null, parent_id: null,
         body_md: "Old session body", body_html: "<p>Old session body</p>", render_version: "test",
         metadata: { attachments: [] }, resolved_at: null, resolved_by_type: null,
         resolved_by_id: null, created_at: "", updated_at: "", deleted_at: null,
@@ -2169,7 +2284,7 @@ describe("IssueDetail (shared)", () => {
     expect(await screen.findByText("cleared project “Original project” when moving workspaces")).toBeInTheDocument();
   });
 
-  it("renders system log rows in seq order without folding or truncating the tail", async () => {
+  it("renders system log rows in seq order only when system details are enabled", async () => {
     mockApiObj.listTimeline.mockResolvedValue(Array.from({ length: 10 }, (_, index) => ({
       type: "activity", id: `system-${index + 1}`, actor_type: "system", actor_id: "",
       content: `System event ${index + 1}`, parent_id: null,
@@ -2178,13 +2293,19 @@ describe("IssueDetail (shared)", () => {
     })));
     renderIssueDetail();
 
+    await waitForReveal();
+    expect(screen.queryByText("System event 10")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Show system details" }));
     await screen.findByText("System event 10");
     const rows = Array.from(document.querySelectorAll("[data-log-kind='system']"));
     expect(rows).toHaveLength(10);
-    expect(rows.map(row => row.textContent)).toEqual(
+    expect(rows.map(row => row.querySelector(".flex-1")?.textContent)).toEqual(
       Array.from({ length: 10 }, (_, index) => `System event ${index + 1}`),
     );
     expect(screen.queryByText(/show \d+ more activities/i)).not.toBeInTheDocument();
+    expect(rows.every(row => row.querySelector("[role='status']")?.classList.contains("h-8"))).toBe(true);
+    fireEvent.click(screen.getByRole("switch", { name: "Show system details" }));
+    expect(document.querySelectorAll("[data-log-kind='system']")).toHaveLength(0);
   });
 
   it("sends empty description when editor is cleared", async () => {

@@ -15,11 +15,6 @@
     "send_failed": "메시지를 보내지 못했습니다. 초안이 저장되었습니다. 다시 시도하세요."
   },
   "message_list": {
-    "event_generic": "세션 업데이트",
-    "issue_update": "{{key}} 새 진행 상황",
-    "issue_update_completed": "{{key}} 새 진행 상황 (완료)",
-    "issue_update_failed": "{{key}} 새 진행 상황 (실패)",
-    "issue_update_cancelled": "{{key}} 새 진행 상황 (취소)",
     "show_details": "세부 정보 보기",
     "replied_in": "{{elapsed}} 만에 답변",
     "failed_after": "{{elapsed}} 후 실패",

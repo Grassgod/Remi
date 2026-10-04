@@ -63,7 +63,7 @@ function collabRawInput(title: string, status: string): Record<string, unknown> 
 
 function renderTranscript(
   items: TimelineItem[],
-  overrides: { task?: Partial<AgentTask>; isLive?: boolean } = {},
+  overrides: { task?: Partial<AgentTask>; isLive?: boolean; initialView?: "execution" | "prompt" } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
@@ -75,12 +75,19 @@ function renderTranscript(
         items={items}
         agentName="Remi"
         isLive={overrides.isLive}
+        initialView={overrides.initialView}
       />
     </QueryClientProvider>,
   );
 }
 
 describe("transcript pending task state", () => {
+  it("opens directly on Input Prompt when requested without an intermediate execution view", async () => {
+    getTaskPrompt.mockResolvedValue({ effective_prompt: "Assignment instructions", prompt: "Assignment instructions" });
+    renderTranscript([], { initialView: "prompt" });
+    expect(screen.getByRole("button", { name: "Input Prompt" })).toHaveAttribute("aria-pressed", "true");
+    expect(getTaskPrompt).toHaveBeenCalledWith("task-1");
+  });
   it("shows the task execution model beside its usage, including the fallback cause", () => {
     renderTranscript([], { task: {
       usage: [{ model: "primary", inputTokens: 240, outputTokens: 80 }],

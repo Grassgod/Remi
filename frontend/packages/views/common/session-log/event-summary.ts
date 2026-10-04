@@ -1,7 +1,15 @@
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { quotePreview } from "../../issues/utils/quote-preview";
 
-const INTERNAL_ID = /\b(?:cmt_env|cmt|ises|tsk|sevt|chat|cses|agt|iss|sres|res|att|dlg|prj|repo|rt)_[a-zA-Z0-9][a-zA-Z0-9_-]*\b/g;
+export const INTERNAL_ID_PREFIXES = [
+  "act", "ane", "apb", "apl", "aps", "apv", "agt", "att", "aut", "batch", "chat", "clog", "cmt_env", "cmt", "crn", "cses",
+  "dcs", "dec", "dep", "dlg", "dws", "evt", "fba", "fbo", "fbr", "fbs", "fcb", "fdb", "fhrp", "flease", "foc", "fop_claim", "fop", "fout", "frp", "fsrc",
+  "hrq", "inb", "inv", "ises", "iss", "kout", "krun", "ksrc", "ksub", "lbl", "mconn", "mem", "mlease", "mout", "msg", "msrc",
+  "nch", "ndl", "orga", "paud", "pdoc", "pdrev", "pin", "pop", "prj", "prov", "rck", "repo", "res", "rt", "run", "rwbatch", "rwdoc",
+  "rwjob", "rwlease", "rwrev", "rws", "rxn", "sar", "sce", "scm", "scr", "scv", "sdl", "sev", "sevt", "sfx", "sil", "skf", "skl",
+  "spart", "sqd", "sqm", "srb", "sres", "sshinvalidate", "sshprobe", "sshrekey", "steer", "sub", "trg", "tsk", "usr", "whd", "ws",
+] as const;
+const INTERNAL_ID = new RegExp(`\\b(?:${INTERNAL_ID_PREFIXES.join("|")})_[a-zA-Z0-9][a-zA-Z0-9_-]*\\b`, "g");
 
 export function eventSummary(markdown: string, maxChars = 120): string {
   for (const line of markdown.split(/\r?\n/)) {
@@ -32,33 +40,33 @@ export function reportOutcome(value: unknown): "completed" | "failed" | "cancell
   return value === "failed" || value === "cancelled" ? value : null;
 }
 
-export function delegationReporter(markdown: string): string {
-  const firstLine = markdown.trim().split(/\r?\n/, 1)[0] ?? "";
-  const match = firstLine.match(/^(.+?) (?:completed|could not complete) a task you delegated\.$/)
-    ?? firstLine.match(/^A task you delegated to (.+?) was cancelled\.$/);
-  return match ? eventSummary(match[1]!) : "";
+export function envelopeType(value: unknown): string {
+  const envelope = metadataRecord(value);
+  const prefix = metadataString(envelope.dedupeKey).split(":", 1)[0];
+  switch (prefix) {
+    case "delegation_terminal": return "delegation";
+    case "delegation_progress": return "delegation_progress";
+    case "child_status": return "child";
+    case "dependency_failed": return "dependency_failed";
+    case "dependency_ready": return "dependency_ready";
+    case "decision_request": return "decision_needed";
+    case "decision_answer": case "decision_overturn": return "decision_answer";
+    case "relay": return "relay";
+  }
+  const role = metadataRecord(envelope.to).role;
+  switch (envelope.kind) {
+    case "child_status": return "child";
+    case "dependency_failed": return "dependency_failed";
+    case "decision_needed": return "decision_needed";
+    case "lifecycle": return "dependency_ready";
+    case "reply": return role === "delegator" ? "delegation_progress" : "decision_answer";
+    case "report": return role === "delegator" ? "delegation"
+      : role === "parent_owner" ? "child" : role === "relay" ? "relay" : "generic";
+    default: return "generic";
+  }
 }
 
-export function delegationBodyOutcome(markdown: string): "completed" | "failed" | "cancelled" | null {
-  const firstLine = markdown.trim().split(/\r?\n/, 1)[0] ?? "";
-  if (/ completed a task you delegated\.$/.test(firstLine)) return "completed";
-  if (/ could not complete a task you delegated\.$/.test(firstLine)) return "failed";
-  if (/^A task you delegated to .+ was cancelled\.$/.test(firstLine)) return "cancelled";
-  return reportOutcome(markdown.match(/^Status:\s*(completed|failed|cancelled)\s*$/m)?.[1]);
-}
-
-export function chatIssueUpdate(markdown: string, metadata: unknown) {
-  const key = markdown.match(/^\s*([A-Z][A-Z0-9]*-\d+)\s+有新日志[：:]/)?.[1];
-  if (!key) return null;
-  const envelope = metadataRecord(metadataRecord(metadata).envelope);
-  const source = metadataRecord(envelope.source);
-  const bodyStatus = markdown.match(/状态\s+(completed|failed|cancelled)\b/)?.[1];
-  return { key, issueId: metadataString(source.issueId),
-    outcome: reportOutcome(envelope.outcome) ?? reportOutcome(bodyStatus) };
-}
-
-// Summary and expanded bodies must never reuse each other's measured heights,
-// or heights left in the replica by the previous full-markdown presentation.
-export function eventLayoutEntry(entry: SessionLogEntry, view: "issue" | "chat", expanded = false): SessionLogEntry {
-  return { ...entry, render_version: `${entry.render_version ?? ""}:${view}-event-v1:${expanded ? "expanded" : "summary"}` };
+// Do not reuse measurements left by the old full-body or inline disclosure UI.
+export function eventLayoutEntry(entry: SessionLogEntry): SessionLogEntry {
+  return { ...entry, render_version: `${entry.render_version ?? ""}:issue-event-v2` };
 }
