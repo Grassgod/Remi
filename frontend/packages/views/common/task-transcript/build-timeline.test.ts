@@ -158,6 +158,34 @@ describe("task transcript timeline", () => {
 });
 
 describe("trace timeline display", () => {
+  it("renders the QA F0 fixture as five events with its complete final reply", () => {
+    const fixture = [
+      trace(1, "execution"),
+      trace(2, "thinking", { content: "检查" }),
+      trace(3, "usage", { content: "", meta: { used: 300000, size: 1000000 } }),
+      trace(4, "thinking", { content: "完成。" }),
+      trace(5, "text", { content: "开始" }),
+      trace(6, "usage", { content: "", meta: { used: 400000, size: 1000000 } }),
+      trace(7, "text", { content: "检查。" }),
+      trace(8, "tool_use", { tool: "Bash", tool_call_id: "T1" }),
+      trace(9, "tool_result", { tool: "Bash", tool_call_id: "T1", status: "completed", meta: { duration_ms: 1000 } }),
+      trace(10, "text", { content: "已通过 " }),
+      trace(11, "usage", { content: "", meta: { used: 350000, size: 1000000 } }),
+      trace(12, "text", { content: "tests and " }),
+      trace(13, "text", { content: "is now building the Web image." }),
+      trace(14, "usage", { content: "", meta: { used: 210908, size: 1000000 } }),
+    ];
+    const items = buildTraceTimeline(fixture);
+    expect(items).toHaveLength(5);
+    expect(items.map((item) => item.type)).toEqual(["thinking", "text", "tool_use", "tool_result", "text"]);
+    expect(items.filter((item) => item.content).map((item) => item.content)).toEqual([
+      "检查完成。", "开始检查。", "已通过 tests and is now building the Web image.",
+    ]);
+    expect(extractContextUsage(fixture)).toEqual({ used: 210908, size: 1000000 });
+    expect(buildEntries(items).find((entry) => entry.kind === "step"))
+      .toMatchObject({ toolCallId: "T1", status: "completed", durationMs: 1000 });
+  });
+
   const events = [
     trace(1, "thinking", { content: "Inspect" }),
     trace(2, "usage", { content: "", meta: { used: 210908, size: 1000000 } }),
