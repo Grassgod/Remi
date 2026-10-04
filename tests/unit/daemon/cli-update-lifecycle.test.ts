@@ -1,3 +1,4 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -48,7 +49,7 @@ for (const outcome of ["failed", "completed"] as const) {
       };
       queueMicrotask(() => {
         emit("open", {});
-        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, min_cli_version: "0.2.86", session_id: "unit-update" } }) });
+        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "unit-update" } }) });
       });
       return socket;
     };

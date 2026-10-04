@@ -1,3 +1,4 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { DaemonProtocolClient, type DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { normalizeDaemonTurnOffer, registerDaemonOfferHandler, type OfferRejection } from "@multiremi/worker/daemon-offers.js";
@@ -29,7 +30,7 @@ function fixture() {
   const lane = { runtime: () => ({ runtime_id: "rt_unit", provider: "claude", max_concurrency: 1, active_task_ids: [] }),
     heartbeat: () => ({ active_task_count: 0 }), onHeartbeatAck: async () => {}, probeUpgrade: async () => {}, onTerminal: async () => {} };
   client.addLane(lane); client.startLane(lane);
-  socket.emit("open", {}); socket.frame({ t: "welcome", p: { protocol: 2, min_cli_version: "0.2.86", session_id: "unit" } });
+  socket.emit("open", {}); socket.frame({ t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "unit" } });
   const hb = socket.sent.find(frame => frame.t === "hb")!;
   socket.frame({ t: "res", re: hb.id, p: { ok: true, runtime_acks: [] } });
   let rejection: OfferRejection | null = null;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,7 +50,7 @@ describe("unified turn input", () => {
   it("rejects the 0.2.85 daemon while admitting the payload release and newer versions", () => {
     expect(checkHandshakeVersion({ protocol: 2, cli_version: "0.2.85" })).toMatchObject({ code: 4426, errorCode: "daemon_cli_upgrade_required" });
     expect(checkHandshakeVersion({ protocol: 2, cli_version: DAEMON_MIN_CLI_VERSION })).toBeNull();
-    expect(checkHandshakeVersion({ protocol: 2, cli_version: "9.0.0" })).toBeNull();
+    expect(checkHandshakeVersion({ protocol: 2, cli_version: `${Number(DAEMON_MIN_CLI_VERSION.split(".")[0]) + 1}.0.0` })).toBeNull();
   });
   it("publishes the new offer without id/prompt and refuses claims missing canonical input", () => {
     expect(daemonTurnOfferPayload({ id: "tsk_one", prompt: "old", runtime_id: "rt_one" }, turn)).toEqual({ ...turn, runtime_id: "rt_one" });
@@ -219,6 +219,28 @@ describe("unified store transport boundary", () => {
     expect(await reportFrame(store, "turn.input", { ...input, input_to_seq: -1 }, { runtimeId: rt.id, turns })).toMatchObject({ ok: false, code: "invalid_report" });
     expect(await reportFrame(store, "turn.decision", { ...decision, task_id: "old" }, { runtimeId: rt.id, turns })).toMatchObject({ ok: false, code: "invalid_report" });
     expect(calls).toHaveLength(2);
+  });
+  it("routes permission decisions through the bridge without reading or writing retired human requests", async () => {
+    const store = createLocalStore();
+    const rt = store.registerRuntime({ id: "rt_permission", name: "permission", provider: "claude" });
+    const legacyWrite = spyOn(store, "createTaskHumanRequest");
+    const legacyRead = spyOn(store, "getTaskHumanRequest");
+    const calls: unknown[] = [];
+    const turns = bridge({ rpc: (type, payload, scope) => {
+      calls.push({ type, payload, scope });
+      return { ok: true, message: message(2, { message_kind: "decision", metadata: payload.metadata as Record<string, unknown> }),
+        status: "awaiting_human" };
+    } });
+    try {
+      const payload = { turn_id: "turn_one", attempt_id: "tsk_one", body_md: "Allow tool?", dedupe_key: "permission:one",
+        options: [{ label: "Allow once", value: "allow", description: "allow_once" }], metadata: { decision_kind: "permission" } };
+      expect(await reportFrame(store, "turn.decision", payload, { runtimeId: rt.id, turns })).toMatchObject({
+        ok: true, message: { message_kind: "decision", metadata: { decision_kind: "permission" } }, status: "awaiting_human",
+      });
+      expect(calls).toEqual([{ type: "turn.decision", payload,
+        scope: { runtimeId: rt.id, daemonId: "fixture-reports", workspaceId: "local" } }]);
+      expect(legacyWrite).not.toHaveBeenCalled(); expect(legacyRead).not.toHaveBeenCalled();
+    } finally { legacyWrite.mockRestore(); legacyRead.mockRestore(); }
   });
   it("closes the attempt trace only after the atomic completion barrier accepts the reply", async () => {
     const store = createLocalStore();

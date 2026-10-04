@@ -39,7 +39,6 @@ import {
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
   MultiremiDaemonHttpError,
-  MultiremiDaemonRequestTimeoutError,
   type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
@@ -1074,7 +1073,7 @@ export class MultiremiDaemon {
       daemonId: this.options.daemonId ?? this.options.runtimeName,
       cliVersion: multiremiVersion,
       launchedBy: this.options.launchedBy,
-      caps: ["offer", "steer.push", "trace.read", "trace.subscribe", "wiki.fetch"],
+      caps: ["offer", "turn.message", "trace.read", "trace.subscribe", "wiki.fetch"],
       log,
       ...options.protocolClientOptions,
     });
@@ -1197,7 +1196,7 @@ export class MultiremiDaemon {
   }
 
   async isFeishuBotHumanRequestPending(taskId: string, requestId: string): Promise<boolean> {
-    return (await this.readFeishuBotHumanRequest(taskId, requestId)).status === "pending";
+    return (await this.getFeishuBotHumanRequest(taskId, requestId))?.status === "pending";
   }
 
   /** Cards this Runtime still owes click handlers for (MUL-407 restart recovery). */
@@ -1234,44 +1233,22 @@ export class MultiremiDaemon {
     return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
   }
 
-  getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    return this.readFeishuBotHumanRequest(taskId, requestId);
+  /** Retired bot hooks fail closed until S4 replaces callers with decision-message routing. */
+  getFeishuBotHumanRequest(_taskId: string, _requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
   }
 
-  waitFeishuBotHumanRequestSettled(requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
-    return this.taskDownlinks.waitForHumanDecision(requestId, signal, 24 * 60 * 60 * 1000);
+  waitFeishuBotHumanRequestSettled(_requestId: string, _signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
+    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
   }
 
-  private async readFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest> {
-    const path = `/api/daemon/tasks/${taskId}/human-requests/${requestId}`;
-    const timeoutMs = this.options.requestTimeoutMs;
-    try {
-      const reply = await this.taskDownlinks.rpc("human_request.get", { task_id: taskId, request_id: requestId }, timeoutMs);
-      if (!reply.request || typeof reply.request !== "object") throw new Error("human_request.get returned no request");
-      return reply.request as MultiremiTaskHumanRequest;
-    } catch (error) {
-      if (error instanceof DaemonProtocolRpcError) {
-        if (error.code === "daemon_timeout") throw new MultiremiDaemonRequestTimeoutError("GET", path, timeoutMs);
-        const status = error.httpStatus ?? (error.code === "task_not_found" ? 404 : error.code === "authority_revoked" ? 403 : null);
-        if (status !== null) throw new MultiremiDaemonHttpError(status, "GET", path,
-          JSON.stringify({ error: error.detail ?? (status === 404 ? "request not found" : "forbidden for daemon identity"),
-            ...(error.httpCode ? { code: error.httpCode } : {}) }), error.httpCode ?? null);
-      }
-      throw error;
-    }
+  prepareTaskHumanRequestCard(_taskId: string, _requestId: string, _recipientOpenId: string): Promise<Record<string, unknown>> {
+    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
   }
 
-  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
-    return this.client.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
-  }
-
-  respondFeishuBotHumanRequest(
-    taskId: string,
-    requestId: string,
-    response: Record<string, unknown>,
-    credential?: { token: string; operatorOpenId: string },
-  ): Promise<MultiremiTaskHumanRequest> {
-    return this.client.respondTaskHumanRequest(taskId, requestId, response, credential);
+  respondFeishuBotHumanRequest(_taskId: string, _requestId: string, _response: Record<string, unknown>,
+    _credential?: { token: string; operatorOpenId: string }): Promise<MultiremiTaskHumanRequest> {
+    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
   }
 
   resetFeishuBotSession(revision: number, externalSessionKey: string): Promise<boolean> {
@@ -3904,37 +3881,42 @@ export class MultiremiDaemon {
       });
     } else {
       provider.setPermissionHandler?.(async (params) => {
+        this.taskDownlinks.beginDecision(task.id);
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
-          const request = await this.createTaskHumanRequest(task.id, {
-            kind: "permission",
-            payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
-            // Publish the deadline so the topic can remind before it elapses.
-            timeoutMs: humanRequestTimeoutMs,
+          // S2 creates the decision message and sets awaiting_human atomically.
+          const result = await this.taskDownlinks.rpc("turn.decision", {
+            ...this.taskDownlinks.turnInput(task.id),
+            dedupe_key: `permission:${task.id}:${randomUUID()}`,
+            body_md: `Permission requested: ${toolTitle}`,
+            options: params.options.map(option => ({ label: option.name, value: option.optionId, description: option.kind })),
+            metadata: { decision_kind: "permission", session_id: params.sessionId,
+              tool_call: params.toolCall ?? null, options: params.options },
+            timeout_ms: humanRequestTimeoutMs,
           });
+          const decision = result.message as UnifiedMessage;
+          if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
+          this.taskDownlinks.registerDecision(decision, task.id);
           await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
-            request_id: request.id,
-            options: params.options,
-            tool_call: params.toolCall ?? null,
+            message_id: decision.id, options: params.options, tool_call: params.toolCall ?? null,
           });
-          const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
-          const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
-          const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
-          await this.reportHumanRequestMessage(
-            task.id,
-            nextSeq(),
-            "permission_response",
-            chosen
-              ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
-              : `Permission request ${settled?.status ?? "cancelled"}`,
-            { request_id: request.id, option_id: optionId, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
-          );
-          if (optionId) return { outcome: "selected", optionId };
-          return { outcome: "cancelled" };
+          const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
+          const optionId = reply ? readResponseOptionId(reply.metadata) ?? reply.body_md.trim() : null;
+          const chosen = optionId ? params.options.find(option => option.optionId === optionId) ?? null : null;
+          await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_response", chosen
+            ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
+            : "Permission request cancelled or timed out", {
+              message_id: decision.id, reply_message_id: reply?.id ?? null,
+              option_id: chosen?.optionId ?? null, responded_by: reply?.sender_id ?? null,
+            });
+          if (reply) this.taskDownlinks.confirmDecisionReply(task.id, reply);
+          return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
         } catch (err) {
           // Conservative deny when the routing infrastructure itself fails.
           log.warn(`Permission routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
           return { outcome: "cancelled" };
+        } finally {
+          this.taskDownlinks.finishDecision(task.id);
         }
       });
     }
@@ -3981,16 +3963,7 @@ export class MultiremiDaemon {
           message_id: decision.id,
           questions,
         });
-        const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
-        let reply = await this.taskDownlinks.waitForDecisionReply(decision.id, waitSignal, humanRequestTimeoutMs);
-        if (!reply) {
-          const expired = await this.taskDownlinks.rpc("turn.decision.expire", {
-            ...this.taskDownlinks.turnInput(task.id), message_id: decision.id,
-            status: waitSignal.aborted ? "cancelled" : "timeout",
-          });
-          // A human reply that committed before expiration wins the race.
-          reply = (expired.reply as UnifiedMessage | undefined) ?? null;
-        }
+        const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
         const answers = reply ? readResponseAnswers(reply.metadata)
           ?? (questions.length === 1 ? { [questions[0]!.question.question]: reply.body_md } : null) : null;
         await this.reportHumanRequestMessage(
@@ -4016,37 +3989,18 @@ export class MultiremiDaemon {
     };
   }
 
-  /**
-   * Wait for the settled push, task abort, or human
-   * timeout elapses. Timeout/abort expires the request server-side; if a human
-   * response won that race, the server returns the responded row and we honor it.
-   */
-  private async awaitHumanDecision(
-    taskId: string,
-    requestId: string,
-    signal: AbortSignal,
-    timeoutMs: number,
-  ): Promise<MultiremiTaskHumanRequest | null> {
+  /** Questions and permissions share the reply/expiry race through decision messages. */
+  private async awaitDecisionReply(taskId: string, messageId: string, signal: AbortSignal,
+    timeoutMs: number): Promise<UnifiedMessage | null> {
     const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
-    const settled = await this.taskDownlinks.waitForHumanDecision(requestId, waitSignal, timeoutMs);
-    if (settled) return settled;
-    try {
-      const result = await this.taskDownlinks.rpc("human_request.expire", { task_id: taskId, request_id: requestId,
-        status: waitSignal.aborted ? "cancelled" : "timeout" });
-      return result.request as MultiremiTaskHumanRequest | null;
-    } catch (err) {
-      log.warn(`Expire human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
-    }
-  }
-
-  private async createTaskHumanRequest(taskId: string, input: {
-    kind: "permission" | "question"; payload: Record<string, unknown>; timeoutMs?: number;
-  }): Promise<MultiremiTaskHumanRequest> {
-    const result = await this.taskDownlinks.rpc("human_request.create", { task_id: taskId,
-      request_id: randomUUID(), kind: input.kind, payload: input.payload,
-      ...(input.timeoutMs === undefined ? {} : { timeout_ms: input.timeoutMs }) });
-    return result.request as unknown as MultiremiTaskHumanRequest;
+    const reply = await this.taskDownlinks.waitForDecisionReply(messageId, waitSignal, timeoutMs);
+    if (reply) return reply;
+    const expired = await this.taskDownlinks.rpc("turn.decision.expire", {
+      ...this.taskDownlinks.turnInput(taskId), message_id: messageId,
+      status: waitSignal.aborted ? "cancelled" : "timeout",
+    });
+    // A human reply committed before expiration wins the race.
+    return (expired.reply as UnifiedMessage | undefined) ?? null;
   }
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {

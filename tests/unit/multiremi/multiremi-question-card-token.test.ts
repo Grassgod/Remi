@@ -250,7 +250,16 @@ for (const backend of ["SQLite", "Postgres"] as const) {
             const request = store.getTaskHumanRequest(requestId);
             return request?.taskId === taskId ? request : null;
           },
-          respond: (taskId, requestId, response, credential) => client.respondTaskHumanRequest(taskId, requestId, response, credential),
+          // Exercise the server's existing token route directly; the daemon's
+          // old human-request transport is retired, and S4 owns card migration.
+          respond: async (taskId, requestId, response, credential) => {
+            const result = await f.api.request(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/respond`, {
+              method: "POST", headers: { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" },
+              body: JSON.stringify({ response, token: credential?.token, operator_open_id: credential?.operatorOpenId }),
+            });
+            if (!result.ok) throw new Error(`Card response failed: ${result.status}`);
+            return (await result.json() as { request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest }).request;
+          },
           getDecision: (issueId, requestId) => client.getFeishuIssueDecision(issueId, requestId),
           answer: (issueId, requestId, answer, credential) => client.answerFeishuIssueDecision(issueId, requestId, { answer, ...credential }),
         });
@@ -326,7 +335,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         revision: 1, externalSessionKey: `oc_native_${f.n}`, externalMessageId: `om_native_${f.n}`,
         chatId: `oc_native_${f.n}`, chatType: "p2p", text: "Question", deliveryMode: "native_cot_v1",
       });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
+      db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
       const request = store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
         payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
       const path = `/api/daemon/tasks/${submitted.taskId}/human-requests/${request.id}`;
@@ -345,7 +354,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       }
       const privateChat = store.createChatSession({ agentId: f.task.agentId, workspaceId: f.workspaceId, creatorId: f.user.id });
       const privateTask = store.createTask({ agentId: f.task.agentId, workspaceId: f.workspaceId, chatSessionId: privateChat.id, prompt: "Private" });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
+      db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
       const privateRequest = store.createTaskHumanRequest({ taskId: privateTask.id, kind: "question", payload: {} });
       expect((await f.api.request(`/api/daemon/tasks/${privateTask.id}/human-requests/${privateRequest.id}/card`, {
         method: "POST", headers, body: cardInput,

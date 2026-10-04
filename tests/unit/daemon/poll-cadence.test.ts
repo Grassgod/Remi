@@ -1,3 +1,4 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { afterEach, describe, expect, it, jest } from "bun:test";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker/daemon-protocol-client.js";
@@ -193,7 +194,7 @@ function createLoopDaemon(options: {
       push = (type, payload) => emit("message", { data: JSON.stringify({ v: 2, t: type, seq: ++sequence, rt: "rt_cadence", p: payload }) });
       queueMicrotask(() => {
         emit("open", {});
-        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, min_cli_version: "0.2.86", session_id: "cadence" } }) });
+        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "cadence" } }) });
         if (options.startLoop !== false) push("plugin.desired_revision", { revision: "rev-1" });
       });
       return {

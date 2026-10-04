@@ -308,7 +308,7 @@ describe("compareDaemonCliVersion", () => {
 describe("meetsDaemonMinCliVersion", () => {
   it("admits the pinned minimum and anything newer", () => {
     expect(meetsDaemonMinCliVersion(DAEMON_MIN_CLI_VERSION)).toBe(true);
-    expect(meetsDaemonMinCliVersion("99.0.0")).toBe(true);
+    expect(meetsDaemonMinCliVersion(`${Number(DAEMON_MIN_CLI_VERSION.split(".")[0]) + 1}.0.0`)).toBe(true);
   });
 
   it("rejects the fleet's current release, which is the point of the gate", () => {

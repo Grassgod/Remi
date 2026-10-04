@@ -3,6 +3,9 @@ import { startMultiremiServer } from "../../fixtures/daemon-protocol.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
+import type { DaemonTurnBridge } from "@multiremi/api/daemon-protocol/turn-bridge.js";
+import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
+import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonTaskDownlinks } from "@multiremi/worker/daemon-downlinks.js";
@@ -25,15 +28,33 @@ function fixture() {
     workspaceId: "local", maxConcurrency: 4, metadata: { parallel_agent_execution: 1 } });
   const agent = store.createAgent({ name: "Task inputs", provider: "claude", runtimeId: rt, maxConcurrentTasks: 4 });
   const active: string[] = [];
+  const messages: ReturnType<DaemonTurnBridge["snapshot"]>["messages"] = [];
+  const wraps: ReturnType<DaemonTurnBridge["snapshot"]>["wrapUps"] = [];
+  const bridge: DaemonTurnBridge = {
+    offerInput: () => { throw new Error("No offer expected in active-task fixture"); },
+    snapshot: () => ({ messages: [...messages], wrapUps: [...wraps] }),
+    rpc: (type, payload) => {
+      if (type === "turn.input") {
+        for (let index = messages.length - 1; index >= 0; index--) {
+          if (payload.message_ids instanceof Array && payload.message_ids.includes(messages[index]!.message.id)) messages.splice(index, 1);
+        }
+      }
+      return type === "turn.decision" ? { ok: true, message: message(1, {
+        id: "decision_live", message_kind: "decision", body_md: String(payload.body_md), metadata: payload.metadata as Record<string, unknown>,
+      }) } : { ok: true };
+    },
+    complete: () => ({ ok: true }),
+  };
   const task = () => {
     const row = store.createTask({ agentId: agent.id, prompt: "Task input fixture" });
     expect(store.claimTask(rt)?.id).toBe(row.id);
     store.startTask(row.id); active.push(row.id);
+    inbox.bindTurn({ turn_id: `turn_${row.id}`, attempt_id: row.id, input_from_seq: 0, input_to_seq: 1, input_messages: [] });
     return row;
   };
   let layer!: DaemonProtocolLayer;
   const server = startMultiremiServer({ store, hostname: "127.0.0.1", port: 0, authToken: "task-input-fixture",
-    onDaemonProtocol: value => { layer = value; } });
+    daemonTurnBridge: bridge, onDaemonProtocol: value => { layer = value; } });
   const clock = new ManualDaemonProtocolClock();
   const sockets: WebSocket[] = [];
   const frames: Array<Record<string, any>> = [];
@@ -58,7 +79,12 @@ function fixture() {
     await waitFor(() => client.connectionState() === "disconnected" && layer.registry.size === 0);
     await client.drain(); await layer.drain();
   };
-  return { store, rt, task, inbox, client, frames, errors,
+  return { store, rt, task, inbox, client, frames, errors, messages, wraps,
+    push(attemptId: string, input: UnifiedMessage) {
+      const session = layer.registry.sessionForRuntime(rt);
+      if (!(session instanceof DaemonProtocolSession)) throw new Error("No runtime session");
+      session.sendEvent({ t: "turn.message", rt, p: { turn_id: `turn_${attemptId}`, attempt_id: attemptId, message: input } });
+    },
     async start() { client.startLane(lane); await waitFor(() => client.connectionState() === "connected"); await client.drain(); await layer.drain(); },
     disconnect,
     async reconnect() { clock.advance(1_000); await waitFor(() => client.connectionState() === "connected"); await client.drain(); await layer.drain(); },
@@ -70,74 +96,87 @@ function fixture() {
   };
 }
 
-describe("A-4 task push inbox over native WS", () => {
-  it("resumes a connected human waiter from the settled frame without get polling", async () => {
-    const h = fixture();
-    const task = h.task();
-    const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    const rpc = spyOn(h.client, "rpc");
+const message = (seq: number, overrides: Partial<UnifiedMessage> = {}): UnifiedMessage => ({
+  id: `msg_${seq}`, kind: "message", seq, session_id: "ises_fixture", body_md: "Yes",
+  sender_type: "member", sender_id: "member_fixture", message_kind: "reply", metadata: {},
+  created_at: "2026-10-05T00:00:00Z", ...overrides,
+} as UnifiedMessage);
+
+describe("turn input push inbox over native WS", () => {
+  it("resumes a permission decision from a reply message without get polling", async () => {
+    const h = fixture(); const task = h.task(); const rpc = spyOn(h.client, "rpc");
     try {
       await h.start();
-      const human = h.inbox.waitForHumanDecision(request.id, new AbortController().signal, 1_000);
-      const start = performance.now();
-      const settled = h.store.respondTaskHumanRequest(request.id, { response: { answer: "Yes" } });
-      expect(await human).toEqual(settled);
-      expect(performance.now() - start).toBeLessThan(1_000);
-      expect(h.frames.filter(frame => frame.t === "task.human_request.settled"
-        && frame.p.request.id === request.id)).toHaveLength(1);
-      expect(rpc.mock.calls.filter(([type]) => type === "human_request.get")).toHaveLength(0);
+      h.inbox.beginDecision(task.id);
+      const result = await h.inbox.rpc("turn.decision", { ...h.inbox.turnInput(task.id),
+        dedupe_key: "permission_live", body_md: "Allow tool?", options: [{ label: "Allow", value: "allow" }],
+        metadata: { decision_kind: "permission" }, timeout_ms: 1000 });
+      const decision = result.message as UnifiedMessage;
+      h.inbox.registerDecision(decision, task.id);
+      const waiting = h.inbox.waitForDecisionReply(decision.id, new AbortController().signal, 1000);
+      const reply = message(2, { reply_to_id: decision.id, metadata: { option_id: "allow" } });
+      h.push(task.id, reply);
+      expect(await waiting).toEqual(reply);
+      expect(h.frames.filter(frame => frame.t === "turn.message" && frame.p.message.id === reply.id)).toHaveLength(1);
+      expect(rpc.mock.calls.filter(([type]) => type === "turn.decision.get")).toHaveLength(0);
+      h.inbox.confirmDecisionReply(task.id, reply); h.inbox.finishDecision(task.id);
+      await h.inbox.consumeTaskSteerMessages(task.id, []);
+      expect(h.inbox.turnInput(task.id).input_to_seq).toBe(2);
+      expect(h.errors).toEqual([]);
     } finally { await h.close(); rpc.mockRestore(); }
   });
 
-  it("bounds settled records received for other runtimes without losing a live waiter", async () => {
-    let handler!: (frame: any) => void;
-    const client = { registerFrameHandler(type: string, callback: (frame: any) => void) {
-      if (type === "task.human_request.settled") handler = callback;
-    } } as unknown as DaemonProtocolClient;
+  it("bounds cached decision replies without losing a live waiter", async () => {
+    const handlers = new Map<string, (frame: any) => void>();
+    const client = { registerFrameHandler: (type: string, callback: (frame: any) => void) => handlers.set(type, callback) } as unknown as DaemonProtocolClient;
     const inbox = new DaemonTaskDownlinks(client, () => "rt_bot");
-    const waiting = inbox.waitForHumanDecision("hrq_live", new AbortController().signal, 1_000);
-    for (let index = 0; index < 1025; index++) handler({ rt: "rt_bot", payload: {
-      task_id: `tsk_other_${index}`, request: { id: `hrq_other_${index}`,
-        taskId: `tsk_other_${index}`, status: "responded" },
+    inbox.bindTurn({ turn_id: "turn_live", attempt_id: "tsk_live", input_from_seq: 0, input_to_seq: 1, input_messages: [] });
+    const waiting = inbox.waitForDecisionReply("decision_live", new AbortController().signal, 1000);
+    for (let index = 0; index < 1025; index++) handlers.get("turn.message")!({ rt: "rt_bot", payload: {
+      turn_id: "turn_live", attempt_id: "tsk_live", message: message(index + 2, { reply_to_id: `decision_${index}` }),
     } });
-    const live = { id: "hrq_live", taskId: "tsk_live", status: "responded" };
-    handler({ rt: "rt_bot", payload: { task_id: "tsk_live", request: live } });
-    expect(await waiting).toMatchObject(live);
-    const settled = (inbox as unknown as { settled: Map<string, unknown> }).settled;
-    expect(settled.size).toBe(1024);
-    expect(settled.has("hrq_other_0")).toBe(false);
-    expect(settled.has("hrq_other_1024")).toBe(true);
+    const live = message(1027, { reply_to_id: "decision_live" });
+    handlers.get("turn.message")!({ rt: "rt_bot", payload: { turn_id: "turn_live", attempt_id: "tsk_live", message: live } });
+    expect(await waiting).toEqual(live);
+    const cache = (inbox as unknown as { decisionReplies: Map<string, UnifiedMessage> }).decisionReplies;
+    expect(cache.size).toBe(1024);
+    expect(cache.has("decision_0")).toBe(false);
+    expect(cache.has("decision_1024")).toBe(true);
+    expect(handlers.has("task.human_request.settled")).toBe(false);
   });
 
-  it("processes offline steer, human settlement and cancellation once across two reconnect snapshots", async () => {
-    const h = fixture();
-    const rpc = spyOn(h.client, "rpc");
-    const steerTask = h.task(); const humanTask = h.task(); const cancelledTask = h.task();
-    const request = h.store.createTaskHumanRequest({ taskId: humanTask.id, kind: "question", payload: { question: "Continue?" } });
-    let steerCount = 0; let cancelCount = 0;
-    const unsubscribe = h.inbox.subscribeTaskSteerMessages(steerTask.id, () => { steerCount++; });
+  it("processes offline input, permission replies, wrap-up and cancellation once across reconnect snapshots", async () => {
+    const h = fixture(); const rpc = spyOn(h.client, "rpc");
+    const inputTask = h.task(); const humanTask = h.task(); const cancelledTask = h.task();
+    const decision = message(1, { id: "decision_offline", message_kind: "decision" });
+    h.inbox.registerDecision(decision, humanTask.id);
+    const waiting = h.inbox.waitForDecisionReply(decision.id, new AbortController().signal, 2000);
+    let inputCount = 0; let cancelCount = 0;
+    const unsubscribe = h.inbox.subscribeTaskSteerMessages(inputTask.id, () => inputCount++);
     const unwatch = h.inbox.observeCancellation(cancelledTask.id, status => { expect(status).toBe("cancelled"); cancelCount++; });
-    const human = h.inbox.waitForHumanDecision(request.id, new AbortController().signal, 2_000);
     try {
       await h.start(); await h.disconnect();
-      const steer = h.store.createTaskSteerMessage({ taskId: steerTask.id, kind: "steer", content: "Offline directive" });
-      const settled = h.store.respondTaskHumanRequest(request.id, { response: { answer: "Yes" }, respondedBy: "fixture" });
+      const input = message(2, { body_md: "Offline directive", message_kind: "request" });
+      const reply = message(2, { id: "msg_reply", reply_to_id: decision.id, metadata: { option_id: "allow" } });
+      h.messages.push({ turn_id: `turn_${inputTask.id}`, attempt_id: inputTask.id, message: input },
+        { turn_id: `turn_${humanTask.id}`, attempt_id: humanTask.id, message: reply });
+      h.wraps.push({ turn_id: `turn_${inputTask.id}`, attempt_id: inputTask.id, requested_at: "2026-10-05T01:00:00Z" });
       h.store.cancelTask(cancelledTask.id);
-      expect(steerCount).toBe(0); expect(cancelCount).toBe(0);
-      await h.reconnect();
-      await waitFor(() => steerCount === 1 && cancelCount === 1);
-      expect(await human).toEqual(settled);
-      expect(h.inbox.pendingTaskSteerMessages(steerTask.id).map(message => message.id)).toEqual([steer.id]);
+      expect(inputCount).toBe(0); expect(cancelCount).toBe(0);
+      await h.reconnect(); await waitFor(() => inputCount === 2 && cancelCount === 1);
+      expect(await waiting).toEqual(reply);
+      h.inbox.confirmDecisionReply(humanTask.id, reply);
+      expect(h.inbox.pendingTaskSteerMessages(inputTask.id).map(item => item.id)).toEqual([input.id, "wrap_up:2026-10-05T01:00:00Z"]);
       await h.disconnect(); await h.reconnect();
-      await waitFor(() => h.frames.filter(frame => frame.t === "task.steer").length === 2);
-      expect(steerCount).toBe(1); expect(cancelCount).toBe(1);
-      expect(await h.inbox.waitForHumanDecision(request.id, new AbortController().signal, 100)).toEqual(settled);
-      await h.inbox.consumeTaskSteerMessages(steerTask.id, [steer.id]);
-      await h.inbox.consumeTaskSteerMessages(steerTask.id, [steer.id]);
-      expect(h.store.listPendingTaskSteerMessages(steerTask.id)).toEqual([]);
-      expect(h.inbox.pendingTaskSteerMessages(steerTask.id)).toEqual([]);
-      expect(h.store.getTaskHumanRequest(request.id)).toEqual(settled);
-      expect(rpc.mock.calls.filter(([type]) => type === "human_request.get").length).toBeLessThanOrEqual(1);
+      await waitFor(() => h.frames.filter(frame => frame.t === "turn.message").length === 4);
+      expect(inputCount).toBe(2); expect(cancelCount).toBe(1);
+      expect(await h.inbox.waitForDecisionReply(decision.id, new AbortController().signal, 100)).toEqual(reply);
+      await h.inbox.consumeTaskSteerMessages(inputTask.id, [input.id, "wrap_up:2026-10-05T01:00:00Z"]);
+      await h.inbox.consumeTaskSteerMessages(inputTask.id, [input.id]);
+      await h.inbox.consumeTaskSteerMessages(humanTask.id, []);
+      expect(h.messages).toEqual([]);
+      expect(h.inbox.pendingTaskSteerMessages(inputTask.id)).toEqual([]);
+      expect(rpc.mock.calls.filter(([type]) => type === "turn.decision.get")).toHaveLength(0);
       expect(h.errors).toEqual([]);
     } finally { unsubscribe(); unwatch(); await h.close(); rpc.mockRestore(); }
   });

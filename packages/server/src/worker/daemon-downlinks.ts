@@ -1,4 +1,4 @@
-import type { MultiremiTaskHumanRequest, MultiremiTaskSteerMessage, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
+import type { MultiremiTaskSteerMessage, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import type { TaskSteerSource } from "./steer.js";
 import type { DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
@@ -20,8 +20,6 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   private readonly decisionListeners = new Map<string, Set<(message: UnifiedMessage) => void>>();
   private readonly steers = new Map<string, Map<string, MultiremiTaskSteerMessage>>();
   private readonly steerListeners = new Map<string, Set<(message: MultiremiTaskSteerMessage) => void>>();
-  private readonly settled = new Map<string, MultiremiTaskHumanRequest>();
-  private readonly humanListeners = new Map<string, Set<(request: MultiremiTaskHumanRequest) => void>>();
   private readonly cancelListeners = new Map<string, (status: Terminal) => void>();
   private readonly connectionWaiters = new Set<(error?: Error) => void>();
 
@@ -57,16 +55,6 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
       this.queueInput(attemptId, { id: `wrap_up:${frame.payload.requested_at}`, taskId: attemptId,
         kind: "force_answer", content: "", authorType: "system", authorId: null,
         createdAt: frame.payload.requested_at, consumedAt: null });
-    });
-    client.registerFrameHandler("task.human_request.settled", frame => {
-      if (!frame.rt || frame.rt !== runtimeId()) return;
-      const request = frame.payload.request as MultiremiTaskHumanRequest | undefined;
-      if (!request?.id || request.taskId !== frame.payload.task_id || request.status === "pending") return;
-      if (this.settled.has(request.id)) return;
-      this.settled.set(request.id, request);
-      for (const listener of this.humanListeners.get(request.id) ?? []) listener(request);
-      // A bot host receives other runtimes' requests and never calls release(taskId).
-      while (this.settled.size > MAX_SETTLED_REQUESTS) this.settled.delete(this.settled.keys().next().value!);
     });
     client.registerFrameHandler("task.cancelled", frame => {
       if (frame.rt !== runtimeId() || typeof frame.payload.task_id !== "string") return;
@@ -138,7 +126,6 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
     }
     for (const key of this.inputSeqs.keys()) if (key.startsWith(`${taskId}:`)) this.inputSeqs.delete(key);
     for (const key of this.inputReplyTo.keys()) if (key.startsWith(`${taskId}:`)) this.inputReplyTo.delete(key);
-    for (const [id, request] of this.settled) if (request.taskId === taskId) this.settled.delete(id);
   }
 
   async consumeTaskSteerMessages(taskId: string, ids: string[]): Promise<void> {
@@ -177,7 +164,7 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
 
   confirmDecisionReply(attemptId: string, reply: UnifiedMessage): void {
     if (!reply.reply_to_id || this.decisionAttempts.get(reply.reply_to_id) !== attemptId) throw new Error("foreign decision reply");
-    // The elicitation callback delivers this input to the provider. Confirm it
+    // The question/permission callback delivers this input to the provider. Confirm it
     // with the next contiguous receipt, without a second prompt/soft interrupt.
     this.inputSeqs.set(`${attemptId}:${reply.id}`, reply.seq);
     let ids = this.confirmedDecisionInputs.get(attemptId);
@@ -219,25 +206,6 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
       const unsubscribe = this.subscribeTaskSteerMessages(taskId, finish);
       const timer = setTimeout(finish, Math.max(0, timeoutMs));
       signal?.addEventListener("abort", finish, { once: true });
-    });
-  }
-
-  waitForHumanDecision(requestId: string, signal: AbortSignal, timeoutMs: number): Promise<MultiremiTaskHumanRequest | null> {
-    if (this.settled.has(requestId)) return Promise.resolve(this.settled.get(requestId)!);
-    if (signal.aborted) return Promise.resolve(null);
-    return new Promise(resolve => {
-      const listeners = this.humanListeners.get(requestId) ?? new Set();
-      this.humanListeners.set(requestId, listeners);
-      const finish = (request: MultiremiTaskHumanRequest | null) => {
-        clearTimeout(timer); listeners.delete(onSettled); signal.removeEventListener("abort", onAbort);
-        if (!listeners.size) this.humanListeners.delete(requestId);
-        resolve(request);
-      };
-      const onSettled = (request: MultiremiTaskHumanRequest) => finish(request);
-      const onAbort = () => finish(null);
-      listeners.add(onSettled);
-      const timer = setTimeout(onAbort, Math.max(0, timeoutMs));
-      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 

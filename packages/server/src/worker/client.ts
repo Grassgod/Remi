@@ -21,7 +21,6 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeLocalSkillSummary,
   MultiremiSkillFile,
-  MultiremiTaskHumanRequest,
   MultiremiTaskStatus,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
@@ -1099,26 +1098,6 @@ export class MultiremiDaemonClient {
       startedAt: response.started_at ?? null,
       completedAt: response.completed_at ?? null,
     };
-  }
-
-  async respondTaskHumanRequest(
-    taskId: string,
-    requestId: string,
-    response: Record<string, unknown>,
-    credential?: { token: string; operatorOpenId: string },
-  ): Promise<MultiremiTaskHumanRequest> {
-    const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
-      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/respond`,
-      { response, token: credential?.token, operator_open_id: credential?.operatorOpenId },
-    );
-    return result.request;
-  }
-
-  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
-    return this.post<{ card: Record<string, unknown> }>(
-      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/card`,
-      { recipient_open_id: recipientOpenId },
-    ).then(result => result.card);
   }
 
   async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {

@@ -17,10 +17,6 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
         payload: { task_id: id, status: task.status }, claimed: () => forget(id), discard: () => forget(id) });
       continue;
     }
-    for (const request of store.listTaskHumanRequests(id)) {
-      if (request.status === "pending") continue;
-      entities.push({ key: `human:${request.id}`, type: "task.human_request.settled", payload: { task_id: id, request } });
-    }
   }
   if (turns && host) {
     const snapshot = turns.snapshot({ runtimeId, daemonId, workspaceId: host.workspaceId ?? "local" }, ids);
@@ -30,13 +26,6 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
     for (const control of snapshot.wrapUps) entities.push({
       key: `turn.wrap_up:${control.attempt_id}:${control.requested_at}`, type: "turn.wrap_up", payload: { ...control },
     });
-  }
-  if (host?.daemonId === daemonId && host.workspaceId) {
-    for (const candidate of store.listFeishuBotSettledHumanRequestCandidates(host.workspaceId, runtimeId, daemonId)) {
-      const request = candidate.request!;
-      entities.push({ key: `human:${request.id}`, type: "task.human_request.settled",
-        payload: { task_id: candidate.taskId, request } });
-    }
   }
   return entities;
 }

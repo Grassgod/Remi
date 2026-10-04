@@ -52,11 +52,11 @@ export const DAEMON_PROTOCOL_MIN = 2;
 /**
  * Lowest CLI version the server accepts on the v2 socket.
  *
- * PIN AT RELEASE: this must equal the first release tag that actually carries
- * unified turn payloads. The upgrade channel targets this value, so the first
- * release containing these payloads must publish this exact version.
+ * RELEASE PLACEHOLDER: the release owner must replace this during integration
+ * with the first formal release containing MUL-507. 0.2.86 is reserved for
+ * the MUL-496 patch. Never publish or deploy with this placeholder.
  */
-export const DAEMON_MIN_CLI_VERSION = "0.2.86";
+export const DAEMON_MIN_CLI_VERSION = "999.0.0-unreleased-mul507";
 
 // ── Frames ──────────────────────────────────────────────────────────────────
 
@@ -124,9 +124,6 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
   "turn.decision",
   "turn.decision.get",
   "turn.decision.expire",
-  "human_request.create",
-  "human_request.get",
-  "human_request.expire",
   "plugin.desired",
   "trace.head",
   "trace.subscribe",
@@ -150,7 +147,6 @@ export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "task.cancelled",
   "turn.message",
   "turn.wrap_up",
-  "task.human_request.settled",
   "runtime.update",
   "runtime.command",
   "runtime.model_list",
@@ -451,7 +447,7 @@ export interface DaemonTurnCompletePayload {
   work_dir?: string | null;
 }
 
-/** ACP questions are decision messages; their reply uses reply_to_id. */
+/** ACP questions and permissions create decision messages + awaiting_human via S2; replies use reply_to_id. */
 export interface DaemonTurnDecisionPayload {
   turn_id: string;
   attempt_id: string;
