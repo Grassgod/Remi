@@ -18,7 +18,6 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 let sequence = 0;
@@ -326,7 +325,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(comment.taskId).toBeNull();
         const coalesced = store.listIssueActivity(f.parent.id).filter(activity =>
           activity.type === "pending_turn_coalesced" && (activity.data as Record<string, unknown>).commentId === comment.id);
-        const mentioned = HUMAN_COMMENT_JOINS_QUEUED_ROUND
+        const mentioned = true
           ? coalesced.map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)
           : store.listTasksForIssue(f.parent.id).filter(task => task.triggerCommentId === comment.id);
         expect(mentioned).toHaveLength(1);

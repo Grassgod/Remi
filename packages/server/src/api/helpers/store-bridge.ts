@@ -6,7 +6,6 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
-import { DelegationRoundTripLimitError } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
@@ -589,7 +588,7 @@ export function safeRerunIssue(
     authorAgentId?: string | null;
     dependencyForce?: CreateTaskInput["dependencyForce"];
   },
-): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
+): { task: MultiremiTask | null; message?: unknown; wake_applied?: string; wake_reason?: string } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
   const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
@@ -619,10 +618,7 @@ export function safeRerunIssue(
     });
     return { task };
   } catch (error) {
-    if (error instanceof DelegationRoundTripLimitError) {
-      store.recordDelegationRoundTripLimited(error);
-      return { error: error.message, status: 409, code: error.code };
-    }
+    if((error as any)?.message_result)return {task:null,...(error as any).message_result};
     // MUL-400 E3 gate 3: a rerun is a *new* round, so a waiting issue cannot
     // start one. The route answers 409 with the same code the status gate uses.
     if (error instanceof IssueDependencyError) {

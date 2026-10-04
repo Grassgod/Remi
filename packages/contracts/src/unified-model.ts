@@ -15,10 +15,10 @@ export type MessageRecipient =
   | { type: "agent" | "member"; ref: string }
   | { type: "role"; ref: MessageRole };
 export type WakeReason =
-  | "human_sender" | "platform_to_owner" | "leader_to_member" | "member_to_delegator"
+  | "human_sender" | "platform_to_owner" | "agent_dispatch" | "member_to_delegator"
   | "to_leader" | "to_parent_owner" | "agent_pair_not_privileged" | "pair_round_trip_limit"
   | "self" | "recipient_unavailable" | "no_recipient" | "requested_next_turn"
-  | "requested_inbox_only" | "migration";
+  | "requested_inbox_only" | "migration" | "dependencies_unmet" | "source_side_session" | "no_issue_target";
 export interface DecisionOption { label: string; value: string; description?: string }
 
 export interface MessageHeader {
@@ -44,6 +44,10 @@ export type UnifiedMessage = Omit<ConversationLogEntry, "author_type" | "author_
 
 /** Caller owns the transaction and its deferred event queue. */
 export interface SendMessageInput {
+  /** Internal id used by atomic lifecycle producers. */
+  id?: string;
+  /** Internal staging of an atomic terminal reply. */
+  visibility?: 'shown' | 'hidden';
   session_id: string;
   sender: { type: MessageSenderType; id: string | null };
   to: MessageRecipient;
@@ -55,6 +59,8 @@ export interface SendMessageInput {
   options?: DecisionOption[] | null;
   attachment_ids?: string[];
   metadata?: Record<string, unknown>;
+  source_turn_id?: string | null;
+  execution_scope?: string;
 }
 export interface SendMessageResult {
   message: UnifiedMessage;
@@ -79,6 +85,7 @@ export interface MultiremiTurn {
   status: TurnStatus;
   wake_source: string | null;
   wake_seq: number;
+  trigger_message_id: string | null;
   input_from_seq: number | null;
   input_to_seq: number | null;
   waiting_on_message_id: string | null;
@@ -158,6 +165,7 @@ export interface MultiremiSessionLane {
   reader_id: string;
   execution_scope: string;
   cursor_seq: number;
+  cursor_offset: number;
   wake_hint_seq: number;
   swept_to_seq: number;
   swept_at: string | null;

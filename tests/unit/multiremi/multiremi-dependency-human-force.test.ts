@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND, IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createLocalStore, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -277,9 +277,9 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       });
       expect(response.status).toBe(201);
     }
-    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 3);
+    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(true ? 1 : 3);
     expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 2 : 0);
+      .toHaveLength(true ? 2 : 0);
     expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
   });

@@ -704,6 +704,7 @@ export class IssueSessionsRepo {
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     let task: MultiremiTask;
+    let unscheduled:unknown;
     try {
       task = this.ctx.db.transaction(() => {
         // Global lock order (MUL-405): W before this transaction's first domain
@@ -720,7 +721,7 @@ export class IssueSessionsRepo {
             targetAgentId: agentId, targetIssue: this.ctx.issues().getIssue(session.issueId) })
           : null;
         this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
-        return this.ctx.tasks().createTaskWithinTransaction({
+        try { return this.ctx.tasks().createTaskWithinTransaction({
           agentId,
           issueId: session.issueId,
           issueSessionId: sessionId,
@@ -736,6 +737,7 @@ export class IssueSessionsRepo {
             delegatedFromIssueSessionId: delegation.delegatedFromIssueSessionId,
           } : delegation?.reason ? { delegationSkipReason: delegation.reason } : {}),
         }, childStatusChanges, deferredEvents);
+        }catch(error){if(!(error as any)?.message_result)throw error;unscheduled=error;return null as unknown as MultiremiTask;}
       })();
     } catch (err) {
       // The transaction rolled back, so the participant and the lane it would
@@ -746,6 +748,7 @@ export class IssueSessionsRepo {
       );
       throw err;
     }
+    if(unscheduled){this.ctx.emitCommitEvents(deferredEvents);throw unscheduled;}
     this.ctx.notifyTaskEnqueued(task);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);

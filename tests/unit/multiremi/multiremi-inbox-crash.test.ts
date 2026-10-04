@@ -138,7 +138,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             expect(envelopes(f).map(row => row.id)).toEqual([entry.id]);
             expect(() => store.createTask({ agentId: f.agentId, issueId: f.targetIssueId,
               issueSessionId: f.issueSessionId, prompt: "Forced second platform turn", wakeSource: "forced_duplicate",
-              preserveIssueStatus: true })).toThrow(/unique/i);
+               })).toThrow(/unique/i);
           }
         }, 30_000);
       }
