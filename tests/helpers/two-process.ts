@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { scrubInheritedEnv } from "../setup/hermetic-env-policy.js";
+import { HERMETIC_ENV_RUN_ROOT_PATHS, scrubInheritedEnv } from "../setup/hermetic-env-policy.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const CHILD_ENTRY = join(import.meta.dir, "two-process-child.ts");
@@ -145,6 +145,9 @@ export class TwoProcessResources {
   constructor() {
     this.childEnv = { ...process.env };
     scrubInheritedEnv(this.childEnv);
+    for (const name of Object.keys(HERMETIC_ENV_RUN_ROOT_PATHS)) {
+      this.childEnv[name] = process.env[name];
+    }
     this.childEnv.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL ?? "1";
   }
 

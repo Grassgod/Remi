@@ -26,7 +26,10 @@
  *
  * Guarded by `tests/arch/hermetic-test-env.test.ts`.
  */
-import { HERMETIC_ENV_DEFAULTS, HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { HERMETIC_ENV_DEFAULTS, HERMETIC_ENV_RUN_ROOT_PATHS, HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
 
 const removed = scrubInheritedEnv();
 
@@ -41,6 +44,16 @@ for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
   process.env[name] = value;
 }
 if (explicitSentinel === "0") process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = "0";
+
+const runRoot = mkdtempSync(join(tmpdir(), "remi-bun-test-"));
+process.env.MULTIREMI_TEST_RUN_ROOT = runRoot;
+for (const [name, subpath] of Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)) {
+  process.env[name] = join(runRoot, subpath);
+}
+process.on("exit", () => {
+  try { rmSync(runRoot, { recursive: true, force: true }); }
+  catch { /* Open SQLite handles can prevent cleanup on Windows. */ }
+});
 
 (globalThis as Record<symbol, unknown>)[HERMETIC_ENV_SENTINEL] = { removed };
 

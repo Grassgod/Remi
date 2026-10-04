@@ -97,6 +97,17 @@ export const HERMETIC_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "1",
 };
 
+/** Existing product path knobs redirected to a fresh directory by the preload. */
+export const HERMETIC_ENV_RUN_ROOT_PATHS: Readonly<Record<string, string>> = {
+  MULTIREMI_STATE_DIR: "state",
+  MULTIREMI_WORKSPACES_ROOT: "workspaces",
+  MULTIREMI_SESSION_ARCHIVE_ROOT: "session-archives",
+  MULTIREMI_PLUGIN_CACHE_ROOT: "plugin-cache",
+  MULTIREMI_UPLOAD_DIR: "uploads",
+  MULTIREMI_CONFIG: "config.json",
+  REMI_HOME: "remi-home",
+};
+
 /** True when `name` is one of the variables the preload removes. */
 export function isScrubbedEnvKey(name: string): boolean {
   if (SCRUBBED_ENV_EXEMPT_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
