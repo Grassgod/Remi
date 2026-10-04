@@ -8,7 +8,7 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { controlPlaneConciergeHost, sendInteractionCardLane } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { openRuntimeDownlinks } from "../../fixtures/runtime-downlinks.js";
-import { nativeHarness, transcript } from "../connectors/feishu-native-harness.js";
+import { completed, nativeHarness, transcript } from "../connectors/feishu-native-harness.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -71,6 +71,13 @@ function flow() {
   const host = controlPlaneConciergeHost({ daemon: () => daemon, current: () => handle,
     attach: () => {}, workspacesRoot: () => "/tmp/local-test" });
   Object.assign(daemon, { pollAbort: new AbortController(), options: { serverUrl: "https://remi.example" },
+    subscribeTrace: async (_taskId: string, afterSeq: number, callback: (events: any[], closed: boolean) => void) => {
+      expect(afterSeq).toBe(0);
+      for await (const event of transcript()) if (event.kind === "message") callback([event.message], false);
+      callback([], true);
+      return async () => {};
+    },
+    getFeishuBotTaskSnapshot: async () => completed.kind === "snapshot" ? completed.snapshot : null,
     feishuConcierge: host, client: {
       prepareFeishuBotOutboundMention: async (_rt: string, id: string, token: string, openId: string | null) =>
         f.store.prepareFeishuBotOutboundMention("local", f.runtimeId, id, token, openId)?.openId ?? null,
@@ -104,6 +111,9 @@ describe("C5 full fake-channel delivery", () => {
     await f.daemon.handleFeishuBotOutbound(f.runtimeId, third[0]!);
     expect(f.h.cards()).toHaveLength(1);
     expect(JSON.stringify(f.h.cards())).toContain("Final answer");
+    expect(JSON.stringify(f.h.cards())).toContain("82k/1M");
+    expect(JSON.stringify(f.h.cards())).toContain("1 tools");
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_task_messages WHERE task_id = ?").get(taskId)).toEqual({ count: 0 });
     expect(db!.query("SELECT kind, status FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? ORDER BY kind, unit_key").all(taskId))
       .toEqual([{ kind: "cot", status: "sent" }, { kind: "receipt", status: "failed" },
         { kind: "receipt", status: "sent" }, { kind: "result_card", status: "sent" }]);
@@ -111,6 +121,22 @@ describe("C5 full fake-channel delivery", () => {
     expect(db!.query("SELECT * FROM multiremi_feishu_bot_chat_bindings").all()).toEqual(binding);
     expect(f.store.listFeishuBotAudit("local").filter(row => row.action === "receipt_failed")).toHaveLength(1);
     expect(await f.inputs()).toEqual([]);
+  });
+
+  it("recovers a completed reply through protocol v2 while the Runtime API scheduler remains disabled", async () => {
+    const f = flow();
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const taskId = f.inbound("runtime_without_jobs").taskId;
+    f.store.completeTask(taskId, { output: "Recovered reply", sessionId: "session_original" });
+    for (let round = 0; round < 3; round++) {
+      for (const row of await f.inputs()) await f.daemon.handleFeishuBotOutbound(f.runtimeId, row);
+    }
+    expect(f.h.cards()).toHaveLength(1);
+    expect(JSON.stringify(f.h.cards())).toContain("Recovered reply");
+    expect(JSON.stringify(f.h.cards())).toContain("82k/1M");
+    expect(JSON.stringify(f.h.cards())).toContain("1 tools");
+    expect(await f.inputs()).toEqual([]);
+    expect(process.env.MULTIREMI_BACKGROUND_JOBS).toBe("0");
   });
 
   it("runs an undeclared daemon through the original bundled flow with unchanged wire fields and one final card", async () => {

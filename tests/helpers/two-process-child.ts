@@ -4,6 +4,7 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { createPeerChannel, resolvePeerSecret, resolvePeerUrl } from "../../packages/server/src/api/peer/peer-channel.js";
 import { redactDiagnostic } from "./two-process.js";
+import { configureKindBot } from "../unit/multiremi/feishu-outbound-kind-fixture.js";
 
 const db = new PostgresSyncDatabase(process.env.MULTIREMI_DATABASE_URL!);
 let store: MultiremiStore;
@@ -66,6 +67,32 @@ async function command(name: string, args: any): Promise<unknown> {
   if (name === "complete") {
     store.completeTask(args.id, { output: "two-process test complete" });
     return;
+  }
+  if (name === "feishu-seed") {
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    const fixture = configureKindBot(store);
+    return { runtimeId: fixture.runtimeId, revision: fixture.config.revision };
+  }
+  if (name === "feishu-completed-inbound") {
+    const submitted = store.submitFeishuBotMessage("local", args.runtimeId, {
+      revision: args.revision, externalSessionKey: "oc_split_test", chatType: "p2p", chatId: "oc_split_test",
+      externalMessageId: "om_split_test", senderOpenId: "ou_split_test", text: "Reply", deliveryMode: "native_cot_v1",
+    });
+    if (store.claimTask(args.runtimeId)?.id !== submitted.taskId) throw new Error("Feishu fixture did not claim its Task");
+    store.startTask(submitted.taskId);
+    store.completeTask(submitted.taskId, { output: "Reply completed on runtime API" });
+    return submitted.taskId;
+  }
+  if (name === "feishu-report") {
+    return store.reportFeishuBotOutbound("local", args.runtimeId, args.id,
+      { claimToken: args.claimToken, status: "sent", externalMessageId: `om_sent_${args.id}` });
+  }
+  if (name === "feishu-delivery-state") {
+    return {
+      jobs: process.env.MULTIREMI_BACKGROUND_JOBS,
+      operations: db.query("SELECT status FROM multiremi_feishu_bot_outbound_operations WHERE workspace_id = 'local'").all(),
+      deliveries: db.query("SELECT kind, status FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? ORDER BY kind, unit_key").all(args.taskId),
+    };
   }
   if (name === "small-queue") {
     // Use the existing peer injection point to reach overflow with real writes

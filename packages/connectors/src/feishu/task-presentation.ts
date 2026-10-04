@@ -3,10 +3,9 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
-import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { buildFinalCard } from "./streaming/card-elements.js";
-import { formatCardStats, formatExecutionSubtitle } from "./card-metadata.js";
+import { FeishuTaskMetadata } from "./task-metadata.js";
 import { sendCardFeishu, updateCardFeishu } from "./send.js";
 import { FeishuCotTransport, feishuTransportError, type CotSample } from "./native-cot.js";
 import { FeishuCotTimeline } from "./cot-timeline.js";
@@ -48,11 +47,10 @@ export class FeishuTaskPresentation {
   private active = true;
   private readonly signal: AbortSignal;
   private readonly timeline: FeishuCotTimeline;
-  private execution: AgentExecutionDisplay;
+  private readonly metadata: FeishuTaskMetadata;
   /** Provider session behind this reply: `null` until the Task reports one,
    * `undefined` for command replies that carry no conversation at all. */
   private sessionId: string | null | undefined;
-  private context: ContextUsage | null = null;
   private lastFlush = Date.now();
   private lastBatch = 0;
 
@@ -63,7 +61,7 @@ export class FeishuTaskPresentation {
     this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq);
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
-    this.execution = { agentName: options.displayName ?? meta.displayName };
+    this.metadata = new FeishuTaskMetadata(options.displayName ?? meta.displayName);
     this.sessionId = meta.sessionId;
   }
 
@@ -144,9 +142,8 @@ export class FeishuTaskPresentation {
       const renderedText = await rewriteMarkdownImages(text, createFeishuImageResolver({
         uploadImage: async image => (await uploadImageFeishu(this.client, image.buffer)).imageKey,
       }));
-      const card = buildFinalCard({ text: renderedText, agentName: this.execution.agentName, sessionId: this.sessionId,
-        subtitle: formatExecutionSubtitle(this.execution), mentionOpenId: this.options.mentionOpenId,
-        stats: formatCardStats(elapsed ?? Math.max(0, Math.round((Date.now() - this.state.startedAt) / 1000)), this.context, this.timeline.toolCount) });
+      const card = buildFinalCard({ text: renderedText, sessionId: this.sessionId, mentionOpenId: this.options.mentionOpenId,
+        ...this.metadata.render(elapsed ?? Math.max(0, Math.round((Date.now() - this.state.startedAt) / 1000))) });
       const sent = await this.retry(() => sendCardFeishu(this.client, this.chatId, card, {
         replyToMessageId: this.options.replyToMessageId,
         idempotencyKey: stableId(`${this.options.idempotencyKey}:${this.meta.taskId}:result`),
@@ -161,22 +158,8 @@ export class FeishuTaskPresentation {
 
   private async message(message: TraceEvent): Promise<void> {
     this.timeline.accept(message);
-    // Nested agent prose must never become the main agent's final answer.
-    const nested = Boolean(message.meta?.parent_tool_call_id);
-    if (message.type === "execution" && !nested) {
-      const info = message.meta ?? {};
-      const model = Object.hasOwn(info, "model") ? executionModel(info.model) : undefined;
-      if (model !== undefined && this.execution.model !== undefined && model !== this.execution.model) this.context = null;
-      this.execution = { ...this.execution,
-        ...(typeof info.agentName === "string" ? { agentName: info.agentName } : {}),
-        ...(typeof info.provider === "string" ? { provider: info.provider } : {}),
-        ...(model !== undefined ? { model, modelName: typeof info.modelName === "string" ? info.modelName : null } : {}) };
-      return;
-    }
-    if (message.type === "usage") {
-      if (!nested) this.context = readContextUsage(message.meta) ?? this.context;
-      return;
-    }
+    this.metadata.accept(message);
+    if (message.type === "execution" || message.type === "usage") return;
     if (Date.now() - this.lastFlush >= 500) await this.flush();
     if (message.type === "permission_request" || message.type === "question_request") {
       await this.flush(true);
@@ -295,7 +278,7 @@ export class FeishuTaskPresentation {
       const sent = await this.retry(async () => {
         const card = recipientOpenId && this.meta.prepareHumanRequestCard
           ? await this.meta.prepareHumanRequestCard(requestId, recipientOpenId)
-          : buildTaskInteractionCard(request!, { agentName: this.execution.agentName, sessionId: this.sessionId, recipientOpenId });
+          : buildTaskInteractionCard(request!, { agentName: this.metadata.agentName, sessionId: this.sessionId, recipientOpenId });
         return sendCardFeishu(this.client, this.chatId, card, {
           replyToMessageId: this.options.replyToMessageId, idempotencyKey: questionCardIdempotencyKey(card, deliveryKey),
         });
@@ -311,7 +294,7 @@ export class FeishuTaskPresentation {
     };
     if (entry.receiptStatus === request.status) { await finishWaiting(); await this.save(); return; }
     const registered = registerTaskInteraction({ appId: this.options.appId, messageId: entry.messageId,
-      agentName: this.execution.agentName, sessionId: this.sessionId });
+      agentName: this.metadata.agentName, sessionId: this.sessionId });
     try {
       // Register the existing card callback before awaiting native transport;
       // a slow CoT update must not leave newly visible buttons unresponsive.
@@ -325,7 +308,7 @@ export class FeishuTaskPresentation {
         request = registered.current() ?? await this.meta.getHumanRequest?.(requestId) ?? request;
       }
       await this.retry(() => updateCardFeishu(this.client, entry!.messageId,
-        buildTaskInteractionCard(request!, { agentName: this.execution.agentName, sessionId: this.sessionId, receipt: true })), true);
+        buildTaskInteractionCard(request!, { agentName: this.metadata.agentName, sessionId: this.sessionId, receipt: true })), true);
       entry.receiptStatus = request.status;
       await finishWaiting();
       await this.save();

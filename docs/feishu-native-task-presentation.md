@@ -16,6 +16,16 @@ If a tool result arrives after a checkpoint without its earlier invocation,
 without re-sending the acknowledged tool start or reading older trace events.
 An unpinned provider session remains unnamed until the final snapshot arrives.
 
+The independent `result_card` lane reads canonical trace from seq 0 on the host
+to build its footer with `FeishuTaskMetadata`, shared with the bundled renderer.
+Repeated updates to one tool ID count once; child execution/usage cannot replace
+the main execution identity or context snapshot, and billing token totals are
+not context occupancy. The server queues the durable terminal answer without
+reading the legacy Task-message table. The optional metadata read is bounded to
+five seconds, so an offline trace cannot prevent the final answer from being
+sent. This metadata subscription is separate from native CoT and does not
+re-send its process events.
+
 Human-request updates for the separate interaction lane still use the existing
 750 ms read loop. E5's `subscribeHumanRequests` is API-process local (MUL-436),
 and the daemon's declared `task.human_request.settled` frame currently has no

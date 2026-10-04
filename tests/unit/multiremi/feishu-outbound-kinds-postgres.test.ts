@@ -119,8 +119,6 @@ describe.skipIf(!adminUrl)("C5 delivery on real PostgreSQL", () => {
     const batch = store.sendChatAttachments(taskId, [{ filename: "pg.html", sizeBytes: 4,
       contentType: "text/html", url: "/api/attachments/pg-local/content" }]);
     expect(db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(batch.delivery_ids[0]!)).toBeNull();
-    expect(store.claimFeishuBotOutbounds("local", "rt_kinds")).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const file = store.claimFeishuBotOutbounds("local", "rt_kinds").find(row => row.id === batch.delivery_ids[0])!;
     expect(file.attachments?.[0]?.filename).toBe("pg.html");
     expect(store.reportFeishuBotOutbound("local", "rt_kinds", file.id,

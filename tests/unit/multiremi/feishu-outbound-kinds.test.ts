@@ -112,17 +112,25 @@ describe("Feishu outbound kind leases", () => {
     expect(report(f, old, "sent")).toBe(false);
   });
 
-  it("jobs=0 writes and claims no outbox rows, then background reconciliation catches up", () => {
+  it("jobs=0 defers lifecycle writes but a host claim delivers the answer without enabling schedulers", () => {
     const f = configureKindBot(createLocalStore());
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
     const taskId = f.inbound("disabled").taskId;
     f.store.createTaskHumanRequest({ taskId, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
     f.store.completeTask(taskId, { output: "Deferred answer" });
     expect(rows(taskId)).toEqual([]);
-    expect(claim(f)).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
-    expect(claim(f).map(row => row.kind).sort()).toEqual(["cot", "receipt"]);
+    const first = claim(f);
+    expect(first.map(row => row.kind).sort()).toEqual(["cot", "receipt"]);
     expect(rows(taskId).find(row => row.kind === "result_card")).toBeDefined();
+    for (const row of first) expect(report(f, row, "sent")).toBe(true);
+    const result = claim(f).find(row => row.kind === "result_card")!;
+    expect(JSON.parse(result.body).text).toBe("Deferred answer");
+    expect(report(f, result, "sent")).toBe(true);
+    for (const row of claim(f)) expect(report(f, row, "sent")).toBe(true);
+    expect(claim(f)).toEqual([]);
+    expect(process.env.MULTIREMI_BACKGROUND_JOBS).toBe("0");
+    expect(db!.query("SELECT status FROM multiremi_feishu_bot_outbound_operations").all())
+      .toEqual(expect.arrayContaining([{ status: "done" }]));
   });
 
   it("stops at six expired split leases, audits the receipt once, and rejects late reports", () => {
@@ -172,8 +180,6 @@ describe("Feishu outbound kind leases", () => {
       contentType: "text/html", url: "/api/attachments/local-test/content" }], "Report attached");
     expect(batch.delivery_ids).toHaveLength(1);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(batch.delivery_ids[0]!)).toBeNull();
-    expect(claim(f)).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const file = claim(f).find(row => row.id === batch.delivery_ids[0])!;
     expect(file.attachments?.[0]?.filename).toBe("report.html");
     expect(file.body).toBe("Report attached");
@@ -187,14 +193,13 @@ describe("Feishu outbound kind leases", () => {
       .toEqual({ status: "done" });
   });
 
-  it("preserves the inbound group recipient when a jobs=0 process leaves the carrier to the background writer", () => {
+  it("preserves the inbound group recipient when a host reconciles the jobs=0 carrier", () => {
     const f = configureKindBot(createLocalStore());
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
     const submitted = f.store.submitFeishuBotMessage("local", f.runtimeId, { revision: f.config.revision,
       externalSessionKey: "oc_group:thread:om_group", chatId: "oc_group", chatType: "group", threadId: "om_group",
       externalMessageId: "om_group", senderOpenId: "ou_group_requester", text: "Group reply", deliveryMode: "native_cot_v1" });
     expect(rows(submitted.taskId)).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const cot = claim(f).find(row => row.kind === "cot")!;
     expect(cot.mention).toEqual({ mode: "person", openId: "ou_group_requester", resolvedOpenId: "ou_group_requester" });
     expect(cot.interactionOpenId).toBe("ou_group_requester");
@@ -226,7 +231,7 @@ describe("Feishu outbound kind leases", () => {
       .get("om_kind_retrylineage")).toEqual({ task_id: taskId, outbound_task_id: retry.id });
   });
 
-  it("defers a topic seed and an E5 request with jobs=0, then reuses their canonical bindings and decision semantics", () => {
+  it("replays topics, E5 requests and patches on the claiming jobs=0 process without re-deferring them", () => {
     const f = configureKindBot(createLocalStore());
     f.store.heartbeatRuntime(f.runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
     f.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_deferred_topic", notifyMode: "person", notifyOpenId: "ou_owner" } } });
@@ -234,7 +239,6 @@ describe("Feishu outbound kind leases", () => {
     const issue = f.store.createIssue({ title: "Deferred topic", workspaceId: "local" });
     f.store.prepareFeishuIssueTopicWithinTransaction(issue);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const root = claim(f)[0]!;
     expect(root.kind).toBeUndefined();
     expect(report(f, root, "sent")).toBe(true);
@@ -242,8 +246,6 @@ describe("Feishu outbound kind leases", () => {
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
     const request = f.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Proceed?" }] } });
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").all()).toEqual([]);
-    expect(claim(f)).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const decision = claim(f)[0]!;
     expect(decision.kind).toBe("decision_card");
     expect(decision.taskId).toBeUndefined();
@@ -253,10 +255,50 @@ describe("Feishu outbound kind leases", () => {
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
     f.store.respondTaskHumanRequest(request.id, { response: { answers: {} } });
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").all()).toEqual([]);
-    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     const patch = claim(f)[0]!;
     expect(patch.kind).toBe("decision_card_patch");
     expect(patch.targetMessageId).toBe(`sent_${decision.id}`);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE issue_id = ?").all(issue.id)).toHaveLength(1);
+    expect(process.env.MULTIREMI_BACKGROUND_JOBS).toBe("0");
+    expect(db!.query("SELECT status FROM multiremi_feishu_bot_outbound_operations").all().every((row: any) => row.status === "done")).toBe(true);
+  });
+
+  it("rejects unauthorized host claims with jobs=0 and leaves the deferred queue untouched", () => {
+    const f = configureKindBot(createLocalStore());
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const taskId = f.inbound("hostguard").taskId;
+    f.store.completeTask(taskId, { output: "Only the configured host may send" });
+    const operations = db!.query("SELECT id, status FROM multiremi_feishu_bot_outbound_operations ORDER BY id").all();
+    expect(f.store.claimFeishuBotOutbounds("local", "rt_not_the_host")).toEqual([]);
+    expect(rows(taskId)).toEqual([]);
+    expect(db!.query("SELECT id, status FROM multiremi_feishu_bot_outbound_operations ORDER BY id").all()).toEqual(operations);
+    f.store.reportFeishuBotRuntimeStatus("local", f.runtimeId, { appliedRevision: f.config.revision, state: "stopped" });
+    expect(claim(f)).toEqual([]);
+    expect(rows(taskId)).toEqual([]);
+  });
+
+  it("restores deferred-write policy after an operation fails and retries without dropping its intent", () => {
+    const f = configureKindBot(createLocalStore());
+    const taskId = f.inbound("replay_failure").taskId;
+    for (const row of claim(f)) expect(report(f, row, "sent")).toBe(true);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const first = f.store.sendChatAttachments(taskId, [{ filename: "first.html", sizeBytes: 4,
+      contentType: "text/html", url: "/api/attachments/local-first/content" }]);
+    const operation = db!.query("SELECT id, operation FROM multiremi_feishu_bot_outbound_operations WHERE kind = 'attachments'").get() as any;
+    db!.run("UPDATE multiremi_feishu_bot_outbound_operations SET operation = ? WHERE id = ?",
+      [JSON.stringify({ kind: "attachments", deliveries: null }), operation.id]);
+    expect(claim(f)).toEqual([]);
+    expect(db!.query("SELECT status FROM multiremi_feishu_bot_outbound_operations WHERE id = ?").get(operation.id)).toEqual({ status: "pending" });
+    const second = f.store.sendChatAttachments(taskId, [{ filename: "second.html", sizeBytes: 4,
+      contentType: "text/html", url: "/api/attachments/local-second/content" }]);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(second.delivery_ids[0]!)).toBeNull();
+    db!.run("UPDATE multiremi_feishu_bot_outbound_operations SET operation = ? WHERE id = ?", [operation.operation, operation.id]);
+    const retryAt = new Date(Date.now() + 6_000);
+    const replayed = claim(f, retryAt);
+    expect(replayed).toHaveLength(1); // Attachment lanes retain the singular legacy cadence.
+    expect(report(f, replayed[0]!, "sent")).toBe(true);
+    const remaining = claim(f, retryAt);
+    expect(new Set([...replayed, ...remaining].map(row => row.id))).toEqual(new Set([...first.delivery_ids, ...second.delivery_ids]));
+    expect(process.env.MULTIREMI_BACKGROUND_JOBS).toBe("0");
   });
 });
