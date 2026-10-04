@@ -12,13 +12,14 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { SESSION_ARCHIVE_TRACE_SUFFIX } from "@multiremi/contracts/session-archive.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { backfillConversationLogWithinTransaction } from "@multiremi/store/conversation-log-backfill.js";
+import { reconcileUnifiedModel } from "@multiremi/store/unified-model-migration.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import type { TraceBackfillProgressRepo } from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import { runTraceBackfill, type TraceBackfillRunOptions } from "../../../scripts/backfill-task-traces.js";
 import { TraceBackfillStopError } from "../../../scripts/lib/task-trace-backfill.js";
 import { reconcileTraceBackfill } from "../../../scripts/lib/task-trace-reconcile.js";
 import {
+  insertFixtureMessage,
   insertSyntheticAgent,
   insertSyntheticChat,
   insertSyntheticIssue,
@@ -26,7 +27,7 @@ import {
   insertSyntheticRuntime,
   insertSyntheticTask,
   truncatedJsonText,
-} from "../../../scripts/lib/task-trace-synthetic.js";
+} from "./trace-backfill-fixtures.js";
 import { traceBackfillBackends, type OpenedStore, type StoreBackend } from "./trace-backfill-backends.js";
 
 const TIMEOUT = 120_000;
@@ -65,27 +66,24 @@ function task(id: string, extra: Partial<Parameters<typeof insertSyntheticTask>[
 function seedWorld(db: SqlDatabase): void {
   insertSyntheticAgent(db, { id: AGENT, provider: "claude", createdAt: T0 });
   insertSyntheticRuntime(db, { id: RUNTIME, provider: "codex", daemonId: "dmn_gd", createdAt: T0 });
-  insertSyntheticChat(db, { id: "chs_gd", agentId: AGENT, createdAt: T0 });
+  insertSyntheticChat(db, { id: "chat_gd", agentId: AGENT, createdAt: T0 });
   insertSyntheticIssue(db, { id: "iss_gd", number: 1, createdAt: T0 });
   db.run(
     "INSERT INTO multiremi_issue_sessions (id, issue_id, is_default, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
     "ises_gd", "iss_gd", T0, T0,
   );
 
-  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chs_gd" }));
+  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chat_gd" }));
   insertSyntheticMessages(db, "tsk_chat_a", [
     { seq: 1, type: "execution", meta: "{\"provider\":\"claude\",\"model\":\"m1\"}", created_at: at(1) },
     { seq: 2, type: "tool_use", tool: "Write", tool_call_id: "c1", input: truncatedJsonText(400, "i"), created_at: at(2) },
     { seq: 3, type: "tool_result", tool: "Write", tool_call_id: "c1", output: "ok", status: "completed", created_at: at(3) },
     { seq: 4, type: "text", content: "done", created_at: at(4) },
   ]);
-  insertSyntheticTask(db, task("tsk_chat_none", { chatSessionId: "chs_gd", status: "failed" }));
-  const chatMessage = (sequence: number, role: "user" | "assistant", body: string, taskId: string | null) => db.run(
-    `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, failure_reason, elapsed_ms, sequence, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    `chm_gd_${sequence}`, "chs_gd", taskId, role, body, taskId === "tsk_chat_none" ? "boom" : null,
-    role === "assistant" ? 1000 : null, sequence, at(sequence),
-  );
+  insertSyntheticTask(db, task("tsk_chat_none", { chatSessionId: "chat_gd", status: "failed" }));
+  const chatMessage = (sequence: number, role: "user" | "assistant", body: string, taskId: string | null) =>
+    insertFixtureMessage(db, { id: `chm_gd_${sequence}`, sessionId: "chat_gd", taskId, role, body,
+      failureReason: taskId === "tsk_chat_none" ? "boom" : null, at: at(sequence) });
   chatMessage(1, "user", "hi", null);
   chatMessage(2, "assistant", "done", "tsk_chat_a");
   chatMessage(3, "user", "again", null);
@@ -101,11 +99,9 @@ function seedWorld(db: SqlDatabase): void {
     { seq: 1, type: "tool_use", tool: "Bash", tool_call_id: "b1", input: "{\"cmd\":\"ls\"}", created_at: at(1) },
   ]);
   insertSyntheticTask(db, task("tsk_issue_none", { issueId: "iss_gd", issueSessionId: "ises_gd", status: "cancelled" }));
-  const sessionEvent = (seq: number, kind: string, taskId: string) => db.run(
-    `INSERT INTO multiremi_session_events (id, session_id, seq, author_type, author_id, kind, body, task_id, metadata, created_at)
-     VALUES (?, ?, ?, 'member', 'local', ?, ?, ?, '{}', ?)`,
-    `sev_gd_${seq}`, "ises_gd", seq, kind, kind === "task_assigned" ? `do ${taskId}` : "", taskId, at(seq),
-  );
+  const sessionEvent = (_seq: number, kind: string, taskId: string) => {
+    if (kind === "task_assigned") db.run("UPDATE multiremi_turns SET legacy_prompt=? WHERE current_attempt_id=?", `do ${taskId}`, taskId);
+  };
   sessionEvent(1, "task_assigned", "tsk_issue_a");
   sessionEvent(2, "task_completed", "tsk_issue_a");
   sessionEvent(3, "task_assigned", "tsk_issue_b");
@@ -116,8 +112,7 @@ function seedWorld(db: SqlDatabase): void {
   insertSyntheticTask(db, task("tsk_one", { runtimeId: null, provider: "claude" }));
   insertSyntheticMessages(db, "tsk_one", [{ seq: 1, type: "text", content: "solo", created_at: at(1) }]);
 
-  const report = db.transaction(() => backfillConversationLogWithinTransaction(db))();
-  expect(report.mismatches).toEqual([]);
+  expect(reconcileUnifiedModel(db).mismatches).toEqual([]);
 }
 
 interface World {
@@ -158,6 +153,8 @@ const COMMITTED_TABLES: Record<string, string> = {
   multiremi_session_archives: "id",
   multiremi_task_traces: "task_id",
   multiremi_trace_backfill_tasks: "task_id",
+  multiremi_turns: "id",
+  multiremi_turn_attempts: "id",
   multiremi_conversation_log: "session_id, seq",
   multiremi_conversation_heads: "session_id",
 };
@@ -319,7 +316,7 @@ for (const backend of backends) {
           expect(report.plan.json).toMatchObject({
             json_unparseable_input: 1, sql_truncated_input: 1, json_unparseable_meta: 1, sql_truncated_meta: 1,
           });
-          expect(backfillArchives(world, "chat", "chs_gd")).toHaveLength(1);
+          expect(backfillArchives(world, "chat", "chat_gd")).toHaveLength(1);
           expect(backfillArchives(world, "issue", "iss_gd")).toHaveLength(1);
           expect(world.opened.store.getTaskTrace("tsk_chat_a")).toMatchObject({ location: "archive", headSeq: 4 });
         });
@@ -390,10 +387,10 @@ for (const backend of backends) {
           const injected = failAfterWriting(world, step);
           await expect(world.run()).rejects.toThrow(`injected ${step} failure`);
           injected.restore();
-          expect(backfillArchives(world, "chat", "chs_gd")).toEqual([]);
+          expect(backfillArchives(world, "chat", "chat_gd")).toEqual([]);
           expect(store.getTaskTrace("tsk_chat_a")).toBeNull();
           expect(store.getTaskTrace("tsk_chat_none")).toBeNull();
-          expect(store.getTraceBackfillProgress("chat", "chs_gd")).toMatchObject({ status: "running", archiveId: null });
+          expect(store.getTraceBackfillProgress("chat", "chat_gd")).toMatchObject({ status: "running", archiveId: null });
           expect(progressRows(world)).toBe(1);
           expect(await committedState(world)).toEqual(before);
           expect(injected.inTransaction).toEqual([true]);
@@ -402,11 +399,11 @@ for (const backend of backends) {
           expect(resumed.execution!.chat).toMatchObject({
             resumed_interrupted: 1, written: 1, archives_created: 1, pointers: 1, none_pointers: 1, turn_cards_updated: 2,
           });
-          const [archive] = backfillArchives(world, "chat", "chs_gd");
+          const [archive] = backfillArchives(world, "chat", "chat_gd");
           expect(store.getTaskTrace("tsk_chat_a")).toMatchObject({ location: "archive", archiveId: archive!.id, headSeq: 4 });
           expect(store.getTaskTrace("tsk_chat_none")).toMatchObject({ location: "none" });
           expect(store.findTurnEntry("tsk_chat_a")!.metadata).toMatchObject({ event_count: 4, tool_call_count: 1 });
-          expect(store.getTraceBackfillProgress("chat", "chs_gd")).toMatchObject({ status: "done", archiveId: archive!.id });
+          expect(store.getTraceBackfillProgress("chat", "chat_gd")).toMatchObject({ status: "done", archiveId: archive!.id });
           expect((await reconcileFull(world)).ok).toBe(true);
         });
       }, TIMEOUT);

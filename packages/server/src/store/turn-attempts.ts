@@ -72,5 +72,5 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
     turn_id:row.id,current_attempt_id:row.current_attempt_id,legacy_prompt:row.legacy_prompt,
   };
   const body=String(row.legacy_prompt??'');const rendered=renderMarkdown(body);
-  return {...entry,task_id:row.current_attempt_id,body_md:body,body_html:rendered.html,render_version:rendered.render_version,metadata};
+  return {...entry,visibility:entry.session_id.startsWith("chat_") && !["completed","failed","cancelled"].includes(row.status) ? "hidden" : entry.visibility,task_id:row.current_attempt_id,body_md:body,body_html:rendered.html,render_version:rendered.render_version,metadata};
 }

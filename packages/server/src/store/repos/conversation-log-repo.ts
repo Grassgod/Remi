@@ -27,6 +27,13 @@ import {
 
 type Row = Record<string, unknown>;
 
+// Chat streams its in-flight trace separately; show its persisted card only at
+// the terminal outcome, while keeping the turn pointer addressable from creation.
+const SHOWN_ROW_SQL = `visibility = 'shown' AND deleted_at IS NULL
+  AND NOT (kind = 'turn' AND session_id LIKE 'chat_%' AND EXISTS
+    (SELECT 1 FROM multiremi_turns t WHERE t.id = multiremi_conversation_log.id
+      AND t.status IN ('pending','running','awaiting_human')))`;
+
 /** Cap on one page of the window read; the route rejects anything larger. */
 export const CONVERSATION_LOG_MAX_WINDOW = 100;
 
@@ -105,7 +112,7 @@ export class ConversationLogRepo {
       ctx.db.run("UPDATE multiremi_conversation_log SET revision=revision+1,updated_at=? WHERE session_id=? AND seq=?",[nowIso(),row.session_id,row.seq]);
       this.touchSessionWithinTransaction(row.session_id);
       const entry=this.getEntryWithinTransaction(row.session_id,Number(row.seq));
-      if(entry)this.emit(entry.session_id,created?entry:toPatch(entry.seq,entry.revision,{metadata:entry.metadata,body_md:entry.body_md,body_html:entry.body_html,render_version:entry.render_version},entry.updated_at));
+      if(entry)this.emit(entry.session_id,created || entry.session_id.startsWith("chat_") ?entry:toPatch(entry.seq,entry.revision,{metadata:entry.metadata,body_md:entry.body_md,body_html:entry.body_html,render_version:entry.render_version},entry.updated_at));
     });
   }
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
@@ -389,7 +396,7 @@ export class ConversationLogRepo {
 
   /** Locate one row's seq by id, for deep links. */
   locate(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
-    const row = this.runQuery(query, "SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ? AND visibility = 'shown' AND deleted_at IS NULL", [sessionId, id]).get() as Row | null;
+    const row = this.runQuery(query, `SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ? AND ${SHOWN_ROW_SQL}`, [sessionId, id]).get() as Row | null;
     if (!row) return null;
     const head = this.getHead(sessionId, query);
     return { id: String(row.id), seq: Number(row.seq ?? 0), head_seq: head?.headSeq ?? 0 };
@@ -499,7 +506,7 @@ export class ConversationLogRepo {
     const anchor = requestedAnchor == null
       ? headSeq
       : Math.max(0, Math.min(Math.floor(requestedAnchor), headSeq));
-    const visible = "visibility = 'shown' AND deleted_at IS NULL";
+    const visible = SHOWN_ROW_SQL;
     const rows: Row[] = [];
     let hasMoreBefore = false;
     let hasMoreAfter = false;
@@ -577,9 +584,8 @@ export class ConversationLogRepo {
   }
 
   /**
-   * The `turn` card for a task, if one exists. A task's card is created when the
-   * task is created (Issue) or when its reply lands (chat), and is then updated
-   * in place through its lifecycle, so the lookup is by `task_id`.
+   * The `turn` card for a task, if one exists. Every task's card is created with its
+   * turn, including Chat and automation, then projected from its current attempt.
    */
   findTurnEntry(taskId: string): ConversationLogEntry | null {
     const row = this.ctx.db.query(
@@ -630,12 +636,12 @@ export class ConversationLogRepo {
     const rows = (to == null
       ? this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND visibility = 'shown' AND deleted_at IS NULL
+         WHERE session_id = ? AND seq > ? AND ${SHOWN_ROW_SQL}
          ORDER BY seq ASC${limitSql}`,
       ).all(...(limit == null ? [sessionId, since] : [sessionId, since, limit]))
       : this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND seq <= ? AND visibility = 'shown' AND deleted_at IS NULL
+         WHERE session_id = ? AND seq > ? AND seq <= ? AND ${SHOWN_ROW_SQL}
          ORDER BY seq ASC${limitSql}`,
       ).all(...(limit == null ? [sessionId, since, to] : [sessionId, since, to, limit]))) as Row[];
     return rows.map(row=>this.materialize(row));

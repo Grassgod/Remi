@@ -13,7 +13,7 @@
 
 1. `multiremi_conversation_log` 的消息头使用普通列：sender、to、message_kind、wake、reply_to_id、dedupe_key、options 和 card_token。`sender_type/id` 替代 author，`reply_to_id` 统一线程与决定答复。收件人写入时解析并冻结。对话内 dedupe_key 唯一；人的收件箱索引按 to_member_id、session_id、seq。
 2. `multiremi_turns` 是工作单位；`multiremi_turn_attempts` 是执行单位，attempt 保留现有 `tsk_` 标识。trace、归档成员、附件和用量继续引用 attempt。重试、换机与孤儿恢复只建尝试，不建轮，也不修改 Issue 状态。显式继续是另一轮，不能被重试链合并。
-3. 日志的 turn 行保存 id 与 seq 指针。卡片的状态、用量、模型、统计与最终回复由轮及当前尝试投影，轮状态变化集中产生 Live Hub patch。历史提示词保存为轮的 legacy_prompt，新的轮输入由消息 seq 范围决定。
+3. 日志的 turn 行保存 id 与 seq 指针。卡片的状态、用量、模型、统计与最终回复由轮及当前尝试投影，轮状态变化集中产生 Live Hub 更新。Chat 未结束的轮投影为隐藏，回复完成后在相同 id/seq 上显示；Chat 更新发送完整 entry，让已消费隐藏标记的副本能恢复同一张卡，其余轮使用 patch。历史提示词保存为轮的 legacy_prompt，新的轮输入由消息 seq 范围决定。
 4. `multiremi_session_lanes` 以 `(session_id,reader_type,reader_id,execution_scope)` 为主键，支持 agent 与 member。人的 lane 不包含 provider 状态，没有逐条归档；读取只推进 cursor。历史 inbox_items 不迁移，人的 cursor 初始化为迁移后的 head；迁移报告单列未读 attention 项。
 5. 每个自动化拥有 `auto_<autopilot id>` 对话；timer 发送 request 消息。Issue 模式执行仍在 Issue 对话，自动化对话记录指向它的 status。运行账本引用 turn，状态从轮推导。
 6. 唯一消息入口为 `sendMessageWithinTransaction(ctx,input,deferredEvents)`，返回 `{message,wake_applied,wake_reason,turn_id?}`。事务归调用方。状态机、门铃规则、所有 producer 的改接由收件箱阶段实现。agent 来回上限默认 5 次，可通过环境变量调整。
