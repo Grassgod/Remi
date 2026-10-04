@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { assertNotHomeDefaultInTest, multiremiStateDir } from "@shared/home-paths.js";
 
 const OWNER_LOCK_DIR = "owner.lock";
 const OWNER_FILE = "owner.json";
@@ -73,9 +74,10 @@ export class WorkspaceSupervisorOwnedError extends Error {
 }
 
 export function configuredMultiremiWorkspacesRoot(explicit?: string | null): string {
-  return explicit
-    ?? process.env.MULTIREMI_WORKSPACES_ROOT
-    ?? join(homedir(), ".remi", "multiremi", "workspaces");
+  const configured = explicit ?? process.env.MULTIREMI_WORKSPACES_ROOT;
+  if (configured != null) return configured;
+  assertNotHomeDefaultInTest("MULTIREMI_WORKSPACES_ROOT", "pass workspacesRoot");
+  return join(homedir(), ".remi", "multiremi", "workspaces");
 }
 
 /**
@@ -288,7 +290,7 @@ function prepareWorkspaceRoot(input: string): { workspaceRoot: string; identity:
 }
 
 function defaultSupervisorStateRoot(): string {
-  return join(userInfo().homedir, ".multiremi", "workspace-supervisors");
+  return join(multiremiStateDir(userInfo().homedir), "workspace-supervisors");
 }
 
 function prepareSupervisorStateRoot(input?: string): string {

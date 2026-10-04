@@ -25,6 +25,15 @@ describe("workspace supervisor process ownership", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("stores default supervisor leases under the configured state directory", () => {
+    const { root } = fixture("configured-state");
+    const lease = acquireWorkspaceSupervisorLease(root);
+    try {
+      expect(lease.lockPath.startsWith(join(process.env.MULTIREMI_STATE_DIR!, "workspace-supervisors")))
+        .toBe(true);
+    } finally { lease.release(); }
+  });
+
   it("rejects another live process across daemon ports and timezones", () => {
     const { root, stateRoot } = fixture("live");
     const lease = acquireWorkspaceSupervisorLease(root, { basePort: 6131, stateRoot });
