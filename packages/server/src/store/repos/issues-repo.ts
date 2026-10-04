@@ -6704,9 +6704,11 @@ export class IssuesRepo {
   ): void {
     const subscribers = this.listIssueSubscribers(issue.id);
     const excluded = new Set(excludedMemberIds);
+    const actorMemberId=actorType==='member'&&actorId
+      ?this.ctx.workspaces().getWorkspaceMemberByRef(actorId,issue.workspaceId)?.id??actorId:null;
     for (const subscriber of subscribers) {
       if (subscriber.userType !== "member") continue;
-      if (actorType === "member" && actorId === subscriber.userId) continue;
+      if (actorType === "member" && actorMemberId === subscriber.userId) continue;
       if (excluded.has(subscriber.userId)) continue;
       this.ctx.createInboxItem({
         issueId: issue.id,

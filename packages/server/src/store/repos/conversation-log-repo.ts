@@ -1,3 +1,5 @@
+import { attemptInputState } from '../inbox/attempt-input.js';
+import { lockLane } from '../inbox/lane-machine.js';
 import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import { createCommitEventQueue } from '../context.js';
 import { projectTurnCard } from "@multiremi/store/turn-attempts.js";
@@ -132,38 +134,47 @@ export class ConversationLogRepo {
   }
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
 
-  getSessionAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
+  getSessionAgentReadProgress(sessionId: string, agentId: string, attemptId?:string): SessionAgentReadProgress {
+    const turn=attemptId?this.ctx.db.query('SELECT t.session_id,t.execution_scope FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId):null;
+    if(attemptId&&!turn)throw new Error('stale_attempt');
+    const scope=turn?.session_id===sessionId?turn.execution_scope:'';
     const row = this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
-      WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId) as Row | null;
-    return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current);
+      WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope) as Row | null;
+    return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current,attemptId);
   }
 
   private storedAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    // Seed streamed progress from persisted lane and attempt receipts.
-    const lane = this.ctx.db.query(`SELECT COALESCE(MAX(cursor_seq), 0) AS seq
-      FROM multiremi_session_lanes WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`).get(sessionId, agentId) as Row;
-    const chat = this.ctx.db.query(`SELECT COALESCE(MAX(projection_to_seq), 0) AS seq
-      FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id = a.turn_id
-      WHERE t.session_id = ? AND t.agent_id = ? AND a.status = 'completed'`).get(sessionId, agentId) as Row;
-    return { seq: Math.min(Math.max(Number(lane.seq), Number(chat.seq)), this.getHead(sessionId)?.headSeq ?? 0), offset: 0 };
+    const row=this.ctx.db.query("SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''").get(sessionId,agentId);
+    return {seq:Number(row?.cursor_seq??0),offset:Number(row?.cursor_offset??0)};
   }
 
   private updateAgentReadProgress(sessionId: string, agentId: string,
-    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress): SessionAgentReadProgress {
+    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress, attemptId?: string): SessionAgentReadProgress {
     return this.ctx.db.transaction(() => {
-      const seed=this.storedAgentReadProgress(sessionId,agentId),at=nowIso();
+      const source=attemptId
+        ?this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId)
+        :this.ctx.db.query("SELECT * FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope='' AND status IN ('running','awaiting_human') ORDER BY created_at DESC LIMIT 1").get(sessionId,agentId);
+      if(attemptId&&!source)throw new Error('stale_attempt');
+      // Inherited conversations have their own reader lane, not this attempt's receipt.
+      const turn=source?.session_id===sessionId?source:null;
+      const scope=turn?.execution_scope??'';
+      if(source)this.ctx.lockWorkspaceRuntimeLifecycle(source.workspace_id);
+      const seed=scope===''?this.storedAgentReadProgress(sessionId,agentId):{seq:0,offset:0};
+      const at=nowIso();
       this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,cursor_offset,created_at,updated_at)
-        VALUES(?,'agent',?,'',?,?,?,?) ON CONFLICT DO NOTHING`,[sessionId,agentId,seed.seq,seed.offset,at,at]);
-      this.ctx.db.run(`UPDATE multiremi_session_lanes SET updated_at=updated_at
-        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[sessionId,agentId]);
+        VALUES(?,'agent',?,?,?,?,?,?) ON CONFLICT DO NOTHING`,[sessionId,agentId,scope,seed.seq,seed.offset,at,at]);
+      lockLane(this.ctx,sessionId,agentId,scope);
       const row=this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
-        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId)!;
-      const current={seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
-      const next = advance(current);
-      if (next.seq !== current.seq || next.offset !== current.offset) {
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope)!;
+      const receipt=turn?attemptInputState(this.ctx,turn):null;
+      const current=receipt?{seq:receipt.read,offset:receipt.offset}:{seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
+      const next=advance(current);
+      // A fresh provider may replay an older range; the lane never goes backwards.
+      if(next.seq>Number(row.cursor_seq)||next.seq===Number(row.cursor_seq)&&next.offset>Number(row.cursor_offset))
         this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?,updated_at=?
-          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[next.seq,next.offset,at,sessionId,agentId]);
-      }
+          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[next.seq,next.offset,at,sessionId,agentId,scope]);
+      if(turn&&(next.seq!==current.seq||next.offset!==current.offset))
+        this.ctx.db.run('UPDATE multiremi_turn_attempts SET input_read_seq=?,input_read_offset=? WHERE id=?',[next.seq,next.offset,turn.current_attempt_id]);
       return next;
     })();
   }
@@ -174,7 +185,7 @@ export class ConversationLogRepo {
   }
 
   recordSessionAgentRangeRead(sessionId: string, agentId: string,
-    start: SessionLogReadPosition, end: SessionLogReadPosition): SessionAgentReadProgress {
+    start: SessionLogReadPosition, end: SessionLogReadPosition, attemptId?: string): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
       const expected = { seq: current.seq + 1, offset: current.offset };
       if (start.seq > expected.seq) {
@@ -187,13 +198,13 @@ export class ConversationLogRepo {
       const offset = lastSeq === end.seq - 1 ? end.offset : 0;
       if (lastSeq < current.seq || lastSeq === current.seq && offset <= current.offset) return current;
       return { seq: lastSeq, offset };
-    });
+    }, attemptId);
   }
 
-  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false): SessionAgentReadProgress {
+  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false, attemptId?: string): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
       // An accepted bootstrap has no provider memory, even if an earlier session read the log.
-      if (coldStart) current = { seq: 0, offset: 0 };
+      if (coldStart) current = { seq: 0, offset: 0 }; // Attempt replay only; lane remains monotonic.
       const inline = new Set(seqs);
       // Creating a turn now appends its pointer immediately. Accepting an
       // inline trigger acknowledges only through the last delivered input,
@@ -209,7 +220,7 @@ export class ConversationLogRepo {
         seq = entry.seq;
       }
       return seq > current.seq ? { seq, offset: 0 } : current;
-    });
+    }, attemptId);
   }
 
   /**

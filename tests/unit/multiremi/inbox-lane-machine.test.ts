@@ -20,9 +20,9 @@ pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
     const issue=store.createIssue({title:'Running',assigneeType:'member',assigneeId:'mem_local_local'}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const input={session_id:session.id,sender:{type:'member' as const,id:'mem_local_local'},to:{type:'agent' as const,ref:agent.id},message_kind:'request' as const,wake_requested:'now' as const,body_md:'start'};
     const first=store.sendMessage(input),ctx=new StoreContext(db,()=>store);
-    db.transaction(()=>{db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[first.turn_id!]);acknowledgeInput(ctx,first.turn_id!,0,first.message.seq);})();
+    db.transaction(()=>{ctx.lockWorkspaceRuntimeLifecycle('local');db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[first.turn_id!]);acknowledgeInput(ctx,first.turn_id!,0,first.message.seq);})();
     const next=store.sendMessage({...input,body_md:'interrupt'});expect(next.turn_id).toBe(first.turn_id);
-    db.transaction(()=>{db.run("UPDATE multiremi_turns SET status='completed' WHERE id=?",[first.turn_id!]);const events=createCommitEventQueue();
+    db.transaction(()=>{ctx.lockWorkspaceRuntimeLifecycle('local');db.run("UPDATE multiremi_turns SET status='completed' WHERE id=?",[first.turn_id!]);const events=createCommitEventQueue();
       const ring=reRingAfterTurnEnd(ctx,first.turn_id!,events);expect(ring).toBeTruthy();expect(reRingAfterTurnEnd(ctx,first.turn_id!,events)).toBe(ring);
     })();
     expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_turns WHERE status='pending'").get().n)).toBe(1);

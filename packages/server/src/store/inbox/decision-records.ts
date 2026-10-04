@@ -41,7 +41,7 @@ export function patchDecisionRecord(ctx:StoreContext,id:string,key:'human_reques
   const metadata=JSON.parse(row.metadata??'{}'),record=metadata[key]??{};
   if(credential)assertQuestionCardToken({token_hash:row.card_token_hash,token_recipient:row.card_token_recipient,
     token_consumed_at:row.card_token_consumed_at,status:record.status??'pending'},credential,expectedStatus==='escalated'?'escalated':'pending');
-  if(expectedStatus&&record.status!==expectedStatus)return false;
+  if(expectedStatus&&(record.status??'pending')!==expectedStatus)return false;
   if(fields.reminder_sent_at&&record.reminder_sent_at)return false;
   metadata[key]={...record,...fields};
   const terminal=typeof fields.status==='string'&&!['pending','escalated'].includes(fields.status);

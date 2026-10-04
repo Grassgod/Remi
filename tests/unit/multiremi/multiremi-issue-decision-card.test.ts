@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-412 (parent MUL-400 S5b / E4 x E5): an E4 decision that is handed to a
  * person becomes a card in the Issue topic's Feishu thread, answered there,
@@ -20,6 +22,8 @@ import {
 import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteraction, resetQuestionCardHostFixtures } from "../connectors/question-card-host-fixture.js";
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
@@ -31,12 +35,12 @@ const DECISION_NOT_SUBMITTED_TOAST = "本次没有提交：这次没能提交。
 const CARD_RECOVERING_TOAST = "本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。";
 
 const DECISION_SIDE_EFFECT_TABLES = [
-  "multiremi_issue_decisions",
+  "multiremi_conversation_log",
   "multiremi_issue_activity",
-  "multiremi_inbox_items",
+  "multiremi_session_lanes",
   "multiremi_feishu_bot_outbound_deliveries",
-  "multiremi_tasks",
-  "multiremi_session_events",
+  "multiremi_turns",
+  "multiremi_turn_attempts",
 ] as const;
 
 function decisionSideEffectCounts(): Record<string, number> {
@@ -201,14 +205,21 @@ function cardAction(decisionId: string): Record<string, unknown> {
 
 describe("MUL-412 issue decision cards", () => {
   it("upgrades the SQLite 828291b9 schema twice without losing existing rows", () => {
-    const { store, agentId } = scaffold();
-    const parent = issueWithTopic(store, "SQLite upgrade", { type: "agent", id: agentId });
-    const { child, task } = childWithTask(store, agentId, parent.id);
-    const decision = raiseDecision(store, agentId, child.id, task.id, {
-      kind: "production_change", title: "Keep this row",
-    });
-    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
-    const deliveryId = card.id;
+    // This is a historical migration fixture, not a downgrade of an already unified Store.
+    const db = openSqliteDatabase(":memory:") as unknown as UnifiedFixtureDatabase;
+    bootstrapPreUnifiedSchema(db);
+    const at = "2026-09-01T00:00:00.000Z";
+    db.run("INSERT INTO multiremi_workspaces(id,name,slug,created_at,updated_at) VALUES('local','Local','local',?,?)", [at,at]);
+    db.run("INSERT INTO multiremi_agents(id,name,provider,created_at,updated_at) VALUES('agt_history','History','codex',?,?)", [at,at]);
+    db.run("INSERT INTO multiremi_issues(id,title,issue_number,workspace_id,created_at,updated_at) VALUES('iss_history','SQLite upgrade',1,'local',?,?)", [at,at]);
+    db.run("INSERT INTO multiremi_chat_sessions(id,workspace_id,agent_id,title,created_at,updated_at) VALUES('chat_history','local','agt_history','History',?,?)", [at,at]);
+    db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings(id,workspace_id,app_id,agent_id,external_session_key,chat_session_id,created_at,updated_at)
+      VALUES('bind_history','local','cli_history','agt_history','oc_history','chat_history',?,?)`, [at,at]);
+    const decision = { id: "dec_history" }, deliveryId = "fbo_history";
+    db.run(`INSERT INTO multiremi_issue_decisions(id,workspace_id,issue_id,source_issue_id,kind,title,body,status,created_by_agent_id,created_at,updated_at)
+      VALUES(?,'local','iss_history','iss_history','production_change','Keep this row','context','escalated','agt_history',?,?)`, [decision.id,at,at]);
+    db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries(id,workspace_id,binding_id,chat_id,body,status,available_at,created_at,updated_at)
+      VALUES(?,'local','bind_history','oc_history','{}','sending',?,?,?)`, [deliveryId,at,at,at]);
     restoreMul412Baseline828291b9Schema(db!);
     expect(tableColumns(db!, "multiremi_issue_decisions")).not.toContain("reminder_sent_at");
     expect(tableColumns(db!, "multiremi_feishu_bot_outbound_deliveries")).not.toContain("decision_id");
@@ -230,6 +241,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(db!.query(
       "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_multiremi_feishu_bot_outbound_decision'",
     ).get()).toEqual({ n: 1 });
+    db.close();
   });
 
   it("sends a card when the owner agent escalates a decision to a person", () => {
@@ -342,10 +354,9 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId, member } = scaffold();
     const parent = issueWithTopic(store, "Card click", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    // Model the source task as in flight. The answer must enqueue one fresh
-    // continuation and wake it, rather than merely append to an existing queued
-    // task (which deliberately emits no second wake).
-    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+    // Model the source task as in flight. Keep the original continuation
+    // assertions while moving the fixture write to the unified attempt model.
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?", options: ["yes", "no"] });
     sendCard(store, "om_answer_card");
     const host = await daemonToken(store);
@@ -478,7 +489,7 @@ describe("MUL-412 issue decision cards", () => {
     });
     db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET interaction_open_id = ? WHERE decision_id = ?",
       ["ou_agent_self", decision.id]);
-    db!.run("UPDATE multiremi_issue_decisions SET token_recipient = ? WHERE id = ?", ["ou_agent_self", decision.id]);
+    db!.run("UPDATE multiremi_conversation_log SET card_token_recipient = ? WHERE id = ?", ["ou_agent_self", decision.id]);
     const asAgent = await answer("ou_agent_self");
     expect(agentMember.id).toBe(agentId);
     expect(asAgent.status).toBe(403);
@@ -854,7 +865,7 @@ describe("MUL-412 issue decision cards", () => {
     const card = sendCard(store, "om_no_timeout")!;
     expect(card.expiresAt ?? null).toBeNull();
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_issue_decisions WHERE status = 'timeout'",
+      "SELECT COUNT(*) AS n FROM multiremi_message_decision_records WHERE status = 'timeout'",
     ).get()).toEqual({ n: 0 });
     // Far past any plausible deadline the card is still the live question.
     const muchLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -885,7 +896,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(due.getTime() + 60 * 60 * 1000))).toBeNull();
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_reminder")).toHaveLength(1);
     // The decision row is the once-only CAS after the delivery-based due check.
-    expect(db!.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(decision.id))
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(decision.id))
       .toMatchObject({ reminder_sent_at: due.toISOString() });
   });
 
@@ -896,7 +907,7 @@ describe("MUL-412 issue decision cards", () => {
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge?" });
     expect(decision.status).toBe("pending");
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_issue_decisions SET created_at = ?, updated_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
       [twoHoursAgo, twoHoursAgo, decision.id]);
     const ownerTask = parentTask(store, agentId, parent.id);
     store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
@@ -1231,7 +1242,7 @@ describe("MUL-412 issue decision cards", () => {
         kind: "production_change", title: "Deploy?", options: ["yes"],
       });
       sendCard(store, `om_${failure.replaceAll(" ", "_")}`)!;
-      db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [task.id]);
       if (failure === "archived runtime workspace") {
         store.runtimeWorkspaces.archive(runtimeWorkspace.id);
       } else {

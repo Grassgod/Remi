@@ -8,8 +8,8 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const sideEffectTables = [
-  "multiremi_issue_decisions", "multiremi_issue_activity", "multiremi_inbox_items",
-  "multiremi_feishu_bot_outbound_deliveries", "multiremi_tasks", "multiremi_session_events",
+  "multiremi_message_decision_records", "multiremi_issue_activity", "multiremi_session_lanes",
+  "multiremi_feishu_bot_outbound_deliveries", "multiremi_turn_attempts", "multiremi_conversation_log",
 ] as const;
 
 for (const backend of ["SQLite", "PostgreSQL"] as const) {
@@ -107,8 +107,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       (db as unknown as SqlDatabase).transaction(fn)();
     }
 
+    function setDecisionStatus(id:string,status:string) {
+      const metadata=JSON.parse(db.query('SELECT metadata FROM multiremi_conversation_log WHERE id=?').get(id)!.metadata as string);
+      metadata.decision_record={...metadata.decision_record,status};
+      db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?',[JSON.stringify(metadata),id]);
+    }
+
     function snapshot() {
-      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY id`).all());
+      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY ${table==='multiremi_session_lanes'?'session_id,reader_type,reader_id,execution_scope':'id'}`).all());
     }
 
     function send(f: Fixture) {
@@ -168,7 +174,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE id = ?", [f.other.id, f.bindingId]);
       },
       "decision, source and target moved away together": f => {
-        db.run("UPDATE multiremi_issue_decisions SET workspace_id = ? WHERE id = ?", [f.foreignId, f.decision.id]);
+        db.run("UPDATE multiremi_issue_sessions SET workspace_id = ? WHERE id = (SELECT session_id FROM multiremi_conversation_log WHERE id=?)", [f.foreignId, f.decision.id]);
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id IN (?, ?)", [f.foreignId, f.parent.id, f.child.id]);
       },
     };
@@ -182,7 +188,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const f = await fixture(reverse);
           send(f);
           move(f);
-          db.run("UPDATE multiremi_issue_decisions SET status = ? WHERE id = ?", [status, f.decision.id]);
+          setDecisionStatus(f.decision.id,status);
           const before = snapshot();
           const events: unknown[] = [];
           const stops = [
@@ -210,14 +216,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const events = createCommitEventQueue();
           // A terminal row whose sent card is still in the outbox, so the
           // stored status cannot mask the patch guard.
-          db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
+          setDecisionStatus(f.decision.id,'answered');
           const before = snapshot();
           inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction({ ...f.decision, status: "answered" }, events));
           expect(snapshot()).toEqual(before);
           expect(events).toEqual(createCommitEventQueue());
           // Escalated again and without the old outbox's idempotency record, so
           // neither can mask the prepare guard.
-          db.run("UPDATE multiremi_issue_decisions SET status = 'escalated' WHERE id = ?", [f.decision.id]);
+          setDecisionStatus(f.decision.id,'escalated');
           db.run("DELETE FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?", [f.decision.id]);
           const empty = snapshot();
           inTransaction(() => store.prepareIssueDecisionCardWithinTransaction(f.parent, f.decision, events));
@@ -262,7 +268,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           move(f);
           expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toEqual([]);
           expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
-          expect(db.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(f.decision.id))
+          expect(db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(f.decision.id))
             .toEqual({ reminder_sent_at: null });
           expect(laneRows(f, "decision_reminder")).toEqual([]);
         });
@@ -286,7 +292,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`${direction}: a decision row with a stale workspace is hidden`, async () => {
         const f = await fixture(reverse);
         send(f);
-        db.run("UPDATE multiremi_issue_decisions SET workspace_id = ? WHERE id = ?", [f.foreignId, f.decision.id]);
+        db.run("UPDATE multiremi_issue_sessions SET workspace_id = ? WHERE id = (SELECT session_id FROM multiremi_conversation_log WHERE id=?)", [f.foreignId, f.decision.id]);
         expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
         expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toEqual([]);
@@ -298,7 +304,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         send(f);
         db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET workspace_id = ? WHERE id = ?", [f.foreignId, f.deliveryId]);
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
-        expect(db.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(f.decision.id))
+        expect(db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(f.decision.id))
           .toEqual({ reminder_sent_at: null });
         const result = store.answerIssueDecision(f.parent.id, f.decision.id, { answer: "yes", reason: "ok" },
           { type: "member", id: f.member.id, taskId: null });
@@ -314,7 +320,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)?.decision.id).toBe(f.decision.id);
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)?.kind).toBe("decision_reminder");
         expect(laneRows(f, "decision_reminder")).toHaveLength(1);
-        db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
+        setDecisionStatus(f.decision.id,'answered');
         inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction(f.decision, createCommitEventQueue()));
         expect(laneRows(f, "decision_card_patch")).toHaveLength(1);
       });
@@ -327,7 +333,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
         expect(laneRows(f, "decision_reminder")).toEqual([]);
-        db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
+        setDecisionStatus(f.decision.id,'answered');
         inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction(f.decision, createCommitEventQueue()));
         expect(laneRows(f, "decision_card_patch")).toEqual([]);
       });

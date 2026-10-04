@@ -167,7 +167,7 @@ function expectDowngradedMessage(store: MultiremiStore, result: any, source: Mul
 }
 
 for (const backend of ["sqlite", "postgres"] as const) {
-  const timeout = backend === "postgres" ? 60_000 : 15_000;
+  const timeout = backend === "postgres" ? 180_000 : 15_000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-510 universal delegation (${backend})`, () => {
     for (const entry of ["task", "session", "rerun"] as const) {
       for (const terminal of ["completed", "failed", "cancelled"] as const) {

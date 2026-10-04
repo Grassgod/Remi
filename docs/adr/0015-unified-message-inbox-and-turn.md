@@ -9,6 +9,9 @@
 - 取代 [ADR 0005](0005-cross-issue-delegation-return.md) 决策 3–5（桥接行、回程任务、手动叫醒抑制）。
 - 编号：设计时暂定 0013，因 main 上已有 0013、0014，合入集成分支时改为 0015（MUL-493 方案修订 cmt_mnjqdgx7jwvr §3）。
 
+
+MUL-506 QA 修订（贺华杰，2026-10-05）：lane 的 `cursor_seq/cursor_offset` 只保存实际读取高水位，范围完整读取或连续输入确认才推进。轮完成和冷恢复不重置或推进它；provider 续接/完成位置另存 `provider_cursor_seq`，业务消费边界存 `turn.input_to_seq`。同轮换尝试使用 attempt 自己的确认和正文读取凭据，冷 replacement 从实际高水位开始并补回原始输入。此裁定取代 ADR 0013 中“接受 bootstrap 重置实际读高水位”的旧规则。
+
 ## 背景
 
 切换前的模型通过评论、Chat、信封、提示词、插话、提问和决定等入口写入消息。人的通知与 agent 游标分开，轮卡镜像执行数据，重试建立另一个工作标识并驱动 Issue 状态；部分自动化没有对话。该分支已统一存储和消息状态机，提供 Daemon/用户功能的 Store 适配；传输、CLI 和页面由消费者集成。

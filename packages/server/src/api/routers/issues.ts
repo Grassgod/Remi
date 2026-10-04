@@ -1703,7 +1703,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
         let progress;
         if (token?.taskId && token.agentId) {
-          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end, token.taskId); }
           catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
         }
         if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",

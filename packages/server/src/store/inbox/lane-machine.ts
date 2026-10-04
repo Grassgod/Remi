@@ -1,3 +1,4 @@
+import { attemptInputState } from './attempt-input.js';
 import type { SendMessageInput, UnifiedMessage } from '@multiremi/contracts/unified-model.js';
 import type { CreateTaskInput } from '@multiremi/contracts/types.js';
 import { nowIso } from '@multiremi/ids.js';
@@ -77,8 +78,7 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
   const triggerSeq=['cancelled','failed'].includes(turn.status)&&turn.trigger_message_id
     ? Number(ctx.db.query('SELECT seq FROM multiremi_conversation_log WHERE id=?').get(turn.trigger_message_id)?.seq??0):0;
   const cursor=Math.max(Number(lane.cursor_seq),Number(turn.input_to_seq??0),triggerSeq);
-  if(cursor>Number(lane.cursor_seq))ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=0
-    WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[cursor,turn.session_id,turn.agent_id,turn.execution_scope]);
+
   const raw=ctx.db.query(`SELECT id FROM multiremi_conversation_log WHERE session_id=? AND kind='message'
     AND to_agent_id=? AND seq>? AND wake_applied='now' AND deleted_at IS NULL AND ${scopeSql}=?
     ORDER BY seq LIMIT 1`).get(turn.session_id,turn.agent_id,cursor,turn.execution_scope);
@@ -95,15 +95,19 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
 
 /** Folded/context bodies need a full CLI range read before a receipt may cross them. */
 export function assertOfferedInputRead(ctx:StoreContext,turn:any,toSeq:number):void {
-  const read=Number(ctx.db.query("SELECT COALESCE(MAX(cursor_seq),0) AS seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=?").get(turn.session_id,turn.agent_id).seq);
-  const entries=ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND seq<=? AND kind='message' AND visibility='shown' AND deleted_at IS NULL").all(turn.session_id,Math.max(read,Number(turn.input_to_seq??0)),toSeq);
+  const state=attemptInputState(ctx,turn);
+  const attempt=ctx.db.query('SELECT session_id,attempt_no,input_trigger_ack FROM multiremi_turn_attempts WHERE id=?').get(turn.current_attempt_id);
+  const replay=Number(attempt.attempt_no)>1&&!attempt.session_id&&!attempt.input_trigger_ack;
+  const from=replay?Math.min(state.read,Number(turn.input_from_seq??0)):Math.max(state.read,state.ack);
+  const entries=ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND seq<=? AND kind='message' AND visibility='shown' AND deleted_at IS NULL").all(turn.session_id,from,replay?Math.max(Math.min(state.ack,Number(turn.input_to_seq??turn.wake_seq)),toSeq):toSeq);
   for(const entry of entries){const m=ctx.inbox().getMessage(entry.id)!;
+    if(m.seq<=state.read)continue;
     if(m.sender_type==='agent'&&m.sender_id===turn.agent_id||!m.body_md)continue;
     if(m.body_md.length>TRIGGER_MESSAGE_INLINE_CHARS||m.to_agent_id!==turn.agent_id||m.wake_applied!=='now'||(m.metadata.execution_scope??'')!==turn.execution_scope)throw new Error('input_gap');
   }
 }
 
-export function acknowledgeInput(ctx: StoreContext, turnId:string, fromSeq:number, toSeq:number): void {
+export function acknowledgeInput(ctx: StoreContext, turnId:string, fromSeq:number, toSeq:number, advanceRead=true): void {
   const turn=ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(turnId);
   if (!turn) throw new Error('Turn not found');
   lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
@@ -112,9 +116,9 @@ export function acknowledgeInput(ctx: StoreContext, turnId:string, fromSeq:numbe
   const current=Math.max(Number(lane.cursor_seq),Number(turn.input_to_seq??0));
   const head=ctx.conversationLog().getConversationLogHead(turn.session_id)?.headSeq??0;
   if(!Number.isSafeInteger(fromSeq)||!Number.isSafeInteger(toSeq)||fromSeq>current||toSeq<fromSeq||toSeq>head) throw new Error('Input acknowledgement must be contiguous and bounded by the log head');
-  if(toSeq<=Number(turn.input_to_seq??0))return;
-  if(toSeq>Number(lane.cursor_seq))ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=0,updated_at=?
+  if(advanceRead&&toSeq>Number(lane.cursor_seq))ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=0,updated_at=?
     WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[toSeq,nowIso(),turn.session_id,turn.agent_id,turn.execution_scope]);
+  if(toSeq<=Number(turn.input_to_seq??0))return;
   ctx.db.run('UPDATE multiremi_turns SET input_from_seq=COALESCE(input_from_seq,?),input_to_seq=? WHERE id=?',[fromSeq,toSeq,turnId]);
   notifyTurnChanged(ctx.db,turnId);
 }
@@ -130,7 +134,13 @@ export function sweepIdleLanes(ctx:StoreContext,events:CommitEventQueue,limit=50
     const agent=ctx.agents().getAgent(lane.reader_id),session=ctx.issueSessions().getIssueSession(lane.session_id),chat=ctx.chat().getChatSession(lane.session_id);
     const active=ctx.db.query("SELECT 1 FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status IN ('pending','running','awaiting_human') LIMIT 1").get(lane.session_id,lane.reader_id,lane.execution_scope);
     if(active)continue;
-    const from=Math.max(Number(lane.cursor_seq),Number(lane.swept_to_seq));
+    // Work coverage suppresses old wakeups without pretending that a provider read them.
+    const covered=ctx.db.query(`SELECT MAX(CASE WHEN t.status='completed' THEN COALESCE(t.input_to_seq,0)
+      ELSE COALESCE(m.seq,0) END) AS seq FROM multiremi_turns t
+      LEFT JOIN multiremi_conversation_log m ON m.id=t.trigger_message_id
+      WHERE t.session_id=? AND t.agent_id=? AND t.execution_scope=?
+      AND t.status IN ('completed','failed','cancelled')`).get(lane.session_id,lane.reader_id,lane.execution_scope);
+    const from=Math.max(Number(lane.cursor_seq),Number(lane.swept_to_seq),Number(covered?.seq??0));
     const head=ctx.conversationLog().getConversationLogHead(lane.session_id)?.headSeq??0;
     if(!agent||agent.archivedAt||session?.status==='archived'||chat?.status==='archived'){
       ctx.db.run("UPDATE multiremi_session_lanes SET swept_to_seq=?,swept_at=? WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?",[head,new Date(now).toISOString(),lane.session_id,lane.reader_id,lane.execution_scope]);continue;}

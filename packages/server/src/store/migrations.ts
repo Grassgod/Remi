@@ -1,3 +1,5 @@
+import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attempt-counters.js';
+import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
 import { UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
@@ -70,7 +72,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
   // migration cannot strand it.
   advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
     const tables=existingTableNames(db);
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -79,7 +81,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);
   });
 }
 

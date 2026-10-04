@@ -9,7 +9,10 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   const issue=ctx.issues().getIssue(issueId);
   if(!issue||['done','cancelled'].includes(issue.status))return {changed:false,previousStatus:issue?.status??null};
   const owner=issue.assigneeType&&issue.assigneeId?ctx.resolveRunnableAgentForAssignee(issue.assigneeType,issue.assigneeId):null;
-  const turns=ctx.db.query(`SELECT t.*,m.sender_type AS trigger_sender,m.wake_reason AS trigger_reason,m.message_kind AS trigger_kind
+  const turns=ctx.db.query(`SELECT t.*,m.sender_type AS trigger_sender,m.wake_reason AS trigger_reason,m.message_kind AS trigger_kind,
+      (SELECT COUNT(*) FROM multiremi_conversation_log merged WHERE merged.kind='message' AND merged.deleted_at IS NULL
+        AND ${ctx.db.dialect==='postgres'?"merged.metadata::jsonb->>'delivery_turn_id'":"json_extract(merged.metadata,'$.delivery_turn_id')"}=t.id
+        AND merged.wake_reason IN ('human_sender','agent_dispatch')) AS merged_work_triggers
     FROM multiremi_turns t LEFT JOIN multiremi_conversation_log m ON m.id=t.trigger_message_id
     WHERE t.issue_id=? AND t.session_id NOT LIKE 'chat_%' ORDER BY t.created_at DESC,t.seq DESC,t.id DESC`).all(issueId);
   const active=turns.filter(t=>['running','awaiting_human','pending'].includes(t.status));
@@ -21,7 +24,7 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   if(active.some(t=>t.status==='running'))status='in_progress';
   else if(active.some(t=>t.status==='awaiting_human')||decision)status='in_review';
   else if(active.some(t=>t.status==='pending')){
-    if(active.some(t=>t.trigger_sender==='member'||t.trigger_reason==='agent_dispatch'||['human_sender','agent_dispatch'].includes(t.wake_source)))status='todo';
+    if(active.some(t=>Number(t.merged_work_triggers)>0||t.trigger_sender==='member'||t.trigger_reason==='agent_dispatch'||['human_sender','agent_dispatch'].includes(t.wake_source)))status='todo';
   }else{
     const latest=turns.find(t=>t.agent_id===owner?.id);
     status=latest?.status==='completed'?'in_review':latest?.status==='failed'?'blocked':latest?.status==='cancelled'?'todo':null;
