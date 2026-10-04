@@ -6,7 +6,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 # 统一消息与收件箱 Store
 
-该分支实现 [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md) 的消息状态机。Daemon 传输、新 CLI/API 和页面由各自消费者集成；本文的接口存在于 Store，不代表生产已经切换。
+该分支实现 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md) 的消息状态机。Daemon 传输、新 CLI/API 和页面由各自消费者集成；本文的接口存在于 Store，不代表生产已经切换。
 
 ## 写入与事务
 

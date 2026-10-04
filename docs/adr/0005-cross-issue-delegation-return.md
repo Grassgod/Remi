@@ -7,7 +7,7 @@ Accepted (MUL-400 S1b, child issue MUL-456). Decision 1 is superseded by
 skip reasons are revised there. Decision 7's report body and result-comment
 contract is superseded by [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md).
 Decisions 3–5 are superseded by
-[ADR 0015](0015-unified-message-inbox-and-turn.md) (MUL-493).
+[ADR 0016](0016-unified-message-inbox-and-turn.md) (MUL-493).
 Ships stacked on S2
 (`docs/adr/0004-issue-dependency-semantics.md`), which ships on S1
 (`docs/adr/0003-parent-status-derived-from-children.md`).

@@ -1,4 +1,4 @@
-# ADR 0015: 消息、轮、尝试与对话游标
+# ADR 0016: 消息、轮、尝试与对话游标
 
 - 状态：设计已由贺华杰确认；存储实现已接入本分支，尚未切换生产。
 - 决策人：贺华杰（范围、一步切换与生产边界）、Senior大哥（设计）、带头大哥（拆分）。
@@ -7,10 +7,10 @@
 - 继承 [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md)：交付物是 `reply/final` 消息，门铃是收件箱投影和平台的 `status/report` 消息；offer 预算与 `offer_too_large` 不变。0013 里 `agent_read_state` 那一段由本 ADR 取代，读进度归 lane 游标（S2 落地）。
 - 继承 [ADR 0014](0014-every-agent-dispatch-is-a-delegation.md) 决策 1–4（派活一律算委派、谱系计数、环境变量上限），修订其决策 5–6：超过来回上限时不再返回 409，也不再记 `comment_mention_skipped`；消息照常落库，降级为下一轮（`wake_reason=pair_round_trip_limit`），通知和活动保留（S2 落地）。
 - 取代 [ADR 0005](0005-cross-issue-delegation-return.md) 决策 3–5（桥接行、回程任务、手动叫醒抑制）。
-- 编号：设计时暂定 0013，因 main 上已有 0013、0014，合入集成分支时改为 0015（MUL-493 方案修订 cmt_mnjqdgx7jwvr §3）。
+- 编号：设计时暂定 0013，因 main 上已有 0013、0014，合入集成分支时改为 0015（MUL-493 方案修订 cmt_mnjqdgx7jwvr §3）；main 随后由 MUL-501 占用 0015（Issue 活动不进对话日志），同步 main 时改为 0016。
 
 
-MUL-506 QA 修订（贺华杰，2026-10-05）：lane 的 `cursor_seq/cursor_offset` 只保存当前 provider 会话的实际读取高水位，范围完整读取或连续输入确认才推进。轮完成不重置或推进它；provider 续接/完成位置另存 `provider_cursor_seq`，业务消费边界存 `turn.input_to_seq`。本 ADR 继承 ADR 0013 的冷 bootstrap 语义：新 provider 的输入从 0 开始，接受后实际读取高水位清零，再按连续读取或完整 inline 输入确认抬高；准备或拒绝不会清零。冷 replacement 同样从 0 重读并包含原轮的原始输入，使用新 attempt 自己的确认和正文读取凭据。Runtime 删除或 daemon 退役仅重置 provider 续接缓存，不在运行环境变化时清零实际读取。
+MUL-506 QA 修订（带头大哥裁定，2026-10-05，MUL-493 评论 cmt_ahun4f63lpo7）：lane 的 `cursor_seq/cursor_offset` 只保存当前 provider 会话的实际读取高水位，范围完整读取或连续输入确认才推进。轮完成不重置或推进它；provider 续接/完成位置另存 `provider_cursor_seq`，业务消费边界存 `turn.input_to_seq`。本 ADR 继承 ADR 0013 的冷 bootstrap 语义：新 provider 的输入从 0 开始，接受后实际读取高水位清零，再按连续读取或完整 inline 输入确认抬高；准备或拒绝不会清零。冷 replacement 同样从 0 重读并包含原轮的原始输入，使用新 attempt 自己的确认和正文读取凭据。Runtime 删除或 daemon 退役仅重置 provider 续接缓存，不在运行环境变化时清零实际读取。
 
 ## 背景
 
