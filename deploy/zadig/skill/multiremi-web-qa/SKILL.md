@@ -73,9 +73,10 @@ if (!token) throw new Error("缺少可用的浏览器登录凭证");
 - 脚本的探针和最终执行都已显式 `-F` 加载别名所在的 workspace config，不依赖默认路径。
   手工 ssh 到 212 时同样带 `-F`。不要靠改 `~/.ssh/config`、复制密钥或关闭
   `StrictHostKeyChecking` 绕过。
-- 控制面把 Mesh 关掉再开（比如轮换密钥）时，daemon 会先删掉受管 config 再重写，
-  这段时间里报 `SSH Mesh configuration is missing`。先看
-  `$HOME/.multiremi/ssh/workspaces/*/state.json` 的 `status`，等它回到 `ready` 再重试。
+- 报 `SSH Mesh configuration is missing` 说明受管 config 被删了：Mesh 被关闭时 daemon
+  会删掉它，重新启用后再写回。先看 `$HOME/.multiremi/ssh/workspaces/*/state.json`：
+  `status` 正在回到 `ready` 就稍等重试；停在 `error` 或 `daemonId` 不是本机 daemon
+  （比如测试写坏了真实 HOME，见 MUL-511），就停下上报，不要自己改 Mesh 文件或重启 daemon。
 
 ## 安全与报告
 
