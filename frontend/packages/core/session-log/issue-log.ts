@@ -85,7 +85,7 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   async loadAround(commentId: string, preserveWindow = false): Promise<void> {
-    const previous = preserveWindow ? this.window : null;
+    const previous = preserveWindow && this.withActivity ? this.window : null;
     this.targetCommentId = commentId;
     this.missingCommentId = null;
     if (!preserveWindow) {

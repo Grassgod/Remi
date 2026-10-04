@@ -88,6 +88,17 @@ describe("activity sidecar", () => {
     expect(replica.getSnapshot("s").entries.at(-1)).toMatchObject({ revision: 2, body_md: "edited" });
     expect(replica.window?.activities?.map(entry => entry.id)).toEqual(["fresh", "held"]);
   });
+  it("keeps log-only deep-link refreshes on their existing replacement behavior", async () => {
+    const seed = { ...windowOf([row(3), row(80)]), activities: [audit("ignored")] };
+    mocks.locate.mockResolvedValue({ id: "r80", seq: 80, head_seq: 81 });
+    mocks.read.mockImplementation(async (_id, params) => params.anchor === 0
+      ? windowOf([row(0, "head")]) : windowOf([row(80), row(81)]));
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: seed });
+    await replica.loadAround("r80", true);
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 80, 81]);
+    expect(replica.window?.activities).toBeUndefined();
+    expect(mocks.read.mock.calls.every(([, params]) => params.with_activity === undefined)).toBe(true);
+  });
 });
 
 afterEach(() => { vi.unstubAllGlobals(); mocks.read.mockReset(); mocks.locate.mockReset(); });
