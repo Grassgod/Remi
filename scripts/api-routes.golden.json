@@ -23872,7 +23872,7 @@
       "body": {
         "config": {
           "backend": "local",
-          "root_hint": "~/.remi/multiremi/session-archives",
+          "root_hint": ".../session-archives",
           "require_archive": true,
           "max_bytes": 2147483648,
           "min_free_bytes": 10737418240,

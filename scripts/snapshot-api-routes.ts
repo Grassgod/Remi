@@ -155,6 +155,7 @@ function installDeterminism(): () => void {
   setEnv("MULTIREMI_API_ROLE", undefined); // capture the baseline without an inherited role
   setEnv("NODE_ENV", "test");
   setEnv("MULTIREMI_UPLOAD_DIR", UPLOAD_DIR);
+  setEnv("MULTIREMI_SESSION_ARCHIVE_ROOT", join(SNAPSHOT_TMP, "session-archives"));
   setEnv("MULTIREMI_RELEASE_DIR", RELEASE_DIR);
   setEnv("MULTIREMI_SCRIPTS_DIR", SCRIPTS_DIR);
   setEnv("MULTIREMI_RELEASE_REPO", "Grassgod/remi");
