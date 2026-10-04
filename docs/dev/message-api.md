@@ -24,7 +24,7 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 |---|---|---|
 | `POST /api/sessions/:sessionId/messages` | 下面的发送体 | `{message,wake_applied,wake_reason,turn_id?}` |
 | `GET /api/sessions/:sessionId/messages` | `limit=1..500`，默认 100；`cursor` 或 `after_seq`；`message_kind`、`thread`、`unread_by=<agentId>` | `{messages,next_cursor}`，按 seq 升序；cursor 为 seq 的十进制字符串 |
-| 同上，范围读取 | `from`、`to`；续页使用原响应 `next_cursor` | `{entries,next_cursor,read_start,read_end,...}`，保留 ADR 0013 原范围协议 |
+| 同上，范围读取 | `from`、`to`；续页使用原响应 `next_cursor` | `{entries,next_cursor,read_start,read_end,...}`，保留 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md) 的范围协议 |
 | `GET /api/messages/:id` | 无 | `{message}`，可读 tombstone |
 | `PATCH /api/messages/:id` | `{body_md}` | `{message}`；仅原发送人，已消费或部分消费拒绝 |
 | `DELETE /api/messages/:id` | 无 | `{message}`；同样仅原发送人、未消费；重复删除幂等 |

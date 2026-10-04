@@ -100,6 +100,8 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("not_a_frame")).toBeNull();
     expect(daemonFrameCategory("")).toBeNull();
     expect(daemonFrameCategory("task.offerr")).toBeNull();
+    expect(daemonFrameCategory("steer.consume")).toBeNull();
+    expect(daemonFrameCategory("task.steer")).toBeNull();
   });
 
   it("maps the six categories to the frames that behave that way", () => {
@@ -138,9 +140,9 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameIsReliable("runtime.ready")).toBe(false);
 
     // RPC frames pair by id and are retried by their caller, not replayed by seq.
-    expect(daemonFrameCategory("steer.consume")).toBe("rpc");
-    expect(daemonFrameIsReliable("steer.consume")).toBe(false);
-    expect(daemonFrameUsesSeq("steer.consume")).toBe(false);
+    expect(daemonFrameCategory("turn.input")).toBe("rpc");
+    expect(daemonFrameIsReliable("turn.input")).toBe(false);
+    expect(daemonFrameUsesSeq("turn.input")).toBe(false);
     expect(daemonFrameCategory("trace.read")).toBe("rpc");
     expect(daemonFrameIsReliable("trace.read")).toBe(false);
 
@@ -306,7 +308,7 @@ describe("compareDaemonCliVersion", () => {
 describe("meetsDaemonMinCliVersion", () => {
   it("admits the pinned minimum and anything newer", () => {
     expect(meetsDaemonMinCliVersion(DAEMON_MIN_CLI_VERSION)).toBe(true);
-    expect(meetsDaemonMinCliVersion("99.0.0")).toBe(true);
+    expect(meetsDaemonMinCliVersion(`${Number(DAEMON_MIN_CLI_VERSION.split(".")[0]) + 1}.0.0`)).toBe(true);
   });
 
   it("rejects the fleet's current release, which is the point of the gate", () => {

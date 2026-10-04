@@ -1660,12 +1660,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    const activityTo = window.has_more_after ? window.entries.at(-1)?.created_at : null;
     window.entries = window.entries.filter(conversationEntryVisibility(c, store)).map(entry => messageResponse(entry));
     const issueSession = store.getIssueSession(sessionId);
     if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
       Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
         fromInclusive: window.prev_entry_created_at,
-        toExclusive: window.has_more_after ? window.entries.at(-1)?.created_at : null,
+        toExclusive: activityTo,
         types: ISSUE_ACTIVITY_TYPES, limit: 200,
       }));
     }

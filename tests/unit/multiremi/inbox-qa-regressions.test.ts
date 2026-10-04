@@ -44,9 +44,9 @@ pendingTurnBackendTests('MUL-506 scoped decision QA', (fixture, backend) => {
             f.store.registerRuntime({ id: 'rt_scope', daemonId: 'daemon_scope', name: 'QA scoped fixture', provider: 'codex', workspaceId: 'local' });
             const sent = f.store.sendMessage({ session_id: s.id, sender: { type: 'member', id: 'mem_local_local' }, to: { type: 'agent', ref: a.id }, message_kind: 'request', wake_requested: 'now', body_md: 'scope work', execution_scope: 'dlg_qa' }), attempt = f.store.claimTask('rt_scope')!;
             f.store.startTask(attempt.id);
-            const bridge = f.store.getDaemonTurnBridge(), scope = { workspaceId: 'local', runtimeId: 'rt_scope', daemonId: 'daemon_scope' }, decision = bridge.rpc('turn.decision', { turn_id: sent.turn_id, attempt_id: attempt.id, dedupe_key: 'scoped_permission', body_md: 'Permit?', options: [{ label: 'Yes', value: 'yes' }], metadata: { kind } }, scope);
+            const bridge = f.store.getDaemonTurnBridge(), scope = { workspaceId: 'local', runtimeId: 'rt_scope', daemonId: 'daemon_scope' }, decision = bridge.rpc('turn.decision', { turn_id: sent.turn_id, attempt_id: attempt.id, dedupe_key: 'scoped_permission', body_md: 'Permit?', options: [{ label: 'Yes', value: 'yes' }], metadata: kind === 'permission' ? { kind, options: [{ optionId: 'yes', name: 'Yes', kind: 'allow_once' }] } : { kind, questions: [{ question: 'Permit?', options: [{ label: 'Yes' }] }] } }, scope);
             expect(decision.ok).toBe(true);
-            const answer = f.store.answerMessageDecision(String(decision.message_id), { sender: { type: 'member', id: 'mem_local_local' }, body_md: 'Yes' });
+            const answer = f.store.answerMessageDecision(String(decision.message_id), { sender: { type: 'member', id: 'mem_local_local' }, body_md: 'Yes', response: kind === 'permission' ? { option_id: 'yes' } : { answers: { 'Permit?': 'Yes' } } });
             expect(f.store.getTurn(sent.turn_id!)?.status).toBe('running');
             expect(f.store.listTurns({ workspace_id: 'local', session_id: s.id }).filter(t => t.status === 'pending')).toHaveLength(0);
             expect(answer.turn_id).toBe(sent.turn_id!);

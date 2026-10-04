@@ -4,7 +4,7 @@
 
 ## 切换顺序
 
-1. 确认目标版本全部集成，并验证正式 main 提交的 release-build-check 成功。daemon 最低版本必须钉到携带本次接口的正式版本。
+1. 发布负责人集成时，将 `packages/contracts/src/daemon-protocol.ts` 的 `DAEMON_MIN_CLI_VERSION` 从 `999.0.0-unreleased-mul507` 替换为第一个包含 MUL-507 的正式版本，并同步协议说明；`0.2.86` 留给 MUL-496 补丁。确认占位值已移除、版本门与正式 tag 一致、目标版本全部集成，按集成时有效的发布门禁验证正式 main 提交。当前 release-build-check 已停用，不等待该检查；保留 Developer context 与相关定向测试证据，正式发布门禁由发布负责人核对。
 2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。
 3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
 

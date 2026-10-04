@@ -92,7 +92,14 @@ export class DaemonTurnBridge {
         const to=Number(payload.input_to_seq),from=this.cursor(turn);
         if(!Number.isSafeInteger(to)||to<0||to>Number(turn.offered_to??0)||!Array.isArray(payload.message_ids))throw new Error('input_gap');
         const replay=this.ctx.db.query('SELECT input_trigger_ack,attempt_no,session_id FROM multiremi_turn_attempts WHERE id=?').get(turn.current_attempt_id);
-        if(to>from||Number(replay.attempt_no)>1&&!replay.session_id&&!replay.input_trigger_ack){const expected=this.inputMessages(turn,from,to).map(message=>message.id);
+        if(to>from||Number(replay.attempt_no)>1&&!replay.session_id&&!replay.input_trigger_ack){
+          // Range reads can deliver ordinary context that snapshots never push.
+          // Only this attempt's full-body receipt may replace an explicit ID;
+          // unread IDs, foreign IDs, duplicates and ordering still need validation.
+          const read=attemptInputState(this.ctx,turn).read;
+          const messageIds=new Set(payload.message_ids);
+          const expected=this.inputMessages(turn,from,to)
+            .filter(message=>message.seq>read||messageIds.has(message.id)).map(message=>message.id);
           if(JSON.stringify(expected)!==JSON.stringify(payload.message_ids))throw new Error('input_gap');
           assertOfferedInputRead(this.ctx,turn,to);}
         acknowledgeInput(this.ctx,turn.id,Math.min(from,to),to);
@@ -105,7 +112,7 @@ export class DaemonTurnBridge {
         const timeout=Number(payload.timeout_ms??0),expires=timeout>0?new Date(Date.now()+timeout).toISOString():null;
         const result=sendMessageWithinTransaction(this.ctx,{session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'member',ref:member.id},
           body_md:payload.body_md,message_kind:'decision',wake_requested:'now',dedupe_key:payload.dedupe_key,options:payload.options as DecisionOption[],
-          metadata:{...(payload.metadata as object),human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:payload.options},status:'pending',expires_at:expires}}},events);
+          metadata:{...(payload.metadata as object),human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},events);
         return {ok:true,message:result.message,message_id:result.message.id};
       }
       const message=getMessage(this.ctx,String(payload.message_id));if(!message||message.task_id!==turn.id||message.message_kind!=='decision')throw new Error('invalid_report');

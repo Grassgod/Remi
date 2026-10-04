@@ -10,8 +10,11 @@ import { prepareTaskOffer } from "@multiremi/api/daemon-protocol/task-offers.js"
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import type { OpenVikingClientContract } from "@multiremi/project-knowledge/types.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
+pendingTurnBackendTests('MUL-508 task offer input', backendFixture => {
+const createLocalStore = () => backendFixture().store;
 afterEach(resetMultiremiTestEnv);
 
 function fixture() {
@@ -134,19 +137,20 @@ test("a long prompt without an explicit trigger points to its task instead of re
   expect(response.prompt).not.toContain("--from 0");
 });
 
-test("Chat input includes only this task's user trigger without a duplicate chat_message body", () => {
+test("coalesced Chat input includes all triggering messages once without a duplicate chat_message body", () => {
   const f = fixture(); const chat = f.store.createChatSession({ agentId: f.agent.id });
   const first = f.store.sendChatMessage(chat.id, { body: "FIRST_CHAT_TRIGGER" });
-  const claimed = f.store.claimTask(f.runtime.id)!;
-  f.store.startTask(claimed.id);
   const second = f.store.sendChatMessage(chat.id, { body: "SECOND_CHAT_TRIGGER" });
   expect(second.task.id).toBe(first.task.id);
+  const claimed = f.store.claimTask(f.runtime.id)!;
+  f.store.startTask(claimed.id);
   const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
   useTaskSessionInput(f.store, claimed, response);
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
-  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).not.toContain("SECOND_CHAT_TRIGGER");
+  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).toContain("SECOND_CHAT_TRIGGER");
   expect(response.chat_message).toBeUndefined();
   expect(prompt.match(/FIRST_CHAT_TRIGGER/g)).toHaveLength(1);
+  expect(prompt.match(/SECOND_CHAT_TRIGGER/g)).toHaveLength(1);
 });
 
 test("range reads every page, rejoins long Unicode bodies, and excludes own history", async () => {
@@ -247,4 +251,5 @@ for (const mode of ["sql", "openviking"] as const) test(`Wiki offers read metada
     expect(response.status).toBe(200);
     expect((await response.json() as any).doc.body).toBe(body);
   }
+});
 });

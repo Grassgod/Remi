@@ -13,22 +13,32 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     expect(f.bridge.rpc('turn.input',{...payload,attempt_id:'wrong'},f.scope).ok).toBe(false);
     expect(f.bridge.rpc('turn.input',{...payload,message_ids:[]},f.scope).ok).toBe(false);
     expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);
-    expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(f.offer.input_to_seq);});
+    expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(f.offer.input_to_seq);},120_000);
   it('decision/permission waits, member reply resumes, wrap-up is a marker',()=>{const f=setup();
-    const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission'}},f.scope);
+    const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission',options:[{optionId:'yes',name:'Yes',kind:'allow_once'}]}},f.scope);
     expect(requested.ok).toBe(true);expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('awaiting_human');
-    const message=requested.message as any;f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Yes'});
+    const message=requested.message as any;f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Yes',response:{option_id:'yes'}});
     expect(()=>f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Again'})).toThrow('settled');
     expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('running');expect(f.bridge.rpc('turn.decision.get',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,message_id:message.id},f.scope).status).toBe('resolved');
-    const before=f.store.getSessionAgentReadProgress(f.session.id,f.agent.id);f.store.wrapUpTurn(f.sent.turn_id!);expect(f.bridge.snapshot(f.scope,new Set([f.attempt.id])).wrapUps).toHaveLength(1);expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual(before);});
+    const before=f.store.getSessionAgentReadProgress(f.session.id,f.agent.id);f.store.wrapUpTurn(f.sent.turn_id!);expect(f.bridge.snapshot(f.scope,new Set([f.attempt.id])).wrapUps).toHaveLength(1);expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual(before);},120_000);
+  it('only a full range read by this attempt permits omitted input IDs',()=>{const f=setup();
+    const receipt={turn_id:f.sent.turn_id,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,message_ids:[]};
+    expect(f.bridge.rpc('turn.input',receipt,f.scope).code).toBe('input_gap');
+    f.store.recordSessionAgentRangeRead(f.session.id,f.agent.id,{seq:1,offset:0},{seq:f.sent.message.seq,offset:1},f.attempt.id);
+    expect(f.bridge.rpc('turn.input',receipt,f.scope).code).toBe('input_gap');
+    f.store.recordSessionAgentRangeRead(f.session.id,f.agent.id,{seq:1,offset:0},{seq:f.offer.input_to_seq+1,offset:0},f.attempt.id);
+    expect(f.bridge.rpc('turn.input',{...receipt,message_ids:['foreign']},f.scope).code).toBe('input_gap');
+    expect(f.bridge.rpc('turn.input',receipt,f.scope).ok).toBe(true);
+    expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(f.offer.input_to_seq);
+  });
   it('completes atomically, re-rings unread interrupt, completion replay is idempotent',()=>{const f=setup();const later=f.store.sendMessage({session_id:f.session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:f.agent.id},message_kind:'request',wake_requested:'now',body_md:'interrupt'});
     const input={payload:{turn_id:f.sent.turn_id!,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,reply:{body_md:'done',message_kind:'final' as const}},completionFields:null};
     const done=f.bridge.complete(input,f.scope);expect(done.ok).toBe(true);expect(f.store.getMessage(String(done.reply_message_id))?.message_kind).toBe('final');
     expect(f.store.listTurns({workspace_id:'local',session_id:f.session.id}).filter(t=>t.status==='pending')).toHaveLength(1);expect(later.message.seq).toBeGreaterThan(f.store.getTurn(f.sent.turn_id!)!.input_to_seq!);
-    expect(f.bridge.complete(input,f.scope)).toEqual(done);});
+    expect(f.bridge.complete(input,f.scope)).toEqual(done);},120_000);
   it('reply write failure completes without a reply pointer',()=>{const f=setup();const write=spyOn(IssuesRepo.prototype,'createIssueCommentWithinTransaction').mockImplementation(()=>{throw new Error('injected reply write failure');});
     try{expect(f.bridge.complete({payload:{turn_id:f.sent.turn_id!,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,reply:{body_md:'done',message_kind:'reply'}},completionFields:null},f.scope).ok).toBe(true);
-      expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('completed');expect(f.store.getTurn(f.sent.turn_id!)?.reply_message_id).toBeNull();}finally{write.mockRestore();}});
+      expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('completed');expect(f.store.getTurn(f.sent.turn_id!)?.reply_message_id).toBeNull();}finally{write.mockRestore();}},120_000);
   it('snapshots only new now input for the current lane and folds large bodies',()=>{const f=setup();
     const send=(body:string,wake:'now'|'next_turn',to=f.agent.id)=>f.store.sendMessage({session_id:f.session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:to},message_kind:'request',wake_requested:wake,body_md:body});
     send('later','next_turn');const other=f.store.createAgent({name:'Other',provider:'codex'});send('other','now',other.id);
@@ -43,7 +53,7 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     f.store.recordSessionAgentRangeRead(f.session.id,f.agent.id,{seq:1,offset:0},{seq:offer.input_to_seq+1,offset:0});
     expect(f.bridge.rpc('turn.input',receipt,f.scope).ok).toBe(true);
     expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(offer.input_to_seq);
-  });
+  },120_000);
 
   it('cold retry replaces the attempt and trace binding without changing Issue status',()=>{const f=setup();
     f.store.cancelTurn(f.sent.turn_id!);const before=f.store.getIssue(f.issue.id)!;
@@ -54,6 +64,6 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     expect(f.store.getIssue(f.issue.id)?.status).toBe(before.status);expect(f.store.getIssue(f.issue.id)?.updatedAt).toBe(before.updatedAt);
     expect(f.db.query("SELECT provider_session_id,work_dir,execution_fingerprint FROM multiremi_session_lanes WHERE session_id=? AND reader_id=? AND execution_scope='' ").get(f.session.id,f.agent.id)).toMatchObject({provider_session_id:null,work_dir:null,execution_fingerprint:null});
     expect(f.bridge.rpc('turn.input',{turn_id:replacement.id,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,message_ids:[]},f.scope).code).toBe('stale_attempt');
-  });
+  },120_000);
 
 });

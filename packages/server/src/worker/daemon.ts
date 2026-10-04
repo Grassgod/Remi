@@ -31,15 +31,15 @@ import {
   createAdapter,
 } from "@acp/index.js";
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
-import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
+import { answersToElicitationContent, elicitationToQuestions, type ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import {
   DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
   MultiremiDaemonHttpError,
-  MultiremiDaemonRequestTimeoutError,
   type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
@@ -284,6 +284,32 @@ function readResponseAnswers(response: Record<string, unknown> | null): Record<s
     if (typeof value === "string" && value.trim()) answers[key] = value;
   }
   return Object.keys(answers).length ? answers : null;
+}
+
+function decisionReplyObject(reply: UnifiedMessage): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(reply.body_md);
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+/** Convert published option values and form answers back to provider field names. */
+function decisionReplyAnswers(reply: UnifiedMessage, questions: ElicitationQuestion[]): Record<string, string> | null {
+  const structured = decisionReplyObject(reply);
+  const answers = readResponseAnswers(reply.metadata) ?? readResponseAnswers(structured);
+  const result: Record<string, string> = {};
+  if (answers) {
+    for (const { fieldKey, question } of questions) {
+      const answer = answers[fieldKey] ?? answers[question.question];
+      if (answer !== undefined) result[question.question] = answer;
+    }
+  } else if (structured && typeof structured.question === "string" && typeof structured.answer === "string") {
+    const match = questions.find(({ fieldKey, question }) => structured.question === fieldKey || structured.question === question.question);
+    if (match) result[match.question.question] = structured.answer;
+  } else if (questions.length === 1) {
+    result[questions[0]!.question.question] = reply.body_md;
+  }
+  return Object.keys(result).length ? result : null;
 }
 
 function providerBootstrapEnv(
@@ -1074,7 +1100,7 @@ export class MultiremiDaemon {
       daemonId: this.options.daemonId ?? this.options.runtimeName,
       cliVersion: multiremiVersion,
       launchedBy: this.options.launchedBy,
-      caps: ["offer", "steer.push", "trace.read", "trace.subscribe", "wiki.fetch"],
+      caps: ["offer", "turn.message", "trace.read", "trace.subscribe", "wiki.fetch"],
       log,
       ...options.protocolClientOptions,
     });
@@ -1149,6 +1175,7 @@ export class MultiremiDaemon {
         return null;
       },
       run: task => {
+        this.taskDownlinks.bindTurn(task);
         this.onceTaskAccepted = true;
         if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
         this.onceOfferTimer = null;
@@ -1196,7 +1223,7 @@ export class MultiremiDaemon {
   }
 
   async isFeishuBotHumanRequestPending(taskId: string, requestId: string): Promise<boolean> {
-    return (await this.readFeishuBotHumanRequest(taskId, requestId)).status === "pending";
+    return (await this.getFeishuBotHumanRequest(taskId, requestId))?.status === "pending";
   }
 
   /** Cards this Runtime still owes click handlers for (MUL-407 restart recovery). */
@@ -1236,31 +1263,22 @@ export class MultiremiDaemon {
     return this.client.getMessageHumanRequest(requestId);
   }
 
-  getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    return this.readFeishuBotHumanRequest(taskId, requestId);
+  async getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    const request = await this.getMessageHumanRequest(requestId);
+    return request?.taskId === taskId ? request : null;
   }
 
-  waitFeishuBotHumanRequestSettled(requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
-    return this.taskDownlinks.waitForHumanDecision(requestId, signal, 24 * 60 * 60 * 1000);
-  }
-
-  private async readFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest> {
-    const path = `/api/daemon/tasks/${taskId}/human-requests/${requestId}`;
-    const timeoutMs = this.options.requestTimeoutMs;
-    try {
-      const reply = await this.taskDownlinks.rpc("human_request.get", { task_id: taskId, request_id: requestId }, timeoutMs);
-      if (!reply.request || typeof reply.request !== "object") throw new Error("human_request.get returned no request");
-      return reply.request as MultiremiTaskHumanRequest;
-    } catch (error) {
-      if (error instanceof DaemonProtocolRpcError) {
-        if (error.code === "daemon_timeout") throw new MultiremiDaemonRequestTimeoutError("GET", path, timeoutMs);
-        const status = error.httpStatus ?? (error.code === "task_not_found" ? 404 : error.code === "authority_revoked" ? 403 : null);
-        if (status !== null) throw new MultiremiDaemonHttpError(status, "GET", path,
-          JSON.stringify({ error: error.detail ?? (status === 404 ? "request not found" : "forbidden for daemon identity"),
-            ...(error.httpCode ? { code: error.httpCode } : {}) }), error.httpCode ?? null);
-      }
-      throw error;
+  async waitFeishuBotHumanRequestSettled(requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
+    // The card host is not the executing turn's subscriber. Read its authorized
+    // decision message while provider replies stay on S3's turn downlink.
+    const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
+    const deadline = Date.now() + 24 * 60 * 60 * 1000;
+    while (!waitSignal.aborted && Date.now() < deadline) {
+      const request = await this.getMessageHumanRequest(requestId);
+      if (!request || request.status !== "pending") return request;
+      await sleep(1000);
     }
+    return null;
   }
 
   prepareTaskHumanRequestCard(requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
@@ -3905,37 +3923,43 @@ export class MultiremiDaemon {
       });
     } else {
       provider.setPermissionHandler?.(async (params) => {
+        this.taskDownlinks.beginDecision(task.id);
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
-          const request = await this.createTaskHumanRequest(task.id, {
-            kind: "permission",
-            payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
-            // Publish the deadline so the topic can remind before it elapses.
-            timeoutMs: humanRequestTimeoutMs,
+          // S2 creates the decision message and sets awaiting_human atomically.
+          const result = await this.taskDownlinks.rpc("turn.decision", {
+            ...this.taskDownlinks.turnInput(task.id),
+            dedupe_key: `permission:${task.id}:${randomUUID()}`,
+            body_md: `Permission requested: ${toolTitle}`,
+            options: params.options.map(option => ({ label: option.name, value: option.optionId, description: option.kind })),
+            metadata: { kind: "permission", session_id: params.sessionId,
+              tool_call: params.toolCall ?? null, options: params.options },
+            timeout_ms: humanRequestTimeoutMs,
           });
+          const decision = result.message as UnifiedMessage;
+          if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
+          this.taskDownlinks.registerDecision(decision, task.id);
           await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
-            request_id: request.id,
-            options: params.options,
-            tool_call: params.toolCall ?? null,
+            message_id: decision.id, options: params.options, tool_call: params.toolCall ?? null,
           });
-          const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
-          const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
-          const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
-          await this.reportHumanRequestMessage(
-            task.id,
-            nextSeq(),
-            "permission_response",
-            chosen
-              ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
-              : `Permission request ${settled?.status ?? "cancelled"}`,
-            { request_id: request.id, option_id: optionId, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
-          );
-          if (optionId) return { outcome: "selected", optionId };
-          return { outcome: "cancelled" };
+          const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
+          const optionId = reply ? readResponseOptionId(reply.metadata)
+            ?? readResponseOptionId(decisionReplyObject(reply)) ?? reply.body_md.trim() : null;
+          const chosen = optionId ? params.options.find(option => option.optionId === optionId) ?? null : null;
+          await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_response", chosen
+            ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
+            : "Permission request cancelled or timed out", {
+              message_id: decision.id, reply_message_id: reply?.id ?? null,
+              option_id: chosen?.optionId ?? null, responded_by: reply?.sender_id ?? null,
+            });
+          if (reply) this.taskDownlinks.confirmDecisionReply(task.id, reply);
+          return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
         } catch (err) {
           // Conservative deny when the routing infrastructure itself fails.
           log.warn(`Permission routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
           return { outcome: "cancelled" };
+        } finally {
+          this.taskDownlinks.finishDecision(task.id);
         }
       });
     }
@@ -3943,6 +3967,7 @@ export class MultiremiDaemon {
     // AskUserQuestion is a collaboration primitive, not a tool permission.
     // Always surface it, including when destructive-tool approvals are automatic.
     provider.setElicitationHandler?.(async (params) => {
+      this.taskDownlinks.beginDecision(task.id);
       try {
         const questions = elicitationToQuestions(params);
         if (!questions?.length) return { action: "cancel" };
@@ -3958,34 +3983,46 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
-        const request = await this.createTaskHumanRequest(task.id, {
-          kind: "question",
-          payload: {
+        const result = await this.taskDownlinks.rpc("turn.decision", {
+          ...this.taskDownlinks.turnInput(task.id),
+          dedupe_key: `elicitation:${task.id}:${randomUUID()}`,
+          body_md: [params.message, ...questions.map(({ question }) => question.question)].filter(Boolean).join("\n\n"),
+          options: questions.flatMap(({ fieldKey, question }) => question.options.map(option => ({
+            label: option.label, value: JSON.stringify({ question: fieldKey, answer: option.label }), description: option.description,
+          }))),
+          metadata: {
+            kind: "question",
             session_id: params.sessionId,
             message: params.message,
             questions,
             ...(context ? { context } : {}),
           },
-          timeoutMs: humanRequestTimeoutMs,
+          timeout_ms: humanRequestTimeoutMs,
         });
+        const decision = result.message as UnifiedMessage;
+        if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
+        this.taskDownlinks.registerDecision(decision, task.id);
         await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
-          request_id: request.id,
+          message_id: decision.id,
           questions,
         });
-        const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
-        const answers = settled?.status === "responded" ? readResponseAnswers(settled.response) : null;
+        const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
+        const answers = reply ? decisionReplyAnswers(reply, questions) : null;
         await this.reportHumanRequestMessage(
           task.id,
           nextSeq(),
           "question_response",
-          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : `Question ${settled?.status ?? "cancelled"}`,
-          { request_id: request.id, answers, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
+          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : "Question cancelled or timed out",
+          { message_id: decision.id, reply_message_id: reply?.id ?? null, answers, responded_by: reply?.sender_id ?? null },
         );
+        if (reply) this.taskDownlinks.confirmDecisionReply(task.id, reply);
         if (!answers) return { action: "cancel" };
         return { action: "accept", content: answersToElicitationContent(questions, answers) };
       } catch (err) {
         log.warn(`Question routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
         return { action: "cancel" };
+      } finally {
+        this.taskDownlinks.finishDecision(task.id);
       }
     });
 
@@ -3994,37 +4031,30 @@ export class MultiremiDaemon {
     };
   }
 
-  /**
-   * Wait for the settled push, task abort, or human
-   * timeout elapses. Timeout/abort expires the request server-side; if a human
-   * response won that race, the server returns the responded row and we honor it.
-   */
-  private async awaitHumanDecision(
-    taskId: string,
-    requestId: string,
-    signal: AbortSignal,
-    timeoutMs: number,
-  ): Promise<MultiremiTaskHumanRequest | null> {
+  /** Questions and permissions share the reply/expiry race through decision messages. */
+  private async awaitDecisionReply(taskId: string, messageId: string, signal: AbortSignal,
+    timeoutMs: number): Promise<UnifiedMessage | null> {
     const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
-    const settled = await this.taskDownlinks.waitForHumanDecision(requestId, waitSignal, timeoutMs);
-    if (settled) return settled;
-    try {
-      const result = await this.taskDownlinks.rpc("human_request.expire", { task_id: taskId, request_id: requestId,
-        status: waitSignal.aborted ? "cancelled" : "timeout" });
-      return result.request as MultiremiTaskHumanRequest | null;
-    } catch (err) {
-      log.warn(`Expire human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+    const reply = await this.taskDownlinks.waitForDecisionReply(messageId, waitSignal, timeoutMs);
+    if (reply) {
+      // WS input is a bounded prompt projection. Fetch once after notification;
+      // never interpret its unread_range prefix or folded body as an answer.
+      const response = await this.taskDownlinks.rpc("turn.decision.get", {
+        ...this.taskDownlinks.turnInput(taskId), message_id: messageId,
+      });
+      const original = response.reply as UnifiedMessage | undefined;
+      if (!original || original.id !== reply.id || original.reply_to_id !== messageId
+        || original.message_kind !== "reply" || typeof original.body_md !== "string") {
+        throw new Error("turn.decision.get returned no matching reply");
+      }
+      return original;
     }
-  }
-
-  private async createTaskHumanRequest(taskId: string, input: {
-    kind: "permission" | "question"; payload: Record<string, unknown>; timeoutMs?: number;
-  }): Promise<MultiremiTaskHumanRequest> {
-    const result = await this.taskDownlinks.rpc("human_request.create", { task_id: taskId,
-      request_id: randomUUID(), kind: input.kind, payload: input.payload,
-      ...(input.timeoutMs === undefined ? {} : { timeout_ms: input.timeoutMs }) });
-    return result.request as unknown as MultiremiTaskHumanRequest;
+    const expired = await this.taskDownlinks.rpc("turn.decision.expire", {
+      ...this.taskDownlinks.turnInput(taskId), message_id: messageId,
+      status: waitSignal.aborted ? "cancelled" : "timeout",
+    });
+    // A human reply committed before expiration wins the race.
+    return (expired.reply as UnifiedMessage | undefined) ?? null;
   }
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
@@ -4277,14 +4307,18 @@ export class MultiremiDaemon {
       // next turn, or — after the force-answer grace elapsed — recorded and
       // consumed without injection so completion can proceed).
       const recordedSteerIds = new Set<string>();
+      let injectedSteerIds: string[] = [];
       const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
+        const ids = messages.map((m) => m.id);
+        // A range hint must reach the provider before its CLI read can satisfy
+        // the server's input barrier. Acknowledging while building the prompt
+        // would fail before the unread ordinary messages could ever be read.
+        if (injected) injectedSteerIds.push(...ids);
+        else await this.taskDownlinks.consumeTaskSteerMessages(task.id, ids);
         for (const message of messages) recordedSteerIds.add(message.id);
         // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
-        await this.taskDownlinks.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
-          log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-        });
         for (const message of messages) {
           await this.reportHumanRequestMessage(task.id, nextExternalSeq(), "steer", message.content, {
             steer_id: message.id,
@@ -4365,6 +4399,11 @@ export class MultiremiDaemon {
         // ACP process (e.g. the previous one died between turns).
         if (finalSessionId) config.sessionId = finalSessionId;
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        if (injectedSteerIds.length && !this.taskDownlinks.pendingTaskSteerMessages(task.id)
+          .some(message => !recordedSteerIds.has(message.id))) {
+          await this.taskDownlinks.consumeTaskSteerMessages(task.id, injectedSteerIds);
+          injectedSteerIds = [];
+        }
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
         if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastTurnMessage?.type === "text") {
@@ -4420,9 +4459,10 @@ export class MultiremiDaemon {
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
         await this.client.reportTaskUsage(task.id, usage);
         try {
-          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
+          await this.taskDownlinks.consumeTaskSteerMessages(task.id, []);
+          await this.client.completeTurn(this.taskDownlinks.turnInput(task.id), candidate, finalSessionId, workDir);
         } catch (err) {
-          if (!isSteerPendingConflict(err)) throw err;
+          if (!isTurnInputPendingConflict(err)) throw err;
           const pendingNow = await this.taskDownlinks.waitForSteer(task.id, this.options.taskDrainTimeoutMs, signal);
           // Already-recorded ids still pending mean an earlier consume call
           // failed (e.g. transient network) — retry it so the barrier lifts,
@@ -4439,7 +4479,7 @@ export class MultiremiDaemon {
           // there and complete once more; a second conflict fails the run
           // loudly rather than looping forever.
           if (fresh.length) await recordSteerBatch(fresh, false);
-          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
+          await this.client.completeTurn(this.taskDownlinks.turnInput(task.id), candidate, finalSessionId, workDir);
         }
         log.info(`Completed task ${task.id}`);
         return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: true };
@@ -5037,7 +5077,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** completeTask refused because an unconsumed steer won the race (server steer barrier). */
-function isSteerPendingConflict(err: unknown): boolean {
-  return (err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending")
-    || (err instanceof DaemonProtocolRpcError && err.code === "steer_pending");
+function isTurnInputPendingConflict(err: unknown): boolean {
+  return err instanceof DaemonProtocolRpcError && err.code === "turn_input_pending";
 }

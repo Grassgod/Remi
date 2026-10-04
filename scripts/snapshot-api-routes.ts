@@ -1632,12 +1632,13 @@ flow("daemon", async (rec, refs, store) => {
 });
 
 flow("daemon-task-lifecycle", async (rec, refs, store) => {
-  const task = await rec.json("POST", "/api/multiremi/tasks", {
+  await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
     issueId: refs.issueId,
     prompt: "Snapshot lifecycle task",
   });
-  const id = task.body?.id ?? task.body?.task?.id ?? refs.taskId;
+  const id = store.createTask({ agentId: refs.agentId, issueId: refs.issueId,
+    prompt: "Snapshot lifecycle task" }).id;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
     const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
@@ -1663,7 +1664,10 @@ flow("daemon-task-lifecycle", async (rec, refs, store) => {
   await rec.json("POST", `/api/tasks/${id}/human-requests/${secondId}/respond`, { outcome: "approved" });
   const thirdId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Write" } }).id;
   store.expireTaskHumanRequest(thirdId, "timeout");
-  await rec.report("task.complete", { task_id: id, result: "done", summary: "complete" });
+  const turn = store.getTaskWithAgent(id)!;
+  const input = store.getDaemonTurnBridge().offerInput(turn);
+  await rec.report("turn.complete", { turn_id: turn.turn_id, attempt_id: id,
+    input_to_seq: input.input_to_seq, reply: { body_md: "done", message_kind: "final" } });
   await rec.report("task.fail", { task_id: refs.taskId, error: "boom" });
 });
 
