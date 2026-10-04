@@ -100,6 +100,8 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("not_a_frame")).toBeNull();
     expect(daemonFrameCategory("")).toBeNull();
     expect(daemonFrameCategory("task.offerr")).toBeNull();
+    expect(daemonFrameCategory("steer.consume")).toBeNull();
+    expect(daemonFrameCategory("task.steer")).toBeNull();
   });
 
   it("maps the six categories to the frames that behave that way", () => {
@@ -138,9 +140,9 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameIsReliable("runtime.ready")).toBe(false);
 
     // RPC frames pair by id and are retried by their caller, not replayed by seq.
-    expect(daemonFrameCategory("steer.consume")).toBe("rpc");
-    expect(daemonFrameIsReliable("steer.consume")).toBe(false);
-    expect(daemonFrameUsesSeq("steer.consume")).toBe(false);
+    expect(daemonFrameCategory("turn.input")).toBe("rpc");
+    expect(daemonFrameIsReliable("turn.input")).toBe(false);
+    expect(daemonFrameUsesSeq("turn.input")).toBe(false);
     expect(daemonFrameCategory("trace.read")).toBe("rpc");
     expect(daemonFrameIsReliable("trace.read")).toBe(false);
 

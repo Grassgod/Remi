@@ -1,7 +1,6 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { normalizeTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
-import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
   ReportRuntimeUpdateInput, ReportRuntimeCommandInput, ReportRuntimeModelListInput,
   ReportRuntimeLocalSkillListInput, ReportRuntimeLocalSkillImportInput, ReportRuntimeDirectoryScanInput,
@@ -20,6 +19,8 @@ import { daemonAgentPluginStateResponse } from "../wire/index.js";
 import type { DaemonProtocolLayer } from "./index.js";
 import type { DaemonProtocolSession } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
+import type { DaemonTurnBridge } from "./turn-bridge.js";
+import type { DaemonTurnCompletePayload } from "@multiremi/contracts/daemon-protocol.js";
 
 class ReportRejection extends Error {
   constructor(readonly code: string) { super(code); }
@@ -112,15 +113,33 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
 export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
-  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void): void {
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void, turns?: DaemonTurnBridge): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
+      // Persisted pre-turn reports must be quarantined, never upgraded on replay.
+      if (frame.type === "task.complete") return { ok: false, code: "report_shape_retired", retryable: false };
+      if (frame.type === "turn.complete") {
+        const reply = p.reply as Record<string, unknown> | undefined;
+        if (!string(p.turn_id) || !string(p.attempt_id) || !Number.isSafeInteger(p.input_to_seq)
+          || (p.input_to_seq as number) < 0 || !reply || typeof reply.body_md !== "string"
+          || (reply.message_kind !== "reply" && reply.message_kind !== "final") || "output" in p || "task_id" in p) reject();
+        const runtimeId = frame.rt ?? string(p.runtime_id);
+        authorizeReportRuntime(store, session, runtimeId);
+        if (!turns) return { ok: false, code: "server_error", retryable: true, message: "unified turn store is not installed" };
+        const fields = completionFields(p, string(p.attempt_id));
+        if (fields) fields.final_reply_md = reply.body_md;
+        const result = await turns.complete({ payload: p as unknown as DaemonTurnCompletePayload, completionFields: fields,
+          traceEventCount: completionTraceEventCount(p.trace, string(p.attempt_id)) },
+        { runtimeId, daemonId: session.daemonId, workspaceId: store.getRuntimeLite(runtimeId)!.workspaceId ?? "local" });
+        if (result.ok === true && fields?.trace) onTraceClosed?.(string(p.attempt_id), fields.trace.head, runtimeId);
+        return result;
+      }
       if (frame.type.startsWith("task.")) {
         const taskId = string(p.task_id);
         if (!taskId) reject();
         const task = authorizeReportTask(store, session, taskId, frame.rt);
-        const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
+        const isCompletion = frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
         const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
         switch (frame.type) {
@@ -180,16 +199,6 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             catch { reject(); }
             break;
           }
-          case "task.complete":
-            if (task.status === "running") {
-              try { store.completeTask(taskId, { output: string(p.output), traceEventCount, branchName: nullable(p.pr_url),
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), completionFields: fields }); }
-              catch (error) {
-                if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
-                throw error;
-              }
-            }
-            break;
           case "task.fail":
             if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
               store.failTask(taskId, {
@@ -317,7 +326,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
       throw error;
     }
   };
-  for (const type of ["task.start", "task.prompt", "task.session_pin", "task.progress", "task.usage", "task.workspace", "task.complete", "task.fail",
+  for (const type of ["task.start", "task.prompt", "task.session_pin", "task.progress", "task.usage", "task.workspace", "task.complete", "turn.complete", "task.fail",
     "runtime.update_result", "runtime.command_result", "runtime.model_list_result", "runtime.local_skills_result", "runtime.directory_scan_result",
     "runtime.local_skill_import_result", "runtime.bot_menu_result", "feishu.outbound_result", "plugin.state"]) layer.registerEventHandler(type, handle);
   layer.registerBestEffortHandler("concierge.status", handle);

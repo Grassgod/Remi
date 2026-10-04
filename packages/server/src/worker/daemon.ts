@@ -33,6 +33,7 @@ import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, Req
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import {
   DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
   isTerminalDaemonAuthorityError,
@@ -1145,6 +1146,7 @@ export class MultiremiDaemon {
         return null;
       },
       run: task => {
+        this.taskDownlinks.bindTurn(task);
         this.onceTaskAccepted = true;
         if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
         this.onceOfferTimer = null;
@@ -3937,6 +3939,7 @@ export class MultiremiDaemon {
     // AskUserQuestion is a collaboration primitive, not a tool permission.
     // Always surface it, including when destructive-tool approvals are automatic.
     provider.setElicitationHandler?.(async (params) => {
+      this.taskDownlinks.beginDecision(task.id);
       try {
         const questions = elicitationToQuestions(params);
         if (!questions?.length) return { action: "cancel" };
@@ -3952,34 +3955,56 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
-        const request = await this.createTaskHumanRequest(task.id, {
-          kind: "question",
-          payload: {
+        const result = await this.taskDownlinks.rpc("turn.decision", {
+          ...this.taskDownlinks.turnInput(task.id),
+          dedupe_key: `elicitation:${task.id}:${randomUUID()}`,
+          body_md: [params.message, ...questions.map(({ question }) => question.question)].filter(Boolean).join("\n\n"),
+          options: questions.flatMap(({ fieldKey, question }) => question.options.map(option => ({
+            label: option.label, value: JSON.stringify({ question: fieldKey, answer: option.label }), description: option.description,
+          }))),
+          metadata: {
+            decision_kind: "question",
             session_id: params.sessionId,
             message: params.message,
             questions,
             ...(context ? { context } : {}),
           },
-          timeoutMs: humanRequestTimeoutMs,
+          timeout_ms: humanRequestTimeoutMs,
         });
+        const decision = result.message as UnifiedMessage;
+        if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
+        this.taskDownlinks.registerDecision(decision, task.id);
         await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
-          request_id: request.id,
+          message_id: decision.id,
           questions,
         });
-        const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
-        const answers = settled?.status === "responded" ? readResponseAnswers(settled.response) : null;
+        const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
+        let reply = await this.taskDownlinks.waitForDecisionReply(decision.id, waitSignal, humanRequestTimeoutMs);
+        if (!reply) {
+          const expired = await this.taskDownlinks.rpc("turn.decision.expire", {
+            ...this.taskDownlinks.turnInput(task.id), message_id: decision.id,
+            status: waitSignal.aborted ? "cancelled" : "timeout",
+          });
+          // A human reply that committed before expiration wins the race.
+          reply = (expired.reply as UnifiedMessage | undefined) ?? null;
+        }
+        const answers = reply ? readResponseAnswers(reply.metadata)
+          ?? (questions.length === 1 ? { [questions[0]!.question.question]: reply.body_md } : null) : null;
         await this.reportHumanRequestMessage(
           task.id,
           nextSeq(),
           "question_response",
-          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : `Question ${settled?.status ?? "cancelled"}`,
-          { request_id: request.id, answers, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
+          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : "Question cancelled or timed out",
+          { message_id: decision.id, reply_message_id: reply?.id ?? null, answers, responded_by: reply?.sender_id ?? null },
         );
         if (!answers) return { action: "cancel" };
+        this.taskDownlinks.confirmDecisionReply(task.id, reply!);
         return { action: "accept", content: answersToElicitationContent(questions, answers) };
       } catch (err) {
         log.warn(`Question routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
         return { action: "cancel" };
+      } finally {
+        this.taskDownlinks.finishDecision(task.id);
       }
     });
 
@@ -4269,13 +4294,11 @@ export class MultiremiDaemon {
       // consumed without injection so completion can proceed).
       const recordedSteerIds = new Set<string>();
       const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
+        await this.taskDownlinks.consumeTaskSteerMessages(task.id, messages.map((m) => m.id));
         for (const message of messages) recordedSteerIds.add(message.id);
         // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
-        await this.taskDownlinks.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
-          log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-        });
         for (const message of messages) {
           await this.reportHumanRequestMessage(task.id, nextExternalSeq(), "steer", message.content, {
             steer_id: message.id,
@@ -4411,9 +4434,10 @@ export class MultiremiDaemon {
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
         await this.client.reportTaskUsage(task.id, usage);
         try {
-          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
+          await this.taskDownlinks.consumeTaskSteerMessages(task.id, []);
+          await this.client.completeTurn(this.taskDownlinks.turnInput(task.id), candidate, finalSessionId, workDir);
         } catch (err) {
-          if (!isSteerPendingConflict(err)) throw err;
+          if (!isTurnInputPendingConflict(err)) throw err;
           const pendingNow = await this.taskDownlinks.waitForSteer(task.id, this.options.taskDrainTimeoutMs, signal);
           // Already-recorded ids still pending mean an earlier consume call
           // failed (e.g. transient network) — retry it so the barrier lifts,
@@ -4430,7 +4454,7 @@ export class MultiremiDaemon {
           // there and complete once more; a second conflict fails the run
           // loudly rather than looping forever.
           if (fresh.length) await recordSteerBatch(fresh, false);
-          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
+          await this.client.completeTurn(this.taskDownlinks.turnInput(task.id), candidate, finalSessionId, workDir);
         }
         log.info(`Completed task ${task.id}`);
         return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: true };
@@ -5028,7 +5052,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** completeTask refused because an unconsumed steer won the race (server steer barrier). */
-function isSteerPendingConflict(err: unknown): boolean {
-  return (err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending")
-    || (err instanceof DaemonProtocolRpcError && err.code === "steer_pending");
+function isTurnInputPendingConflict(err: unknown): boolean {
+  return err instanceof DaemonProtocolRpcError && err.code === "turn_input_pending";
 }

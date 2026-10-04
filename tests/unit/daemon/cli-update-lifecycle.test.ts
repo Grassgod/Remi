@@ -47,7 +47,7 @@ for (const outcome of ["failed", "completed"] as const) {
       };
       queueMicrotask(() => {
         emit("open", {});
-        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, session_id: "unit-update" } }) });
+        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, min_cli_version: "0.2.86", session_id: "unit-update" } }) });
       });
       return socket;
     };
@@ -101,8 +101,10 @@ for (const outcome of ["failed", "completed"] as const) {
       const provider = index === 0 ? "claude" : "codex";
       const seq = ++sequence;
       push({ t: "task.offer", seq, rt: `rt_${provider}`, p: {
-        id: `tsk_lifecycle_${seq}`, runtime_id: `rt_${provider}`, agent_id: "agt_lifecycle",
-        prompt: "no-op", agent: { provider },
+        turn_id: `turn_lifecycle_${seq}`, attempt_id: `tsk_lifecycle_${seq}`,
+        input_from_seq: 0, input_to_seq: 1,
+        input_messages: [{ id: `msg_lifecycle_${seq}`, kind: "message", seq: 1, body_md: "no-op" }],
+        runtime_id: `rt_${provider}`, agent_id: "agt_lifecycle", agent: { provider },
       } });
       await waitFor(() => replies.has(String(seq)), "offer must be answered while an update is running");
       return replies.get(String(seq));

@@ -160,6 +160,7 @@ import {
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
 import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
+import type { DaemonTurnBridge } from "./daemon-protocol/turn-bridge.js";
 import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
 import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
@@ -308,6 +309,8 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
 }
 
 export interface MultiremiApiOptions {
+  /** Unified store/lane integration. Missing integration rejects turn writes retryably. */
+  daemonTurnBridge?: DaemonTurnBridge;
   /** Transport injection for protocol integration tests; no store subscriptions. */
   onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
   store?: MultiremiStore;
@@ -1161,19 +1164,19 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
-    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki),
+    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki, options.daemonTurnBridge?.offerInput(task)),
     onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
     snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
       ...sessionArchiveRequestSnapshot(store, rt),
-      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id))] });
-  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
+      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id), options.daemonTurnBridge)] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), options.daemonTurnBridge);
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
     effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
       ? createHubTraceSink(liveHub as HubImpl) : undefined);
-  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId), options.daemonTurnBridge);
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   registerSessionArchiveRequestHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);

@@ -1153,9 +1153,11 @@ export class MultiremiDaemonClient {
     });
   }
 
-  async completeTask(taskId: string, output: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
-    await this.report("task.complete", taskId, {
-      output,
+  async completeTurn(input: { turn_id: string; attempt_id: string; input_to_seq: number }, output: string,
+    sessionId?: string | null, workDir?: string | null): Promise<void> {
+    await this.report("turn.complete", input.attempt_id, {
+      ...input,
+      reply: { body_md: output, message_kind: "final" },
       session_id: sessionId ?? undefined,
       work_dir: workDir ?? undefined,
     }, true);
