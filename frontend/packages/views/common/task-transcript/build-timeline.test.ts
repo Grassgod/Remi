@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
+import type { TraceEvent } from "@multiremi/contracts/trace";
+import { appendTimelineItem, buildEntries, buildTimeline, buildTraceTimeline, coalesceTimelineItems, extractContextUsage, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
+
+function trace(seq: number, type: string, fields: Partial<TraceEvent> = {}): TraceEvent {
+  return { seq, type, ts: "2026-10-04T00:00:00Z", ...fields };
+}
 
 function message(seq: number, type: TaskMessagePayload["type"], content?: string): TaskMessagePayload {
   return {
@@ -149,6 +154,131 @@ describe("task transcript timeline", () => {
       { task_id: "t", issue_id: "i", seq: 1, type: "usage", content: JSON.stringify({ sessionUpdate: "usage_update", used: 60000, size: 1000000 }) },
     ]);
     expect(usage?.totalTokens).toBe(60000);
+  });
+});
+
+describe("trace timeline display", () => {
+  const events = [
+    trace(1, "thinking", { content: "Inspect" }),
+    trace(2, "usage", { content: "", meta: { used: 210908, size: 1000000 } }),
+    trace(3, "thinking", { content: "ing." }),
+    trace(4, "text", { content: "Starting " }),
+    trace(5, "text", { content: "audit." }),
+    trace(6, "tool_use", { tool: "Agent", tool_call_id: "agent-1", input: { description: "audit" } }),
+    trace(7, "text", { content: "Child ", meta: { parent_tool_call_id: "agent-1" } }),
+    trace(8, "text", { content: "report.", meta: { parent_tool_call_id: "agent-1" } }),
+    trace(9, "tool_result", { tool: "Agent", tool_call_id: "agent-1", status: "completed", output: "done" }),
+    trace(10, "text", { content: "Fixed " }),
+    trace(11, "usage", { content: "", meta: { used: 82000, size: 1000000 } }),
+    trace(12, "execution", { meta: { model: "model-x" } }),
+    trace(13, "text", { content: "the bug " }),
+    trace(14, "text", { content: "and added tests." }),
+    trace(15, "text", { content: "Child tail.", meta: { parent_tool_call_id: "agent-2" } }),
+  ];
+
+  it("filters metadata before coalescing and preserves tools and subagent boundaries", () => {
+    const input = [...events].reverse();
+    const items = buildTraceTimeline(input);
+    expect(items).toHaveLength(7);
+    expect(items.map((item) => item.type)).toEqual([
+      "thinking", "text", "tool_use", "text", "tool_result", "text", "text",
+    ]);
+    expect(items.map((item) => item.content)).toEqual([
+      "Inspecting.", "Starting audit.", undefined, "Child report.", undefined,
+      "Fixed the bug and added tests.", "Child tail.",
+    ]);
+    expect(items.filter((item) => item.type === "text" && !item.meta?.parent_tool_call_id).at(-1)?.content)
+      .toBe("Fixed the bug and added tests.");
+    expect(buildEntries(items).find((entry) => entry.kind === "step"))
+      .toMatchObject({ toolCallId: "agent-1", status: "completed", output: "done" });
+    expect(input).toEqual([...events].reverse());
+  });
+
+  it("produces identical timelines for equivalent task messages and trace events", () => {
+    const messages: TaskMessagePayload[] = events.map((event) => ({
+      task_id: "task-1", issue_id: "issue-1", seq: event.seq, type: event.type,
+      created_at: event.ts, content: event.content ?? undefined, tool: event.tool ?? undefined,
+      input: event.input ?? undefined, output: event.output ?? undefined,
+      tool_call_id: event.tool_call_id ?? undefined, status: event.status ?? undefined,
+      meta: event.meta ?? undefined,
+    }));
+    expect(buildTraceTimeline(events)).toEqual(buildTimeline(messages));
+  });
+
+  it.each(["text", "thinking"])("does not combine %s from different parents", (type) => {
+    const items = buildTraceTimeline([
+      trace(1, type, { content: "Main." }),
+      trace(2, type, { content: "Child A.", meta: { parent_tool_call_id: "a" } }),
+      trace(3, type, { content: "Child B.", meta: { parent_tool_call_id: "b" } }),
+      trace(4, type, { content: "Main again." }),
+    ]);
+    expect(items.map((item) => item.content)).toEqual(["Main.", "Child A.", "Child B.", "Main again."]);
+  });
+
+  it("redacts credentials split across fragments and metadata rows", () => {
+    const items = buildTraceTimeline([
+      trace(1, "text", { content: "Authorization: Bearer abc123xyz." }),
+      trace(2, "usage", { meta: { used: 500 } }),
+      trace(3, "text", { content: "def456" }),
+      trace(4, "tool_use", { input: { api_key: "raw-secret-value" }, meta: { path: "/home/alice/repo" } }),
+    ]);
+    expect(items[0]?.content).toBe("Authorization: Bearer [REDACTED]");
+    expect(items[1]?.input).toEqual({ api_key: "[REDACTED CREDENTIAL]" });
+    expect(items[1]?.meta).toEqual({ path: "/home/<user>/repo" });
+  });
+
+  it("normalizes nullable trace fields without rendering metadata rows", () => {
+    expect(buildTraceTimeline([
+      trace(1, "usage", { content: null, meta: { used: 1 } }),
+      trace(2, "execution", { content: null }),
+      trace(3, "text", { content: "Done", tool: null, input: null, output: null, tool_call_id: null, status: null, meta: null }),
+    ])).toEqual([{
+      seq: 3, type: "text", content: "Done", createdAt: "2026-10-04T00:00:00Z",
+      tool: undefined, input: undefined, output: undefined, toolCallId: undefined, status: undefined, meta: undefined,
+    }]);
+  });
+});
+
+describe("extractContextUsage", () => {
+  it("takes the latest sequence even when occupancy decreases and input arrives out of order", () => {
+    expect(extractContextUsage([
+      trace(4, "usage", { meta: { used: 82000, size: 1000000 } }),
+      trace(1, "usage", { meta: { used: 210908, size: 1000000 } }),
+      trace(5, "text", { content: "done" }),
+    ])).toEqual({ used: 82000, size: 1000000 });
+  });
+
+  it("reads legacy JSON-in-content usage", () => {
+    expect(extractContextUsage([
+      trace(1, "usage", { content: JSON.stringify({ sessionUpdate: "usage_update", used: 60000, size: 1000000 }) }),
+    ])).toEqual({ used: 60000, size: 1000000 });
+  });
+
+  it("prefers metadata and supports its nested usage form", () => {
+    expect(extractContextUsage([
+      trace(1, "usage", { meta: { usage: { used: 40, size: 100 } }, content: '{"used":999}' }),
+    ])).toEqual({ used: 40, size: 100 });
+  });
+
+  it("keeps zero occupancy and allows missing capacity", () => {
+    expect(extractContextUsage([trace(1, "usage", { meta: { used: 0 } })])).toEqual({ used: 0 });
+  });
+
+  it.each([0, -1, "100", Infinity, NaN])("omits an invalid capacity: %s", (size) => {
+    expect(extractContextUsage([trace(1, "usage", { meta: { used: 40, size } })])).toEqual({ used: 40 });
+  });
+
+  it.each([undefined, -1, "40", Infinity, NaN])("rejects invalid occupancy: %s", (used) => {
+    expect(extractContextUsage([trace(1, "usage", { meta: { used } })])).toBeNull();
+  });
+
+  it("returns null without usage or when the latest usage cannot be read", () => {
+    expect(extractContextUsage([])).toBeNull();
+    expect(extractContextUsage([trace(1, "text")])).toBeNull();
+    expect(extractContextUsage([
+      trace(1, "usage", { meta: { used: 40 } }),
+      trace(2, "usage", { content: "invalid json" }),
+    ])).toBeNull();
   });
 });
 
