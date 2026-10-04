@@ -103,15 +103,15 @@ export function registerForWorkspaceRehydration(fn: () => void) {
  * workspaces. Persisted stores get a real read once setCurrentWorkspace
  * triggers their registered rehydrate fn.
  */
-export function createWorkspaceAwareStorage(adapter: StorageAdapter): StateStorage {
+export function createWorkspaceAwareStorage(adapter: StorageAdapter, scope = () => _currentSlug): StateStorage {
   return {
     getItem: (key) =>
-      _currentSlug ? adapter.getItem(`${key}:${_currentSlug}`) : null,
+      scope() ? adapter.getItem(`${key}:${scope()}`) : null,
     setItem: (key, value) => {
-      if (_currentSlug) adapter.setItem(`${key}:${_currentSlug}`, value);
+      if (scope()) adapter.setItem(`${key}:${scope()}`, value);
     },
     removeItem: (key) => {
-      if (_currentSlug) adapter.removeItem(`${key}:${_currentSlug}`);
+      if (scope()) adapter.removeItem(`${key}:${scope()}`);
     },
   };
 }

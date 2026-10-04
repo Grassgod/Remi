@@ -21,11 +21,15 @@ export function TaskTraceDialog({
   agentName,
   onOpenChange,
   headerSlot,
+  promptFallback,
+  initialView,
 }: {
   task: AgentTask;
   agentName: string;
   onOpenChange: (open: boolean) => void;
   headerSlot?: React.ReactNode;
+  promptFallback?: React.ReactNode;
+  initialView?: "execution" | "prompt";
 }) {
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [result, setResult] = useState<TaskTraceRead | null>(null);
@@ -86,6 +90,8 @@ export function TaskTraceDialog({
       agentName={agentName}
       isLive={ACTIVE_TASK_STATUSES.has(task.status) && !result?.closed}
       headerSlot={headerSlot}
+      promptFallback={promptFallback}
+      initialView={initialView}
       traceResult={result}
       traceLoading={loading}
       traceError={error}
