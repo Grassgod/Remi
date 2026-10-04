@@ -73,14 +73,24 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
   const lane=ctx.db.query(`SELECT cursor_seq FROM multiremi_session_lanes
     WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(turn.session_id,turn.agent_id,turn.execution_scope)!;
   const scopeSql=ctx.db.dialect==='postgres'?"COALESCE(metadata::jsonb->>'execution_scope','')":"COALESCE(json_extract(metadata,'$.execution_scope'),'')";
+  // A stopped turn consumes its original trigger; later unread messages still ring.
+  const triggerSeq=['cancelled','failed'].includes(turn.status)&&turn.trigger_message_id
+    ? Number(ctx.db.query('SELECT seq FROM multiremi_conversation_log WHERE id=?').get(turn.trigger_message_id)?.seq??0):0;
+  const cursor=Math.max(Number(lane.cursor_seq),Number(turn.input_to_seq??0),triggerSeq);
+  if(cursor>Number(lane.cursor_seq))ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=0
+    WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[cursor,turn.session_id,turn.agent_id,turn.execution_scope]);
   const raw=ctx.db.query(`SELECT id FROM multiremi_conversation_log WHERE session_id=? AND kind='message'
     AND to_agent_id=? AND seq>? AND wake_applied='now' AND deleted_at IS NULL AND ${scopeSql}=?
-    ORDER BY seq LIMIT 1`).get(turn.session_id,turn.agent_id,Math.max(Number(lane.cursor_seq),Number(turn.input_to_seq??0)),turn.execution_scope);
+    ORDER BY seq LIMIT 1`).get(turn.session_id,turn.agent_id,cursor,turn.execution_scope);
   if (!raw) return;
   const message=ctx.inbox().getMessage(raw.id)!;
-  return ensurePendingTurn(ctx,message,{session_id:turn.session_id,sender:{type:message.sender_type,id:message.sender_id},
+  const successor=ensurePendingTurn(ctx,message,{session_id:turn.session_id,sender:{type:message.sender_type,id:message.sender_id},
     to:{type:'agent',ref:turn.agent_id},message_kind:message.message_kind,wake_requested:'now',body_md:message.body_md,
     execution_scope:turn.execution_scope},events,{delegationId:turn.delegation_id,delegatedByAgentId:turn.delegated_by_agent_id,delegatedFromIssueSessionId:turn.delegated_from_issue_session_id});
+  if(successor)ctx.db.run(`UPDATE multiremi_turns SET delegation_return_turn_id=? WHERE delegation_return_turn_id=?
+    AND id IN (SELECT task_id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND to_agent_id=? AND wake_applied='now' AND ${scopeSql}=?)`,
+    [successor,turn.id,turn.session_id,cursor,turn.agent_id,turn.execution_scope]);
+  return successor;
 }
 
 /** Folded/context bodies need a full CLI range read before a receipt may cross them. */
