@@ -27,26 +27,35 @@ const workflow = readFileSync(resolve(deployRoot, "ppe/workflow.sh"), "utf8");
 const collector = readFileSync(resolve(deployRoot, "ppe/gc.sh"), "utf8");
 const dockerfileWeb = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.web"), "utf8");
 const nextConfig = readFileSync(resolve(repoRoot, "frontend/apps/web/next.config.ts"), "utf8");
+const deployValidationStart = workflow.indexOf('if [[ "${PPE_ACTION}" == "deploy" ]]; then');
+const deployValidation = workflow.slice(
+  deployValidationStart,
+  workflow.indexOf("\nselect_slot\n", deployValidationStart),
+);
 const versionResolutionStart = workflow.indexOf('  package_json_url=');
 const versionResolution = workflow.slice(
   versionResolutionStart,
   workflow.indexOf('\nelse\n  : "${PPE_LEASE_ID', versionResolutionStart),
 );
 
-function parsePpeVersion(packageJson: string, curlStatus = 0) {
+function parsePpeVersion(packageJson: string, curlStatus = 0, action = "deploy") {
   return spawnSync("bash", ["-c", `
 set -euo pipefail
 curl() {
   printf '%s\\n' "$PPE_TEST_PACKAGE_JSON"
   return "$PPE_TEST_CURL_STATUS"
 }
-${versionResolution}
-printf 'Version: %s\\n' "$multiremi_version"
+${deployValidation}
+printf 'Version: %s\\n' "\${multiremi_version:-unset}"
 `], {
     encoding: "utf8",
     env: {
       ...process.env,
-      GIT_COMMIT: "adcaf571d842b93578f010f85e7cbcd2231348fd",
+      PPE_ACTION: action,
+      PPE_MODE: action === "deploy" ? "platform" : "",
+      PPE_FAKE_ACP_BASE64: action === "deploy" ? "test" : "",
+      PPE_LEASE_ID: "0".repeat(32),
+      GIT_COMMIT: action === "deploy" ? "adcaf571d842b93578f010f85e7cbcd2231348fd" : "",
       PPE_TEST_PACKAGE_JSON: packageJson,
       PPE_TEST_CURL_STATUS: String(curlStatus),
     },
@@ -171,6 +180,7 @@ describe("Zadig PPE deployment", () => {
   });
 
   test.each([
+    "",
     "{}",
     '{ "name": "remi" }',
     '  "version": "",',
@@ -188,6 +198,23 @@ describe("Zadig PPE deployment", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Failed to fetch package.json for commit adcaf571");
     expect(result.stdout).toBe("");
+  });
+
+  test.each(["extend", "release"])("keeps %s independent of commit and version fetching", (action) => {
+    const result = parsePpeVersion("", 22, action);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Version: unset\n");
+    expect(result.stderr).toBe("");
+  });
+
+  test("returns status before deploy parameter validation and version fetching", () => {
+    const statusBranch = workflow.slice(
+      workflow.indexOf('if [[ "${PPE_ACTION}" == "status" ]]; then'),
+      deployValidationStart,
+    );
+    expect(statusBranch).toContain("exit 0\nfi");
+    expect(statusBranch).not.toContain("package_json");
+    expect(statusBranch).not.toContain("GIT_COMMIT is required");
   });
 
   test("atomically leases PPEs per Issue and reclaims them after 24 hours", () => {
