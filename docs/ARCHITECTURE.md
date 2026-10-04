@@ -88,7 +88,7 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 执行消费者使用 [只读投影](../packages/server/src/store/turn-execution-records.ts)，写入口更新规范表；轮卡由 [轮和当前尝试](../packages/server/src/store/turn-attempts.ts)投影，统计及最终回复不再镜像到日志 turn 行。
 重试、redispatch 与孤儿恢复只替换尝试，不写 Issue 状态。自动化账本引用轮，在 `auto_*` 对话保留 timer 输入与运行消息。
 现有 [InboxRepo](../packages/server/src/store/repos/inbox-repo.ts) producer 继续使用原领域入口；共享 [sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)已固定签名，状态机和 producer 改接由下一阶段接入。
-完整边界见 [ADR 0013](adr/0013-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
+完整边界见 [ADR 0015](adr/0015-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

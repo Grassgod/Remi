@@ -1,9 +1,13 @@
-# ADR 0013: 消息、轮、尝试与对话游标
+# ADR 0015: 消息、轮、尝试与对话游标
 
 - 状态：设计已由贺华杰确认；存储实现已接入本分支，尚未切换生产。
 - 决策人：贺华杰（范围、一步切换与生产边界）、Senior大哥（设计）、带头大哥（拆分）。
 - 交付单：MUL-505。
-- 修订：ADR 0012 的消息信封与 pending 轮、ADR 0006 的轮卡存储、ADR 0005 的委派回程、ADR 0011 的令牌落点。已存在两份编号 0012，引用时需带文档标题。
+- 修订：ADR 0012（决策 1、3、5、6：消息信封与 pending 轮）、ADR 0006（决策 4：轮卡存储）、ADR 0011（令牌落点）。已存在两份编号 0012，引用时需带文档标题。
+- 继承 [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md)：交付物是 `reply/final` 消息，门铃是收件箱投影和平台的 `status/report` 消息；offer 预算与 `offer_too_large` 不变。0013 里 `agent_read_state` 那一段由本 ADR 取代，读进度归 lane 游标（S2 落地）。
+- 继承 [ADR 0014](0014-every-agent-dispatch-is-a-delegation.md) 决策 1–4（派活一律算委派、谱系计数、环境变量上限），修订其决策 5–6：超过来回上限时不再返回 409，也不再记 `comment_mention_skipped`；消息照常落库，降级为下一轮（`wake_reason=pair_round_trip_limit`），通知和活动保留（S2 落地）。
+- 取代 [ADR 0005](0005-cross-issue-delegation-return.md) 决策 3–5（桥接行、回程任务、手动叫醒抑制）。
+- 编号：设计时暂定 0013，因 main 上已有 0013、0014，合入集成分支时改为 0015（MUL-493 方案修订 cmt_mnjqdgx7jwvr §3）。
 
 ## 背景
 

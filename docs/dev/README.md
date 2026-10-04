@@ -35,7 +35,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
 | 改 agent 派活、来回上限、委派回叫或 `wake_source` | [ADR 0014](../adr/0014-every-agent-dispatch-is-a-delegation.md)、[ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 通用派活入口、来源会话、计数拒绝、D4 去重和回程血缘 |
 | 改任务结果、门铃正文、未读输入或 Wiki 下载 | [ADR 0013](../adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)、[daemon 协议](../daemon-protocol-v2.md) | 最后顶层消息、事务内结论评论、完整范围读取、Wiki 缓存与派单预算 |
-| 改消息头、轮/尝试存储、统一 lane 或启动迁移 | [ADR 0013](../adr/0013-unified-message-inbox-and-turn.md)、[切换手册](../deploy/unified-model-cutover.md) | 存储投影、四项启动预检、只读对账与删表边界；消息状态机和用户接口另行集成 |
+| 改消息头、轮/尝试存储、统一 lane 或启动迁移 | [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md)、[切换手册](../deploy/unified-model-cutover.md) | 存储投影、四项启动预检、只读对账与删表边界；消息状态机和用户接口另行集成 |
 | 改会话日志表、轮次卡、trace 归属或 Session Archive 主体 | [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md) | 契约类型、被否决的替代方案和回到源码的位置 |
 | 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0012](../adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、升级等待与 offer；pending/配置和任务输入走下行帧及 RPC，跨进程触发依赖实时扇出；outbox 与 trace 归 v2-A |
 | 改浏览器实时订阅、Live Hub 或前端本地副本 | [浏览器实时 v2](realtime-v2.md)、[ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的端点与归属、订阅鉴权、续传与退避、resync 广播；C1 已落核心、按角色锁与 health 字段 |
