@@ -227,7 +227,8 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       await outbox(h).waitForTaskDrain(t.id);
       expect(turns).toBe(2);
       expect(prompts[1]).toContain("use the new answer");
-      expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: "old answernew answer" });
+      expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: "new answer" });
+      expect(h.daemon.traceStore().read(t.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "old answer" }));
       expect(terminalEffects).toBe(1);
       expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === t.id)).toHaveLength(2);
       expect(outbox(h).stats().blocked).toBe(0);

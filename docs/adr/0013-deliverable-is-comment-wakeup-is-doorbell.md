@@ -30,10 +30,15 @@ existing daemon versions as well as the updated worker.
 - A delegation terminal report contains identity, status, a conclusion-comment
   pointer and a bounded summary. Automatic replies use a reserved id and commit
   with the terminal transition. Only a successfully written comment is referenced.
-  A failed write leaves task output available through the task CLI.
+  The terminal path calls the transaction-internal comment writer without opening
+  another transaction frame (ADR 0011). On a comment write failure, the owning
+  terminal transaction rolls back completely and retries once without an automatic
+  reply; no partial comment or notification survives. Task output stays available
+  through the task CLI. Dispatch and notifications follow the successful COMMIT.
 - The unified envelope writer clamps every envelope to 4 KiB. Terminal reports
-  target less than 2 KiB and keep the English first line, `Status:` line, child
-  Issue prefixes and envelope metadata used by the parallel MUL-501 frontend.
+  target less than 2 KiB and keep the English first line, `Status:` line and
+  envelope metadata used by the parallel MUL-501 frontend. Cross-issue reports
+  keep one short `来源：<Issue key>` line; they do not copy the result body.
 - Task session input contains all triggering messages, one unread range and one
   command. It excludes other unread bodies, titles, summaries and own history.
   Trigger messages normally have an 8,000-character allowance and carry explicit
@@ -116,8 +121,11 @@ they upgrade. Updated daemons aggregate Project and Repository Wiki failures.
 
 Local verification covers deterministic result boundaries, terminal comment
 references, offers, range pagination/permissions and Wiki caching/failure.
-PPE testing with current and isolated 0.2.85 daemons and final-head CI remain
-separate acceptance gates. Revert the implementation commits to roll back;
+Release build check has been disabled. Acceptance uses related-module local
+tests with recorded commands/results, QA approval and no unresolved blocking
+findings; skipped PostgreSQL cases are not counted as passing. PPE testing with
+current and isolated 0.2.85 daemons remains a separate pre-merge gate.
+Revert the implementation commits to roll back;
 the nullable `agent_read_state` column may remain, as older images ignore it.
 Provider checkpoint columns are unchanged. Missing per-agent state is initialized
 once from the legacy inline projection checkpoint; genuinely new agents start

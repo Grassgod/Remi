@@ -483,7 +483,8 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
-      expect(completed.result).toBe("before during after");
+      // Tool activity separates messages; replay preserves every segment in the trace below.
+      expect(completed.result).toBe("after");
 
       // Replayed messages arrive complete and in the original seq order.
       const messages = daemon.traceStore().read(task.id).events;
