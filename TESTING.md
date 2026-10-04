@@ -45,8 +45,16 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 | 工作流 | 实际检查范围 |
 |---|---|
 | [dev-context.yml](.github/workflows/dev-context.yml) | PR / main push；Linux、Windows 上的 Node 检查器测试及默认文档阅读链校验 |
-| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；后端套件、架构、CLI 能力、前端类型/测试、CLI 和容器构建、平台专项检查 |
-| [release.yml](.github/workflows/release.yml) / [platform-release.yml](.github/workflows/platform-release.yml) | CLI 发布前校验依赖准备快照、tag 版本与同一 main 提交的全量 CI；平台发版条件遵循 [AGENTS.md](AGENTS.md) |
+| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；后端套件（仅 main push 和手动运行）、架构、CLI 能力、前端类型/测试、CLI 和容器构建、平台专项检查 |
+| [release.yml](.github/workflows/release.yml) / [platform-release.yml](.github/workflows/platform-release.yml) | 发布前校验依赖准备快照、tag 版本，并要求同一 main 提交有成功的全量 CI（main push 或 main 上的手动运行）；平台发版条件遵循 [AGENTS.md](AGENTS.md) |
+
+`release-build-check.yml` 在合并请求和 main 上跑的内容不同（MUL-516）：
+
+- 合并请求只跑快检查：架构守卫、CLI 能力、前端类型/测试、CLI 和容器构建、平台专项检查。`build` job 里的「Backend test suite」显示为跳过（skipped），job 仍正常报告结果。同一个合并请求推送新提交时，未跑完的旧运行会被自动取消。
+- 后端全套 `bun test` 在合入 main 后的 push 运行里跑。main 上的运行互不取消，每个 main 提交都有自己的完整结果。
+- 发版门禁不变：打 tag 前，目标 main SHA 必须有一次全绿的 main push 运行或 main 上的手动运行（都含后端全套）。合并请求上的绿灯不能代替。检查停用后重新打开时，main 不会自动补跑，用 `gh workflow run release-build-check.yml --ref main` 手动跑一次。
+- main 上后端全套变红时，带头大哥当天定位到对应的合并，修复或回滚。QA 维护测试集的职责不变：测试本身的问题由 QA 修复或暂时隔离，代码问题开单处理。
+- 合并请求作者仍应在本地跑与改动相关的测试文件（`bun test <path>`）。
 
 真实 provider、飞书和浏览器 harness 的成功不能由普通单测或构建绿灯推断。报告验证时写明实际命令、环境、结果和未覆盖项。
 
