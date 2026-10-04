@@ -24,6 +24,7 @@
     "./wiki-links": "./src/wiki-links.ts",
     "./live-hub": "./src/live-hub.ts",
     "./conversation-log": "./src/conversation-log.ts",
+    "./unified-model": "./src/unified-model.ts",
     "./trace-file": "./src/trace-file.ts"
   },
   "dependencies": {}
