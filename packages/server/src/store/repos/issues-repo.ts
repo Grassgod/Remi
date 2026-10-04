@@ -28,7 +28,9 @@ import {
   toIssueComment,
 } from "@multiremi/store/context.js";
 import type { ChildStatusChange, ChildStatusChangeCollector, TriggerCommentRecoveryLane } from "./tasks-repo.js";
+import { DelegationRoundTripLimitError, pairRoundTripLimit } from "./tasks-repo.js";
 import type { Envelope } from "@multiremi/contracts/inbox.js";
+import { envelopeSummary } from "../envelope-body.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -154,12 +156,9 @@ function parentStatusGuardEnabled(): boolean {
  */
 export type ChildTerminalOutcome = "done" | "failed" | "blocked" | "cancelled";
 
-export type SquadLeaderDelegationDecision =
-  | { ok: true; delegatedFromIssueSessionId: string | null }
-  | { ok: false; reason: "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
-      | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | null };
-
-const DELEGATION_TREE_MAX_DEPTH = 16;
+export type AgentDelegationDecision =
+  | { ok: true; delegatedFromIssueSessionId: string }
+  | { ok: false; reason: "source_not_issue_task" | "source_side_session" | "self_dispatch" | "target_not_issue_task" | null };
 
 /** `null` for statuses that are not a child ending. */
 function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
@@ -462,6 +461,7 @@ interface ReactionInput {
  */
 type CreateIssueCommentOptions =
   | {
+    commentId?: string;
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
@@ -470,6 +470,7 @@ type CreateIssueCommentOptions =
     deferredEvents?: CommitEventQueue;
   }
   | {
+    commentId?: string;
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
@@ -810,7 +811,7 @@ export class IssuesRepo {
         data: { decision_id: decision.id, parent_issue_id: parent.id, answerer_type: actor.type },
       }, events);
       const source = this.getIssue(decision.sourceIssueId)!;
-      const body = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${answer}\nFor subsequent actions cite decision:${decision.id}.`;
+      const body = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${envelopeSummary(answer)}\nFor subsequent actions cite decision:${decision.id}.`;
       const sourceOwner = this.decisionOwner(source);
       if (sourceOwner) this.ctx.inbox().sendEnvelopeWithinTransaction({
         to: { role: "issue_owner", issueId: source.id }, kind: "reply", wake: "now",
@@ -821,7 +822,7 @@ export class IssuesRepo {
         this.ctx.inbox().sendEnvelopeWithinTransaction({
           to: { role: "issue_owner", issueId: parent.id }, kind: "reply", wake: "now",
           dedupeKey: `decision_overturn:${decision.id}:${answered.history.length}`, replyTo: decision.id,
-          body: `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`,
+          body: `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${envelopeSummary(answer)}\nSee the decision history on ${parent.key}.`,
           source: { issueId: source.id, decisionId: decision.id },
         }, changes, events);
       }
@@ -4757,9 +4758,9 @@ export class IssuesRepo {
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
     // also reached from a caller that already owns a transaction — the
     // Organizer action transaction that passes `withinTransaction` — so it
-    // opens a BEGIN only when it is called from outside one. (The automatic
-    // reply owns its frame and calls the two halves directly; see
-    // `postAgentReplyComment`.) A second frame there would be a pure
+    // opens a BEGIN only when it is called from outside one. (Task completion
+    // owns the automatic reply's frame and calls the two halves directly; see
+    // `postAgentReplyCommentWithinTransaction`.) A second frame there would be a pure
     // savepoint wrapper over the same writes and would push a guarded path past
     // the single BEGIN the depth probes assert. When we do own the frame, we
     // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,
@@ -4848,7 +4849,7 @@ export class IssuesRepo {
     if (parent && parent.issueSessionId && parent.issueSessionId !== issueSessionId) {
       throw new Error("Reply must belong to the parent comment's session");
     }
-    const id = options.entryId ?? createId("cmt");
+    const id = options.commentId ?? options.entryId ?? createId("cmt");
     const now = nowIso();
     const body = rawBody.trim();
     const taskId = cleanOptionalString(input.taskId ?? input.task_id) ?? null;
@@ -6779,9 +6780,7 @@ export class IssuesRepo {
     const seenAgents = new Set<string>();
     const taskAuthoredByCommentAgent = comment.authorType === "agent"
       && !!comment.authorId
-      && sourceTask?.agentId === comment.authorId
-      && sourceTask.issueId === issue.id
-      && sourceTask.issueSessionId === comment.issueSessionId;
+      && sourceTask?.agentId === comment.authorId;
     for (const target of targets) {
       const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
       if (!agent) {
@@ -6797,13 +6796,6 @@ export class IssuesRepo {
       }
       seenAgents.add(agent.id);
 
-      const leaderDelegation = this.isSquadLeaderDelegation({
-        issue,
-        sourceTask,
-        authorAgentId: comment.authorType === "agent" ? comment.authorId : null,
-        targetAgentId: agent.id,
-        issueSessionId: comment.issueSessionId,
-      });
       const delegationReturn = comment.authorType === "agent"
         && taskAuthoredByCommentAgent
         && !!sourceTask?.delegationId
@@ -6820,27 +6812,36 @@ export class IssuesRepo {
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
-      if (comment.authorType === "agent" && !leaderDelegation.ok) {
+      if (comment.authorType === "agent" && !taskAuthoredByCommentAgent) {
         this.recordCommentMentionSkipped(
           issue,
           comment,
           agent,
           target,
-          taskAuthoredByCommentAgent ? "unsupported_direction" : "unlinked_agent_comment",
+          "unlinked_agent_comment",
         );
         continue;
       }
+      let delegation: AgentDelegationDecision;
+      try {
+        delegation = this.resolveAgentDelegation({ targetIssue: issue, sourceTask,
+          authorAgentId: comment.authorType === "agent" ? comment.authorId : null, targetAgentId: agent.id });
+      } catch (error) {
+        if (!(error instanceof DelegationRoundTripLimitError)) throw error;
+        this.recordCommentMentionSkipped(issue, comment, agent, target, error.code, deferredEvents);
+        const events = deferredEvents ?? createCommitEventQueue();
+        this.ctx.tasks().recordDelegationRoundTripLimitedWithinTransaction(error,
+          childStatusChanges ?? [], events);
+        if (!deferredEvents) this.ctx.emitCommitEvents(events);
+        continue;
+      }
 
-
-      // A rich mention is the same leader talking to the same teammate again.
-      // Continue the lane that teammate already owns in this Session so it
-      // keeps one provider conversation and receives a delta; a teammate that
-      // has never been delegated to still gets a fresh lane, and `remi task
-      // create` remains the explicit way to start an independent one.
-      const continuedDelegation = leaderDelegation.ok
-        ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId)
+      // Continue only the same dispatcher and return Session's existing lane.
+      const continuedDelegation = delegation.ok
+        ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId,
+          delegation.delegatedFromIssueSessionId)
         : null;
-      const delegationId = leaderDelegation.ok
+      const delegationId = delegation.ok
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
       let task: MultiremiTask;
@@ -6853,6 +6854,8 @@ export class IssuesRepo {
           prompt: commentMentionPrompt(comment),
           delegationId,
           delegatedByAgentId: delegationId ? comment.authorId : null,
+          delegatedFromIssueSessionId: delegation.ok ? delegation.delegatedFromIssueSessionId : null,
+          delegationSkipReason: !delegation.ok ? delegation.reason : null,
           assignmentAuthorType: comment.authorType,
           assignmentAuthorId: comment.authorId,
           dependencyForce: comment.authorType === "member"
@@ -6902,11 +6905,11 @@ export class IssuesRepo {
     target: { assigneeType: "agent" | "squad"; assigneeId: string },
     reason:
       | "self_mention"
-      | "unsupported_direction"
       | "unlinked_agent_comment"
       | "target_unavailable"
       | "side_session_delegation_blocked"
-      | "dependencies_unmet",
+      | "dependencies_unmet"
+      | "pair_round_trip_limit",
     deferredEvents?: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
@@ -7011,103 +7014,33 @@ export class IssuesRepo {
     return targets;
   }
 
-  /**
-   * MUL-400 E2b: is a task-token dispatch a squad-leader delegation, and where
-   * does its terminal report return?
-   *
-   * The same-issue branch is the pre-E2b rule, byte for byte: the leader's own
-   * task, its own Session, a squad-owned issue, and a teammate. A dispatch to a
-   * *different* issue is the E2b extension: the delegator's issue must still be
-   * the squad's, its task must carry a main Session, and the target issue must
-   * sit in the delegator's own subtree or in the subtree of its parent (child,
-   * grandchild, sibling, sibling's descendant), walking up at most 16 levels
-   * with a visited set. The return always lands on the delegator's Issue
-   * Session, never on the child issue's Session.
-   *
-   * A failed cross-issue judgement returns a reason that the task carries to
-   * its terminal hook, so the silence that hid MUL-383 becomes auditable. The
-   * same-issue branch returns `reason: null`: its behaviour is deliberately
-   * unchanged, so a non-delegating same-issue dispatch stays exactly as quiet as
-   * it is today.
-   */
-  isSquadLeaderDelegation(input: {
-    issue: MultiremiIssue;
+  /** Resolve credential-owned dispatch lineage independently of Issue ownership. */
+  resolveAgentDelegation(input: {
+    targetIssue: MultiremiIssue | null;
     sourceTask: MultiremiTask | null;
     authorAgentId: string | null;
     targetAgentId: string;
-    issueSessionId: string | null;
-  }): SquadLeaderDelegationDecision {
-    const { issue, sourceTask, authorAgentId, targetAgentId, issueSessionId } = input;
+  }): AgentDelegationDecision {
+    const { targetIssue, sourceTask, authorAgentId, targetAgentId } = input;
     if (!authorAgentId || !sourceTask || sourceTask.agentId !== authorAgentId) {
       return { ok: false, reason: null };
     }
-    if (sourceTask.issueId === issue.id) {
-      if (
-        sourceTask.issueSessionId !== issueSessionId
-        || issue.assigneeType !== "squad"
-        || !issue.assigneeId
-      ) return { ok: false, reason: null };
-      const squad = this.ctx.squads().getSquad(issue.assigneeId);
-      if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return { ok: false, reason: null };
-      const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
-        member.memberType === "agent"
-        && member.memberId === targetAgentId
-        && member.memberId !== authorAgentId
-      );
-      if (!teammate) return { ok: false, reason: null };
-      return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId! };
-    }
-
-    if (!sourceTask.issueId || !sourceTask.issueSessionId) {
+    if (!sourceTask.issueId || !sourceTask.issueSessionId || sourceTask.chatSessionId) {
       return { ok: false, reason: "source_not_issue_task" };
-    }
-    const sourceIssue = this.getIssue(sourceTask.issueId);
-    if (!sourceIssue || sourceIssue.workspaceId !== issue.workspaceId) {
-      return { ok: false, reason: "cross_issue_no_lineage" };
     }
     const sourceSession = this.ctx.issueSessions().getIssueSession(sourceTask.issueSessionId);
     if (!sourceSession || sourceSession.inheritMode !== "none") {
       return { ok: false, reason: "source_side_session" };
     }
-    if (sourceIssue.assigneeType !== "squad" || !sourceIssue.assigneeId) {
-      return { ok: false, reason: "source_not_squad_leader" };
-    }
-    const squad = this.ctx.squads().getSquad(sourceIssue.assigneeId);
-    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) {
-      return { ok: false, reason: "source_not_squad_leader" };
-    }
     if (targetAgentId === authorAgentId) return { ok: false, reason: "self_dispatch" };
-    const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
-      member.memberType === "agent" && member.memberId === targetAgentId
-    );
-    if (!teammate) return { ok: false, reason: "target_not_squad_member" };
-    if (!this.isIssueInDelegationTree(sourceIssue, issue)) {
-      return { ok: false, reason: "cross_issue_no_lineage" };
+    if (!targetIssue) return { ok: false, reason: "target_not_issue_task" };
+    if (targetIssue.workspaceId !== sourceTask.workspaceId) throw new Error("Delegation target belongs to another workspace");
+    const limit = pairRoundTripLimit();
+    const hops = this.ctx.tasks().countDelegationPairHops(sourceTask, targetAgentId, limit);
+    if (hops >= 2 * limit) {
+      throw new DelegationRoundTripLimitError(sourceTask, targetAgentId, targetIssue.id, hops, limit);
     }
     return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId };
-  }
-
-  /**
-   * MUL-400 E2b scope rule: the target issue is the delegator's own issue, a
-   * descendant of it, or a descendant of its parent (which covers siblings and
-   * their subtrees). Bounded to 16 hops with a visited set, so a malformed
-   * parent chain cannot loop and a deep tree cannot cost unbounded reads.
-   */
-  private isIssueInDelegationTree(sourceIssue: MultiremiIssue, targetIssue: MultiremiIssue): boolean {
-    if (sourceIssue.id === targetIssue.id) return true;
-    const allowedRoots = new Set<string>([sourceIssue.id]);
-    const sourceParent = this.sameWorkspaceParent(sourceIssue);
-    if (sourceParent) allowedRoots.add(sourceParent.id);
-    const seen = new Set<string>();
-    let cursor: string | null = targetIssue.id;
-    for (let depth = 0; cursor && depth <= DELEGATION_TREE_MAX_DEPTH; depth += 1) {
-      if (allowedRoots.has(cursor)) return true;
-      if (seen.has(cursor)) return false;
-      seen.add(cursor);
-      const current = this.getIssue(cursor);
-      cursor = current ? this.sameWorkspaceParent(current)?.id ?? null : null;
-    }
-    return false;
   }
 
   private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {
@@ -7148,18 +7081,20 @@ export class IssuesRepo {
     agentId: string,
     delegatedByAgentId: string | null,
     issueSessionId: string | null,
+    returnSessionId: string,
   ): MultiremiTask | null {
     if (!delegatedByAgentId) return null;
     const sessionClause = issueSessionId === null
       ? "issue_session_id IS NULL"
       : "issue_session_id = ?";
     const params: unknown[] = issueSessionId === null
-      ? [issueId, agentId, delegatedByAgentId]
-      : [issueId, agentId, delegatedByAgentId, issueSessionId];
+      ? [issueId, agentId, delegatedByAgentId, returnSessionId]
+      : [issueId, agentId, delegatedByAgentId, returnSessionId, issueSessionId];
     const row = this.ctx.db.query(
       `SELECT id FROM multiremi_turn_execution_records
        WHERE issue_id = ? AND agent_id = ? AND delegated_by_agent_id = ?
          AND delegation_id IS NOT NULL
+         AND COALESCE(delegated_from_issue_session_id, issue_session_id) = ?
          AND ${sessionClause}
        ORDER BY created_at DESC
        LIMIT 1`,

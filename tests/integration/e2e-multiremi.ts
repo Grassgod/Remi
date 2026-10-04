@@ -13,6 +13,7 @@
  *
  * Usage: bun run tests/integration/e2e-multiremi.ts [--provider=claude|codex] [--port=6191]
  */
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import "@shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
 import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -118,6 +119,7 @@ async function main() {
     });
     const daemonToken = await store.createAccessToken({ name: "e2e daemon", type: "daemon", workspaceId: "local" });
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: base,
       token: daemonToken.token,
       provider: PROVIDER,

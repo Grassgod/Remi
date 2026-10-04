@@ -18,14 +18,31 @@ const script = resolve(
 // 桩 ssh：带 -n 时不碰 stdin；不带 -n 时像真 ssh 一样把 stdin 读干净并转发。
 // 最终那次调用（远端命令不是 `test`）把收到的 stdin 原样吐到 stdout，
 // 测试据此判断凭证有没有活着走完全程。
+//
+// MUL-497：桩完全不看默认用户配置，只认 -F 显式加载、且确实定义了该别名的
+// workspace config，否则像真 ssh 一样把别名当主机名解析失败。这对应 Agent 以
+// root 运行、HOME 不等于 passwd home 时，OpenSSH 读不到 $HOME/.ssh/config 的
+// Mesh Include 的真实情况。
 const SSH_STUB = `#!/usr/bin/env bash
 no_stdin=0
 is_probe=0
-for arg in "$@"; do
-  [[ "$arg" == "-n" ]] && no_stdin=1
-  # 别名探针的远端命令是 \`test -x <wrapper>\`，拆成了多个 argv
-  [[ "$arg" == "test" ]] && is_probe=1
+config=""
+host=""
+while (( $# > 0 )); do
+  case "$1" in
+    -F) config="$2"; shift 2 ;;
+    -o) shift 2 ;;
+    -n) no_stdin=1; shift ;;
+    -*) shift ;;
+    *) host="$1"; shift; break ;;
+  esac
 done
+if [[ -z "$config" ]] || ! grep -qx "Host $host" "$config"; then
+  echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+  exit 255
+fi
+# 别名探针的远端命令是 \`test -x <wrapper>\`，拆成了多个 argv
+[[ "$1" == "test" ]] && is_probe=1
 if (( is_probe == 1 )); then
   # 真 ssh 会把本地 stdin 转发给远端命令，所以不带 -n 时必须把管道读干净。
   if (( no_stdin == 0 )); then
@@ -112,6 +129,35 @@ describe("qa-browser-ssh.sh", () => {
       const result = run(["check"], "", meshRoot, binDir);
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("stub-desktop-alias");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("loads the workspace config that owns the 212 alias explicitly", () => {
+    const { root, meshRoot, binDir } = makeEnv();
+    try {
+      // 排在前面的 workspace 不含 212：脚本必须用别名所在的那份 config 去 -F，
+      // 探针和最终 exec 都一样，不能依赖 OpenSSH 默认的用户配置路径。
+      rmSync(join(meshRoot, "workspaces", "ws-1"), { recursive: true });
+      mkdirSync(join(meshRoot, "workspaces", "ws-0"), { recursive: true });
+      writeFileSync(
+        join(meshRoot, "workspaces", "ws-0", "config"),
+        "Host other-alias\n  HostName 10.37.117.209\n",
+      );
+      mkdirSync(join(meshRoot, "workspaces", "ws-2"), { recursive: true });
+      writeFileSync(
+        join(meshRoot, "workspaces", "ws-2", "config"),
+        "Host other-alias-2\n  HostName 10.37.66.8\n\nHost stub-desktop-alias\n  HostName 10.36.0.212\n",
+      );
+
+      const check = run(["check"], "", meshRoot, binDir);
+      expect(check.code).toBe(0);
+      expect(check.stdout).toBe("QA browser ready via stub-desktop-alias\n");
+
+      const exec = run(["authenticate", "MUL-497"], "placeholder", meshRoot, binDir);
+      expect(exec.code).toBe(0);
+      expect(exec.stdout).toBe("REMOTE_STDIN:placeholder");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

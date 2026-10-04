@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -68,6 +69,7 @@ try {
   for (const surface of ["chat", "issue"] as const) {
     // Restart the worker between tasks; persistence must not depend on its memory.
     daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId,
       provider, runtimeName: `workspace-${provider}-smoke`, workspaceId: "local",
       daemonPort: 0, pollIntervalMs: 50, gcEnabled: false, taskTimeoutMs: timeoutMs,

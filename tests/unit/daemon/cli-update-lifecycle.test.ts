@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,6 +58,7 @@ for (const outcome of ["failed", "completed"] as const) {
     let restarts = 0;
     const daemons: MultiremiDaemon[] = instantiateCoResidentWorkerDaemons(
       ["claude", "codex"].map((provider) => ({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: "http://127.0.0.1:1",
         runtimeId: `rt_${provider}`,
         provider,

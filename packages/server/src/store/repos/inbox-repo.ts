@@ -3,6 +3,7 @@ import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multire
 import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { createId } from "@multiremi/ids.js";
+import { clampEnvelopeBody } from "../envelope-body.js";
 import type { CommitEventQueue, StoreContext } from "@multiremi/store/context.js";
 import { afterCommit } from "@multiremi/store/db/postgres.js";
 import type { ChildStatusChangeCollector, EnsurePendingTurnResult, PendingTurnLane } from "./tasks-repo.js";
@@ -36,7 +37,8 @@ export class InboxRepo {
     const deliveries: EnvelopeDelivery[] = [];
     const sourceComment = env.source.commentId ? this.ctx.issues().getIssueComment(env.source.commentId) : null;
     const sourceTask = env.source.taskId ? this.ctx.tasks().getTask(env.source.taskId) : null;
-    const { body, ...envelope } = env;
+    const { body: rawBody, ...envelope } = env;
+    const body = clampEnvelopeBody(rawBody);
     const envelopeMetadata: EnvelopeMetadata["envelope"] = {
       ...envelope,
       priority: envelopePriority({ ...env, senderType: sourceComment?.authorType,
@@ -48,12 +50,12 @@ export class InboxRepo {
       if (recipient.issueSessionId) {
         this.ctx.issueSessions().getOrCreateSessionAgentLane(sessionId, recipient.agentId, recipient.executionScope);
       }
-      const recipientBody = env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
+      const recipientBody = clampEnvelopeBody(env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
         ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
           this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
           recipient.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${recipient.chatSessionId}`,
         ).cursorSeq))
-        : body;
+        : body);
       if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId
         || sourceTask && sourceTask.workspaceId !== recipient.workspaceId) {
         throw new Error("Envelope source belongs to another workspace");

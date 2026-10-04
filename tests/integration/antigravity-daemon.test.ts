@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { expect, it, spyOn } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -36,6 +37,7 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
   const token = await store.createAccessToken({ name: "AGY test daemon", type: "daemon", workspaceId: "local", daemonId: "agy-test-machine" });
   const server = startMultiremiServer({ store, scheduler: null, authToken: "agy-test-root", hostname: "127.0.0.1", port: 0 });
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "agy-test-machine", runtimeName: "AGY integration",
     provider: "antigravity", workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
     workspacesRoot: join(root, "state"), repoCacheRoot: join(root, "repo-cache"),

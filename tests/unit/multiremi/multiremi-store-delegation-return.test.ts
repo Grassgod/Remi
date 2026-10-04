@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
@@ -263,6 +263,50 @@ function countFeishuRoundPushes(): number {
 }
 
 describe("task-level agent delegation return", () => {
+  for (const commented of [false, true]) {
+    it(`MUL-498 rings a bounded doorbell pointing to the ${commented ? "agent" : "automatic"} reply`, () => {
+      const f = createDelegationFixture();
+      try {
+        const output = "长过程文字".repeat(25_000);
+        const authored = commented ? f.store.createIssueComment(f.issue.id, {
+          authorType: "agent", authorId: f.qa.id, taskId: f.childTask.id, body: "结论评论",
+        }) : null;
+        f.store.completeTask(f.childTask.id, { output });
+        const returned = f.store.getTask(f.store.getTask(f.childTask.id)!.delegationReturnTaskId!)!;
+        const body = inboxReportBody(f.store, returned, f.childTask.id);
+        const id = body.match(/结论评论：(cmt_\w+)/)?.[1];
+        expect(id).toBeDefined();
+        expect(Buffer.byteLength(body)).toBeLessThan(2_048);
+        expect(body).toContain("Status: completed\n");
+        expect(body).toContain("QA completed a task you delegated.");
+        expect(body).toContain(`remi comment list ${f.issue.id} --thread ${id}`);
+        expect(f.store.getIssueComment(id!)?.body).toBe(commented ? "结论评论" : output);
+        if (authored) expect(id).toBe(authored.id);
+        expect(f.store.getIssue(f.issue.id)?.status).not.toBe("blocked");
+        expect(f.store.claimTask(f.leaderRuntime.id)?.id).toBe(returned.id);
+      } finally { resetMultiremiTestEnv(); }
+    });
+  }
+
+  it("keeps completion and a task-result pointer when the automatic comment write fails", () => {
+    const f = createDelegationFixture();
+    const run = db!.run.bind(db!);
+    const failure = spyOn(db!, "run").mockImplementation((sql: string, ...parameters: any[]) => {
+      if (sql.includes("INSERT INTO multiremi_issue_comments") && parameters[0]?.[3] === "agent") {
+        throw new Error("comment write unavailable");
+      }
+      return run(sql, ...parameters);
+    });
+    try {
+      f.store.completeTask(f.childTask.id, { output: "final reply" });
+      expect(f.store.getTask(f.childTask.id)?.status).toBe("completed");
+      const returned = f.store.getTask(f.store.getTask(f.childTask.id)!.delegationReturnTaskId!)!;
+      const report = inboxReportBody(f.store, returned, f.childTask.id);
+      expect(report).toContain(`结论评论：无；结果见 remi task get ${f.childTask.id}`);
+      expect(report).not.toMatch(/结论评论：cmt_/);
+    } finally { failure.mockRestore(); resetMultiremiTestEnv(); }
+  });
+
   it("returns every explicit continuation round once", () => {
     const fixture = createDelegationFixture();
     fixture.store.completeTask(fixture.childTask.id, {
@@ -340,12 +384,11 @@ describe("task-level agent delegation return", () => {
       .toMatchObject({ reason: "unlinked_agent_comment", agentId: qa.id });
   });
 
-  it("derives direct-task delegation lineage only from a qualifying task credential", async () => {
+  it("derives direct-task delegation lineage from the task credential even without a squad", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
-    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
-    const issue = store.createIssue({ title: "Direct delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = store.createIssue({ title: "Direct delegation" });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -387,7 +430,7 @@ describe("task-level agent delegation return", () => {
     expect(delegated.delegationId).not.toBe("dlg_forged");
   });
 
-  it("does not mislabel an ordinary task-token task creation as a skipped return", async () => {
+  it("delegates an ordinary task-token dispatch to an agent outside the squad", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
@@ -404,14 +447,16 @@ describe("task-level agent delegation return", () => {
     });
     expect(response.status).toBe(201);
     const taskId = ((await response.json()) as { task: { id: string } }).task.id;
-    expect(store.getTask(taskId)).toMatchObject({ delegationId: null, delegatedByAgentId: null });
+    expect(store.getTask(taskId)).toMatchObject({ delegatedByAgentId: leader.id,
+      delegatedFromIssueSessionId: leaderTask.issueSessionId });
+    expect(store.getTask(taskId)!.delegationId).toBeTruthy();
     expect(store.listIssueActivity(issue.id)
       .some((activity) => activity.type === "delegation_return_skipped"
         && (activity.data as Record<string, unknown>).taskId === taskId))
       .toBeFalse();
   });
 
-  it("lets only the assigned squad leader richly mention a squad teammate", () => {
+  it("lets a task-linked agent richly mention agents inside and outside the squad", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
@@ -432,10 +477,9 @@ describe("task-level agent delegation return", () => {
       taskId: leaderTask.id,
       body: `Please help [@Outsider](mention://agent/${outsider.id})`,
     });
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
-    expect(store.listIssueActivity(issue.id)
-      .find((activity) => activity.type === "comment_mention_skipped")?.data)
-      .toMatchObject({ reason: "unsupported_direction", agentId: outsider.id });
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(2);
+    expect(store.listTasksForIssue(issue.id).find(task => task.agentId === outsider.id))
+      .toMatchObject({ delegatedByAgentId: leader.id, delegatedFromIssueSessionId: leaderTask.issueSessionId });
 
     store.createIssueComment(issue.id, {
       authorType: "agent",
@@ -445,7 +489,7 @@ describe("task-level agent delegation return", () => {
     });
 
     const tasks = store.listTasksForIssue(issue.id);
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(3);
     const delegated = tasks.find((task) => task.agentId === qa.id)!;
     expect(delegated).toMatchObject({ agentId: qa.id, delegatedByAgentId: leader.id });
     expect(delegated.delegationId).toBeTruthy();
@@ -786,8 +830,8 @@ describe("task-level agent delegation return", () => {
     const reportBody = inboxReportBody(fixture.store, leaderReturn);
     expect(reportBody).toContain("QA completed a task you delegated");
     expect(reportBody).toContain("QA passed; verified the permission boundary.");
-    expect(reportBody).toContain("other delegated tasks that are still queued or running");
-    expect(reportBody).toContain("one round delivery summary");
+    expect(reportBody).toContain("本轮所有委派都终态后再发一次轮次总结");
+    expect(Buffer.byteLength(reportBody)).toBeLessThan(2_048);
     expect(reportBody).not.toContain("communicate the final outcome to the user");
     expect(leaderReturn.prompt).not.toContain("QA passed; verified the permission boundary.");
     expect(fixture.store.getIssue(fixture.issue.id)?.status).toBe("todo");
@@ -847,7 +891,8 @@ describe("task-level agent delegation return", () => {
     returned = delegationTasks(fixture);
     expect(returned).toHaveLength(2);
     leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
-    expect(inboxReportBody(fixture.store, leaderReturn)).toContain("QA finished successfully.");
+    expect(inboxReportBody(fixture.store, leaderReturn)).toContain("摘要：Still working;");
+    expect(inboxReportBody(fixture.store, leaderReturn)).toContain("结论评论：cmt_");
     expect(leaderReturn.triggerCommentId).toBeNull();
     fixture.store.updateIssueComment(report.id, { body: "QA found no blocker." });
     expect(fixture.store.getTask(leaderReturn.id)?.status).toBe("queued");

@@ -2,6 +2,7 @@
 // while a turn is streaming soft-interrupts it and is injected as the next
 // prompt on the same provider session; force_answer additionally arms a grace
 // deadline after which the run completes with the output produced so far.
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import type { Database } from "bun:sqlite";
@@ -97,6 +98,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer",
@@ -114,8 +116,9 @@ describe("Bun Multiremi daemon steering", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
-      // Output from before the steer survives; the steered turn appends.
-      expect(completed.result).toBe("English draft. 中文结论");
+      // The result contains only the post-steer segment; earlier output remains in the trace.
+      expect(completed.result).toBe("中文结论");
+      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "English draft. " }));
 
       // The injected prompt carries the user's directive on the same session.
       expect(prompts).toHaveLength(2);
@@ -174,6 +177,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-late",
@@ -193,7 +197,8 @@ describe("Bun Multiremi daemon steering", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
-      expect(completed.result).toBe("old answer. 中文结论");
+      expect(completed.result).toBe("中文结论");
+      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "old answer. " }));
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("改用中文输出");
       expect(steerId).toBeTruthy();
@@ -225,6 +230,7 @@ describe("Bun Multiremi daemon steering", () => {
       return originalComplete(id, input);
     });
     const daemon = activeDaemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "daemon-completion-race",
       runtimeName: "Completion race", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,
       workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "repos"),
@@ -239,7 +245,8 @@ describe("Bun Multiremi daemon steering", () => {
     try {
       await daemon.start();
       expect(conflicts).toBe(1);
-      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "draft. final directive." });
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "final directive." });
+      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "draft. " }));
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("Include the final directive");
       expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
@@ -307,6 +314,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
@@ -324,7 +332,8 @@ describe("Bun Multiremi daemon steering", () => {
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
-      expect(completed.result).toBe("english draft. 中文结论");
+      expect(completed.result).toBe("中文结论");
+      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "english draft. " }));
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("改用中文输出");
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
@@ -375,6 +384,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-force",
@@ -394,7 +404,9 @@ describe("Bun Multiremi daemon steering", () => {
       const completed = store.getTask(task.id)!;
       // Grace timeout is not a failure: the run completes with what exists.
       expect(completed.status).toBe("completed");
-      expect(completed.result).toBe("Partial findings. Still exploring…");
+      // Even when force-answer grace expires, the result intentionally keeps only the last segment.
+      expect(completed.result).toBe("Still exploring…");
+      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "Partial findings. " }));
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("Deliver now");
       expect(prompts[1]).toContain("先给结论");
@@ -428,6 +440,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-cancel",

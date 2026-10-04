@@ -14,6 +14,7 @@
  * fallback model genuinely travelled from the Agent's configuration through the
  * recovery chain and the claim payload into the engine's hands.
  */
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -228,6 +229,7 @@ async function runDrill(options: {
   const daemonToken = await store.createAccessToken({ name: "Drill daemon", type: "daemon", workspaceId: "local" });
   const server = startMultiremiServer({ store, scheduler: null, authToken: "drill-root", hostname: "127.0.0.1", port: 0 });
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: `http://127.0.0.1:${server.port}`,
     token: daemonToken.token,
     runtimeName: "Drill runtime",
