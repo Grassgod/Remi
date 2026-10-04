@@ -23,8 +23,24 @@ interface ResolvedDownload {
 
 const AttachmentDownloadContext = createContext<ResolvedDownload | null>(null);
 
+/**
+ * Exact URL first. An optional query must not lose the record's ID-based
+ * download/preview, so only strict authenticated attachment paths may fall
+ * back to matching by the ID in the path.
+ */
+function findAttachmentByUrl(attachments: Attachment[] | undefined, url: string): Attachment | undefined {
+  if (!url || !attachments?.length) return undefined;
+  const exact = attachments.find(a => a.url === url);
+  if (exact) return exact;
+  const id = isAllowedFileCardHref(url)
+    ? /^\/api\/attachments\/([A-Za-z0-9_-]+)\/content(?:\?|$)/.exec(url)?.[1]
+    : undefined;
+  return id ? attachments.find(a => a.id === id) : undefined;
+}
+
 interface ProviderProps {
   attachments?: Attachment[];
+  loadAttachments?: () => Promise<Attachment[]>;
   children: ReactNode;
 }
 
@@ -33,35 +49,34 @@ interface ProviderProps {
  * `ContentEditor`. Without a provider the consumer falls back to opening the
  * raw URL via `openExternal` — same behaviour as before this hook existed.
  */
-export function AttachmentDownloadProvider({ attachments, children }: ProviderProps) {
+export function AttachmentDownloadProvider({ attachments, loadAttachments, children }: ProviderProps) {
   const download = useDownloadAttachment();
   const value = useMemo<ResolvedDownload>(
     () => {
-      const resolveAttachment = (url: string): Attachment | undefined => {
-        if (!url || !attachments?.length) return undefined;
-        const exact = attachments.find(a => a.url === url);
-        if (exact) return exact;
-        // An optional query must not lose the record's ID-based download/preview.
-        // Only strict authenticated attachment paths may resolve by ID.
-        const id = isAllowedFileCardHref(url)
-          ? /^\/api\/attachments\/([A-Za-z0-9_-]+)\/content(?:\?|$)/.exec(url)?.[1]
-          : undefined;
-        return id ? attachments.find(a => a.id === id) : undefined;
-      };
+      const resolveAttachment = (url: string): Attachment | undefined =>
+        findAttachmentByUrl(attachments, url);
       return {
         resolveAttachmentId: (url) => resolveAttachment(url)?.id,
         resolveAttachment,
-        openByUrl: (url) => {
-          const att = resolveAttachment(url);
+        openByUrl: async (url) => {
+          if (!url) return;
+          let att = resolveAttachment(url);
+          if (!att && loadAttachments) {
+            try {
+              att = findAttachmentByUrl(await loadAttachments(), url);
+            } catch {
+              // Unmanaged links remain usable if metadata cannot be loaded.
+            }
+          }
           if (att) {
-            download(att.id);
+            void download(att.id);
             return;
           }
-          if (url) openExternal(url);
+          openExternal(url);
         },
       };
     },
-    [attachments, download],
+    [attachments, loadAttachments, download],
   );
   return (
     <AttachmentDownloadContext.Provider value={value}>
