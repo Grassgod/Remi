@@ -10,6 +10,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const sideEffectTables = [
   "multiremi_conversation_log", "multiremi_issue_activity", "multiremi_turn_execution_records",
+  "multiremi_message_decision_records", "multiremi_session_lanes",
   "multiremi_feishu_bot_outbound_deliveries", "multiremi_turns", "multiremi_turn_attempts",
 ] as const;
 
@@ -120,7 +121,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }
 
     function snapshot() {
-      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY id`).all());
+      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY ${table==='multiremi_session_lanes'?'session_id,reader_type,reader_id,execution_scope':'id'}`).all());
     }
 
     function send(f: Fixture) {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   DAEMON_FRAME_MAX_BYTES, DAEMON_HEARTBEAT_INTERVAL_MS, DAEMON_SEND_PAUSE_BYTES,
   DAEMON_SEND_RESUME_BYTES, DAEMON_TERMINAL_CLOSE_CODES,
+  DAEMON_MIN_CLI_VERSION,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { encodeDaemonProtocolFrame } from "@multiremi/api/daemon-protocol/frames.js";
@@ -27,7 +28,7 @@ class Socket implements DaemonProtocolSocketLike {
   frame(frame: Record<string, unknown>): void { this.emit("message", { data: JSON.stringify({ v: 2, ts: 1, ...frame }) }); }
   handshake(): void {
     this.emit("open");
-    this.frame({ t: "welcome", p: { protocol: 2, session_id: "session-unit", hb_interval_ms: 15_000 } });
+    this.frame({ t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "session-unit", hb_interval_ms: 15_000 } });
     this.answerHeartbeat();
   }
   answerHeartbeat(): void {
@@ -69,6 +70,26 @@ afterEach(async () => {
 });
 
 describe("daemon protocol v2 client", () => {
+  it("keeps a new daemon out of an old v2 server and retains the 60-second upgrade probe", async () => {
+    const b = bed({ cliVersion: DAEMON_MIN_CLI_VERSION });
+    b.sockets[0]!.emit("open");
+    b.sockets[0]!.frame({ t: "welcome", p: { protocol: 2, session_id: "old-server", min_cli_version: "0.2.83" } });
+    expect(b.client.connectionState()).toBe("upgrade_wait");
+    expect(b.client.allowsClaims()).toBe(false);
+    expect(b.sockets[0]!.sent.some(frame => frame.t === "runtime.ready" || frame.t === "hb")).toBe(false);
+    b.clock.advance(60_000); await b.client.drain();
+    expect(b.probes()).toBe(1);
+  });
+
+  it("logs CLI versions on a payload-release rejection without claiming work", async () => {
+    const b = bed({ cliVersion: "0.2.85" });
+    b.sockets[0]!.emit("open");
+    b.sockets[0]!.frame({ t: "reject", p: { code: "daemon_cli_upgrade_required", min_protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION } });
+    b.sockets[0]!.emit("close", { code: 4426 });
+    expect(b.client.connectionState()).toBe("upgrade_wait");
+    expect(b.logs).toContain(`daemon protocol rejected by server (min ${DAEMON_MIN_CLI_VERSION}, self 0.2.85); waiting for pending_update, no tasks will be claimed`);
+    expect(b.client.allowsClaims()).toBe(false);
+  });
   it("sends the daemon token in an Authorization header, not in the URL", () => {
     const b = bed({ token: "test-daemon-credential" });
     expect(b.headers).toEqual([{ Authorization: "Bearer test-daemon-credential" }]);
@@ -271,11 +292,11 @@ describe("daemon protocol v2 client", () => {
     const b = bed();
     const socket = b.sockets[0]!;
     socket.emit("open");
-    socket.frame({ t: "welcome", p: { protocol: 2, session_id: "upgrade-pending-hb" } });
+    socket.frame({ t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "upgrade-pending-hb" } });
     expect(b.client.diagnostics().pending_rpcs).toBe(1);
     socket.emit("close", { code: 4426 });
     await b.client.drain();
-    expect(b.logs).toEqual(["daemon protocol rejected by server (min 2, self 2); waiting for pending_update, no tasks will be claimed"]);
+    expect(b.logs).toEqual([`daemon protocol rejected by server (min ${DAEMON_MIN_CLI_VERSION}, self 0.2.83); waiting for pending_update, no tasks will be claimed`]);
     expect(b.errors).toEqual([]);
     expect(b.client.diagnostics().pending_rpcs).toBe(0);
   });

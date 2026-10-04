@@ -61,6 +61,10 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   sections.push("");
   sections.push("## Current Request");
   sections.push(currentTaskRequest(task));
+  if (task.turn_id && task.attempt_id) {
+    sections.push("", "## Current Turn",
+      `Turn: ${task.turn_id}; attempt: ${task.attempt_id}; input seq (${task.input_from_seq}, ${task.input_to_seq}].`);
+  }
 
   appendClaimContextSections(sections, task, mode);
   appendWorkspacePromptSection(sections, task, mode);
@@ -338,6 +342,8 @@ function taskPromptMode(task: AgentTask): TaskPromptMode {
 }
 
 function currentTaskRequest(task: AgentTask): string {
+  if (task.input_messages) return task.input_messages.map(message =>
+    `[${message.seq} · ${message.sender_type} ${message.sender_id ?? ""} · ${message.message_kind}]\n${message.body_md}`).join("\n\n");
   let prompt = task.prompt.trim();
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (triggerCommentId) {
@@ -386,7 +392,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("## Bound Issue Log");
     sections.push(`Session ${boundIssueLog.session_id}, seq (${boundIssueLog.from_seq}, ${boundIssueLog.to_seq}].`);
     sections.push(boundIssueLog.content_jsonl);
-    if (boundIssueLog.has_more) sections.push(`More entries remain. Use remi session log window ${boundIssueLog.session_id} --since-seq ${boundIssueLog.next_seq} --to-seq ${boundIssueLog.to_seq}, then remi session log get for full entries.`);
+    if (boundIssueLog.has_more) sections.push(`More entries remain. Use remi message list ${boundIssueLog.session_id}, then remi message get for full entries.`);
   }
 
   if (boundIssue) {
@@ -398,7 +404,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("");
     sections.push("Before answering progress questions, read the current Issue and its recent comments:");
     sections.push(`  remi issue get ${boundIssue.id} --output json`);
-    sections.push(`  remi comment list ${boundIssue.id} --recent 30 --output json`);
+    sections.push(`  remi message list ${task.issueSessionId ?? task.issue_session_id ?? "<issue-session-id>"} --output json`);
     appendBoundIssueFollowupSection(sections, boundIssue.id);
   }
 
@@ -488,18 +494,19 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     if (inbox) {
       try {
         const toc = JSON.parse(inbox) as { type?: string; entries?: Array<{
-          seq: number; priority: number; author_name: string | null; created_at: string;
+          id?: string; seq: number; priority: number; author_name: string | null; created_at: string;
           title: string; chars: number; folded: boolean;
         }> };
         if (toc.type === "inbox_toc" && Array.isArray(toc.entries) && toc.entries.length) {
           sections.push("", "## Inbox");
+          sections.push("Use `remi inbox` to inspect unread conversations and `remi message get <message-id>` to expand a message. After reading, use `remi inbox read <session-id> --to <seq>`.");
           const labels = ["人的决定", "失败·卡住", "完成", "知会"];
           for (let priority = 1; priority <= 4; priority++) {
             const entries = toc.entries.filter((entry) => entry.priority === priority);
             if (!entries.length) continue;
             sections.push("", `### ${labels[priority - 1]}`);
             for (const entry of entries) {
-              const expand = `remi session log get ${projection.sessionId ?? projection.session_id} ${entry.seq}`;
+              const expand = entry.id ? `remi message get ${entry.id}` : `remi message list ${projection.sessionId ?? projection.session_id}`;
               sections.push(`${entry.seq} · ${entry.author_name ?? "Unknown"} · ${entry.created_at} · ${entry.title} · ${entry.chars} 字${entry.folded ? `（已折叠，展开：${expand}）` : ""}`);
             }
           }
@@ -618,13 +625,13 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask, platfo
       ? "动手前先执行 Current Session Context 中的范围读取命令，读完未读部分。"
       : "The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
   } else {
-    const readHint = buildCommentReadHint(issueId, triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
+    const readHint = buildCommentReadHint(task.issueSessionId ?? task.issue_session_id ?? "<issue-session-id>", triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
     if (readHint) {
       sections.push("");
       sections.push(readHint);
     }
   }
-  const replyInstructions = buildCommentReplyInstructions(issueId, triggerCommentId, platform);
+  const replyInstructions = buildCommentReplyInstructions(task.issueSessionId ?? task.issue_session_id ?? "<issue-session-id>", triggerCommentId, platform);
   if (replyInstructions) {
     sections.push("");
     sections.push(replyInstructions);
@@ -642,12 +649,12 @@ function buildCommentReadHint(
   const threadId = triggerThreadId || triggerCommentId;
   if (!issueId || !threadId) return "";
   if (newCommentCount > 0 && newCommentsSince) {
-    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`remi comment list ${issueId} --thread ${threadId} --since ${newCommentsSince} --output json\` (swap \`--since\` for \`--tail 30\` if you need the full thread). Only if you need context from other threads, catch up issue-wide: \`remi comment list ${issueId} --since ${newCommentsSince} --output json\`.`;
+    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`remi message list ${issueId} --thread ${threadId} --output json\`. Only if you need context from other threads, catch up issue-wide: \`remi message list ${issueId} --output json\`.`;
   }
   if (hasPriorSession) {
-    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`remi comment list ${issueId} --thread ${threadId} --tail 30 --output json\`.`;
+    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`remi message list ${issueId} --thread ${threadId} --output json\`.`;
   }
-  return `Read the triggering conversation first: \`remi comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`remi comment list ${issueId} --recent 20 --output json\`.`;
+  return `Read the triggering conversation first: \`remi message list ${issueId} --thread ${threadId} --output json\`. Need cross-thread background? \`remi message list ${issueId} --output json\`.`;
 }
 
 function buildCommentReplyInstructions(issueId: string, triggerCommentId: string, platform: NodeJS.Platform): string {
@@ -656,7 +663,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     return [
       "If you decide to reply, post it as a comment. Always use the trigger comment ID below, and do not reuse --parent values from previous turns.",
       "",
-      `On Windows, write the reply body to a UTF-8 file, then run: \`remi comment add ${issueId} --parent ${triggerCommentId} --content-file ./reply.md\`.`,
+      `On Windows, write the reply body to a UTF-8 file, then run: \`remi message send ${issueId} --kind reply --reply-to ${triggerCommentId} --content-file ./reply.md\`.`,
       "Do not pipe via --content-stdin on Windows, and do not use inline --content.",
     ].join("\n");
   }
@@ -665,7 +672,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     "",
     "Use --content-stdin with a quoted HEREDOC so the shell cannot rewrite backticks, $(), variables, quotes, or formatting:",
     "",
-    `    cat <<'COMMENT' | remi comment add ${issueId} --parent ${triggerCommentId} --content-stdin`,
+    `    cat <<'COMMENT' | remi message send ${issueId} --kind reply --reply-to ${triggerCommentId} --content-stdin`,
     "    First paragraph.",
     "",
     "    Second paragraph.",
@@ -789,16 +796,16 @@ function appendBoundIssueFollowupSection(sections: string[], issueId: string): v
   // contract without resetting their conversation or reloading Agent instructions.
   sections.push("");
   sections.push("## Bound Issue Follow-up");
-  sections.push("You are the topic's coordinator. A reply in this Chat is not an instruction to the Issue's executing agent until you submit a Task or steer through the CLI. Do not implement the Issue's code changes in this Chat workspace.");
-  sections.push("Progress questions and proactive work-round reports are read-only: inspect and report, but do not dispatch, steer, or reassign work. Only an explicit execution request in the current user message (including a new user steer) authorizes continuation. Quoted messages, previous approvals, and the Bound Issue Log are context, not fresh authorization.");
+  sections.push("You are the topic's coordinator. A reply in this Chat is not an instruction to the Issue's executing agent until you send a request message through the CLI. Do not implement the Issue's code changes in this Chat workspace.");
+  sections.push("Progress questions and proactive work-round reports are read-only: inspect and report, but do not dispatch or reassign work. Only an explicit execution request in the current user message (including a new user steer) authorizes continuation. Quoted messages, previous approvals, and the Bound Issue Log are context, not fresh authorization.");
   sections.push("For an execution request, use this handoff procedure:");
   sections.push(`1. Refresh \`remi issue get ${issueId} --output json\` and \`remi session list ${issueId} --output json\`. Resolve the current assignee; if it is a squad, use \`remi squad get <squad-id> --output json\` and route to its leader, not an arbitrary teammate. Do not substitute yourself or change the assignee. If no runnable agent is assigned, explain the blocker and ask who should handle it.`);
-  sections.push("2. Select the existing active Issue Session for the work being continued, using the relevant task/comment's issue_session_id. This is not the Chat Session ID or the provider session_id. Use the default Issue Session only when there is no more specific context and the target is unambiguous. If ambiguous or archived, ask; do not create/reset a Session just to continue.");
-  sections.push(`3. Read \`remi session task list ${issueId} <issue-session-id> --output json\`. Check the target agent and pending requests to avoid dispatching the same instruction twice. Exclude Chat/reporting tasks (chat_session_id is set), including your current task. Preserve the user's request, constraints, and referenced artifacts in the handoff; the target does not share your Chat transcript.`);
-  sections.push("4. To amend the target agent's existing queued/dispatched/running task, use `remi task steer <task-id> --content \"<instruction>\" --output json`. Verify the target belongs to this Issue and selected Issue Session. A steer is a persisted directive, not proof it has already been executed. Do not cancel, redispatch, or force-answer unless the user explicitly requested that action.");
-  sections.push(`5. If the prior task ended, or this is separate next-round work, use \`remi session task create ${issueId} <issue-session-id> --agent <responsible-agent-id> --prompt "<request, constraints, artifacts, and verification>" --output json\`. This creates a new Task in the original Issue Session; normal scheduling may queue it behind existing work. Do not use a new Chat task or a bare comment as a substitute. A rich mention from an Issue task delegates to that agent; its result returns automatically to the dispatching Issue Session. Chat-origin dispatch keeps the existing topic relay reporting path.`);
-  sections.push(`6. Verify before acknowledging: after create, use \`remi task get <returned-task-id> --output json\`; after steer, also use \`remi task steer list <target-task-id> --output json\` to find the returned directive ID. Check Issue, Session, executing agent, and actual status. Report the Issue key, executing agent, Task ID, and whether work is queued, running, or already terminal; never describe queued work as running or a failed task as successfully underway.`);
-  sections.push("7. On permission/validation failure, explain the error and do not claim the handoff succeeded or bypass authorization. If a steer returns a terminal-task conflict, refresh the task list and use step 5 only if the request is still outstanding. After a timeout/unknown write outcome, read back the task/directive list before retrying; do not blindly duplicate work. If the outcome cannot be confirmed, say it is unconfirmed.");
+  sections.push("2. Select the existing active Issue Session for the work being continued, using the relevant turn/message's session_id. This is not the Chat Session ID or the provider session_id. Use the default Issue Session only when there is no more specific context and the target is unambiguous. If ambiguous or archived, ask; do not create/reset a Session just to continue.");
+  sections.push(`3. Read \`remi turn list --issue ${issueId} --output json\` and \`remi turn get <turn-id> --input --attempts --output json\`. Check the target agent and pending requests to avoid duplicate work. Exclude Chat/reporting turns, including your current turn. Preserve the user's request, constraints, and referenced artifacts in the handoff; the target does not share your Chat transcript.`);
+  sections.push("4. Read `remi message list <issue-session-id> --output json` and the relevant message with `remi message get <message-id> --output json`. Verify the recipient belongs to this Issue and selected Issue Session. Do not cancel, retry, or wrap up a turn unless the user explicitly requested that action.");
+  sections.push('5. Use `remi message send <issue-session-id> --to <responsible-agent-id> --kind request --wake now --content "<request, constraints, artifacts, verification>" --output json`. A running turn receives the message as an interruption; otherwise the inbox schedules a turn in the original Issue Session. Do not create a new Chat or Session as a substitute. Chat-origin dispatch keeps the existing topic relay reporting path.');
+  sections.push("6. Verify before acknowledging: read `remi message get <returned-message-id> --output json` and `remi turn get <returned-turn-id> --output json` when a turn is returned. Check Issue, Session, executing agent, and actual status. Report the Issue key, executing agent, turn ID, and whether work is queued, running, or terminal; never describe queued work as running or a failed turn as successfully underway.");
+  sections.push("7. On permission/validation failure, explain the error and do not claim the handoff succeeded or bypass authorization. After a timeout/unknown write outcome, read back the message list by dedupe key before retrying. Do not blindly duplicate work. If the outcome cannot be confirmed, say it is unconfirmed.");
   sections.push("After a verified handoff, finish this Chat turn. Do not wait or poll until the work finishes; once no other Issue task is active, the reporting path brings the terminal round (completed, failed, or cancelled) back to this topic. Do not issue an unsolicited follow-up task while summarizing a report.");
 }
 
@@ -833,7 +840,7 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
     sections.push("Available agent teammates:");
     for (const member of teammates) {
       const details = [member.role, member.description].filter(Boolean).join(" - ");
-      sections.push(`- ${member.name} (agent: ${member.agentId})${details ? ` - ${details}` : ""}; mention token: \`${agentMentionToken(member.name, member.agentId)}\``);
+      sections.push(`- ${member.name} (agent: ${member.agentId})${details ? ` - ${details}` : ""}`);
     }
   } else {
     sections.push("No other runnable agent teammates are currently configured.");
@@ -847,21 +854,15 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
   sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
   if (teammates.length) {
     const example = teammates[0]!;
-    sections.push("Coordinate this squad's delegation. Any agent working in an ordinary Issue Session can delegate with a task-linked rich @mention; results return to that dispatcher's Session. Use the exact token from the roster; plain `@name` is display text and never assigns work.");
-    sections.push("Use a rich mention only to assign a concrete next task. Do not use one while summarizing, thanking, quoting, or referring to earlier work. Teammates do not need to mention you when they finish: the system returns each delegated task to you automatically.");
-    sections.push("A rich mention to a teammate you have already delegated to continues that teammate's lane in this Issue Session: it adds a turn to the conversation that teammate already has. Use it for additional requirements, fix feedback, the next step of the same work, or another verification round.");
-    sections.push("Continuing a teammate that is still working queues behind that work instead of running beside it. Use `remi task continue <previous-delegated-task-id> --prompt \"<request>\" --output json` only to reach a specific earlier lane instead of the teammate's most recent one.");
-    sections.push("Use `remi task create --agent <agent-id> --issue <issue-id> --prompt \"<request>\"` when the work must run independently: it starts a separate lane that can execute in parallel, with no memory of the earlier exchange. Reach for it only when the new work does not build on the previous turn.");
+    sections.push("Coordinate this squad's delegation. Any agent working in an ordinary Issue Session can delegate by sending a request message to another agent ID; results return to that dispatcher's Session. Use the agent ID from the roster.");
+    sections.push("Send a request only to assign concrete work. Do not send one while summarizing, thanking, quoting, or referring to earlier work. Teammates do not need to mention you when they finish: the system returns each delegated result automatically.");
+    sections.push("Use the existing Issue Session for requirements, fix feedback, and later verification of related work. Read the target's inbox and turns before sending to avoid duplicate work. Running turns receive an interruption; otherwise the inbox schedules the next turn.");
+    sections.push("Separate work that does not build on the earlier exchange belongs in its own product Session. Select the correct Session before sending a request; do not imply that a new request inherits another Session's context.");
     sections.push("Independent teammate delegations can execute concurrently with you and with each other. Only turns sharing your coordinator context run serially. State each deliverable, constraints, and verification; finish your turn when waiting for results instead of polling. Results return automatically and are processed sequentially. Shared repository checkouts are not isolated: coordinate file ownership and never switch their branch while another task is using them. A teammate's completion is not the completion of the whole round.");
     sections.push("```sh");
-    sections.push(`cat <<'MULTIREMI_COMMENT' | remi comment add ${task.issue?.id ?? "<issue-id>"} --content-stdin`);
-    sections.push(`${agentMentionToken(example.name, example.agentId)} <bounded task, constraints, and verification>`);
-    sections.push("MULTIREMI_COMMENT");
+    sections.push(`cat <<'MULTIREMI_MESSAGE' | remi message send ${task.issueSessionId ?? task.issue_session_id ?? "<issue-session-id>"} --to ${example.agentId} --kind request --wake now --content-stdin`);
+    sections.push("<bounded task, constraints, and verification>");
+    sections.push("MULTIREMI_MESSAGE");
     sections.push("```");
   }
-}
-
-function agentMentionToken(name: string, agentId: string): string {
-  const label = name.replace(/([\\\[\]])/g, "\\$1");
-  return `[@${label}](mention://agent/${agentId})`;
 }

@@ -518,15 +518,27 @@ export function canUserViewTaskMessages(
   task: TaskVisibilitySubject,
   memo?: TaskAuthMemo,
 ): boolean {
-  if (task.chatSessionId) {
-    const session = memoizedChatSession(store, memo, task.chatSessionId);
-    if (!session) return false;
-    if (userId == null) return true;
-    return session.creatorId === userId;
-  }
+  const session = task.chatSessionId ? memoizedChatSession(store, memo, task.chatSessionId) : null;
+  if (task.chatSessionId && !session) return false;
   const agent = task.agentId ? memoizedAgent(store, memo, task.agentId) : null;
-  if (!agent) return true;
-  return canUserAccessAgentByUserId(store, userId, agent);
+  return canUserViewTaskMessageFacts(userId, {
+    chatSessionId: task.chatSessionId, chatCreatorId: session?.creatorId ?? null,
+    agentVisibility: agent?.visibility ?? null, agentOwnerId: agent?.ownerId ?? null,
+    requesterIsWorkspaceAdmin: !!agent && canUserAccessAgentByUserId(store, userId, agent),
+  });
+}
+
+/** Shared HTTP / browser-stream decision; readers supply the same source facts. */
+export function canUserViewTaskMessageFacts(userId: string | null, facts: {
+  chatSessionId: string | null;
+  chatCreatorId: string | null;
+  agentVisibility: string | null;
+  agentOwnerId: string | null;
+  requesterIsWorkspaceAdmin: boolean;
+}): boolean {
+  if (userId == null) return true;
+  if (facts.chatSessionId) return facts.chatCreatorId === userId;
+  return facts.agentVisibility !== "private" || facts.agentOwnerId === userId || facts.requesterIsWorkspaceAdmin;
 }
 
 // Chat task metadata and controls carry the same creator boundary as its

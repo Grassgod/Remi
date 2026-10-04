@@ -11,7 +11,7 @@ export * from "./model-thinking.js";
 export * from "./codex-model-catalog.js";
 export * from "./session-archive.js";
 export * from "./conversation-log.js";
-export * from "./issue-activity.js";
 export * from "./unified-model.js";
+export * from "./issue-activity.js";
 export * from "./trace-file.js";
 export type { TaskMessageFanoutSubject } from "./task-message-fanout.js";

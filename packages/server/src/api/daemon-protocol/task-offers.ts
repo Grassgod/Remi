@@ -1,4 +1,4 @@
-import { DAEMON_OFFER_COOLDOWN_MS, DAEMON_OFFER_TIMEOUT_MS } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_OFFER_COOLDOWN_MS, DAEMON_OFFER_TIMEOUT_MS, type DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { MultiremiTask, MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
@@ -15,9 +15,24 @@ import { fitTaskOfferToBudget, useTaskSessionInput } from "./offer-budget.js";
 
 export const DAEMON_OFFER_SWEEP_MS = 60_000;
 
+/** S2 supplies the canonical turn input with the claimed attempt. */
+export function daemonTurnOfferPayload(execution: Record<string, unknown>, input: DaemonTurnInput): Record<string, unknown> {
+  const { id: _attemptId, prompt: _prompt, ...context } = execution;
+  if (!input.turn_id || !input.attempt_id || !Number.isSafeInteger(input.input_from_seq)
+    || !Number.isSafeInteger(input.input_to_seq) || input.input_from_seq < 0
+    || input.input_to_seq < input.input_from_seq || !Array.isArray(input.input_messages)) {
+    throw new Error("unified turn offer context missing");
+  }
+  return { ...context, turn_id: input.turn_id, attempt_id: input.attempt_id,
+    input_from_seq: input.input_from_seq, input_to_seq: input.input_to_seq, input_messages: input.input_messages };
+}
+
 export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTaskWithAgent,
   project: ProjectKnowledgeServiceContract, repository: RepositoryWikiServiceContract,
-  supportsWikiFetch = false): Promise<Record<string, unknown> | null> {
+  supportsWikiFetch = false,
+  input: DaemonTurnInput = store.getDaemonTurnBridge().offerInput(task)): Promise<Record<string, unknown> | null> {
+  // Validate canonical input before preparing the execution context and access token.
+  daemonTurnOfferPayload({}, input);
   const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
   for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {
     if (!remotes.has(canonicalRepositoryRemote(repo.url))) {
@@ -35,7 +50,7 @@ export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTas
   const runtime = store.getRuntimeLite(task.runtimeId!);
   const token = await store.createTaskAccessToken(task, cleanString(runtime?.ownerId) ?? "local");
   response.auth_token = token.token;
-  return response;
+  return daemonTurnOfferPayload(response, input);
 }
 
 interface RuntimePump {
@@ -285,7 +300,7 @@ export class DaemonTaskOffers {
         pump.accepted.add(pending.taskId);
         if (pending.inlineRead) {
           try { this.options.store.recordSessionAgentInlineRead(pending.inlineRead.sessionId, pending.agentId,
-            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart); }
+            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart, pending.taskId); }
           catch { console.warn(JSON.stringify({ event: "session_log_read_progress_failed", task_id: pending.taskId })); }
         }
       }

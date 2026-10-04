@@ -160,6 +160,7 @@ import {
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
 import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
+import type { DaemonTurnBridge } from "./daemon-protocol/turn-bridge.js";
 import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
 import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
@@ -210,6 +211,7 @@ import {
 import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
 import { createConversationLogFillReader } from "./hub/conversation-log-fill-reader.js";
+import { createBrowserLogProjection } from "./hub/browser-log-projection.js";
 import { stopHubReadResources } from "./hub/hub-lifecycle.js";
 import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import {
@@ -308,6 +310,8 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
 }
 
 export interface MultiremiApiOptions {
+  /** Override the Store-owned turn bridge for protocol integration tests. */
+  daemonTurnBridge?: DaemonTurnBridge;
   /** Transport injection for protocol integration tests; no store subscriptions. */
   onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
   store?: MultiremiStore;
@@ -1159,21 +1163,23 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
   });
+  const daemonTurnBridge = options.daemonTurnBridge ?? store.getDaemonTurnBridge();
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
-    prepare: (task, supportsWikiFetch) => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki, supportsWikiFetch),
+    prepare: (task, supportsWikiFetch) => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki,
+      supportsWikiFetch, daemonTurnBridge.offerInput(task)),
     onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
     snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
       ...sessionArchiveRequestSnapshot(store, rt),
-      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id))] });
-  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
+      ...taskInputSnapshot(store, rt, session.daemonId, activeIds, id => downlinks.forgetTask(rt, id), daemonTurnBridge)] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), daemonTurnBridge);
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
     effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
       ? createHubTraceSink(liveHub as HubImpl) : undefined);
-  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId), daemonTurnBridge);
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   registerSessionArchiveRequestHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);
@@ -1186,6 +1192,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     hub: liveHub,
     auth: streamAuth,
     endpoint: "log",
+    projectLogFrames: createBrowserLogProjection(store, readPool),
   });
   const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
     hub: liveHub,

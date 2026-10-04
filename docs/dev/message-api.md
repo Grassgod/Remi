@@ -18,13 +18,15 @@ Issue 决定及其答复在消息、日志和收件箱读取中统一检查来�
 
 消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用现有 `/api/attachments/:id/file`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
 
+网页 `/ws` 的 log 冷回放、补洞、entry 与 patch 使用同一来源规则与字段脱除；无权行仅发送序号和版本的隐藏标记，具体协议见[浏览器实时 v2](realtime-v2.md)。
+
 ## Message
 
 | HTTP | 输入 | 响应 |
 |---|---|---|
 | `POST /api/sessions/:sessionId/messages` | 下面的发送体 | `{message,wake_applied,wake_reason,turn_id?}` |
 | `GET /api/sessions/:sessionId/messages` | `limit=1..500`，默认 100；`cursor` 或 `after_seq`；`message_kind`、`thread`、`unread_by=<agentId>` | `{messages,next_cursor}`，按 seq 升序；cursor 为 seq 的十进制字符串 |
-| 同上，范围读取 | `from`、`to`；续页使用原响应 `next_cursor` | `{entries,next_cursor,read_start,read_end,...}`，保留 ADR 0013 原范围协议 |
+| 同上，范围读取 | `from`、`to`；续页使用原响应 `next_cursor` | `{entries,next_cursor,read_start,read_end,...}`，保留 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md) 的范围协议 |
 | `GET /api/messages/:id` | 无 | `{message}`，可读 tombstone |
 | `PATCH /api/messages/:id` | `{body_md}` | `{message}`；仅原发送人，已消费或部分消费拒绝 |
 | `DELETE /api/messages/:id` | 无 | `{message}`；同样仅原发送人、未消费；重复删除幂等 |
@@ -55,7 +57,7 @@ decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，
 
 SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionId/log?anchor=&before=&after=` 返回 head、轮卡片、head_seq/log_version、前后分页标记及消息附件/反应 sidecar；`GET .../log/locate?id=` 返回 seq/head_seq；`GET .../log/entry?seq=` 或 `?id=` 展开一条展示记录及 delivered。它们使用新消息/轮的 canonical projection，保留展示 wire，不推进读游标。/log 带 from 或 to 返回 400，提示改用 `remi message list <conversation> --from <seq> --to <seq>`。Issue activity 仍由现有 Issue 详情读取协议提供。CLI 的旧 session log 命令继续本地退役；CLI 的范围读只走 messages GET。三条展示 GET 登记为 pure_ui，旧写入口仍退役。
 
-当前 S2 集成有已知的 agent 游标回归：轮完成会把 lane.cursor_seq 推到 projection_to_seq，暖续接和恢复 bootstrap 不能完整保留实际范围读取进度。`session-unread-progress.test.ts` 有 6 个失败，需 S2 修复；上述分页 HTTP 格式已定，人的 inbox 游标不受这处问题影响。页面不要用该 agent 游标推断用户阅读状态。
+按 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md)，lane 的 `cursor_seq/cursor_offset` 是实际读取高水位，`provider_cursor_seq` 是 provider 续接/完成位置。轮完成不推进实际读游标；冷 bootstrap 被接受后实际进度清零，完整 inline 输入与范围读取再推进它。范围读取绑定当前 attempt，拒绝或准备 bootstrap 不清零。人的 inbox 使用自己的 member lane，页面不要用 agent 游标推断用户阅读状态。
 
 ## Inbox
 

@@ -12,6 +12,8 @@ const OPTS = { daemonPort: 6200, serverUrl: "http://server:6120" };
 function taskWith(overrides: Partial<AgentTask>): AgentTask {
   return {
     id: "tsk_env",
+    turn_id: "turn_env",
+    attempt_id: "tsk_env",
     workspaceId: "local",
     prompt: "env",
     issueId: null,
@@ -103,7 +105,9 @@ describe("buildTaskEnv", () => {
 
     expect(env.MULTIREMI_DAEMON_PORT).toBe("6200");
     expect(env.MULTIREMI_WORKSPACE_ID).toBe("local");
-    expect(env.MULTIREMI_TASK_ID).toBe("tsk_env");
+    expect(env.MULTIREMI_TURN_ID).toBe("turn_env");
+    expect(env.MULTIREMI_ATTEMPT_ID).toBe("tsk_env");
+    expect(env.MULTIREMI_TASK_ID).toBeUndefined();
     expect(env.MULTIREMI_SERVER_URL).toBe("http://server:6120");
     expect(env.MULTIREMI_TOKEN).toBe("real-token");
     expect(env.MULTIREMI_PROJECT_ID).toBe("prj_real");
@@ -163,11 +167,12 @@ describe("buildTaskEnv", () => {
       "GIT_SSH_COMMAND",
       "GIT_TERMINAL_PROMPT",
       "MULTIREMI_AGENT_NAME",
+      "MULTIREMI_ATTEMPT_ID",
       "MULTIREMI_DAEMON_PORT",
       "MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS",
       "MULTIREMI_SERVER_URL",
-      "MULTIREMI_TASK_ID",
       "MULTIREMI_TOKEN",
+      "MULTIREMI_TURN_ID",
       "MULTIREMI_WORKSPACE_ID",
       "ONLY_AGENT",
     ]);

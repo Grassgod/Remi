@@ -278,6 +278,11 @@ export interface AgentTaskRepo {
  * structurally assignable.
  */
 export interface AgentTask {
+  turn_id?: string | null;
+  attempt_id?: string;
+  input_from_seq?: number;
+  input_to_seq?: number;
+  input_messages?: import("@multiremi/contracts/unified-model.js").UnifiedMessage[];
   runtimeWorkspaceId?: string | null;
   runtimeWorkspace?: {
     id: string;

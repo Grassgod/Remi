@@ -70,6 +70,18 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 - `log:` 按会话归属。chat 会话只允许 `creatorId` 本人；issue 会话要求请求者是该会话所属工作区的成员。socket 的 workspace 绑定仍然生效，跨工作区一律拒绝。
 - `trace:` 按 `canUserViewTaskMessages`。chat 任务只允许会话创建者；私有 Agent 的任务只允许其 owner 与工作区 owner/admin；其余任务工作区成员可读。
 
+会话订阅通过后，浏览器发送出口仍逐批执行与三个 HTTP log GET 共用的来源可见性规则。
+冷回放、ring 续传、peer 补洞、实时 entry 和 patch 都经过
+[browser-log-projection.ts](../../packages/server/src/api/hub/browser-log-projection.ts)。patch 先查当前 canonical 行，
+避免部分字段遗漏来源；提问、答复、轮卡片及引用它们的编辑/生命周期标记沿来源任务/agent 鉴权。
+无权行只发送 `{session_id,seq,revision,visibility:"hidden"}`，供本地副本记录连续覆盖范围；
+有权帧递归脱除 `card_token_*`。权限只缓存到当前批次，保留的 ring 不按用户改写。
+Postgres 的行与来源事实通过异步 read pool 读取；查询失败停止该订阅并返回 `unavailable`。
+
+`task:*` 状态、结果和进度事件也按来源任务权限选择工作区成员，local 与 peer 使用同一个发送函数。
+`inbox:new/read/batch-read` 仅发送 `{index_only:true}`，由客户端重新读取带权限的 inbox API；
+human-request feed 仅供内部卡片宿主消费，不向浏览器发送消息对象。
+
 Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL` / `TRACE_STREAM_FACTS_SQL`），不使用同步 bridge；SQLite 与测试退回 store 同步读取。`userId === null`（主令牌/开放模式）保留本地管理员语义。
 
 鉴权等待期间，退订、连接关闭和同一流的新订阅都会使旧请求失效；旧结果不再登记 Hub 订阅，也不发送迟到的 ack 或错误。
@@ -101,6 +113,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 - 服务端协议与鉴权：`bun test tests/unit/multiremi/multiremi-browser-stream-protocol.test.ts`（假 Hub，覆盖三种 log 归属、trace 四种可见性、ack/gap、续传、`wrong_endpoint`、resync）。
 - 服务端端点接线与 chat 归属：`bun test tests/unit/multiremi/multiremi-browser-stream-socket.test.ts`。
 - 冷流、真实 PG peer 补帧与关停顺序：`bun test tests/unit/multiremi/conversation-log-server-wiring.test.ts`。
+- 浏览器来源权限与字段脱除：`bun test tests/unit/multiremi/unified-browser-log-visibility.test.ts`，真实 loopback `/ws`，SQLite 与设置 `MULTIREMI_TEST_POSTGRES_URL` 后的真实 PG。
 - 客户端：`cd frontend/packages/core && bunx vitest run api/ws-client-streams.test.ts api/trace-socket.test.ts`。
 - 路由清单：`bun run scripts/snapshot-api-routes.ts --check`；角色守卫计数：`bun test tests/unit/multiremi/api-role-guard.test.ts`。
 

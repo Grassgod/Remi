@@ -30,6 +30,27 @@ async function storageFor(kind: "memory" | "sqlite", filename = ":memory:"): Pro
 }
 
 describe.each(["memory", "sqlite"] as const)("%s revision watermarks", kind => {
+  test("minimal hidden markers settle seqs and revoke a cached row at the same revision", async () => {
+    const storage = await storageFor(kind);
+    try {
+      const engine = new ReplicaEngine(storage);
+      open(engine); engine.ack(sid, ack()); engine.frames(sid, [entry()]);
+      const hidden: HubFrame = { seq: 1, kind: "entry", payload: {
+        session_id: sid, seq: 1, revision: 1, visibility: "hidden",
+      } };
+      expect(engine.frames(sid, [hidden])).toBeNull();
+      expect(engine.readWindow(sid, 1, 1)).toEqual([]);
+      expect(engine.snapshot(sid)).toMatchObject({ head: 1, fresh: true, entries: [] });
+      const reopened = new ReplicaEngine(storage);
+      open(reopened);
+      expect(reopened.frames(sid, [hidden, entry()])).toBeNull();
+      reopened.writeWindow(sid, [row()], { from: 1, to: 1 });
+      expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
+      expect(reopened.covers(sid, 1)).toBe(true);
+      expect(storage.readRevisionWatermarks(sid).get(1)).toBe(1);
+    } finally { storage.close(); }
+  });
+
   test.each(["tombstone", "hidden"] as const)("%s rejects old/equal entries and HTTP rows after engine reopen", async removal => {
     const storage = await storageFor(kind);
     try {

@@ -35,6 +35,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createReadPool, type ReadPool } from "@multiremi/store/db/read-pool.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import type { ApiRole } from "@multiremi/config/api-role.js";
+import { canUserViewTaskMessageFacts } from "../helpers/auth-guards.js";
 
 /** The codes a refused `stream.subscribe` can carry (see the C0 contract). */
 export type StreamSubscribeDenialCode = "invalid_payload" | "forbidden" | "wrong_endpoint" | "unavailable";
@@ -131,14 +132,7 @@ export function decideTraceSubscription(
 ): StreamSubscribeAuthorization {
   if (!facts) return { ok: false, code: "forbidden" };
   if (facts.workspaceId !== subject.workspaceId) return { ok: false, code: "forbidden" };
-  if (subject.userId == null) return { ok: true };
-  if (facts.chatSessionId) {
-    return facts.chatCreatorId === subject.userId ? { ok: true } : { ok: false, code: "forbidden" };
-  }
-  if (!facts.agentId) return { ok: true };
-  if (facts.agentVisibility !== "private") return { ok: true };
-  if (facts.agentOwnerId && facts.agentOwnerId === subject.userId) return { ok: true };
-  return facts.requesterIsWorkspaceAdmin ? { ok: true } : { ok: false, code: "forbidden" };
+  return canUserViewTaskMessageFacts(subject.userId, facts) ? { ok: true } : { ok: false, code: "forbidden" };
 }
 
 /**
@@ -167,10 +161,10 @@ SELECT 'issue' AS kind, s.workspace_id AS workspace_id, NULL AS creator_id,
  * The one statement a `trace:` subscription costs in Postgres.
  *
  * The task decides chat-ness, the chat session supplies the creator, and the
- * agent supplies the privacy rule. An archived agent is left out of the join so
- * its task reads as unrestricted, which is what the store-backed guard sees.
+ * agent supplies the privacy rule, including archived agents: archiving does
+ * not make their private history public.
  *
- * Parameters, in order: `[userId, userId, taskId]`.
+ * Parameters, in order: `[userId, taskId]`.
  */
 export const TRACE_STREAM_FACTS_SQL = `SELECT t.workspace_id AS workspace_id, t.chat_session_id AS chat_session_id,
        c.creator_id AS chat_creator_id, t.agent_id AS agent_id,
@@ -180,7 +174,7 @@ export const TRACE_STREAM_FACTS_SQL = `SELECT t.workspace_id AS workspace_id, t.
            AND m.role IN ('owner', 'admin')) AS is_admin
   FROM multiremi_turn_execution_records t
   LEFT JOIN multiremi_chat_sessions c ON c.id = t.chat_session_id
-  LEFT JOIN multiremi_agents a ON a.id = t.agent_id AND a.archived_at IS NULL
+  LEFT JOIN multiremi_agents a ON a.id = t.agent_id
  WHERE t.id = ?`;
 
 interface LogFactsRow {

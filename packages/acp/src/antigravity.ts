@@ -147,7 +147,8 @@ export class AntigravityProvider implements Provider {
     );
     // `this.env` is shared by every launch, so merge the platform's temp
     // overrides into a per-spawn copy instead of the instance environment.
-    const env = launch.env ? { ...this.env, ...launch.env } : this.env;
+    const env = { ...this.env, ...launch.env };
+    delete env.MULTIREMI_TASK_ID;
     const child = spawn(launch.executable, launch.args, {
       cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       detached: process.platform !== "win32" && !this.options.inheritProcessGroup,

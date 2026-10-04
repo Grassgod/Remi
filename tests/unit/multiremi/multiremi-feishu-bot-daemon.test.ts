@@ -490,30 +490,39 @@ describe("Feishu bot control-plane delivery", () => {
       payload: { question: "Continue?" } });
     const privateQuestion = test.store.createTaskHumanRequest({ taskId: unbound.id, kind: "question",
       payload: { question: "Private?" } });
-    const read = (runtimeId: string, taskId: string, requestId: string, token: string) =>
-      requestRuntimeRpc(test.store, runtimeId, "human_request.get", { task_id: taskId, request_id: requestId }, token, "MASTER");
+    db!.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [unbound.id]);
+    const boundTurnId = test.store.getTurnForAttempt(submitted.taskId)!.id;
+    const privateTurnId = test.store.getTurnForAttempt(unbound.id)!.id;
+    const readCard = (messageId: string, token: string) => test.app.request(`/api/daemon/messages/${messageId}`,
+      { headers: daemonHeaders(token) });
+    const readTurn = (turnId: string, attemptId: string, messageId: string) =>
+      requestRuntimeRpc(test.store, "rt_claude", "turn.decision.get", {
+        turn_id: turnId, attempt_id: attemptId, message_id: messageId,
+      }, executor.token, "MASTER");
 
-    const hosted = await read("rt_a", submitted.taskId, question.id, test.tokens.rt_a!);
-    expect(hosted).toMatchObject({ ok: true, request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
-    expect(await read("rt_claude", submitted.taskId, question.id, executor.token)).toMatchObject({ ok: true });
-    expect(await read("rt_claude", unbound.id, privateQuestion.id, executor.token)).toMatchObject({ ok: true });
-    // Not the bot host.
-    expect(await read("rt_b", submitted.taskId, question.id, test.tokens.rt_b!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
-    // Not a Chat bound to the bot.
-    expect(await read("rt_a", unbound.id, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
-    // Access to one bound Task does not reach another Task's request.
-    expect(await read("rt_a", submitted.taskId, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "task_not_found", http_status: 404 });
-    const create = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "human_request.create", {
-      task_id: submitted.taskId, request_id: crypto.randomUUID(), kind: "question", payload: { question: "Another?" },
+    const hosted = await readCard(question.id, test.tokens.rt_a!);
+    expect(hosted.status).toBe(200);
+    expect(await hosted.json()).toMatchObject({ message: { id: question.id },
+      request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
+    expect(await readTurn(boundTurnId, submitted.taskId, question.id)).toMatchObject({ ok: true, message: { id: question.id } });
+    expect(await readTurn(privateTurnId, unbound.id, privateQuestion.id)).toMatchObject({ ok: true, message: { id: privateQuestion.id } });
+    // The card transport remains limited to the configured host and bound Chat.
+    expect((await readCard(question.id, test.tokens.rt_b!)).status).toBe(403);
+    expect((await readCard(privateQuestion.id, test.tokens.rt_a!)).status).toBe(403);
+    // Even the executing daemon cannot read another turn's decision through this turn.
+    expect(await readTurn(boundTurnId, submitted.taskId, privateQuestion.id)).toMatchObject({ ok: false, code: "invalid_report" });
+    const create = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "turn.decision", {
+      turn_id: boundTurnId, attempt_id: submitted.taskId, dedupe_key: "another-question", body_md: "Another?",
+      options: [], metadata: { kind: "question" },
     }, token, "MASTER");
-    const expire = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "human_request.expire", {
-      task_id: submitted.taskId, request_id: question.id, status: "cancelled",
+    const expire = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "turn.decision.expire", {
+      turn_id: boundTurnId, attempt_id: submitted.taskId, message_id: question.id, status: "cancelled",
     }, token, "MASTER");
-    expect(await create("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked" });
-    expect(await expire("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked" });
+    expect(await create("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "stale_attempt" });
+    expect(await expire("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "stale_attempt" });
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("pending");
-    expect(await create("rt_claude", executor.token)).toMatchObject({ ok: true, request: { taskId: submitted.taskId, kind: "question" } });
-    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, request: { id: question.id, status: "cancelled" } });
+    expect(await create("rt_claude", executor.token)).toMatchObject({ ok: true, message: { task_id: boundTurnId, message_kind: "decision" } });
+    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, message: { id: question.id, resolved_at: expect.any(String) } });
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
   });
 

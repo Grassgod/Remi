@@ -1578,6 +1578,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const conversation = loadConversation(c, store, sessionId);
     return conversation instanceof Response ? conversation : conversation.id;
   };
+  const denyLogRange = (c: Context) => c.req.query("from") != null || c.req.query("to") != null
+    ? c.json({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" }, 400)
+    : null;
   const recordLogRead = (message: string, data: Record<string, unknown>): void => {
     // Optional read telemetry cannot make an authorized read fail.
     try { log.info(message, data); } catch {}
@@ -1585,6 +1588,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log/locate", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const id = c.req.query("id");
     if (!id) return c.json({ error: "id is required" }, 400);
     const location = store.locateConversationLogEntry(sessionId, id);
@@ -1594,6 +1599,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log/entry", c => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const rawSeq = c.req.query("seq"), id = c.req.query("id");
     if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
     const seq = rawSeq == null ? store.locateConversationLogEntry(sessionId, id!)?.seq : /^(0|[1-9]\d*)$/.test(rawSeq) ? Number(rawSeq) : NaN;
@@ -1618,7 +1625,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId, conversationEntryVisibility(c, store));
       let progress;
       if (token?.taskId && token.agentId) {
-        try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+        try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end, token.taskId); }
         catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
       }
       if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
@@ -1638,7 +1645,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
-    if (c.req.query("from") != null || c.req.query("to") != null) return c.json({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" }, 400);
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const readNumber = (name: string): number | null | undefined => {
       const raw = c.req.query(name);
       if (raw == null) return undefined;
@@ -1652,12 +1660,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    const activityTo = window.has_more_after ? window.entries.at(-1)?.created_at : null;
     window.entries = window.entries.filter(conversationEntryVisibility(c, store)).map(entry => messageResponse(entry));
     const issueSession = store.getIssueSession(sessionId);
     if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
       Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
         fromInclusive: window.prev_entry_created_at,
-        toExclusive: window.has_more_after ? window.entries.at(-1)?.created_at : null,
+        toExclusive: activityTo,
         types: ISSUE_ACTIVITY_TYPES, limit: 200,
       }));
     }

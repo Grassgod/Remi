@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-407 (parent MUL-400 E5): an Issue task's human request becomes a decision
  * card in the Issue's Feishu topic instead of waking a relay Agent to ask in
@@ -21,7 +23,8 @@ import {
   decisionReminderLeadMs,
   resolveDecisionRecipient,
 } from "@multiremi/store/repos/feishu-bot-repo.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./feishu-host-store-fixture.js";
+import { resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
@@ -37,6 +40,11 @@ import {
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { handleTaskInteractionEvent, interactionMarker, registerQuestionCardClient } from "@connectors/feishu/task-interaction.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
+
+pendingTurnBackendTests("MUL-508 human request cards", (fixture) => {
+let db: SqlDatabase;
+beforeEach(() => { db = fixture().db; });
+const createLocalStore = () => fixture().store;
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousEncryptionKey: string | undefined;
@@ -114,7 +122,7 @@ function issueWithTopic(store: MultiremiStore, agentId: string, title = "Decisio
 function sourceTask(store: MultiremiStore, agentId: string, issueId: string): string {
   const task = store.createTask({ agentId, issueId, workspaceId: "local", prompt: "Work the Issue" });
   store.registerRuntime({ id: `rt_worker_${task.id}`, name: "Executor", provider: "claude", workspaceId: "local", daemonId: `worker-${task.id}` });
-  db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [`rt_worker_${task.id}`, task.id]);
+  runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [`rt_worker_${task.id}`, task.id]);
   return task.id;
 }
 
@@ -132,6 +140,39 @@ function cloneSettledQuestion(store: MultiremiStore, sourceId: string, id: strin
     source_turn_id: source.task_id, to: { type: "none" }, body_md: source.body_md, message_kind: "decision", wake_requested: "inbox_only", metadata });
 }
 
+function cloneSettledQuestionBatch(store: MultiremiStore, sourceId: string, count: number, stem: string, cardId: string, taskId: string, respondedAt?: string): void {
+  db.transaction(() => {
+    // One real send establishes the canonical shape; bulk copies keep the
+    // large read-budget fixtures within the same timeout on both databases.
+    cloneSettledQuestion(store, sourceId, `hrq_${stem}_0`, respondedAt);
+    const template = db.query("SELECT * FROM multiremi_conversation_log WHERE id=?").get(`hrq_${stem}_0`)!;
+    const columns = Object.keys(template);
+    for (let start = 1; start < count; start += 128) {
+      const size = Math.min(128, count - start);
+      const values = Array.from({ length: size }, (_, offset) => {
+        const row = { ...template, id: `hrq_${stem}_${start + offset}`, seq: Number(template.seq) + start + offset };
+        return columns.map(column => row[column]);
+      });
+      db.run(`INSERT INTO multiremi_conversation_log (${columns.join(",")}) VALUES ${values.map(() => `(${columns.map(() => "?").join(",")})`).join(",")}`, values.flat());
+    }
+    db.run("UPDATE multiremi_conversation_heads SET head_seq=?,log_version=log_version+? WHERE session_id=?",
+      [Number(template.seq) + count - 1, count - 1, template.session_id]);
+    for (let start = 0; start < count; start += 128) {
+      const values = Array.from({ length: Math.min(128, count - start) }, (_, offset) => {
+        const index = start + offset;
+        return [`fbo_${stem}_${index}`, `hrq_${stem}_${index}`, `om_${stem}_${index}`];
+      });
+      db.run(`WITH clones(delivery_id,request_id,external_id) AS (VALUES ${values.map(() => "(?,?,?)").join(",")})
+        INSERT INTO multiremi_feishu_bot_outbound_deliveries
+        (id,workspace_id,binding_id,task_id,chat_id,body,status,available_at,created_at,updated_at,kind,human_request_id,human_request_task_id,external_message_id)
+        SELECT clones.delivery_id,card.workspace_id,card.binding_id,NULL,card.chat_id,card.body,'sent',card.available_at,
+          card.created_at,card.updated_at,'decision_card',clones.request_id,?,clones.external_id
+        FROM clones
+        CROSS JOIN multiremi_feishu_bot_outbound_deliveries card WHERE card.id=?`, [...values.flat(), taskId, cardId]);
+    }
+  })();
+}
+
 function askQuestion(store: MultiremiStore, taskId: string, timeoutMs?: number) {
   return store.createTaskHumanRequest({
     taskId,
@@ -142,6 +183,18 @@ function askQuestion(store: MultiremiStore, taskId: string, timeoutMs?: number) 
       questions: [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }],
     },
   });
+}
+
+async function readDecisionRequest(store: MultiremiStore, daemonId: string, requestId: string) {
+  const runtime = store.listRuntimes().find(runtime => runtime.daemonId === daemonId)!;
+  const token = await store.createAccessToken({ name: 'decision reader', type: 'daemon',
+    workspaceId: runtime.workspaceId ?? 'local', daemonId });
+  const response = await createMultiremiApp({ store, authToken: 'MASTER' }).request(`/api/daemon/messages/${requestId}`, {
+    headers: { Authorization: `Bearer ${token.token}` },
+  });
+  if (response.status === 403 || response.status === 404) return null;
+  expect(response.status).toBe(200);
+  return (await response.json() as { request: import('@multiremi/contracts/types.js').MultiremiTaskHumanRequest }).request;
 }
 
 describe("Feishu decision cards for Issue human requests", () => {
@@ -501,16 +554,16 @@ describe("Feishu decision cards for Issue human requests", () => {
     const issue = issueWithTopic(store, agentId);
     // Execution is pinned to another machine, exactly as it is in production.
     const taskId = sourceTask(store, agentId, issue.id);
-    db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", ["rt_exec", taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", ["rt_exec", taskId]);
     const request = askQuestion(store, taskId);
     const hostToken = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const host = { Authorization: `Bearer ${hostToken.token}`, "content-type": "application/json" };
     const requestPath = `/api/daemon/messages/${request.id}`;
 
     // (1) The topic's host may read the request.
-    const read = await requestRuntimeRpc(store, "rt_bot", "human_request.get",
-      { task_id: taskId, request_id: request.id }, hostToken.token, "MASTER");
-    expect(read).toMatchObject({ ok: true, request: { id: request.id, status: "pending" } });
+    const read = await app.request(requestPath, { headers: host });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({ request: { id: request.id, status: "pending" } });
     // (2) The topic's host may answer it.
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
@@ -524,25 +577,23 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(respond.status, await respond.clone().text()).toBe(200);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
     // (3) The topic's host still may not create or expire requests.
-    const create = await requestRuntimeRpc(store, "rt_bot", "human_request.create", {
-      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
+    const create = await requestRuntimeRpc(store, "rt_bot", "turn.decision", {
+      turn_id: taskId, attempt_id: taskId, dedupe_key: 'foreign', body_md: 'Question?', options: [], metadata: { kind: 'question' },
     }, hostToken.token, "MASTER");
-    expect(create).toMatchObject({ ok: false, code: "authority_revoked" });
+    expect(create).toMatchObject({ ok: false, code: "stale_attempt" });
     const second = store.createTaskHumanRequest({ taskId, kind: "question", payload: {} });
-    const expire = await requestRuntimeRpc(store, "rt_bot", "human_request.expire", {
-      task_id: taskId, request_id: second.id, status: "cancelled",
+    const expire = await requestRuntimeRpc(store, "rt_bot", "turn.decision.expire", {
+      turn_id: taskId, attempt_id: taskId, message_id: second.id, status: "cancelled",
     }, hostToken.token, "MASTER");
-    expect(expire).toMatchObject({ ok: false, code: "authority_revoked" });
+    expect(expire).toMatchObject({ ok: false, code: "stale_attempt" });
     expect(store.getTaskHumanRequest(second.id)?.status).toBe("pending");
     // (4) S2: a genuinely different daemon is refused, on read and on create.
     const stranger = await store.createAccessToken({ name: "stranger", type: "daemon", workspaceId: "local", daemonId: "someone-else" });
     store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude", workspaceId: "local", daemonId: "someone-else" });
-    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.get",
-      { task_id: taskId, request_id: request.id }, stranger.token, "MASTER"))
-      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
-    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.create", {
-      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
-    }, stranger.token, "MASTER")).toMatchObject({ ok: false, code: "authority_revoked" });
+    expect((await app.request(requestPath, { headers: { Authorization: `Bearer ${stranger.token}` } })).status).toBe(403);
+    expect(await requestRuntimeRpc(store, "rt_stranger", "turn.decision", {
+      turn_id: taskId, attempt_id: taskId, dedupe_key: 'foreign', body_md: 'Question?', options: [], metadata: { kind: 'question' },
+    }, stranger.token, "MASTER")).toMatchObject({ ok: false, code: "stale_attempt" });
     // (5) S2: a daemon in another workspace has no access either.
     const otherWorkspace = store.createWorkspace({ name: "Other", slug: "other" });
     store.registerRuntime({ id: "rt_other", name: "Other host", provider: "codex",
@@ -550,13 +601,15 @@ describe("Feishu decision cards for Issue human requests", () => {
     store.heartbeatRuntime("rt_other", { supportsFeishuBotConfig: true });
     const outsider = await store.createAccessToken({ name: "outsider", type: "daemon",
       workspaceId: otherWorkspace.id, daemonId: "other-host" });
-    expect(await requestRuntimeRpc(store, "rt_other", "human_request.get",
-      { task_id: taskId, request_id: request.id }, outsider.token, "MASTER"))
-      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
+    expect((await app.request(requestPath, { headers: { Authorization: `Bearer ${outsider.token}` } })).status).toBe(404);
     // The executing daemon keeps full control.
-    expect(await requestRuntimeRpc(store, "rt_exec", "human_request.expire", {
-      task_id: taskId, request_id: request.id, status: "cancelled",
-    }, executor.token, "MASTER")).toMatchObject({ ok: true, request: { id: request.id, status: "responded" } });
+    expect(await requestRuntimeRpc(store, "rt_exec", "turn.decision.expire", {
+      turn_id: taskId, attempt_id: taskId, message_id: request.id, status: "cancelled",
+    }, executor.token, "MASTER")).toMatchObject({ ok: true, message: { id: request.id } });
+    expect(store.getTaskHumanRequest(request.id)?.status).toBe('responded');
+    expect(await requestRuntimeRpc(store, 'rt_exec', 'human_request.get', {
+      task_id: taskId, request_id: request.id,
+    }, executor.token, 'MASTER')).toMatchObject({ ok: false, code: 'unknown_frame' });
   });
 
   it("S3: the decision lane never calls a receipt or reaction API", async () => {
@@ -674,7 +727,33 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toEqual([]);
   });
 
-  it("sends settled decision snapshots only to the executor and authorized bot host", () => {
+  it("the daemon card host observes a reply through message HTTP after legacy downlinks are removed", async () => {
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId), taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const token = await store.createAccessToken({ name: 'polling card host', type: 'daemon', workspaceId: 'local', daemonId: 'bot-host' });
+    let firstRead!: () => void;
+    const read = new Promise<void>(resolve => { firstRead = resolve; });
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(input) {
+      const response = await app.fetch(input);
+      firstRead();
+      return response;
+    } });
+    const daemon = outboundDaemon(store, new MultiremiDaemonClient(server.url.origin, token.token));
+    try {
+      const waiting = daemon.waitFeishuBotHumanRequestSettled(request.id, new AbortController().signal);
+      await read;
+      const settled = store.respondTaskHumanRequest(request.id, { response: { answers: { 'Continue?': 'Yes' } } });
+      expect(await waiting).toEqual(settled);
+      expect(await daemon.getFeishuBotHumanRequest(taskId, request.id)).toEqual(settled);
+      expect(await daemon.getFeishuBotHumanRequest('unrelated-task', request.id)).toBeNull();
+      const aborted = new AbortController();
+      aborted.abort();
+      expect(await daemon.waitFeishuBotHumanRequestSettled(request.id, aborted.signal)).toBeNull();
+    } finally { await server.stop(true); }
+  });
+
+  it("reads settled decisions only as the executor or authorized bot host without legacy downlinks", async () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
@@ -689,11 +768,10 @@ describe("Feishu decision cards for Issue human requests", () => {
       .filter(entity => entity.type === "task.human_request.settled");
     expect(snapshot("rt_bot", "bot-host")).toEqual([]);
     const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
-    const payload = { task_id: taskId, request: settled };
-    expect(snapshot(`rt_worker_${taskId}`, `worker-${taskId}`)).toEqual([
-      expect.objectContaining({ payload }),
-    ]);
-    expect(snapshot("rt_bot", "bot-host")).toEqual([expect.objectContaining({ payload })]);
+    expect(await readDecisionRequest(store, `worker-${taskId}`, request.id)).toEqual(settled);
+    expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(settled);
+    expect(snapshot(`rt_worker_${taskId}`, `worker-${taskId}`)).toEqual([]);
+    expect(snapshot("rt_bot", "bot-host")).toEqual([]);
     store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude",
       workspaceId: "local", daemonId: "stranger" });
     const foreign = store.createWorkspace({ name: "Foreign", slug: "settled-foreign" });
@@ -702,10 +780,12 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(snapshot("rt_stranger", "stranger")).toEqual([]);
     expect(snapshot("rt_foreign", "foreign")).toEqual([]);
     expect(snapshot("rt_bot", "stranger")).toEqual([]);
+    expect(await readDecisionRequest(store, 'stranger', request.id)).toBeNull();
+    expect(await readDecisionRequest(store, 'foreign', request.id)).toBeNull();
     db!.run("UPDATE multiremi_turn_attempts SET runtime_id = 'rt_bot' WHERE id = ?", [taskId]);
-    expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
+    expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(settled);
     patchHumanRequestFixture(request.id, { responded_at: "2000-01-01T00:00:00.000Z" });
-    expect(snapshot("rt_bot", "bot-host")).toHaveLength(1);
+    expect(await readDecisionRequest(store, 'bot-host', request.id)).toMatchObject({ id: request.id, status: 'responded' });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(patch.kind).toBe("decision_card_patch");
     store.reportFeishuBotOutbound("local", "rt_bot", patch.id, {
@@ -714,7 +794,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
   });
 
-  it("settles an offline cancellation with its Issue card in the task transaction", () => {
+  it("settles an offline cancellation with its Issue card in the task transaction", async () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
@@ -750,7 +830,8 @@ describe("Feishu decision cards for Issue human requests", () => {
         .get(request.id)).toEqual({ n: 1 });
       expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {})
         .filter(entity => entity.type === "task.human_request.settled"))
-        .toEqual([expect.objectContaining({ payload: { task_id: taskId, request: cancelled } })]);
+        .toEqual([]);
+      expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(cancelled);
       expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
       expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
         .get(request.id)).toEqual({ n: 1 });
@@ -761,7 +842,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     }
   });
 
-  it("fans out a Chat-bound request without a decision card and rejects a disabled host", () => {
+  it("reads a Chat-bound request without a decision card and rejects a disabled host", async () => {
     const { store, agentId, config } = scaffold();
     const chat = store.submitFeishuBotMessage("local", "rt_bot", {
       revision: config.revision, externalSessionKey: "oc_settled_chat",
@@ -769,15 +850,15 @@ describe("Feishu decision cards for Issue human requests", () => {
     });
     store.registerRuntime({ id: "rt_chat_executor", name: "Chat executor", provider: "claude",
       workspaceId: "local", daemonId: "chat-executor" });
-    db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
     const request = askQuestion(store, chat.taskId);
     expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(true);
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
     const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
       .toContainEqual({ requestId: request.id, taskId: chat.taskId });
-    expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => []))
-      .toEqual([expect.objectContaining({ payload: { task_id: chat.taskId, request: settled } })]);
+    expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+    expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(settled);
     expect(taskInputSnapshot(store, "rt_bot", "other-daemon", new Set(), () => [])).toEqual([]);
     patchHumanRequestFixture(request.id, { responded_at: "2000-01-01T00:00:00.000Z" });
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot")).toEqual([]);
@@ -786,6 +867,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       appSecretOp: "keep", domain: "feishu", enabled: false });
     expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(false);
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+    expect(await readDecisionRequest(store, 'bot-host', request.id)).toBeNull();
   });
 
   it("does not replay a card sent by a previous bot app after the configured app changes", () => {
@@ -807,7 +889,7 @@ describe("Feishu decision cards for Issue human requests", () => {
   });
 
   for (const status of ["timeout", "cancelled"] as const) {
-    it(`fans out ${status} decision snapshots to both authorized runtimes`, () => {
+    it(`reads ${status} decisions from both authorized runtimes without legacy downlinks`, async () => {
       const { store, agentId } = scaffold();
       const issue = issueWithTopic(store, agentId);
       const taskId = sourceTask(store, agentId, issue.id);
@@ -819,11 +901,11 @@ describe("Feishu decision cards for Issue human requests", () => {
       });
       expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
       const settled = store.expireTaskHumanRequest(request.id, status)!;
-      const frame = expect.objectContaining({ type: "task.human_request.settled",
-        payload: { task_id: taskId, request: settled } });
       expect(taskInputSnapshot(store, `rt_worker_${taskId}`, `worker-${taskId}`,
-        new Set([taskId]), () => [])).toEqual([frame]);
-      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([frame]);
+        new Set([taskId]), () => [])).toEqual([]);
+      expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
+      expect(await readDecisionRequest(store, `worker-${taskId}`, request.id)).toEqual(settled);
+      expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(settled);
     });
   }
 
@@ -839,26 +921,14 @@ describe("Feishu decision cards for Issue human requests", () => {
     });
     store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
     patchHumanRequestFixture(request.id, { responded_at: "2000-01-01T00:00:00.000Z" });
-    db!.transaction(() => {
-      for (let index = 0; index < 1024; index++) {
-        const id = `hrq_replay_${index}`;
-        cloneSettledQuestion(store, request.id, id, new Date().toISOString());
-        db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
-          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
-           created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
-          SELECT ?, workspace_id, binding_id, NULL, chat_id, body, 'sent', available_at,
-                 created_at, updated_at, 'decision_card', ?, ?, ?
-          FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
-        [`fbo_replay_${index}`, id, taskId, `om_replay_${index}`, card.id]);
-      }
-    })();
+    cloneSettledQuestionBatch(store, request.id, 1024, "replay", card.id, taskId, new Date().toISOString());
     const candidates = store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot");
     expect(candidates).toHaveLength(1024);
     expect(candidates.some(candidate => candidate.requestId === request.id)).toBe(false);
     expect(new Set(candidates.map(candidate => candidate.requestId)).size).toBe(1024);
   });
 
-  it("keeps bot host snapshot SELECTs constant with 1024 settled candidates", () => {
+  it("keeps bot host recovery SELECTs constant with 1024 settled candidates", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
@@ -879,7 +949,7 @@ describe("Feishu decision cards for Issue human requests", () => {
         return originalQuery(sql);
       } });
       try {
-        const frames = taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {});
+        const frames = store.listFeishuBotSettledHumanRequestCandidates('local', 'rt_bot', 'bot-host');
         selectCounts.push(selects);
         return frames;
       } finally {
@@ -887,21 +957,10 @@ describe("Feishu decision cards for Issue human requests", () => {
       }
     };
     expect(snapshotCount()).toHaveLength(1);
-    db!.transaction(() => {
-      for (let index = 0; index < 1023; index++) {
-        const id = `hrq_budget_${index}`;
-        cloneSettledQuestion(store, request.id, id);
-        db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
-          (id, workspace_id, binding_id, task_id, chat_id, body, status, available_at,
-           created_at, updated_at, kind, human_request_id, human_request_task_id, external_message_id)
-          SELECT ?, workspace_id, binding_id, NULL, chat_id, body, 'sent', available_at,
-                 created_at, updated_at, 'decision_card', ?, ?, ?
-          FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`,
-        [`fbo_budget_${index}`, id, taskId, `om_budget_${index}`, card.id]);
-      }
-    })();
+    cloneSettledQuestionBatch(store, request.id, 1023, "budget", card.id, taskId);
     expect(snapshotCount()).toHaveLength(1024);
-    expect(selectCounts).toEqual([3, 3]);
+    expect(selectCounts[0]).toBeLessThanOrEqual(3);
+    expect(selectCounts[1]).toBe(selectCounts[0]);
   });
 
   it("excludes an archived topic, removed binding and same-workspace non-host runtime", () => {
@@ -915,8 +974,8 @@ describe("Feishu decision cards for Issue human requests", () => {
       interactionOpenId: "ou_the_person",
     });
     store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
-    const settled = (runtimeId: string, daemonId: string) => taskInputSnapshot(store, runtimeId, daemonId,
-      new Set(), () => {}).filter(entity => entity.type === "task.human_request.settled");
+    const settled = (runtimeId: string, daemonId: string) => store.getRuntimeLite(runtimeId)?.daemonId === daemonId
+      ? store.listFeishuBotSettledHumanRequestCandidates('local', runtimeId, daemonId) : [];
     expect(settled("rt_bot", "bot-host")).toHaveLength(1);
     store.registerRuntime({ id: "rt_not_host", name: "Other runtime", provider: "claude",
       workspaceId: "local", daemonId: "not-host" });
@@ -949,7 +1008,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     try {
       for (const status of ["responded", "timeout", "cancelled"] as const) {
         const request = askQuestion(store, taskId);
-        db!.run("UPDATE multiremi_turns SET status = 'awaiting_human' WHERE current_attempt_id = ?", [taskId]);
+        runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'awaiting_human' WHERE id = ?", [taskId]);
         events.length = 0;
         taskEvents.length = 0;
         storeDb.transaction(() => {
@@ -963,7 +1022,7 @@ describe("Feishu decision cards for Issue human requests", () => {
         expect(store.getTaskHumanRequest(request.id)?.status).toBe(status);
       }
       const rolledBack = askQuestion(store, taskId);
-      db!.run("UPDATE multiremi_turns SET status = 'awaiting_human' WHERE current_attempt_id = ?", [taskId]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'awaiting_human' WHERE id = ?", [taskId]);
       events.length = 0;
       taskEvents.length = 0;
       expect(() => storeDb.transaction(() => {
@@ -982,7 +1041,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     const issue = issueWithTopic(store, agentId);
     const makePending = () => {
       const taskId = sourceTask(store, agentId, issue.id);
-      db!.run("UPDATE multiremi_turn_attempts SET status = 'running' WHERE id = ?", [taskId]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [taskId]);
       return { taskId, request: askQuestion(store, taskId) };
     };
     const committed = makePending();
@@ -1790,7 +1849,7 @@ describe("Feishu decision card heartbeat delivery", () => {
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
     // The Task stays in `local`; only its Issue pointer moves.
-    db!.run("UPDATE multiremi_turns SET issue_id = ? WHERE current_attempt_id = ?", [otherIssue.id, taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, taskId]);
     const request = askQuestion(store, taskId);
 
     expect(db!.query(
@@ -1824,7 +1883,7 @@ describe("Feishu decision card heartbeat delivery", () => {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
-    db!.run("UPDATE multiremi_turns SET issue_id = ? WHERE current_attempt_id = ?", [otherIssue.id, request.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, request.taskId]);
 
     const expiresAt = Date.parse(request.expiresAt!);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))).toBeNull();
@@ -1834,7 +1893,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type.startsWith("decision_card"))).toHaveLength(0);
 
     // Point the Task back and the same request still gets its reminder.
-    db!.run("UPDATE multiremi_turns SET issue_id = ? WHERE current_attempt_id = ?", [issue.id, request.taskId]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [issue.id, request.taskId]);
     const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))!;
     expect(reminder.kind).toBe("decision_reminder");
     expect(reminder.humanRequestId).toBe(request.id);
@@ -2207,7 +2266,7 @@ async function withRecordedFeishuTransport<T>(
   }) as typeof fetch;
   try {
     const connector = new FeishuConnector({
-      appId: "cli_decision_card", appSecret: APP_SECRET, domain: "feishu",
+      appId: `cli_recorder_${crypto.randomUUID()}`, appSecret: APP_SECRET, domain: "feishu",
     } as never);
     const result = await fn(connector);
     return { result, requests };
@@ -2283,3 +2342,4 @@ function queueOrdinaryDelivery(store: MultiremiStore, issueId: string): string {
   [id, issueId, "2026-09-27T00:00:00.000Z", "2099-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"]);
   return id;
 }
+});

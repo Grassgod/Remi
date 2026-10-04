@@ -59,19 +59,27 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         it(`${route}: ${testCase.name}`, async () => {
           const store = backend === "SQLite" ? createStore() : pgStore!;
           store.ensureLocalWorkspace();
-          const runtime = store.registerRuntime({ name: "Completion trace daemon", provider: "codex", workspaceId: "local" });
+          const runtime = store.registerRuntime({ daemonId: "fixture-reports", name: "Completion trace daemon", provider: "codex", workspaceId: "local" });
           const agent = store.createAgent({ name: "Trace completion", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
           const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "trace completion" });
           expect(store.claimTask(runtime.id)?.id).toBe(task.id);
           store.startTask(task.id);
           expect(store.getTaskTrace(task.id)?.location).toBe("daemon");
+          const bridge = store.getDaemonTurnBridge();
+          const offer = bridge.offerInput(store.getTaskWithAgent(task.id)!);
+          store.recordSessionAgentRangeRead(offer.input_messages[0]!.session_id, agent.id,
+            { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 });
+          expect(bridge.rpc("turn.input", { ...offer, message_ids: offer.input_messages.map(m => m.id) },
+            { runtimeId: runtime.id, daemonId: "fixture-reports", workspaceId: "local" }).ok).toBe(true);
           const warn = spyOn(log, "warn").mockImplementation(() => {});
           try {
             const trace = testCase.trace === undefined || Array.isArray(testCase.trace)
               ? testCase.trace
               : { head: 0, closed: true, tool_call_count: 0, type_histogram: [], ...testCase.trace };
-            const response = await reportFrame(store, `task.${route}`, {
-              task_id: task.id, output: "done", error: "failed", trace,
+            const response = await reportFrame(store, route === "complete" ? "turn.complete" : "task.fail", {
+              ...(route === "complete" ? { turn_id: offer.turn_id, attempt_id: task.id,
+                input_to_seq: offer.input_to_seq, reply: { body_md: "done", message_kind: "final" } }
+                : { task_id: task.id, error: "failed" }), trace,
               final_reply_md: "", model: { provider: "codex", model: "fixture" },
             }, { runtimeId: runtime.id });
             expect(response.ok).toBe(true);
@@ -85,7 +93,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
           } finally {
             warn.mockRestore();
           }
-        });
+        }, 120_000);
       }
     }
   });

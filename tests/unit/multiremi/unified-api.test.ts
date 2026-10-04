@@ -4,19 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
-let db: ReturnType<typeof openSqliteDatabase>, store: MultiremiStore, app: ReturnType<typeof createMultiremiApp>;
+pendingTurnBackendTests("MUL-508 unified API", (fixture) => {
+let store: MultiremiStore, app: ReturnType<typeof createMultiremiApp>;
+let db: SqlDatabase;
 let agent: ReturnType<MultiremiStore["createAgent"]>, other: typeof agent;
 let issue: ReturnType<MultiremiStore["createIssue"]>, session: ReturnType<MultiremiStore["getOrCreateDefaultIssueSession"]>;
 beforeEach(() => {
-  db = openSqliteDatabase(":memory:"); store = new MultiremiStore(db); store.ensureLocalWorkspace();
+  store = fixture().store;
+  db = fixture().db;
   agent = store.createAgent({ name: "Worker", provider: "codex", visibility: "workspace" });
   other = store.createAgent({ name: "Other", provider: "codex", visibility: "workspace" });
   issue = store.createIssue({ title: "API", assigneeType: "agent", assigneeId: agent.id });
   session = store.getOrCreateDefaultIssueSession(issue.id); app = createMultiremiApp({ store });
 });
-afterEach(() => { store.stopNotificationDeliverySweeper(); db.close(); });
+afterEach(() => { store.stopNotificationDeliverySweeper(); });
 const path = () => `/api/sessions/${session.id}/messages`;
 async function request(url: string, method = "GET", input?: unknown, headers: Record<string, string> = {}) {
   const response = await app.request(url, { method, headers: { "Content-Type": "application/json", ...headers }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) });
@@ -213,8 +217,13 @@ it("lets the addressed agent answer a decision once through its authenticated me
   app = createMultiremiApp({ store, authToken: "master" });
   const token = await store.createAccessToken({ name: "agent", type: "task", taskId: turn.current_attempt_id!, agentId: agent.id, userId: "local", workspaceId: "local" });
   const headers = { Authorization: `Bearer ${token.token}` };
+  const memberToken = await store.createAccessToken({ name: "member", type: "pat", userId: "local", workspaceId: "local" });
+  expect((await request(path(), "POST", { reply_to_id: question.id, body_md: "forged" }, { Authorization: `Bearer ${memberToken.token}` })).status).toBe(400);
+  expect(store.getMessage(question.id)?.metadata.decision_record).toMatchObject({ status: "pending" });
+  expect(store.getMessage(question.id)?.resolved_at).toBeNull();
   const result = await request(path(), "POST", { reply_to_id: question.id, metadata: { selected_options: ["yes"] } }, headers);
   expect(result.status).toBe(200); expect(result.data.message.sender_id).toBe(agent.id); expect(result.data.message.to_agent_id).toBe(other.id);
+  expect(store.getMessage(question.id)?.resolved_at).toBeTruthy();
   expect((await request(path(), "POST", { reply_to_id: question.id, body_md: "replay" }, headers)).status).toBe(409);
 });
 it("run-now leaves a request in auto conversation with an execution turn", async () => {
@@ -223,4 +232,5 @@ it("run-now leaves a request in auto conversation with an execution turn", async
   const messages = await request(`/api/sessions/auto_${auto.id}/messages`);
   expect(messages.status).toBe(200); expect(messages.data.messages.filter((m: any) => m.message_kind === "request")).toHaveLength(1);
   expect((await request(`/api/turns?session_id=auto_${auto.id}`)).data.turns).toHaveLength(1);
+});
 });

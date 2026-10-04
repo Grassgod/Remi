@@ -215,6 +215,19 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     expect((await f.request(`${log}/entry?seq=-1`, "GET", undefined, f.owner)).status).toBe(400);
   });
 
+  it("B5: all display log GETs reject from/to, including empty parameters, with the same message", async () => {
+    const f = await scaffold();
+    const sent = await f.request(f.path, "POST", { body_md: "Display range rejection" }, f.owner);
+    const log = `/api/sessions/${f.session.id}/log`;
+    for (const route of [log, `${log}/locate?id=${sent.data.message.id}`, `${log}/entry?id=${sent.data.message.id}`]) {
+      for (const range of ["from=0", "to=2", "from=0&to=2", "from=", "to="]) {
+        const result = await f.request(`${route}${route.includes("?") ? "&" : "?"}${range}`, "GET", undefined, f.owner);
+        expect(result.status).toBe(400);
+        expect(result.data).toEqual({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" });
+      }
+    }
+  });
+
   it("S5: sends committed workspace inbox invalidations to both tabs, isolating rollback and other workspaces", async () => {
     const f = await scaffold();
     const second = f.store.createIssue({ title: "Other conversation" }), session = f.store.getOrCreateDefaultIssueSession(second.id);

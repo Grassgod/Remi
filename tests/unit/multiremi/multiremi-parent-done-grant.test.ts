@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -78,7 +80,7 @@ describe("MUL-457 parent done grant", () => {
     const { taskToken, memberToken } = await tokens(store, owner.id);
     store.grantParentDone(parent.id, "local");
     store.createIssueComment(parent.id, { body: "Earlier summary", authorType: "agent", authorId: owner.id });
-    db!.run("UPDATE multiremi_issue_comments SET created_at = '2020-01-01T00:00:00.000Z' WHERE issue_id = ?", [parent.id]);
+    db!.run("UPDATE multiremi_conversation_log SET created_at = '2020-01-01T00:00:00.000Z' WHERE session_id = ?", [store.getOrCreateDefaultIssueSession(parent.id).id]);
     store.updateIssue(child.id, { status: "done" });
     store.createIssueComment(parent.id, { body: "Other agent summary", authorType: "agent", authorId: other.id });
     store.createIssueComment(parent.id, { body: "Member summary", authorType: "member", authorId: "local" });
@@ -127,6 +129,8 @@ describe("MUL-457 parent done grant", () => {
 
   it("keeps a forged comment from satisfying A1 for the authorized agent", async () => {
     const { store, owner, other, parent, child, app } = setup();
+    // Give this fixture's canonical member the literal id used by its identity assertions.
+    db!.run("UPDATE multiremi_workspace_members SET id='local' WHERE id='mem_local_local'");
     const { taskToken, memberToken } = await tokens(store, owner.id);
     const otherTaskToken = (await tokens(store, other.id)).taskToken;
     store.grantParentDone(parent.id, "local");
@@ -273,10 +277,13 @@ describe("MUL-457 parent done grant", () => {
     store.grantParentDone(parent.id, "local");
     store.updateIssue(child.id, { status: "done" });
     const finished = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Final report" });
-    db!.run(
-      "UPDATE multiremi_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+    (store as any).ctx.db.transaction(() => {
+      (store as any).ctx.lockWorkspaceRuntimeLifecycle("local");
+      runTurnExecutionMutation((store as any).ctx.db as UnifiedFixtureDatabase,
+      "UPDATE multiremi_turn_execution_records SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
       [JSON.stringify({ output: "All children delivered" }), new Date(Date.now() + 1_000).toISOString(), finished.id],
-    );
+      );
+    })();
     const otherParent = store.createIssue({ title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
     const otherChild = store.createIssue({ title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
     store.updateIssue(otherChild.id, { status: "cancelled" });

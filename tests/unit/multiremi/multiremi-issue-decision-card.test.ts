@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-412 (parent MUL-400 S5b / E4 x E5): an E4 decision that is handed to a
  * person becomes a card in the Issue topic's Feishu thread, answered there,
@@ -11,7 +13,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import {
   decisionInteractionMarker,
@@ -20,11 +23,16 @@ import {
 import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteraction, resetQuestionCardHostFixtures } from "../connectors/question-card-host-fixture.js";
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
+
+pendingTurnBackendTests("MUL-508 Issue decision cards", (fixture) => {
+let db: UnifiedFixtureDatabase;
+beforeEach(() => { db = fixture().db; });
+const createLocalStore = () => fixture().store;
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
@@ -37,14 +45,16 @@ const DECISION_SIDE_EFFECT_TABLES = [
   "multiremi_message_decision_records",
   "multiremi_issue_activity",
   "multiremi_conversation_log",
+  "multiremi_session_lanes",
   "multiremi_feishu_bot_outbound_deliveries",
+  "multiremi_turns",
   "multiremi_turn_attempts",
   "multiremi_session_events",
 ] as const;
 
 function decisionSideEffectCounts(): Record<string, number> {
   return Object.fromEntries(DECISION_SIDE_EFFECT_TABLES.map(table => {
-    const row = db!.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
+    const row = db!.query(`SELECT CAST(COUNT(*) AS INTEGER) AS n FROM ${table}`).get() as { n: number };
     return [table, Number(row.n)];
   }));
 }
@@ -236,7 +246,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(db!.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(deliveryId))
       .toEqual({ id: deliveryId, status: "sending" });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_multiremi_feishu_bot_outbound_decision'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_multiremi_feishu_bot_outbound_decision'",
     ).get()).toEqual({ n: 1 });
     db.close();
   });
@@ -248,7 +258,7 @@ describe("MUL-412 issue decision cards", () => {
     // A merge decision first goes to the parent's owner agent, so no card.
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge the change" });
     expect(decision.status).toBe("pending");
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").get())
       .toEqual({ n: 0 });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("pending");
 
@@ -299,7 +309,7 @@ describe("MUL-412 issue decision cards", () => {
     }, { type: "agent", id: agentId, taskId: ownerTask.id });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("answered");
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind LIKE 'decision%'").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind LIKE 'decision%'").get())
       .toEqual({ n: 0 });
   });
 
@@ -340,7 +350,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(decision.status).toBe("escalated");
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id IS NOT NULL",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id IS NOT NULL",
     ).get()).toEqual({ n: 0 });
     // Skipped without a card: the skip activity is only for a missing topic.
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_skipped")).toHaveLength(0);
@@ -351,11 +361,9 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId, member } = scaffold();
     const parent = issueWithTopic(store, "Card click", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    // Model the source task as in flight. The answer must enqueue one fresh
-    // continuation and wake it, rather than merely append to an existing queued
-    // task (which deliberately emits no second wake).
-    db!.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [task.id]);
-    db!.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
+    // Model the source task as in flight. Keep the original continuation
+    // assertions while moving the fixture write to the unified attempt model.
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?", options: ["yes", "no"] });
     sendCard(store, "om_answer_card");
     const host = await daemonToken(store);
@@ -542,7 +550,7 @@ describe("MUL-412 issue decision cards", () => {
       parentActivity: store.listIssueActivity(parent.id).length,
       childActivity: store.listIssueActivity(child.id).length,
       inbox: store.listInboxItems(member.id).length,
-      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+      deliveries: (db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
       tasks: store.listTasksForIssue(child.id).length,
     };
     let wakes = 0;
@@ -563,7 +571,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
     expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
     expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
       .toEqual({ n: before.deliveries });
     expect(store.listTasksForIssue(child.id)).toHaveLength(before.tasks);
     expect(wakes).toBe(0);
@@ -583,7 +591,7 @@ describe("MUL-412 issue decision cards", () => {
       parentActivity: store.listIssueActivity(parent.id).length,
       childActivity: store.listIssueActivity(child.id).length,
       inbox: store.listInboxItems(member.id).length,
-      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+      deliveries: (db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
     };
     let wakes = 0;
     const events: string[] = [];
@@ -603,7 +611,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
     expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
     expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
       .toEqual({ n: before.deliveries });
     expect(wakes).toBe(0);
     expect(events).toEqual([]);
@@ -662,7 +670,7 @@ describe("MUL-412 issue decision cards", () => {
       parentActivity: store.listIssueActivity(parent.id).length,
       childActivity: store.listIssueActivity(child.id).length,
       inbox: store.listInboxItems(member.id).length,
-      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+      deliveries: (db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
       tasks: store.listTasksForIssue(child.id).length,
     };
     let wakes = 0;
@@ -683,7 +691,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
     expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
     expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
       .toEqual({ n: before.deliveries });
     expect(store.listTasksForIssue(child.id)).toHaveLength(before.tasks);
     expect(wakes).toBe(0);
@@ -815,7 +823,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_answered")).toHaveLength(1);
     expect(store.listIssueActivity(child.id).filter(entry => entry.type === "decision_received")).toHaveLength(1);
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND decision_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND decision_id = ?",
     ).get(decision.id)).toEqual({ n: 1 });
   });
 
@@ -868,7 +876,7 @@ describe("MUL-412 issue decision cards", () => {
     const card = sendCard(store, "om_no_timeout")!;
     expect(card.expiresAt ?? null).toBeNull();
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_issue_decisions WHERE status = 'timeout'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_message_decision_records WHERE status = 'timeout'",
     ).get()).toEqual({ n: 0 });
     // Far past any plausible deadline the card is still the live question.
     const muchLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -910,7 +918,7 @@ describe("MUL-412 issue decision cards", () => {
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge?" });
     expect(decision.status).toBe("pending");
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_issue_decisions SET created_at = ?, updated_at = ? WHERE id = ?",
+    db!.run("UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
       [twoHoursAgo, twoHoursAgo, decision.id]);
     const ownerTask = parentTask(store, agentId, parent.id);
     store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
@@ -1083,14 +1091,14 @@ describe("MUL-412 issue decision cards", () => {
     expect(thrown?.message).toBe("injected escalation failure");
     // Nothing survived: not the escalation, not the delivery, not an activity.
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("pending");
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?")
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?")
       .get(decision.id)).toEqual({ n: 0 });
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_queued")).toHaveLength(0);
     expect(events.filter(type => type.startsWith("decision") || type === "activity:created")).toHaveLength(0);
     // The queue is still usable afterwards, and the row goes out once.
     store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")!.kind).toBe("decision_card");
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND decision_id = ?")
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND decision_id = ?")
       .get(decision.id)).toEqual({ n: 1 });
   });
 
@@ -1125,7 +1133,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(thrown?.message).toBe("injected answer failure");
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
     expect(store.getIssueDecision(parent.id, decision.id)!.history).toHaveLength(0);
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'")
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'")
       .get()).toEqual({ n: 0 });
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_answered")).toHaveLength(0);
     expect(events.filter(type => type.startsWith("decision") || type === "activity:created")).toHaveLength(0);
@@ -1133,7 +1141,7 @@ describe("MUL-412 issue decision cards", () => {
     store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
       { type: "member", id: member.id, taskId: null });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("answered");
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'")
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'")
       .get()).toEqual({ n: 1 });
   });
 
@@ -1245,8 +1253,7 @@ describe("MUL-412 issue decision cards", () => {
         kind: "production_change", title: "Deploy?", options: ["yes"],
       });
       sendCard(store, `om_${failure.replaceAll(" ", "_")}`)!;
-      db!.run("UPDATE multiremi_turn_attempts SET status = 'completed' WHERE id = ?", [task.id]);
-      db!.run("UPDATE multiremi_turns SET status = 'completed' WHERE current_attempt_id = ?", [task.id]);
+      runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [task.id]);
       if (failure === "archived runtime workspace") {
         store.runtimeWorkspaces.archive(runtimeWorkspace.id);
       } else {
@@ -1729,3 +1736,4 @@ describe("MUL-412 issue decision cards", () => {
 function app(store: MultiremiStore) {
   return createMultiremiApp({ store, authToken: "MASTER" });
 }
+});

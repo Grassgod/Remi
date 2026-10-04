@@ -37,6 +37,7 @@
 
 import type { TraceEvent } from "./trace.js";
 import type { MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
+import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 
@@ -51,14 +52,11 @@ export const DAEMON_PROTOCOL_MIN = 2;
 /**
  * Lowest CLI version the server accepts on the v2 socket.
  *
- * PIN AT RELEASE: this must equal the first release tag that actually carries
- * protocol v2. The upgrade channel targets this value, so too high strands every
- * v1 daemon with no upgrade available, and too low admits a v1 daemon to a
- * v2-only server. 0.2.83 is the next patch release in this repository's cadence
- * and is the expected landing point; A-7 owns the enforcement and the release
- * that carries v2 confirms the value.
+ * RELEASE PLACEHOLDER: the release owner must replace this during integration
+ * with the first formal release containing MUL-507. 0.2.86 is reserved for
+ * the MUL-496 patch. Never publish or deploy with this placeholder.
  */
-export const DAEMON_MIN_CLI_VERSION = "0.2.83";
+export const DAEMON_MIN_CLI_VERSION = "999.0.0-unreleased-mul507";
 
 // ── Frames ──────────────────────────────────────────────────────────────────
 
@@ -85,7 +83,9 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
   "task.progress",
   "task.usage",
   "task.workspace",
+  // Decode persisted retired reports only to return report_shape_retired.
   "task.complete",
+  "turn.complete",
   "task.fail",
   "runtime.update_result",
   "runtime.command_result",
@@ -120,10 +120,10 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
 export const DAEMON_UPLINK_RPC_FRAMES = [
-  "steer.consume",
-  "human_request.create",
-  "human_request.get",
-  "human_request.expire",
+  "turn.input",
+  "turn.decision",
+  "turn.decision.get",
+  "turn.decision.expire",
   "plugin.desired",
   "trace.head",
   "trace.subscribe",
@@ -145,8 +145,8 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
 export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "task.offer",
   "task.cancelled",
-  "task.steer",
-  "task.human_request.settled",
+  "turn.message",
+  "turn.wrap_up",
   "runtime.update",
   "runtime.command",
   "runtime.model_list",
@@ -417,6 +417,48 @@ export interface DaemonTaskCompletionFields {
   model: DaemonTaskCompletionModel | null;
 }
 
+/** Turn input travels as messages; attempt ids remain trace/outbox keys. */
+export interface DaemonTurnInput {
+  turn_id: string;
+  attempt_id: string;
+  input_from_seq: number;
+  input_to_seq: number;
+  input_messages: UnifiedMessage[];
+}
+
+export interface DaemonTurnMessagePayload {
+  turn_id: string;
+  attempt_id: string;
+  message: UnifiedMessage;
+  attachments?: import("./types.js").MultiremiAttachment[];
+}
+
+export interface DaemonTurnWrapUpPayload {
+  turn_id: string;
+  attempt_id: string;
+  requested_at: string;
+}
+
+export interface DaemonTurnCompletePayload {
+  turn_id: string;
+  attempt_id: string;
+  input_to_seq: number;
+  reply: { body_md: string; message_kind: "reply" | "final" };
+  session_id?: string | null;
+  work_dir?: string | null;
+}
+
+/** ACP questions and permissions create decision messages + awaiting_human via S2; replies use reply_to_id. */
+export interface DaemonTurnDecisionPayload {
+  turn_id: string;
+  attempt_id: string;
+  dedupe_key: string;
+  body_md: string;
+  options: DecisionOption[];
+  metadata: Record<string, unknown>;
+  timeout_ms?: number;
+}
+
 /**
  * `runtime.archive_sessions`, server -> daemon.
  *
@@ -600,6 +642,8 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   "task_not_found",
   "authority_revoked",
   "invalid_report",
+  "report_shape_retired",
+  "turn_input_pending",
   "start_replayed",
   "steer_pending",
   // offer rejections and dispatch
@@ -634,6 +678,7 @@ export const DAEMON_TERMINAL_ERROR_CODES = [
   "authority_revoked",
   "task_not_found",
   "invalid_report",
+  "report_shape_retired",
 ] as const satisfies readonly DaemonProtocolErrorCode[];
 
 // ── Close codes ─────────────────────────────────────────────────────────────
@@ -724,13 +769,13 @@ export function daemonCloseCodeRequiresUpgrade(code: number): boolean {
 /**
  * Additive capability bits. A new frame type that an older peer must not receive
  * gets a bit; adding a bit does not bump the protocol version. Removing a frame
- * or changing its meaning does.
+ * or changing its payload semantics is gated by min_cli_version.
  */
 export const DAEMON_PROTOCOL_CAPS = [
   /** daemon accepts `task.offer` / `task.cancelled` instead of HTTP claim. */
   "offer",
-  /** daemon accepts pushed `task.steer` and answers `steer.consume`. */
-  "steer.push",
+  /** daemon accepts unified turn inputs and reports replies as messages. */
+  "turn.message",
   /** daemon answers `trace.read` for its hot tasks. */
   "trace.read",
   /** daemon accepts `trace.subscribe` / `trace.fetch` and emits `trace.push`. */

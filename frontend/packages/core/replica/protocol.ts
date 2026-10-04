@@ -149,7 +149,10 @@ export function applyFrames(input: {
 
     const parsed = frameAsEntry(frame);
     if (parsed === null) continue;
-    if (parsed.entry.revision <= (revisions.get(parsed.seq) ?? -Infinity)) continue;
+    const watermark = revisions.get(parsed.seq) ?? -Infinity;
+    // A permission change can hide an unchanged row. An equal-revision hidden
+    // marker must remove the cached body; equal-revision full rows stay blocked.
+    if (parsed.entry.revision < watermark || (!parsed.hidden && parsed.entry.revision === watermark)) continue;
     remember(parsed.seq, parsed.entry.revision);
 
     if (parsed.hidden) {

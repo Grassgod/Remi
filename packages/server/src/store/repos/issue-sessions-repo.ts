@@ -577,7 +577,7 @@ export class IssueSessionsRepo {
         targetAgentId: task.agentId,
         events,
         expandableSeqs,
-        cursorSeq: lane.cursorSeq,
+        cursorSeq: Number(this.ctx.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(task.issueSessionId,task.agentId,taskExecutionScope(task))?.provider_cursor_seq??0),
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
         tokenBudget: tokenBudget - inheritedTokenBudget,
         currentTaskId: task.id,
