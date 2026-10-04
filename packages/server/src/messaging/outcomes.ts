@@ -671,7 +671,7 @@ export class MessagingOutcomeService {
   private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {
     if (!taskId) return;
     const row = this.ctx.db.query(
-      "SELECT workspace_id FROM multiremi_tasks WHERE id = ?",
+      "SELECT workspace_id FROM multiremi_turn_execution_records WHERE id = ?",
     ).get(taskId) as { workspace_id?: unknown } | null;
     if (!row || String(row.workspace_id ?? "") !== workspaceId) {
       throw new MessagingOutcomeError("task_id must reference a task in this workspace");

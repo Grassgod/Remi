@@ -1279,7 +1279,7 @@ export class FeishuIngestRepo {
 
   private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {
     if (!taskId) return;
-    const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_tasks WHERE id = ?").get(taskId) as Row | null;
+    const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_turn_execution_records WHERE id = ?").get(taskId) as Row | null;
     if (!task || String(task.workspace_id) !== workspaceId) {
       throw new Error("task_id must reference a task in this workspace");
     }

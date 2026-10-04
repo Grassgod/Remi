@@ -49,6 +49,11 @@ import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIs
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
 describe("translateSqliteToPg", () => {
+  it("preserves explicitly installed foreign keys", () => {
+    const sql = "ALTER TABLE multiremi_turn_attempts ADD CONSTRAINT attempt_turn_fk FOREIGN KEY (turn_id) REFERENCES multiremi_turns(id)";
+    expect(translateSqliteToPg(sql)).toBe(sql);
+  });
+
   it("numbers ? placeholders positionally, skipping ? inside string literals", () => {
     expect(translateSqliteToPg("SELECT * FROM t WHERE a = ? AND b = ?")).toBe(
       "SELECT * FROM t WHERE a = $1 AND b = $2",

@@ -330,9 +330,9 @@ export class FeishuBotRepo {
   isTaskIssueCreationRestricted(taskId: string): boolean {
     return Boolean(this.ctx.db.query(
       `WITH RECURSIVE lineage AS (
-         SELECT id, parent_task_id, chat_session_id FROM multiremi_tasks WHERE id = ?
+         SELECT id, parent_task_id, chat_session_id FROM multiremi_turn_execution_records WHERE id = ?
          UNION
-         SELECT p.id, p.parent_task_id, p.chat_session_id FROM multiremi_tasks p
+         SELECT p.id, p.parent_task_id, p.chat_session_id FROM multiremi_turn_execution_records p
          JOIN lineage child ON p.id = child.parent_task_id
        )
        SELECT 1 AS restricted FROM multiremi_feishu_bot_deliveries d
@@ -885,7 +885,7 @@ export class FeishuBotRepo {
            FROM multiremi_feishu_bot_deliveries d
            JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
            LEFT JOIN multiremi_agents a ON a.id = b.agent_id
-           JOIN multiremi_tasks t ON t.id = d.task_id
+           JOIN multiremi_turn_execution_records t ON t.id = d.task_id
           WHERE d.workspace_id = ? AND d.external_message_id = ?`,
       ).get(workspaceId, externalMessageId) as Row | null;
       if (duplicate) {
@@ -1129,7 +1129,7 @@ export class FeishuBotRepo {
       FROM multiremi_feishu_bot_configs c
       JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id
       JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id
-      JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id
+      JOIN multiremi_turn_execution_records t ON t.chat_session_id = b.chat_session_id
         AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id
       WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1`)
       .get(workspaceId, daemonId, taskId) != null;
@@ -1149,7 +1149,7 @@ export class FeishuBotRepo {
       JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id
       JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id
       JOIN multiremi_chat_sessions s ON s.id = b.chat_session_id AND s.status = 'active'
-      JOIN multiremi_tasks t ON t.issue_id = b.issue_id AND t.workspace_id = b.workspace_id
+      JOIN multiremi_turn_execution_records t ON t.issue_id = b.issue_id AND t.workspace_id = b.workspace_id
       WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ?
         AND b.issue_id IS NOT NULL AND t.id = ? LIMIT 1`)
       .get(workspaceId, daemonId, taskId) != null;
@@ -2183,7 +2183,7 @@ export class FeishuBotRepo {
     const due = this.ctx.db.query(
       `SELECT request.id, request.task_id, request.expires_at, request.created_at
        FROM multiremi_task_human_requests request
-       JOIN multiremi_tasks task ON task.id = request.task_id
+       JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
          AND request.expires_at IS NOT NULL
          -- A reminder is worth sending only while it still leaves the reader
@@ -2353,7 +2353,7 @@ export class FeishuBotRepo {
         task.agent_id AS task_agent_id, c.workspace_id AS bot_workspace_id,
         c.app_id AS bot_app_id, host.daemon_id AS bot_daemon_id
       FROM multiremi_task_human_requests request
-      JOIN multiremi_tasks task ON task.id = request.task_id
+      JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       JOIN multiremi_feishu_bot_configs c ON c.workspace_id = task.workspace_id
       JOIN multiremi_runtimes host ON host.id = c.runtime_id AND host.workspace_id = c.workspace_id
       WHERE c.workspace_id = ? AND c.runtime_id = ? AND c.enabled = 1
@@ -2797,7 +2797,7 @@ export class FeishuBotRepo {
           context?.interactionOpenId ?? delivery.open_id, context ? toJson(context.mention) : null, context ? toJson(context.presentation) : null]);
     }
     const rows = this.ctx.db.query(`SELECT o.task_id FROM multiremi_feishu_bot_outbound_deliveries o
-      JOIN multiremi_tasks t ON t.id = o.task_id
+      JOIN multiremi_turn_execution_records t ON t.id = o.task_id
       WHERE o.workspace_id = ? AND o.kind = 'cot' AND o.delivery_mode = 'split'
         AND (t.status NOT IN ('completed', 'failed', 'cancelled') OR NOT EXISTS (
           SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries r WHERE r.task_id = o.task_id AND r.kind = 'result_card'))`)
@@ -3109,7 +3109,7 @@ export class FeishuBotRepo {
     ) deadlines`).get(workspaceId, new Date(now).toISOString(), workspaceId, new Date(now).toISOString()) as Row | null;
     let next = row?.wake_at ? Date.parse(String(row.wake_at)) : Number.POSITIVE_INFINITY;
     const requests = this.ctx.db.query(`SELECT request.created_at, request.expires_at
-      FROM multiremi_task_human_requests request JOIN multiremi_tasks task ON task.id = request.task_id
+      FROM multiremi_task_human_requests request JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       WHERE task.workspace_id = ? AND task.issue_id IS NOT NULL AND request.status = 'pending'
         AND request.reminder_sent_at IS NULL AND request.expires_at IS NOT NULL
         AND EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries delivery

@@ -1,7 +1,7 @@
 /**
  * MUL-432 item 8: the trace backfill writes each task's event count, tool call
- * count, `(type, tool)` histogram and model onto the `turn` card MUL-427's
- * conversation backfill created, on SQLite and Postgres, and reconciliation
+ * count, `(type, tool)` histogram and model onto each attempt, projected onto
+ * the turn card, on SQLite and Postgres, and reconciliation
  * checks them against the rows.
  */
 import { afterAll, describe, expect, it } from "bun:test";
@@ -13,10 +13,11 @@ import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { backfillConversationLogWithinTransaction, reconcileConversationLog } from "@multiremi/store/conversation-log-backfill.js";
+import { reconcileUnifiedModel } from "@multiremi/store/unified-model-migration.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import {
   traceBackfillTurnCardDiff,
+  type TraceBackfillProgressRepo,
   type TraceBackfillTurnSummary,
 } from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
@@ -24,6 +25,7 @@ import { countToolCalls, deriveTraceModel, summarizeTrace, traceTypeHistogram } 
 import { runTraceBackfill, type TraceBackfillRunOptions } from "../../../scripts/backfill-task-traces.js";
 import { reconcileTraceBackfill } from "../../../scripts/lib/task-trace-reconcile.js";
 import {
+  insertFixtureMessage,
   insertSyntheticAgent,
   insertSyntheticChat,
   insertSyntheticIssue,
@@ -32,7 +34,7 @@ import {
   insertSyntheticTask,
   truncatedJsonText,
   type SyntheticMessage,
-} from "../../../scripts/lib/task-trace-synthetic.js";
+} from "./trace-backfill-fixtures.js";
 import { emptyTraceTurnSummary, TraceTurnSummaryBuilder } from "../../../scripts/lib/task-trace-turn-summary.js";
 import { traceBackfillBackends, type OpenedStore, type StoreBackend } from "./trace-backfill-backends.js";
 
@@ -42,7 +44,7 @@ const ENDED = "2026-08-10T00:00:00.000Z";
 const CUTOFF = "2026-09-01T00:00:00.000Z";
 const AGENT = "agt_tc";
 const RUNTIME = "rt_tc";
-const CARD_TASKS = ["tsk_chat_a", "tsk_chat_none", "tsk_issue_a", "tsk_issue_none", "tsk_issue_plain"];
+const CARD_TASKS = ["tsk_chat_a", "tsk_chat_none", "tsk_issue_a", "tsk_issue_none", "tsk_issue_plain", "tsk_one"];
 const SUMMARY_KEYS = ["event_count", "tool_call_count", "type_histogram", "model"] as const;
 
 const backends = await traceBackfillBackends("turncards");
@@ -99,46 +101,38 @@ function insertSessionEvent(
   db: SqlDatabase,
   input: { sessionId: string; seq: number; kind: string; taskId: string; body?: string },
 ): void {
-  db.run(
-    `INSERT INTO multiremi_session_events (id, session_id, seq, author_type, author_id, kind, body, task_id, metadata, created_at)
-     VALUES (?, ?, ?, 'member', 'local', ?, ?, ?, '{}', ?)`,
-    `sev_${input.sessionId}_${input.seq}`, input.sessionId, input.seq, input.kind, input.body ?? "", input.taskId, at(input.seq),
-  );
+  if (input.kind === "task_assigned") db.run("UPDATE multiremi_turns SET legacy_prompt=? WHERE current_attempt_id=?", input.body ?? "", input.taskId);
 }
 
 function insertChatMessage(
   db: SqlDatabase,
   input: { chatId: string; sequence: number; role: "user" | "assistant"; body: string; taskId?: string; failureReason?: string },
 ): void {
-  db.run(
-    `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, failure_reason, elapsed_ms, sequence, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    `chm_${input.chatId}_${input.sequence}`, input.chatId, input.taskId ?? null, input.role, input.body,
-    input.failureReason ?? null, input.role === "assistant" ? 1234 : null, input.sequence, at(input.sequence),
-  );
+  insertFixtureMessage(db, { id: `chm_${input.chatId}_${input.sequence}`, sessionId: input.chatId,
+    taskId: input.taskId, role: input.role, body: input.body, failureReason: input.failureReason, at: at(input.sequence) });
 }
 
 /**
  * A Chat with a traced and a `none` task, an Issue session with a traced, a
- * `none` and a model-less task, and a one-shot Task (which has no card). The
- * cards come from MUL-427's conversation backfill over the legacy rows, as
+ * `none` and a model-less task, and a one-shot Task in an auto conversation. The
+ * cards are pointers over canonical turns and attempts, as
  * they do on a migrated production database.
  */
 function seedWorld(db: SqlDatabase): void {
   insertSyntheticAgent(db, { id: AGENT, provider: "claude", createdAt: T0 });
   insertSyntheticRuntime(db, { id: RUNTIME, provider: "codex", daemonId: "dmn_tc", createdAt: T0 });
-  insertSyntheticChat(db, { id: "chs_tc", agentId: AGENT, createdAt: T0 });
+  insertSyntheticChat(db, { id: "chat_tc", agentId: AGENT, createdAt: T0 });
   insertSyntheticIssue(db, { id: "iss_tc", number: 1, createdAt: T0 });
   insertIssueSession(db, "ises_tc", "iss_tc");
 
-  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chs_tc" }));
+  insertSyntheticTask(db, task("tsk_chat_a", { chatSessionId: "chat_tc" }));
   insertSyntheticMessages(db, "tsk_chat_a", CHAT_A_ROWS);
-  insertSyntheticTask(db, task("tsk_chat_none", { chatSessionId: "chs_tc", status: "failed" }));
-  insertChatMessage(db, { chatId: "chs_tc", sequence: 1, role: "user", body: "hi" });
-  insertChatMessage(db, { chatId: "chs_tc", sequence: 2, role: "assistant", body: "final answer", taskId: "tsk_chat_a" });
-  insertChatMessage(db, { chatId: "chs_tc", sequence: 3, role: "user", body: "again" });
+  insertSyntheticTask(db, task("tsk_chat_none", { chatSessionId: "chat_tc", status: "failed" }));
+  insertChatMessage(db, { chatId: "chat_tc", sequence: 1, role: "user", body: "hi" });
+  insertChatMessage(db, { chatId: "chat_tc", sequence: 2, role: "assistant", body: "final answer", taskId: "tsk_chat_a" });
+  insertChatMessage(db, { chatId: "chat_tc", sequence: 3, role: "user", body: "again" });
   insertChatMessage(db, {
-    chatId: "chs_tc", sequence: 4, role: "assistant", body: "", taskId: "tsk_chat_none", failureReason: "boom",
+    chatId: "chat_tc", sequence: 4, role: "assistant", body: "", taskId: "tsk_chat_none", failureReason: "boom",
   });
 
   insertSyntheticTask(db, task("tsk_issue_a", { issueId: "iss_tc", issueSessionId: "ises_tc" }));
@@ -157,8 +151,7 @@ function seedWorld(db: SqlDatabase): void {
     { seq: 1, type: "tool_use", tool: "Bash", tool_call_id: "o1", input: meta({ cmd: "pwd" }), created_at: at(1) },
   ]);
 
-  const report = db.transaction(() => backfillConversationLogWithinTransaction(db))();
-  expect(report.mismatches).toEqual([]);
+  expect(reconcileUnifiedModel(db).mismatches).toEqual([]);
 }
 
 interface World {
@@ -297,15 +290,17 @@ for (const backend of backends) {
     it("fills every card from its task's rows and changes nothing else on it", async () => {
       await withWorld(backend, async (world) => {
         const before = cards(world);
-        for (const entry of before.values()) {
-          for (const key of SUMMARY_KEYS) expect(entry.metadata).not.toHaveProperty(key);
+        for (const [taskId, entry] of before) {
+          for (const key of SUMMARY_KEYS) expect(entry.metadata[key]).toBeNull();
+          expect(world.db.query("SELECT event_count,tool_call_count,type_histogram,model FROM multiremi_turn_attempts WHERE id=?").get(taskId))
+            .toEqual({ event_count: null, tool_call_count: null, type_histogram: null, model: null });
         }
-        expect(world.opened.store.findTurnEntry("tsk_one")).toBeNull();
+        expect(card(world, "tsk_one").session_id).toStartWith("auto_");
 
         const report = await world.run();
-        expect(sumCounts(report)).toEqual({ updated: 5, unchanged: 0, missing: 1 });
+        expect(sumCounts(report)).toEqual({ updated: 6, unchanged: 0, missing: 0 });
         expect(report.execution!.chat).toMatchObject({ turn_cards_updated: 2, turn_cards_missing: 0 });
-        expect(report.execution!.task).toMatchObject({ turn_cards_updated: 0, turn_cards_missing: 1 });
+        expect(report.execution!.task).toMatchObject({ turn_cards_updated: 1, turn_cards_missing: 0 });
         expect(report.execution!.issue_without_archive).toMatchObject({ turn_cards_updated: 3, turn_cards_missing: 0 });
 
         const after = cards(world);
@@ -317,11 +312,11 @@ for (const backend of backends) {
           expect(withoutSummary(now.metadata)).toEqual(withoutSummary(was.metadata));
           expect(now.body_md).toBe(was.body_md);
         }
-        // The chat reply stays as MUL-427 wrote it; an Issue turn still has none.
+        // The chat reply stays unchanged; an Issue card has no inline reply.
         expect(after.get("tsk_chat_a")!.metadata.final_reply_md).toBe("final answer");
         expect(after.get("tsk_issue_a")!.metadata).not.toHaveProperty("final_reply_md");
 
-        for (const taskId of ["tsk_chat_a", "tsk_issue_a", "tsk_issue_plain"]) {
+        for (const taskId of ["tsk_chat_a", "tsk_issue_a", "tsk_issue_plain", "tsk_one"]) {
           const { events, head } = await readAllEvents(world, taskId);
           const shared = summarizeTrace(events, head);
           expect(after.get(taskId)!.metadata).toMatchObject({
@@ -358,11 +353,15 @@ for (const backend of backends) {
           });
         }
 
-        expect(reconcileConversationLog(world.db).mismatches).toEqual([]);
+        expect(reconcileUnifiedModel(world.db).mismatches).toEqual([]);
         const full = await reconcileTraceBackfill(world.db, { archiveRoot: world.root, oldTableStoppedAt: CUTOFF });
         expect(full.ok).toBe(true);
-        expect(full.checked_turn_cards).toBe(5);
-        expect(full.informational.turn_card_missing).toBe(1);
+        expect(full.checked_turn_cards).toBe(6);
+        expect(full.informational.turn_card_missing).toBe(0);
+        const missing = world.db.transaction(() => (world.opened.store as unknown as { traceBackfillProgress: TraceBackfillProgressRepo }).traceBackfillProgress.fillTurnCards([
+          { taskId: "tsk_missing", eventCount: 1, toolCallCount: 0, typeHistogram: [], model: null },
+        ]))();
+        expect(missing).toEqual({ updated: 0, unchanged: 0, missing: 1 });
       });
     }, TIMEOUT);
 
@@ -428,11 +427,11 @@ for (const backend of backends) {
       await withWorld(backend, async (world) => {
         await world.run();
         const tamper = (taskId: string, patch: Record<string, unknown>) => {
-          const entry = card(world, taskId);
-          world.db.run(
-            "UPDATE multiremi_conversation_log SET metadata = ? WHERE session_id = ? AND seq = ?",
-            JSON.stringify({ ...entry.metadata, ...patch }), entry.session_id, entry.seq,
-          );
+          for (const [key, value] of Object.entries(patch)) {
+            expect(SUMMARY_KEYS as readonly string[]).toContain(key);
+            world.db.run(`UPDATE multiremi_turn_attempts SET ${key}=? WHERE id=?`,
+              typeof value === "object" ? JSON.stringify(value) : value, taskId);
+          }
         };
         tamper("tsk_chat_a", { event_count: 9 });
         tamper("tsk_issue_none", { model: { provider: "claude", model: "ghost" } });

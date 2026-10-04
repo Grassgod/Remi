@@ -1,3 +1,4 @@
+import { parseJson } from "@multiremi/store/helpers.js";
 import type {
   ConversationLogModel,
   ConversationLogTurnMetadata,
@@ -247,28 +248,21 @@ export class TraceBackfillProgressRepo {
     );
   }
 
-  /**
-   * Write each task's summary onto its `turn` card, the card MUL-427's
-   * conversation backfill created. Like {@link markDone}, this belongs to the
-   * transaction that publishes the subject. Only `event_count`,
-   * `tool_call_count`, `type_histogram` and `model` are written; a card that
-   * already carries the same values is left alone, so a rerun does not bump
-   * its revision.
-   */
+  /** Store each historical trace summary on its own attempt; identical fields are idempotent. */
   fillTurnCards(summaries: readonly TraceBackfillTurnSummary[]): TraceBackfillTurnCardCounts {
     const counts: TraceBackfillTurnCardCounts = { updated: 0, unchanged: 0, missing: 0 };
     const log = this.ctx.conversationLog();
     for (const summary of summaries) {
-      const card = log.findTurnEntry(summary.taskId);
-      if (!card) {
+      const attempt=this.ctx.db.query('SELECT event_count,tool_call_count,type_histogram,model FROM multiremi_turn_attempts WHERE id=?').get(summary.taskId) as Record<string,unknown>|null;
+      if (!attempt) {
         counts.missing++;
         continue;
       }
-      if (traceBackfillTurnCardDiff(card.metadata as ConversationLogTurnMetadata, summary).length === 0) {
+      if (traceBackfillTurnCardDiff({...attempt,type_histogram:parseJson(attempt.type_histogram,null),model:parseJson(attempt.model,null)} as ConversationLogTurnMetadata, summary).length === 0) {
         counts.unchanged++;
         continue;
       }
-      log.updateTurnCardWithinTransaction(summary.taskId, {
+      log.recordAttemptOutcomeWithinTransaction(summary.taskId, {
         eventCount: summary.eventCount,
         toolCallCount: summary.toolCallCount,
         typeHistogram: summary.typeHistogram,

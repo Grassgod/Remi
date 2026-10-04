@@ -1021,7 +1021,7 @@ export class AgentPluginsRepo {
     const taskSnapshots = this.ctx.db.query(
       `SELECT DISTINCT snapshot.plugin_id, snapshot.version_id, snapshot.provider
        FROM multiremi_task_plugin_snapshots snapshot
-       JOIN multiremi_tasks task ON task.id = snapshot.task_id
+       JOIN multiremi_turn_execution_records task ON task.id = snapshot.task_id
        WHERE task.workspace_id = ?
          AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
     ).all(workspaceId) as Row[];

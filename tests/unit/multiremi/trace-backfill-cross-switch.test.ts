@@ -17,7 +17,7 @@ import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { backfillConversationLogWithinTransaction } from "@multiremi/store/conversation-log-backfill.js";
+import { reconcileUnifiedModel } from "@multiremi/store/unified-model-migration.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { getLogLevel, setLogLevel } from "@shared/logger.js";
@@ -26,12 +26,13 @@ import { runTraceBackfill, type TraceBackfillRunOptions } from "../../../scripts
 import { TraceBackfillStopError } from "../../../scripts/lib/task-trace-backfill.js";
 import { openTraceBackfillArchive, reconcileTraceBackfill } from "../../../scripts/lib/task-trace-reconcile.js";
 import {
+  insertFixtureMessage,
   insertSyntheticAgent,
   insertSyntheticChat,
   insertSyntheticMessages,
   insertSyntheticRuntime,
   insertSyntheticTask,
-} from "../../../scripts/lib/task-trace-synthetic.js";
+} from "./trace-backfill-fixtures.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { traceBackfillBackends, type OpenedStore, type StoreBackend } from "./trace-backfill-backends.js";
 
@@ -43,7 +44,7 @@ const AFTER_CUTOFF = "2026-09-02T00:00:00.000Z";
 const AGENT = "agt_cs";
 const RUNTIME = "rt_cs";
 const DAEMON = "dmn_cs";
-const CHAT = "chs_cs";
+const CHAT = "chat_cs";
 const SUBJECT = { kind: "chat" as const, id: CHAT };
 
 const backends = await traceBackfillBackends("crossswitch");
@@ -69,8 +70,8 @@ let chatSequence = 0;
 
 /**
  * A finished chat task with old rows, claimed by the daemon (so its pointer is
- * `daemon`) and with a user message and a reply, from which MUL-427's
- * conversation backfill makes its `turn` card.
+ * `daemon`) and with a user message and reply linked to its canonical turn.
+ * The card projects that turn's current attempt.
  */
 function seedChatTask(db: SqlDatabase, taskId: string, input: { endedAt: string; seqs: readonly number[] }): void {
   insertSyntheticTask(db, {
@@ -82,12 +83,8 @@ function seedChatTask(db: SqlDatabase, taskId: string, input: { endedAt: string;
   })));
   for (const [role, body] of [["user", `ask ${taskId}`], ["assistant", `reply ${taskId}`]] as const) {
     chatSequence++;
-    db.run(
-      `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, failure_reason, elapsed_ms, sequence, created_at)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-      `chm_${taskId}_${role}`, CHAT, role === "assistant" ? taskId : null, role, body,
-      role === "assistant" ? 1000 : null, chatSequence, at(chatSequence),
-    );
+    insertFixtureMessage(db, { id: `chm_${taskId}_${role}`, sessionId: CHAT,
+      taskId: role === "assistant" ? taskId : null, role, body, at: at(chatSequence) });
   }
 }
 
@@ -115,8 +112,7 @@ async function withWorld(
     insertSyntheticChat(db, { id: CHAT, agentId: AGENT, createdAt: T0 });
     db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", RUNTIME, CHAT);
     seed(db, { opened });
-    const cards = db.transaction(() => backfillConversationLogWithinTransaction(db))();
-    expect(cards.mismatches).toEqual([]);
+    expect(reconcileUnifiedModel(db).mismatches).toEqual([]);
 
     const service = new SessionArchiveService(opened.store, { root, minFreeBytes: 0 });
     const logs: string[] = [];

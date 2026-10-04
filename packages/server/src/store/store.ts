@@ -4517,12 +4517,12 @@ runMigrations(this.db);
     return this.conversationLog.findTurnEntry(taskId);
   }
 
-  /** Update a task's `turn` card in place, bumping `revision`. */
-  updateTurnCardWithinTransaction(
+  /** Store attempt outcomes; the card is projected from normalized storage. */
+  recordAttemptOutcomeWithinTransaction(
     taskId: string,
-    fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
+    fields: Parameters<ConversationLogRepo["recordAttemptOutcomeWithinTransaction"]>[1],
   ): ConversationLogEntry | null {
-    return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
+    return this.conversationLog.recordAttemptOutcomeWithinTransaction(taskId, fields);
   }
 
   /**
