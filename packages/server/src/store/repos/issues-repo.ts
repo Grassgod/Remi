@@ -6858,8 +6858,10 @@ export class IssuesRepo {
       } catch (error) {
         if (!(error instanceof DelegationRoundTripLimitError)) throw error;
         this.recordCommentMentionSkipped(issue, comment, agent, target, error.code, deferredEvents);
+        const events = deferredEvents ?? createCommitEventQueue();
         this.ctx.tasks().recordDelegationRoundTripLimitedWithinTransaction(error,
-          childStatusChanges ?? [], deferredEvents ?? createCommitEventQueue());
+          childStatusChanges ?? [], events);
+        if (!deferredEvents) this.ctx.emitCommitEvents(events);
         continue;
       }
 

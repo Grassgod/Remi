@@ -573,6 +573,7 @@ export function countDelegationPairHops(
       || (lastMemberMessageAt !== null && task.createdAt <= lastMemberMessageAt)) break;
     seen.add(task.id);
     hops += 1;
+    if (hops === maxHops) break;
     expectedAgentId = expectedAgentId === source.agentId ? targetAgentId : source.agentId;
     task = task.parentTaskId ? getParent(task.parentTaskId) : null;
   }

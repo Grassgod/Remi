@@ -5,6 +5,10 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createId } from "@multiremi/ids.js";
 import { pairRoundTripLimit } from "@multiremi/store/repos/tasks-repo.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { useTaskSessionInput } from "@multiremi/api/daemon-protocol/offer-budget.js";
+import { normalizeDaemonClaimTask } from "@multiremi/worker/client.js";
+import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 
@@ -176,11 +180,48 @@ for (const backend of ["sqlite", "postgres"] as const) {
             expect(activity(store, f.a.id, "delegation_return_triggered")).toHaveLength(1);
             expect(inboxReportEntry(store, returned, child.id).metadata.envelope?.wake).toBe("now");
             start(store, returned);
+            const claimed = store.getTaskWithAgent(returned.id)!;
+            const offer = daemonTaskClaimResponse(store, claimed, store.getTaskTriggerMetadata(claimed));
+            useTaskSessionInput(store, claimed, offer);
+            const daemonInput = buildTaskPrompt(normalizeDaemonClaimTask(offer)!);
+            expect(daemonInput).toContain(f.b.key);
+            expect(daemonInput).toContain(conclusion.id);
+            const messages = (offer.session_projection as { jsonl: string }).jsonl.split("\n")
+              .map(line => JSON.parse(line) as { type: string; body?: string });
+            expect(messages.some(message => message.body?.includes(`Status: ${terminal}\nIssue: ${f.b.key} (${f.b.id})\n`)))
+              .toBe(true);
             expect(inboxReportBody(store, returned, child.id)).toBe(body);
             store.completeTask(returned.id, { output: "Reviewed." });
             expect(store.listTasks("queued")).toHaveLength(0);
           }), timeout);
       }
+    }
+
+    for (const entry of ["task", "session"] as const) {
+      it(`${entry}: reproduces a leader in unassigned A/S0 dispatching QA to B (C1/C1')`,
+        async () => withStore(backend, async store => {
+          const f = fixture(store);
+          store.completeTask(f.source.id, { output: "QA first round ended." });
+          const leaderSource = store.createTask({ agentId: f.leader.id, issueId: f.a.id,
+            issueSessionId: f.s0.id, prompt: "Dispatch acceptance." });
+          start(store, leaderSource);
+          const child = await dispatch(store, leaderSource, f.b, f.qa.id, entry, f.s1.id);
+          expect(child).toMatchObject({ delegatedByAgentId: f.leader.id, parentTaskId: leaderSource.id,
+            delegatedFromIssueSessionId: f.s0.id, issueSessionId: f.s1.id });
+          expect(store.getIssue(f.a.id)!.assigneeId).toBeNull();
+          store.completeTask(leaderSource.id, { output: "Waiting for QA." });
+          start(store, child);
+          const conclusion = store.createIssueComment(f.b.id, { issueSessionId: f.s1.id,
+            authorType: "agent", authorId: f.qa.id, taskId: child.id, body: "验收不通过：测试阻塞项" });
+          store.completeTask(child.id, { output: "验收不通过：测试阻塞项" });
+          const returned = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
+          expect(returned).toMatchObject({ agentId: f.leader.id, issueId: f.a.id, issueSessionId: f.s0.id });
+          expect(inboxReportBody(store, returned, child.id)).toContain(`Status: completed\nIssue: ${f.b.key} (${f.b.id})\n`);
+          expect(inboxReportBody(store, returned, child.id)).toContain(conclusion.id);
+          expect(inboxReportBody(store, returned, child.id)).toContain("摘要：验收不通过");
+          expect(store.listTasksForIssue(f.a.id).filter(t => t.issueSessionId === f.wrong.id)).toHaveLength(0);
+          expect(store.listTasksForIssue(f.b.id).filter(t => t.agentId === f.leader.id)).toHaveLength(0);
+        }), timeout);
     }
 
     for (const entry of ["task", "session", "mention"] as const) {
@@ -236,7 +277,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           let source = f.source;
           for (let round = 0; round < limit; round++) {
             expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(2 * round);
-            const child = await dispatch(store, source, f.b, f.atlas.id);
+            const child = await dispatch(store, source, f.b, f.atlas.id, "task", f.s1.id);
             store.completeTask(source.id, { output: "Dispatched." });
             start(store, child);
             store.completeTask(child.id, { output: "Result." });
@@ -252,6 +293,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
             expect(store.listTasks().length).toBe(before);
           }
           expect((await mention(store, source, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
+          expect(store.listTasks().length).toBe(before);
+          const newSession = store.createIssueSession(f.b.id, { title: "No prior delegation lane" });
+          expect((await mention(store, source, f.b, newSession.id, f.atlas.id)).status).toBe(201);
           expect(store.listTasks().length).toBe(before);
           expect(activity(store, f.b.id, "comment_mention_skipped").at(-1)?.data)
             .toMatchObject({ reason: "pair_round_trip_limit" });
@@ -334,17 +378,41 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect((await mention(store, f.source, f.a, f.s0.id, f.qa.id)).status).toBe(201);
         expect(activity(store, f.a.id, "comment_mention_skipped").at(-1)?.data).toMatchObject({ reason: "self_mention" });
         const detached = store.createTask({ agentId: f.qa.id, prompt: "No Issue source" });
-        for (const entry of ["task", "session"] as const) {
-          const child = await dispatch(store, detached, f.b, f.atlas.id, entry);
-          expect(child.delegationSkipReason).toBe("source_not_issue_task");
-          store.cancelTask(child.id);
-          expect(child.delegationId).toBeNull();
+        const chat = store.createChatSession({ agentId: f.qa.id, creatorId: "local" });
+        const chatSource = store.createTask({ agentId: f.qa.id, chatSessionId: chat.id, prompt: "Chat source" });
+        for (const source of [detached, chatSource]) {
+          for (const entry of ["task", "session"] as const) {
+            const child = await dispatch(store, source, f.b, f.atlas.id, entry);
+            expect(child.delegationSkipReason).toBe("source_not_issue_task");
+            store.cancelTask(child.id);
+            expect(child.delegationId).toBeNull();
+            expect(store.getTask(child.id)!.delegationReturnTaskId).toBeNull();
+          }
         }
         const response = await request(store, f.source, "/api/multiremi/tasks", { agentId: f.atlas.id, prompt: "No target Issue" });
         expect(response.status).toBe(201);
         const detachedTarget = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
         expect(detachedTarget).toMatchObject({ issueId: null, delegationId: null, delegationSkipReason: "target_not_issue_task" });
       }), timeout);
+
+    it("continue inherits lineage but cannot evade the pair limit or cross-Session authorization",
+      async () => withLimit("2", () => withStore(backend, async store => {
+        const f = fixture(store);
+        const source = chain(store, f, 4);
+        const previous = store.createTask({ agentId: f.atlas.id, issueId: f.a.id, issueSessionId: f.s0.id,
+          delegationId: createId("dlg"), delegatedByAgentId: f.qa.id,
+          delegatedFromIssueSessionId: f.s0.id, prompt: "Earlier delegated work" });
+        const before = store.listTasks().length;
+        const response = await request(store, source, "/api/multiremi/tasks", {
+          agentId: f.atlas.id, continueTaskId: previous.id, prompt: "Another round" });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "pair_round_trip_limit" });
+        expect(store.listTasks().length).toBe(before);
+        const cross = await request(store, source, "/api/multiremi/tasks", {
+          agentId: f.atlas.id, continueTaskId: source.parentTaskId, prompt: "Cross-Session continuation" });
+        expect(cross.status).toBe(400);
+        expect(store.listTasks().length).toBe(before);
+      })), timeout);
 
     for (const recovery of ["retry_success", "retry_exhausted", "redispatch"] as const) {
       it(`${recovery}: universal delegation keeps the original dispatcher and reports only its final successor (C7)`,
