@@ -74,7 +74,7 @@ Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/pack
 
 Issue 活动区的非评论日志由 [IssueLogEventRow](../../frontend/packages/views/issues/components/issue-log-event-row.tsx) 显示为固定单行摘要。派活行只在点击后挂载完整正文；收件箱唤醒和委派回程只显示人可读状态，发布结果使用已加载的结果列表解析发布者并打开结果面板。Chat 的内部进展通知由 [ChatLogEventRow](../../frontend/packages/views/chat/components/chat-log-event-row.tsx) 摘要显示，信封带 Issue ID 时使用工作区路径链接到详情。摘要不运行 Markdown 渲染，不新增逐行查询，普通评论和聊天气泡沿用原路径。
 
-摘要与展开正文通过现有 `transformEntries` 在列表内区分行高缓存的 `render_version`，不更改副本中的服务端日志。`SessionLogList` 在渲染版本变化时重新扫描可见行；标记为 `data-session-log-disclosure` 的展开按钮会先释放贴底，防止正文展开把点击位置拖走。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[Chat 日志行测试](../../frontend/packages/views/chat/components/chat-log-event-row.test.tsx) 和现有滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。
+摘要与展开正文通过现有 `transformEntries` 在列表内区分行高缓存的 `render_version`，不更改副本中的服务端日志。`SessionLogList` 在渲染版本变化时重新扫描可见行；展开和收起沿用原贴底状态机，pinned 时保持到末尾的距离，released 时保留阅读位置。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[Chat 日志行测试](../../frontend/packages/views/chat/components/chat-log-event-row.test.tsx) 和现有滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。
 
 ## 实时更新与性能定位
 

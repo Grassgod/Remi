@@ -110,32 +110,40 @@ describe("useStickToBottom", () => {
     expect(fixture.root.scrollTop).toBe(scrollTopAfterRelease);
   });
 
-  it("releases on a log disclosure click before expansion resizes the content", () => {
+  it("keeps pinned bottom distance stable when a disclosure expands and collapses", () => {
     fixture.userScroll(600);
     const { result } = renderStick(baseProps());
     const button = document.createElement("button");
-    button.setAttribute("data-session-log-disclosure", "");
+    button.setAttribute("aria-expanded", "false");
     const icon = document.createElement("span");
     button.appendChild(icon);
     fixture.content.appendChild(button);
     fire(() => icon.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(result.current.state).toBe("released");
+    expect(result.current.state).toBe("pinned");
     fixture.setScrollHeight(1300);
     fire(() => resize.trigger());
-    expect(fixture.root.scrollTop).toBe(600);
+    expect(fixture.root.scrollTop).toBe(900);
+    expect(fixture.root.scrollHeight - fixture.root.scrollTop - fixture.root.clientHeight).toBe(0);
     fixture.setScrollHeight(1000);
     fire(() => resize.trigger());
     expect(fixture.root.scrollTop).toBe(600);
   });
 
-  it("keeps following after a regular content click", () => {
-    fixture.userScroll(600);
+  it("keeps released reading position stable when a disclosure expands and collapses", () => {
+    fixture.userScroll(300);
     const { result } = renderStick(baseProps());
-    fire(() => fixture.content.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(result.current.state).toBe("pinned");
+    fire(wheelUp);
+    const button = document.createElement("button");
+    button.setAttribute("aria-expanded", "false");
+    fixture.content.appendChild(button);
+    fire(() => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(result.current.state).toBe("released");
     fixture.setScrollHeight(1300);
     fire(() => resize.trigger());
-    expect(fixture.root.scrollTop).toBe(900);
+    expect(fixture.root.scrollTop).toBe(300);
+    fixture.setScrollHeight(1000);
+    fire(() => resize.trigger());
+    expect(fixture.root.scrollTop).toBe(300);
   });
 
   it.each([

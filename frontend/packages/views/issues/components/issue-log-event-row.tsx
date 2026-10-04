@@ -82,7 +82,6 @@ export function IssueLogEventRow({ row, expanded, onToggle, getActorName, result
   return <div data-log-kind={row.kind}>
     {expandable || showResult
       ? <button type="button" className={`${lineClass} hover:text-foreground`}
-        data-session-log-disclosure={expandable ? "" : undefined}
         aria-expanded={expandable ? expanded : undefined}
         aria-controls={expandable ? `log-event-body-${row.id}` : undefined}
         onClick={expandable ? onToggle : onShowKeyResults}>{content}</button>
