@@ -1,5 +1,9 @@
+import { attemptInputState } from '../inbox/attempt-input.js';
+import { lockLane } from '../inbox/lane-machine.js';
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
+import { createCommitEventQueue } from '../context.js';
 import { projectTurnCard } from "@multiremi/store/turn-attempts.js";
-import { registerTurnChangeHook, registerExecutionMessageHook, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
+import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
 // Conversation log domain: the single per-session log that replaces the three
 // conversation tables (MUL-402 / ADR 0006). One row is one display unit; every
 // other lifecycle fact is a hidden marker on the same seq axis.
@@ -76,6 +80,9 @@ export type AppendConversationLogInput = {
   kind: ConversationLogKind;
   authorType: string;
   messageKind?: import("@multiremi/contracts/unified-model.js").MessageKind;
+  messageHeader?: import("@multiremi/contracts/unified-model.js").MessageHeader;
+  /** Atomic completion stages a message before its product metadata is published. */
+  visibility?: ConversationLogVisibility;
   authorId?: string | null;
   taskId?: string | null;
   bodyMd?: string;
@@ -108,7 +115,14 @@ export type UpdateConversationLogInput = {
 
 export class ConversationLogRepo {
   constructor(private ctx: StoreContext) {
-    registerExecutionMessageHook(ctx.db,id=>{const entry=this.getEntryById(id);if(entry)this.emit(entry.session_id,entry);});
+    registerExecutionMessageWriter(ctx.db,(sessionId,id,senderId,body,input)=>{
+      const events=createCommitEventQueue();
+      const source=input.taskId&&ctx.db.query('SELECT id FROM multiremi_turns WHERE id=?').get(input.taskId);
+      const result=sendMessageWithinTransaction(ctx,{id,session_id:sessionId,sender:{type:(input.senderType??'agent') as 'agent'|'timer',id:senderId},
+        source_turn_id:source?input.taskId:null,to:{type:'none'},body_md:body,message_kind:(input.messageKind??'reply') as 'reply'|'status',
+        wake_requested:'inbox_only',metadata:input.metadata,visibility:input.visibility==='hidden'?'hidden':'shown'},events);
+      afterCommit(ctx.db,()=>ctx.emitCommitEvents(events));return result.message.seq;
+    });
     registerTurnChangeHook(ctx.db, (turnId,created) => {
       const row=ctx.db.query("SELECT session_id,seq FROM multiremi_turns WHERE id=?").get(turnId);
       if (!row) return;
@@ -120,35 +134,49 @@ export class ConversationLogRepo {
   }
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
 
-  getSessionAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-    const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-    return state[agentId] ?? this.updateAgentReadProgress(sessionId, agentId, current => current);
+  getSessionAgentReadProgress(sessionId: string, agentId: string, attemptId?:string): SessionAgentReadProgress {
+    const turn=attemptId?this.ctx.db.query('SELECT t.session_id,t.execution_scope FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId):null;
+    if(attemptId&&!turn)throw new Error('stale_attempt');
+    const scope=turn?.session_id===sessionId?turn.execution_scope:'';
+    const row = this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+      WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope) as Row | null;
+    return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current,attemptId);
   }
 
   private storedAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    // Seed streamed progress from persisted lane and attempt receipts.
-    const lane = this.ctx.db.query(`SELECT COALESCE(MAX(cursor_seq), 0) AS seq
-      FROM multiremi_session_lanes WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`).get(sessionId, agentId) as Row;
-    const chat = this.ctx.db.query(`SELECT COALESCE(MAX(projection_to_seq), 0) AS seq
-      FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id = a.turn_id
-      WHERE t.session_id = ? AND t.agent_id = ? AND a.status = 'completed'`).get(sessionId, agentId) as Row;
-    return { seq: Math.min(Math.max(Number(lane.seq), Number(chat.seq)), this.getHead(sessionId)?.headSeq ?? 0), offset: 0 };
+    const row=this.ctx.db.query("SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''").get(sessionId,agentId);
+    return {seq:Number(row?.cursor_seq??0),offset:Number(row?.cursor_offset??0)};
   }
 
   private updateAgentReadProgress(sessionId: string, agentId: string,
-    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress): SessionAgentReadProgress {
+    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress, attemptId?: string, resetForBootstrap = false): SessionAgentReadProgress {
     return this.ctx.db.transaction(() => {
-      // Serialize the JSON read/modify/write across agents and server processes.
-      this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = agent_read_state WHERE session_id = ?", [sessionId]);
-      const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-      const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-      const current = state[agentId] ?? this.storedAgentReadProgress(sessionId, agentId);
-      const next = advance(current);
-      if (row && (!state[agentId] || next.seq !== current.seq || next.offset !== current.offset)) {
-        state[agentId] = next;
-        this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = ? WHERE session_id = ?", [toJson(state), sessionId]);
-      }
+      const source=attemptId
+        ?this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId)
+        :this.ctx.db.query("SELECT * FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope='' AND status IN ('running','awaiting_human') ORDER BY created_at DESC LIMIT 1").get(sessionId,agentId);
+      if(attemptId&&!source)throw new Error('stale_attempt');
+      // Inherited conversations have their own reader lane, not this attempt's receipt.
+      const turn=source?.session_id===sessionId?source:null;
+      const scope=turn?.execution_scope??'';
+      if(source)this.ctx.lockWorkspaceRuntimeLifecycle(source.workspace_id);
+      const seed=scope===''?this.storedAgentReadProgress(sessionId,agentId):{seq:0,offset:0};
+      const at=nowIso();
+      this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,cursor_offset,created_at,updated_at)
+        VALUES(?,'agent',?,?,?,?,?,?) ON CONFLICT DO NOTHING`,[sessionId,agentId,scope,seed.seq,seed.offset,at,at]);
+      lockLane(this.ctx,sessionId,agentId,scope);
+      const row=this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope)!;
+      const receipt=turn?attemptInputState(this.ctx,turn):null;
+      const current=resetForBootstrap?{seq:0,offset:0}:receipt?{seq:receipt.read,offset:receipt.offset}:{seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
+      const next=advance(current);
+      // Acceptance starts a new provider's reading history; reads within it stay monotonic.
+      if(resetForBootstrap||next.seq>Number(row.cursor_seq)||next.seq===Number(row.cursor_seq)&&next.offset>Number(row.cursor_offset))
+        this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?,updated_at=?
+          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[next.seq,next.offset,at,sessionId,agentId,scope]);
+      if(turn&&resetForBootstrap)
+        this.ctx.db.run('UPDATE multiremi_turn_attempts SET input_ack_seq=0,input_read_seq=?,input_read_offset=?,input_trigger_ack=NULL WHERE id=?',[next.seq,next.offset,turn.current_attempt_id]);
+      else if(turn&&(next.seq!==current.seq||next.offset!==current.offset))
+        this.ctx.db.run('UPDATE multiremi_turn_attempts SET input_read_seq=?,input_read_offset=? WHERE id=?',[next.seq,next.offset,turn.current_attempt_id]);
       return next;
     })();
   }
@@ -159,7 +187,7 @@ export class ConversationLogRepo {
   }
 
   recordSessionAgentRangeRead(sessionId: string, agentId: string,
-    start: SessionLogReadPosition, end: SessionLogReadPosition): SessionAgentReadProgress {
+    start: SessionLogReadPosition, end: SessionLogReadPosition, attemptId?: string): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
       const expected = { seq: current.seq + 1, offset: current.offset };
       if (start.seq > expected.seq) {
@@ -172,13 +200,11 @@ export class ConversationLogRepo {
       const offset = lastSeq === end.seq - 1 ? end.offset : 0;
       if (lastSeq < current.seq || lastSeq === current.seq && offset <= current.offset) return current;
       return { seq: lastSeq, offset };
-    });
+    }, attemptId);
   }
 
-  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false): SessionAgentReadProgress {
+  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false, attemptId?: string): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
-      // An accepted bootstrap has no provider memory, even if an earlier session read the log.
-      if (coldStart) current = { seq: 0, offset: 0 };
       const inline = new Set(seqs);
       // Creating a turn now appends its pointer immediately. Accepting an
       // inline trigger acknowledges only through the last delivered input,
@@ -194,7 +220,7 @@ export class ConversationLogRepo {
         seq = entry.seq;
       }
       return seq > current.seq ? { seq, offset: 0 } : current;
-    });
+    }, attemptId, coldStart);
   }
 
   /**
@@ -328,12 +354,24 @@ export class ConversationLogRepo {
 
   /** Allocate seq and insert. The caller already owns the transaction. */
   appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    if(['message','system','delegation_report'].includes(input.kind)&&!input.messageHeader){
+      const events=createCommitEventQueue(),session=this.ctx.issueSessions().getIssueSession(input.sessionId),chat=this.ctx.chat().getChatSession(input.sessionId);
+      const workspaceId=session?.workspaceId??chat?.workspaceId??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(input.sessionId)?.workspace_id;
+      const type=input.authorType==='system'||input.authorType==='external'?'platform':input.authorType;
+      const member=type==='member'?this.ctx.workspaces().getWorkspaceMemberByRef(input.authorId??'local',workspaceId):null;
+      const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
+      const result=sendMessageWithinTransaction(this.ctx,{id:input.id,session_id:input.sessionId,
+        sender:{type:type as 'agent'|'member'|'platform'|'timer',id:member?.id??input.authorId??null},source_turn_id:source?.turn_id??null,
+        to:{type:'none'},message_kind:input.messageKind??(input.kind==='delegation_report'?'report':input.parentId?'reply':type==='member'?'request':'status'),
+        wake_requested:'inbox_only',body_md:input.bodyMd??'',reply_to_id:input.parentId,metadata:input.metadata},events);
+      afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return this.getEntryById(result.message.id)!;
+    }
     if (input.kind==='turn' && input.taskId) {
       const turn=this.ctx.db.query("SELECT t.session_id,t.seq FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?").get(input.taskId);
       if(turn)return this.getEntryWithinTransaction(turn.session_id,Number(turn.seq))!;
     }
     const kind = input.kind === 'system' || input.kind === 'delegation_report' ? 'message' : input.kind;
-    const visibility = CONVERSATION_LOG_KIND_VISIBILITY[kind];
+    const visibility = kind==='message' ? input.visibility??CONVERSATION_LOG_KIND_VISIBILITY[kind] : CONVERSATION_LOG_KIND_VISIBILITY[kind];
     if (!visibility) throw new Error(`Unknown conversation log kind: ${kind}`);
     const metadata:any={...input.metadata};
     const envelope=metadata.envelope;delete metadata.envelope;
@@ -380,8 +418,9 @@ export class ConversationLogRepo {
          body_md, body_html, render_version, reply_to_id,
          resolved_at, resolved_by_type, resolved_by_id,
          metadata, revision, created_at, updated_at, deleted_at,
-         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,dedupe_key
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,dedupe_key,
+         options,card_token_hash,card_token_recipient,card_token_consumed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.sessionId,
         seq,
@@ -403,7 +442,13 @@ export class ConversationLogRepo {
         now,
         updatedAt,
         input.deletedAt ?? null,
-        toType,toRef,toAgent,toMember,messageKind,envelope?.wake??"inbox_only",envelope?.wake??"inbox_only",envelope?"migration":"requested_inbox_only",envelope?.dedupeKey??null,
+        input.messageHeader?.to_type??toType,input.messageHeader?.to_ref??toRef,
+        input.messageHeader?.to_agent_id??toAgent,input.messageHeader?.to_member_id??toMember,
+        input.messageHeader?.message_kind??messageKind,input.messageHeader?.wake_requested??envelope?.wake??"inbox_only",
+        input.messageHeader?.wake_applied??envelope?.wake??"inbox_only",input.messageHeader?.wake_reason??(envelope?"migration":"requested_inbox_only"),
+        input.messageHeader?.dedupe_key??envelope?.dedupeKey??null,
+        input.messageHeader?.options?toJson(input.messageHeader.options):null,input.messageHeader?.card_token_hash??null,
+        input.messageHeader?.card_token_recipient??null,input.messageHeader?.card_token_consumed_at??null,
       ],
     );
     // One `log_version` bump per log mutation: the allocator already counted
@@ -628,12 +673,15 @@ export class ConversationLogRepo {
       hasMoreAfter = anchor < headSeq;
     }
     const entries = rows.map(row=>this.materialize(row));
+    let prevEntryCreatedAt: string | null = null;
     if (entries.length) {
-      hasMoreBefore = (this.runQuery(
+      const previous = this.runQuery(
         input.query,
-        `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq < ? AND ${visible} ORDER BY seq DESC LIMIT 1`,
+        `SELECT seq, created_at FROM multiremi_conversation_log WHERE session_id = ? AND seq < ? AND ${visible} ORDER BY seq DESC LIMIT 1`,
         [sessionId, entries[0]!.seq],
-      ).get() as Row | null) != null;
+      ).get() as Row | null;
+      hasMoreBefore = previous != null;
+      prevEntryCreatedAt = previous ? String(previous.created_at) : null;
       hasMoreAfter = (this.runQuery(
         input.query,
         `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND ${visible} ORDER BY seq ASC LIMIT 1`,
@@ -646,6 +694,7 @@ export class ConversationLogRepo {
       log_version: logVersion,
       has_more_before: hasMoreBefore,
       has_more_after: hasMoreAfter,
+      prev_entry_created_at: prevEntryCreatedAt,
     };
     if (hasMoreBefore && entries.length) {
       // `seq >= 1` and the plain visibility filter keep this on the

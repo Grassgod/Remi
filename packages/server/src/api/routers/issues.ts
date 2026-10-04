@@ -1,4 +1,5 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
+import { ISSUE_ACTIVITY_TYPES } from "@multiremi/contracts";
 import { readSessionLogRange } from "../session-log-range.js";
 import type { Context, Hono } from "hono";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
@@ -89,7 +90,6 @@ import {
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
-import { DelegationRoundTripLimitError } from "@multiremi/store/repos/tasks-repo.js";
 import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
@@ -1173,8 +1173,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(issueUsageResponse(store, issue));
   });
   app.post("/api/issues/:id/rerun", async (c) => {
-    const dispatchDenied = denySideSessionAgentDispatch(c, store);
-    if (dispatchDenied) return dispatchDenied;
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
@@ -1196,6 +1194,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         ? c.json({ error: result.error, code: result.code, unmet: result.unmet ?? [] }, result.status)
         : c.json({ error: result.error }, result.status);
     }
+    if(!result.task)return c.json(result,200);
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
   app.post("/api/issues/:id/tasks/:taskId/cancel", async (c) => {
@@ -1704,7 +1703,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
         let progress;
         if (token?.taskId && token.agentId) {
-          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end, token.taskId); }
           catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
         }
         if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
@@ -1762,7 +1761,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
-    if (!store.getIssueSession(sessionId)) {
+    const issueSession = store.getIssueSession(sessionId);
+    if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
+      Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
+        fromInclusive: window.prev_entry_created_at,
+        toExclusive: window.has_more_after ? window.entries.at(-1)?.created_at : null,
+        types: ISSUE_ACTIVITY_TYPES, limit: 200,
+      }));
+    }
+    if (!issueSession) {
       const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
         .map(entry => entry.id);
       const attachments = store.listAttachmentsForChatMessages(messageIds);
@@ -1949,8 +1956,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const dispatchDenied = denySideSessionAgentDispatch(c, store);
-    if (dispatchDenied) return dispatchDenied;
     const body = await readJson<CreateSessionTaskInput>(c);
     const agentId = cleanString(body.agentId ?? body.agent_id);
     const agent = agentId ? store.getAgent(agentId) : null;
@@ -1971,10 +1976,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {
-      if (error instanceof DelegationRoundTripLimitError) {
-        store.recordDelegationRoundTripLimited(error);
-        return c.json({ error: error.message, code: error.code }, 409);
-      }
+      if((error as any)?.message_result)return c.json({task:null,...(error as any).message_result},200);
       const dependencyResponse = issueDependencyErrorResponse(c, error);
       if (dependencyResponse) return dependencyResponse;
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);

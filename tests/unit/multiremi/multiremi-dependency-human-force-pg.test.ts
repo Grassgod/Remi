@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND, IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { signTestJwt } from "./helpers.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -208,9 +208,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
         method: "POST", headers: repeated.headers, body: JSON.stringify({ body }),
       })).status).toBe(201);
     }
-    expect(store.listTasksForIssue(repeated.issue.id)).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 3);
+    expect(store.listTasksForIssue(repeated.issue.id)).toHaveLength(true ? 1 : 3);
     expect(store.listIssueActivity(repeated.issue.id).filter(activity => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 2 : 0);
+      .toHaveLength(true ? 2 : 0);
     expect(forces(repeated.issue.id)).toHaveLength(1);
 
     const parentCase = await fixture("pat", "parent");
@@ -360,7 +360,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     expect(results.every((result) => result.maxTransactionDepth === 1)).toBe(true);
     const tasks = store.listTasksForIssue(f.issue.id);
     const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "pending_turn_coalesced");
-    expect(merges.length).toBeLessThanOrEqual(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 0);
+    expect(merges.length).toBeLessThanOrEqual(true ? 1 : 0);
     expect(tasks).toHaveLength(2 - merges.length);
     expect(tasks.some((task) => task.status === "cancelled")).toBe(false);
     expect(forces(f.issue.id)).toHaveLength(1);
@@ -379,7 +379,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       .filter((entry) => entry.type === "dependency_auto_started").length;
     expect(forceCount + autoCount).toBe(1);
     const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "pending_turn_coalesced");
-    expect(merges).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? autoCount : 0);
+    expect(merges).toHaveLength(true ? autoCount : 0);
     expect(tasks).toHaveLength(1 + autoCount - merges.length);
     expect(store.getIssue(f.issue.id)?.status).toBe("todo");
   });

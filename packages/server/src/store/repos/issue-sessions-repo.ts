@@ -109,6 +109,7 @@ export class IssueSessionsRepo {
   createIssueSessionWithinTransaction(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
     const title = input.title?.trim() || `Session ${this.listIssueSessions(issueId, true).length + 1}`;
     const id = input.id ?? createId("ises");
     const now = nowIso();
@@ -410,6 +411,7 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
     this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
     if(input.kind==='task_assigned'&&input.taskId){
       const pointer=this.ctx.conversationLog().findTurnEntry(input.taskId);
@@ -575,7 +577,7 @@ export class IssueSessionsRepo {
         targetAgentId: task.agentId,
         events,
         expandableSeqs,
-        cursorSeq: lane.cursorSeq,
+        cursorSeq: Number(this.ctx.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(task.issueSessionId,task.agentId,taskExecutionScope(task))?.provider_cursor_seq??0),
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
         tokenBudget: tokenBudget - inheritedTokenBudget,
         currentTaskId: task.id,
@@ -704,6 +706,7 @@ export class IssueSessionsRepo {
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     let task: MultiremiTask;
+    let unscheduled:unknown;
     try {
       task = this.ctx.db.transaction(() => {
         // Global lock order (MUL-405): W before this transaction's first domain
@@ -720,7 +723,7 @@ export class IssueSessionsRepo {
             targetAgentId: agentId, targetIssue: this.ctx.issues().getIssue(session.issueId) })
           : null;
         this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
-        return this.ctx.tasks().createTaskWithinTransaction({
+        try { return this.ctx.tasks().createTaskWithinTransaction({
           agentId,
           issueId: session.issueId,
           issueSessionId: sessionId,
@@ -736,6 +739,7 @@ export class IssueSessionsRepo {
             delegatedFromIssueSessionId: delegation.delegatedFromIssueSessionId,
           } : delegation?.reason ? { delegationSkipReason: delegation.reason } : {}),
         }, childStatusChanges, deferredEvents);
+        }catch(error){if(!(error as any)?.message_result)throw error;unscheduled=error;return null as unknown as MultiremiTask;}
       })();
     } catch (err) {
       // The transaction rolled back, so the participant and the lane it would
@@ -746,6 +750,7 @@ export class IssueSessionsRepo {
       );
       throw err;
     }
+    if(unscheduled){this.ctx.emitCommitEvents(deferredEvents);throw unscheduled;}
     this.ctx.notifyTaskEnqueued(task);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);

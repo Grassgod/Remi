@@ -386,9 +386,11 @@ function sessionCommandSpecs(): CommandSpec[] {
       { name: "anchor", type: "integer", valueName: "seq", description: "Anchor sequence" },
       { name: "before", type: "integer", valueName: "n", description: "Entries at or before anchor" },
       { name: "after", type: "integer", valueName: "n", description: "Entries after anchor" },
+      { name: "with-activity", type: "boolean", description: "Include Issue activity in the default Session window" },
     ], async (invocation) => {
       await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log`, ["entries"], {
         anchor: integerOption(invocation, "anchor"), before: integerOption(invocation, "before"), after: integerOption(invocation, "after"),
+        with_activity: invocation.options["with-activity"] === true ? 1 : undefined,
       });
     }, [
       { path: ["chat", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi session log window" },

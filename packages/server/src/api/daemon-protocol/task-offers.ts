@@ -285,7 +285,7 @@ export class DaemonTaskOffers {
         pump.accepted.add(pending.taskId);
         if (pending.inlineRead) {
           try { this.options.store.recordSessionAgentInlineRead(pending.inlineRead.sessionId, pending.agentId,
-            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart); }
+            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart, pending.taskId); }
           catch { console.warn(JSON.stringify({ event: "session_log_read_progress_failed", task_id: pending.taskId })); }
         }
       }

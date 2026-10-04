@@ -1,5 +1,15 @@
 # CLI command migration
 
+`remi session log window <session> --with-activity --json` adds an activity
+sidecar for the default Issue session. The same log-window response includes
+`activities`, `activities_truncated`, and `prev_entry_created_at`; activities
+do not consume log sequence numbers or change pagination counts. Each window
+returns the latest 200 matching activities in chronological order, bounded by
+the previous log entry's timestamp (inclusive) and the window's last entry
+(exclusive, except the open-ended tail). Side sessions and Chat ignore the
+flag. Without it, the response remains a log-only window. The JSON sidecar
+includes system activities; display preferences are applied by the frontend.
+
 `remi issue decision request <source-issue> --kind <kind> --title <title>
 [--body-stdin] [--option <choice>...]` records a non-blocking decision on the
 source issue's parent (or on the source issue itself when it has no parent).

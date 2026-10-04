@@ -817,7 +817,7 @@ export class RuntimesRepo {
            provider = NULL,
            execution_fingerprint = NULL,
            work_dir = NULL,
-           cursor_seq = 0,
+           provider_cursor_seq = 0,
            parent_cursor_seq = 0,
            generation = generation + 1,
            last_attempt_id = NULL,

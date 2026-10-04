@@ -316,7 +316,7 @@ export class NotificationChannelsRepo {
     if (!delivery) return null;
     const channel = this.getChannel(delivery.channelId);
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_inbox_items WHERE id = ?",
+      "SELECT * FROM multiremi_member_inbox_records WHERE id = ?",
     ).get(delivery.inboxItemId) as Row | null;
     const issueId = nullableString(row?.issue_id);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;

@@ -6,7 +6,6 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -477,7 +476,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(activity).toHaveLength(1);
 
     store.createIssueComment(issue.id, { body: "One more thing." });
-    expect(store.listTasks()).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 2);
+    expect(store.listTasks()).toHaveLength(true ? 1 : 2);
   });
 
   it("suppresses assignee auto-response when the comment addresses someone explicitly", () => {

@@ -36,7 +36,13 @@ function fixture(version = "2.1.259", hoisted = true) {
   put(join(sdk, "sdk.mjs"), "export {};\n");
   const libcSuffix = process.platform === "linux" && !(process.report!.getReport() as any).header.glibcVersionRuntime ? "-musl" : "";
   const executable = fakeCli(join(sdkModules, "@anthropic-ai", `claude-agent-sdk-${process.platform}-${process.arch}${libcSuffix}`, "claude"), version);
-  const env: NodeJS.ProcessEnv = { ...process.env, REMI_HOME: root, REMI_CLAUDE_AGENT_ACP_DIR: bridge };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    REMI_HOME: root,
+    REMI_CLAUDE_AGENT_ACP_DIR: bridge,
+    npm_config_logs_dir: join(root, "npm-logs"),
+    npm_config_cache: join(root, "npm-cache"),
+  };
   delete env.REMI_CLAUDE_CODE_EXECUTABLE;
   delete env.CLAUDE_CODE_EXECUTABLE;
   delete env.REMI_CLAUDE_AGENT_ACP_PACKAGE;

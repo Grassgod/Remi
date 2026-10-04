@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runUnifiedModelMigration, reconcileUnifiedModel, retryChains,
   UnifiedModelPreflightError } from "@multiremi/store/unified-model-migration.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
-import { dropRetiredTables, RETIRED_TABLE_SETS } from "../../../scripts/drop-retired-tables.js";
+import { dropRetiredTables, RETIRED_TABLE_SETS, RETIRED_COLUMN_SETS } from "../../../scripts/drop-retired-tables.js";
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
 
@@ -227,8 +227,14 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
       const report=runUnifiedModelMigration(db,{reportDir:dir});
       const now=new Date();
       db.run("UPDATE multiremi_schema_migrations SET applied_at=? WHERE id=?",[new Date(now.getTime()-8*86_400_000).toISOString(),UNIFIED_MODEL_MIGRATION]);
+      const previous=process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+      process.env.MULTIREMI_MIGRATION_REPORT_DIR=dir;
+      try { new MultiremiStore(db); } finally {
+        if(previous===undefined)delete process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+        else process.env.MULTIREMI_MIGRATION_REPORT_DIR=previous;
+      }
       const args={set,reconciliation:report,now};
-      expect(dropRetiredTables(db,args)).toEqual({dry_run:true,tables:[...RETIRED_TABLE_SETS[set]],minimum_age_days:7});
+      expect(dropRetiredTables(db,args)).toEqual({dry_run:true,tables:[...RETIRED_TABLE_SETS[set]],columns:RETIRED_COLUMN_SETS[set],minimum_age_days:7});
       expect(()=>dropRetiredTables(db,{...args,execute:true})).toThrow("--confirm-drop");
       const backup=join(dir,"local-backup");writeFileSync(backup,"local fixture backup");
       expect(dropRetiredTables(db,{...args,execute:true,confirmDrop:true,backup}).dry_run).toBe(false);
