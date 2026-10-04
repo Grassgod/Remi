@@ -60,8 +60,9 @@ describe("bound Issue continuation prompt", () => {
         expect(prompt).toContain("the target does not share your Chat transcript");
         expect(prompt).toContain("remi task steer <task-id>");
         expect(prompt).toContain(`remi session task create ${issue.id} <issue-session-id>`);
-        expect(prompt).toContain("Ordinary agent comments");
-        expect(prompt).toContain("do not wake the assignee");
+        expect(prompt).toContain("A rich mention from an Issue task delegates to that agent");
+        expect(prompt).toContain("its result returns automatically to the dispatching Issue Session");
+        expect(prompt).toContain("Chat-origin dispatch keeps the existing topic relay reporting path");
         expect(prompt).toContain("remi task get <returned-task-id> --output json");
         expect(prompt).toContain("remi task steer list <target-task-id> --output json");
         expect(prompt).toContain("never describe queued work as running");
@@ -88,7 +89,7 @@ describe("bound Issue continuation prompt", () => {
 });
 
 describe("topic Task credential handoff through existing APIs", () => {
-  it("a comment alone does not dispatch; an explicit Task resumes the owner's Issue lane", async () => {
+  it("task-linked rich mentions and explicit Tasks resume the owner's Issue lane without a delegation return to Chat", async () => {
     const { store, app, headers, task, owner, remi, issue, session, runtime, chat } = await authenticatedTopic();
     const previous = store.createSessionTask(session.id, { agentId: owner.id, prompt: "Original implementation" });
     expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
@@ -101,8 +102,28 @@ describe("topic Task credential handoff through existing APIs", () => {
       body: JSON.stringify({ content: `[@Issue owner](mention://agent/${owner.id}) Please continue.` }),
     });
     expect(comment.status).toBe(201);
-    expect((await comment.json()).author_type).toBe("agent");
-    expect(store.listTasks()).toHaveLength(before);
+    const posted = await comment.json();
+    expect(posted.author_type).toBe("agent");
+    const mentioned = store.listTasks().find((entry) => entry.triggerCommentId === posted.id)!;
+    expect(mentioned).toMatchObject({
+      issueId: issue.id, issueSessionId: session.id, agentId: owner.id,
+      chatSessionId: null, parentTaskId: task.id, status: "queued", sessionId: "acp_issue_owner",
+      delegationId: null, delegatedByAgentId: null, delegatedFromIssueSessionId: null,
+      delegationSkipReason: "source_not_issue_task",
+    });
+    expect(store.listTasks()).toHaveLength(before + 1);
+    expect(store.claimTask(runtime.id)?.id).toBe(mentioned.id);
+    store.startTask(mentioned.id);
+    store.completeTask(mentioned.id, { output: "Rich mention follow-up verified." });
+    expect(store.getTask(mentioned.id)?.delegationReturnTaskId).toBeNull();
+    expect(store.listIssueActivity(issue.id)).toContainEqual(expect.objectContaining({
+      type: "delegation_return_skipped",
+      data: expect.objectContaining({
+        reason: "source_not_issue_task", sourceTaskId: mentioned.id, terminalStatus: "completed",
+      }),
+    }));
+    expect(store.listTasks()).toHaveLength(before + 1);
+    expect(store.listTasks().filter((entry) => entry.chatSessionId === chat.id).map((entry) => entry.id)).toEqual([task.id]);
 
     const created = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
       method: "POST", headers,
@@ -117,6 +138,7 @@ describe("topic Task credential handoff through existing APIs", () => {
     const verified = await app.request(`/api/multiremi/tasks/${next.id}`, { headers });
     expect(verified.status).toBe(200);
     expect((await verified.json()).task).toMatchObject({ id: next.id, issueSessionId: session.id, agentId: owner.id, status: "queued" });
+    expect(store.getTask(next.id)).toMatchObject({ delegationId: null, delegationSkipReason: "source_not_issue_task" });
     const listed = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, { headers });
     expect(listed.status).toBe(200);
     expect((await listed.json()).some((entry: { id: string }) => entry.id === next.id)).toBe(true);

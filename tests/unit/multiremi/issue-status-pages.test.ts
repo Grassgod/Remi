@@ -112,11 +112,15 @@ describe(`MUL-395 status pages (${process.env.MULTIREMI_TEST_POSTGRES_URL ? "Pos
     const writer = h.writer();
     const id = "iss_primary_todo_119";
     let changed = false;
+    let statusChanged = false;
+    let labelsDeleted = false;
     h.probe.afterRead = (sql) => {
       if (changed || !sql.includes("UNION ALL")) return;
       changed = true;
       writer.run("UPDATE multiremi_issues SET status = ?, archived_at = ? WHERE id = ?", "in_progress", "2026-09-28", id);
+      statusChanged = true;
       writer.run("DELETE FROM multiremi_issue_to_labels WHERE issue_id = ?", id);
+      labelsDeleted = true;
     };
     try {
       const during = await h.request(path);
@@ -126,9 +130,12 @@ describe(`MUL-395 status pages (${process.env.MULTIREMI_TEST_POSTGRES_URL ? "Pos
       expect(h.store.countIssues({ workspaceId: "local", archivedOnly: true })).toBe(22);
     } finally {
       h.probe.afterRead = undefined;
-      writer.run("UPDATE multiremi_issues SET status = ?, archived_at = NULL WHERE id = ?", "todo", id);
-      writer.run("INSERT INTO multiremi_issue_to_labels (issue_id, label_id) VALUES (?, ?)", id, "lbl_status");
-      writer.close();
+      try {
+        if (statusChanged) writer.run("UPDATE multiremi_issues SET status = ?, archived_at = NULL WHERE id = ?", "todo", id);
+        if (labelsDeleted) writer.run("INSERT INTO multiremi_issue_to_labels (issue_id, label_id) VALUES (?, ?)", id, "lbl_status");
+      } finally {
+        writer.close();
+      }
     }
   });
   it("defaults to seven states, normalizes open and rejects later pages", async () => {

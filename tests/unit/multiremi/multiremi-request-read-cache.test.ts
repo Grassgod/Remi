@@ -229,6 +229,36 @@ describe("request-scoped read cache", () => {
       expect(reads()).toBe(2);
     });
 
+    for (const rollback of [false, true]) it(`keeps deferred snapshot cache and commit bookkeeping on ${rollback ? "rollback" : "commit"}`, () => {
+      const { raw, wrapped, read } = cachedTable();
+      const callbacks: string[] = [];
+      try {
+        withRequestReadCache(() => {
+          expect(read()).toBe("before");
+          raw.run("UPDATE t SET v = 'after' WHERE id = 'a'");
+          const snapshot = (wrapped as unknown as SqlDatabase).transaction(() => {
+            expect(read()).toBe("after");
+            (wrapped as unknown as SqlDatabase).afterCommit!(() => {
+              expect(wrapped.inTransaction).toBe(false);
+              callbacks.push("committed");
+            });
+            expect(callbacks).toEqual([]);
+            if (rollback) throw new Error("abort snapshot");
+            return read();
+          });
+          expect(snapshot.deferred).toBeFunction();
+          if (rollback) expect(() => snapshot.deferred!()).toThrow("abort snapshot");
+          else expect(snapshot.deferred!()).toBe("after");
+          expect(wrapped.inTransaction).toBe(false);
+          expect(callbacks).toEqual(rollback ? [] : ["committed"]);
+          raw.run("UPDATE t SET v = 'latest' WHERE id = 'a'");
+          expect(read()).toBe(rollback ? "latest" : "after");
+        });
+      } finally {
+        raw.close();
+      }
+    });
+
     it("starts a fresh cache generation for a transaction opened after commit", () => {
       const { raw, wrapped, read } = cachedTable();
       try {
