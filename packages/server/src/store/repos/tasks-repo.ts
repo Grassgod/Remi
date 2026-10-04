@@ -749,6 +749,8 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  */
 export class TaskSteerPendingError extends Error {}
 
+class AgentReplyCommentError extends Error {}
+
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
     OR (${active}.agent_id = ${queued}.agent_id AND (
@@ -4834,7 +4836,9 @@ ${placementAfter.sql}
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
-    const deferredEvents = createCommitEventQueue();
+    let deferredEvents = createCommitEventQueue();
+    const ownsTransaction = !this.ctx.db.inTransaction;
+    let skipAutoReply = false;
     const completeWithinTransaction = () => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -4871,11 +4875,23 @@ ${placementAfter.sql}
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       this.markEmptyTraceAtTerminal(taskId, input.traceEventCount);
       const completed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents);
+      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents,
+        "turn_end", skipAutoReply);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
       return { task: completed, followUps };
     };
-    const terminal = this.ctx.db.inTransaction ? completeWithinTransaction() : this.ctx.db.transaction(completeWithinTransaction)();
+    let terminal: ReturnType<typeof completeWithinTransaction>;
+    try {
+      terminal = ownsTransaction ? this.ctx.db.transaction(completeWithinTransaction)() : completeWithinTransaction();
+    } catch (error) {
+      if (!ownsTransaction || !(error instanceof AgentReplyCommentError)) throw error;
+      // Roll back partial comment writes and PG statement failures, then finish once with a result pointer.
+      log.warn(`agent reply comment skipped for ${taskId}: ${error.message}`);
+      skipAutoReply = true;
+      childStatusChanges.length = 0;
+      deferredEvents = createCommitEventQueue();
+      terminal = this.ctx.db.transaction(completeWithinTransaction)();
+    }
     const task = terminal.task;
     // Chat's turn card is the assistant reply, so it exists only after the
     // terminal transaction. Issue turn cards already receive their receipt at claim.
@@ -5914,6 +5930,7 @@ ${placementAfter.sql}
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
     reRingOrigin = "turn_end",
+    skipAutoReply = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
@@ -6081,8 +6098,8 @@ ${placementAfter.sql}
       }, deferredEvents);
       // Issue turns keep the reply as a standalone threadable `message` row and
       // point the card at it; the card itself only carries the lifecycle state.
-      const replyComment = status === "completed"
-        ? this.postAgentReplyComment(task, body, replyCommentId ?? undefined)
+      const replyComment = status === "completed" && !skipAutoReply
+        ? this.postAgentReplyCommentWithinTransaction(task, body, replyCommentId ?? undefined)
         : null;
       resultCommentId ??= replyComment?.id ?? null;
       if (task.issueSessionId) {
@@ -6688,6 +6705,12 @@ ${placementAfter.sql}
   // still report the "Task completed." placeholder — skip it, it says nothing.
   /** Returns the reply comment it created, or null when the run posted none. */
   private postAgentReplyComment(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {
+    return this.ctx.db.inTransaction
+      ? this.postAgentReplyCommentWithinTransaction(task, output, commentId)
+      : this.ctx.db.transaction(() => this.postAgentReplyCommentWithinTransaction(task, output, commentId))();
+  }
+
+  private postAgentReplyCommentWithinTransaction(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {
     if (!task.issueId || !task.agentId || task.chatSessionId) return null;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return null;
@@ -6695,8 +6718,7 @@ ${placementAfter.sql}
     try {
       // If the agent already posted its own comment during this run (the normal
       // path for @mention/comment-triggered tasks — it replies in-thread via a
-      // tool), don't also post the accumulated transcript text: that double-posts
-      // and the auto-reply is the lower-quality, narration-heavy version. The
+      // tool), don't also post the final message: that double-posts. The
       // auto-reply stays for direct assignments where the agent doesn't comment.
       if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)) {
         return null;
@@ -6716,24 +6738,24 @@ ${placementAfter.sql}
       // and member notifications follow COMMIT: a dispatch SQL failure must
       // keep the reply and complete the task, since no client can retry it.
       const deferredEvents = createCommitEventQueue();
-      const created = this.ctx.db.transaction(() => {
-        const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
-          withinTransaction: true,
-          deferredEvents,
-          deferDispatch: true,
-          commentId,
-        });
-        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
-        return created;
-      })();
+      const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
+        withinTransaction: true,
+        deferredEvents,
+        deferDispatch: true,
+        commentId,
+      });
+      this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
       reply = { id: created.comment.id };
       afterCommit(this.ctx.db, () => {
-        this.ctx.emitCommitEvents(deferredEvents);
-        this.ctx.issues().runIssueCommentPostCommit(created, input);
+        try {
+          this.ctx.emitCommitEvents(deferredEvents);
+          this.ctx.issues().runIssueCommentPostCommit(created, input);
+        } catch (error) {
+          log.warn(`agent reply comment skipped for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       });
     } catch (err) {
-      // Task completion must never fail because the reply couldn't be posted.
-      log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new AgentReplyCommentError(err instanceof Error ? err.message : String(err), { cause: err });
     }
     return reply;
   }
@@ -7090,6 +7112,7 @@ function delegationTerminalReportSection(report: DelegationTerminalReport, comme
         : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
     `Status: ${report.terminalStatus}`,
     ...(report.crossIssue ? [`Issue: ${report.sourceIssueKey} (${report.source.issueId})`] : []),
+    ...(report.crossIssue && report.sourceIssueKey ? [`来源：${report.sourceIssueKey}`] : []),
     report.resultCommentId
       ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
       : `结论评论：无；结果见 remi task get ${report.source.id}`,

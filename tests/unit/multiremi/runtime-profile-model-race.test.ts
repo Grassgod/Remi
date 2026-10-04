@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { expect, it, spyOn } from "bun:test";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
@@ -22,6 +23,7 @@ it("never reports a completed old probe under a replacement connection", async (
     return Response.json({ data: [{ id: url.hostname === "a.invalid" ? "model-from-A" : "model-from-B" }] });
   }) as typeof fetch);
   const daemon = new MultiremiDaemon({
+    sshMeshManager: disabledSshMeshRuntime(),
     serverUrl: "http://127.0.0.1:1", token: "fixture-daemon-token", runtimeId: "fixture-runtime",
     provider: "codex", daemonId: "fixture-daemon", workspaceId: "local", gcEnabled: false,
     inProcessRuntimeModelDiscoveryEnabled: true,

@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -88,6 +89,7 @@ describe("Project-bound Chat daemon startup", () => {
       let cwd = "";
       let envProject: string | undefined;
       const daemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
         daemonId, runtimeId: "rt_chat_project", runtimeName: "Chat Project runtime", provider: "claude", workspaceId: "local",
         once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -191,6 +193,7 @@ describe("Project-bound Chat daemon startup", () => {
     const prompts: string[] = [];
     const cwds: string[] = [];
     const createDaemon = () => new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
       daemonId, runtimeId, runtimeName: "Chat repo runtime", provider: "claude", workspaceId: "local",
       once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -316,6 +319,7 @@ describe("Project-bound Chat daemon startup", () => {
         const runTurn = async (turn: number) => {
           const sent = store.sendChatMessage(chat.id, { body: `Run turn ${turn}.` });
           const daemon = new MultiremiDaemon({
+            sshMeshManager: disabledSshMeshRuntime(),
             serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
             daemonId, runtimeId, runtimeName: "Preserved Chat runtime", provider: "claude", workspaceId: "local",
             once: true, daemonPort: 0, workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, ".repo-cache"),
@@ -448,6 +452,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       expect(host).toBeDefined();
       let observed: { cwd: string; sessionId: string | null; prompt: string } | undefined;
       const daemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`, token: credentials.get(runtimeId)!,
         ...host, runtimeName: host.runtimeId, provider: "claude", workspaceId: "local",
         once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
@@ -563,6 +568,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
           // Every turn starts a new daemon, so successful continuation cannot
           // depend on an in-memory directory or provider-session cache.
           const daemon = new MultiremiDaemon({
+            sshMeshManager: disabledSshMeshRuntime(),
             serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
             daemonId, runtimeId, runtimeName: "Directory transition runtime", provider: "claude", workspaceId: "local",
             once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),
@@ -667,6 +673,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
       const clock = spyOn(Date, "now").mockImplementation(() => realNow() + clockOffset);
       const runDaemon = async (run: number, rejectInheritedPath = false) => {
         const daemon = new MultiremiDaemon({
+          sshMeshManager: disabledSshMeshRuntime(),
           serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
           daemonId, runtimeId, runtimeName: "Unsafe delta runtime", provider: "claude", workspaceId: "local",
           once: true, daemonPort: 0, workspacesRoot, repoCacheRoot: join(root, ".repo-cache"),

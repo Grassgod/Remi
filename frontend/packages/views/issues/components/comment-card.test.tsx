@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -40,13 +41,55 @@ vi.mock("@multiremi/core/paths", async (importOriginal) => {
   };
 });
 
-import { AttachmentList } from "./comment-card";
+vi.mock("@multiremi/core/workspace/hooks", () => ({
+  useActorName: () => ({ getActorName: () => "User" }),
+}));
+vi.mock("@multiremi/core/hooks/use-file-upload", () => ({
+  useFileUpload: () => ({ uploadWithToast: vi.fn() }),
+}));
+vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
+
+import { AttachmentList, CommentCard } from "./comment-card";
+import { renderWithI18n } from "../../test/i18n";
+import type { TimelineEntry } from "@multiremi/core/types";
 
 function renderWithQuery(ui: ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+function renderCard(entry: Partial<TimelineEntry>, onResolveToggle = vi.fn()) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const comment: TimelineEntry = {
+    type: "comment",
+    id: "c-1",
+    actor_type: "member",
+    actor_id: "u-1",
+    content: "hello",
+    parent_id: null,
+    resolved_at: null,
+    created_at: "2026-10-01T00:00:00Z",
+    ...entry,
+  };
+  renderWithI18n(
+    <QueryClientProvider client={qc}>
+      <CommentCard
+        issueId="i-1"
+        entry={comment}
+        currentUserId="u-1"
+        onStartReply={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleReaction={vi.fn()}
+        onResolveToggle={onResolveToggle}
+      />
+    </QueryClientProvider>,
+  );
+  return { onResolveToggle };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -84,5 +127,30 @@ describe("AttachmentList — standalone HTML attachment routes through Attachmen
     // AttachmentCard chrome would render the filename as visible <p> text;
     // HtmlAttachmentPreview replaces the row entirely.
     expect(screen.queryByText("report.html")).toBeNull();
+  });
+});
+
+describe("CommentCard — resolve menu item", () => {
+  // MUL-503: the server rejects resolve/unresolve on a reply with
+  // "only root comments can be resolved", so the menu must not offer it there.
+  it("offers Resolve thread on a root comment", async () => {
+    const user = userEvent.setup();
+    const { onResolveToggle } = renderCard({ parent_id: null });
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Resolve thread" }));
+
+    expect(onResolveToggle).toHaveBeenCalledWith("c-1", true);
+  });
+
+  it("does not offer Resolve thread on a reply", async () => {
+    const user = userEvent.setup();
+    renderCard({ id: "c-2", parent_id: "c-1" });
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+
+    expect(await screen.findByRole("menuitem", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Resolve thread" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Unresolve thread" })).toBeNull();
   });
 });

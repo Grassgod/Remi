@@ -2,6 +2,7 @@
 // while a turn is streaming soft-interrupts it and is injected as the next
 // prompt on the same provider session; force_answer additionally arms a grace
 // deadline after which the run completes with the output produced so far.
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import type { Database } from "bun:sqlite";
@@ -97,6 +98,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer",
@@ -175,6 +177,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-late",
@@ -227,6 +230,7 @@ describe("Bun Multiremi daemon steering", () => {
       return originalComplete(id, input);
     });
     const daemon = activeDaemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "daemon-completion-race",
       runtimeName: "Completion race", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,
       workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "repos"),
@@ -310,6 +314,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
@@ -379,6 +384,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-force",
@@ -434,6 +440,7 @@ describe("Bun Multiremi daemon steering", () => {
 
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-cancel",

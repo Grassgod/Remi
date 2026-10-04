@@ -4758,9 +4758,9 @@ export class IssuesRepo {
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
     // also reached from a caller that already owns a transaction — the
     // Organizer action transaction that passes `withinTransaction` — so it
-    // opens a BEGIN only when it is called from outside one. (The automatic
-    // reply owns its frame and calls the two halves directly; see
-    // `postAgentReplyComment`.) A second frame there would be a pure
+    // opens a BEGIN only when it is called from outside one. (Task completion
+    // owns the automatic reply's frame and calls the two halves directly; see
+    // `postAgentReplyCommentWithinTransaction`.) A second frame there would be a pure
     // savepoint wrapper over the same writes and would push a guarded path past
     // the single BEGIN the depth probes assert. When we do own the frame, we
     // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,

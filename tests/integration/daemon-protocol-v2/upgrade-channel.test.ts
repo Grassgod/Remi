@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -196,6 +197,7 @@ describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
     cleanups.push(() => hello.mockRestore());
     let upgrades = 0;
     const daemon = new TestMultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "dmn_upgrade", runtimeId: b.runtime.id,
       runtimeName: "Version fixture", provider: "claude", workspaceId: "local", daemonPort: 0,
       workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"), pluginCacheRoot: join(root, "plugins"),

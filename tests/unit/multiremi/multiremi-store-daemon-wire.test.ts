@@ -12,6 +12,22 @@ import { captureReports } from "../../fixtures/report-session.js";
 
 afterEach(resetMultiremiTestEnv);
 
+async function readOfferHistory(app: ReturnType<typeof createMultiremiApp>, wire: any): Promise<Array<{
+  body_md: string; metadata: Record<string, unknown>;
+}>> {
+  const range = JSON.parse(wire.session_projection.jsonl.split("\n")[0]);
+  expect(range).toMatchObject({ type: "unread_range", from_seq: 0 });
+  const command = range.instruction.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+  expect(command[1]).toBe(wire.session_projection.session_id);
+  expect(command[2]).toBe("0");
+  const response = await app.request(`/api/sessions/${command[1]}/log/entry?from=${command[2]}&to=${command[3]}`,
+    { headers: { Authorization: `Bearer ${wire.auth_token}` } });
+  expect(response.status).toBe(200);
+  const page = await response.json() as any;
+  expect(page.next_cursor).toBeNull();
+  return page.entries;
+}
+
 
 describe("Multiremi store — Go daemon wire shapes", () => {
 
@@ -299,7 +315,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       issue_session_generation: 1,
       workspace_id: "local",
       status: "dispatched",
-      prompt: "First claim",
+      prompt: expect.stringContaining("Respond to the triggering messages"),
       kind: "direct",
       agent: {
         id: agent.id,
@@ -336,6 +352,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       ],
       repos: [{ url: "https://github.com/example/claim-shape" }],
     });
+    expect(claimTask.session_projection.jsonl).toContain('"body":"First claim"');
     expect(claimTask.auth_token).toStartWith("mat_");
     const firstClaimToken = await store.verifyAccessToken(claimTask.auth_token);
     expect(firstClaimToken).toMatchObject({
@@ -368,7 +385,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       issueId: secondIssue.id,
       issueSessionGeneration: 1,
       workspaceId: "local",
-      prompt: "Second claim",
+      prompt: expect.stringContaining("Respond to the triggering messages"),
       agent: {
         id: agent.id,
         customEnv: { CLAIM_SECRET: "present" },
@@ -398,6 +415,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       ],
       repos: [{ url: "https://github.com/example/claim-shape" }],
     });
+    expect(normalized?.sessionProjection?.jsonl).toContain('"body":"Second claim"');
     expect(normalized?.authToken).toStartWith("mat_");
   });
 
@@ -635,7 +653,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Claim chat context" });
     const firstChat = store.sendChatMessage(chat.id, { body: "Check Shanghai weather" });
-    store.sendChatMessage(chat.id, { body: "and Qingdao too" });
+    const queuedChat = store.sendChatMessage(chat.id, { body: "and Qingdao too" });
     const autopilot = store.createAutopilot({
       id: "ap_claim_context",
       title: "Atlas · Repository Wiki",
@@ -669,12 +687,15 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       id: firstChat.task.id,
       kind: "chat",
       chat_session_id: chat.id,
-      chat_message: "Check Shanghai weather\n\nand Qingdao too",
       workspace_context: "Use the workspace TypeScript conventions.",
       requesting_user_name: "Local Alice",
       requesting_user_profile_description: "Prefers concise updates with verification notes.",
     });
     expect(byId.get(firstChat.task.id).chatMessage).toBeUndefined();
+    expect(byId.get(firstChat.task.id).chat_message).toBeUndefined();
+    expect(byId.get(firstChat.task.id).session_projection.jsonl).toContain('"body":"Check Shanghai weather"');
+    expect(byId.get(firstChat.task.id).session_projection.jsonl).not.toContain("and Qingdao too");
+    expect(store.getTask(queuedChat.task.id)?.status).toBe("queued");
 
     expect(byId.get(run.taskId!)).toMatchObject({
       id: run.taskId,
@@ -696,6 +717,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       quick_create_prompt: "Create onboarding screenshot follow-up",
     });
     expect(byId.get(quick.task.id).quickCreatePrompt).toBeUndefined();
+
+    store.startTask(firstChat.task.id);
+    store.completeTask(firstChat.task.id, { output: "Shanghai checked", sessionId: "chat-queue-session" });
+    const queuedClaim = (await (await taskOfferResponse(store, runtime.id)).json()).task;
+    expect(queuedClaim.id).toBe(queuedChat.task.id);
+    expect(queuedClaim.session_projection.jsonl).toContain('"body":"and Qingdao too"');
+    expect(queuedClaim.session_projection.jsonl).not.toContain('"body":"Check Shanghai weather"');
 
     mockFetch(() => jsonResponse({
       task: {
@@ -784,11 +812,14 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(retry).not.toHaveProperty("session_id");
     expect(retry).not.toHaveProperty("work_dir");
     expect(retry.session_projection.mode).toBe("bootstrap");
-    expect(retry.session_projection.jsonl).toContain("Original question");
-    expect(retry.session_projection.jsonl).toContain("Original answer");
+    expect(retry.session_projection.jsonl).not.toContain("Original question");
+    expect(retry.session_projection.jsonl).not.toContain("Original answer");
     expect(retry.session_projection.jsonl).not.toContain("Continue from that");
     expect(retry.chat_message).toBe("Continue from that");
     expect(retry).not.toHaveProperty("chat_bootstrap_transcript");
+    const history = await readOfferHistory(app, retry);
+    expect(history.map(entry => entry.body_md)).toContain("Original question");
+    expect(history).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ final_reply_md: "Original answer" }) }));
   });
 
   it.each([false, true])("cold-bootstraps a stale detached private Chat dispatch (legacy Issue Session: %s)", async (legacyIssueSession) => {
@@ -831,9 +862,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(wire).not.toHaveProperty("prior_session_id");
     expect(wire.work_dir).toBe("/tmp/detached-chat-work");
     expect(wire.session_projection.mode).toBe("bootstrap");
-    expect(wire.session_projection.jsonl).toContain("Our earlier private question");
-    expect(wire.session_projection.jsonl).toContain("Our earlier private answer");
+    expect(wire.session_projection.jsonl).not.toContain("Our earlier private question");
+    expect(wire.session_projection.jsonl).not.toContain("Our earlier private answer");
     expect(wire.session_projection.jsonl).not.toContain("UNRELATED_ISSUE_HISTORY_MUST_NOT_SHIP");
+    const history = await readOfferHistory(app, wire);
+    expect(history.map(entry => entry.body_md)).toContain("Our earlier private question");
+    expect(history).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ final_reply_md: "Our earlier private answer" }) }));
+    expect(JSON.stringify(history)).not.toContain("UNRELATED_ISSUE_HISTORY_MUST_NOT_SHIP");
     expect(store.getTask(pending.task.id)?.sessionId).toBe("legacy_issue_context_session");
   });
 
@@ -870,10 +905,11 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(wire.id).toBe(sent.task.id);
     expect(wire.issue_id).toBe("");
     for (const field of [
-      "issue", "issue_session", "issue_session_id", "issue_session_results",
+      "issue", "issue_session", "issue_session_id",
       "project", "project_id", "project_resources", "project_contexts", "project_wiki_docs",
       "repository_wiki_contexts", "repos", "bound_issue", "bound_issue_updates", "squad_context",
     ]) expect(wire).not.toHaveProperty(field);
+    expect(wire.issue_session_results).toEqual([]);
     expect(JSON.stringify(wire)).not.toContain("MUST_NOT_SHIP");
     expect(store.listChatMessages(chat.id).map(message => message.body)).toEqual(["Just this conversation"]);
   });
@@ -901,12 +937,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(firstResponse.status).toBe(200);
     const firstClaim = (await firstResponse.json()).task;
     expect(firstClaim.session_projection.mode).toBe("bootstrap");
-    const firstPrompt = buildTaskPrompt({
-      ...store.getTaskWithAgent(first.task.id)!,
-      sessionProjection: firstClaim.session_projection,
-      chatMessage: firstClaim.chat_message,
-      boundIssue: firstClaim.bound_issue,
-    } as any);
+    const firstPrompt = buildTaskPrompt(normalizeDaemonClaimTask(firstClaim)!);
     expect(firstPrompt.match(/First bound request/g)).toHaveLength(1);
     expect(firstPrompt).toContain("## Agent Instructions");
     expect(firstPrompt).toContain("## Skills");
@@ -918,12 +949,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(secondResponse.status).toBe(200);
     const secondClaim = (await secondResponse.json()).task;
     expect(secondClaim.session_projection.mode).toBe("delta");
-    const secondPrompt = buildTaskPrompt({
-      ...store.getTaskWithAgent(second.task.id)!,
-      sessionProjection: secondClaim.session_projection,
-      chatMessage: secondClaim.chat_message,
-      boundIssue: secondClaim.bound_issue,
-    } as any);
+    const secondPrompt = buildTaskPrompt(normalizeDaemonClaimTask(secondClaim)!);
     expect(secondPrompt).toContain("# Delta Prompt");
     expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
     expect(secondPrompt.match(/Second bound request/g)).toHaveLength(1);
@@ -1184,12 +1210,15 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       id: task.id,
       trigger_comment_id: comment.id,
       trigger_thread_id: root.id,
-      trigger_comment_content: body,
       trigger_author_type: "member",
       trigger_author_name: "Alice Reviewer",
       new_comment_count: 2,
       new_comments_since: previousStartedAt,
     });
+    expect(claimBody.task.trigger_comment_content).toBeUndefined();
+    expect(claimBody.task.session_projection.jsonl).toContain(JSON.stringify(body));
+    // The legacy pending snapshot retains its field; production offers use only the triggering-message JSONL.
+    expect(claimBody.task.session_projection.jsonl).not.toContain("Root context.");
   });
 
   it("dispatches a task when an issue update assigns an agent (assign-on-update)", async () => {

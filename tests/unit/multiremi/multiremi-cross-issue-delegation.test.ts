@@ -1,5 +1,6 @@
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -157,6 +158,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(returns[0]?.issueSessionId).toBe(f.leaderSession.id);
         const body = inboxReportBody(store, returns[0]!);
         expect(body).toContain(f.child.key);
+        expect(body.split("\n")).toContain(`来源：${f.child.key}`);
         expect(body).toContain(comment.id);
         expect(body).toContain(`Status: ${terminal}`);
         expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
@@ -331,8 +333,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.claimTask(f.workerRuntime.id)?.id).toBe(first.id);
       store.buildTaskSessionProjection(first.id);
       store.startTask(first.id);
-      // No comment yet: the terminal transaction records null and the prompt
-      // carries the ruling's fixed fallback line.
+      // Cancellation has no automatic reply; the bell points to the source task.
       store.cancelTask(first.id);
       const withoutComment = store.listTasksForIssue(f.parent.id)
         .find((task) => task.agentId === f.leader.id && task.parentTaskId === first.id)!;
@@ -373,8 +374,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const bridgeWith = store.listSessionEvents(f.leaderSession.id)
         .find((event) => event.kind === "delegation_report" && event.taskId === second.id)!;
       expect((bridgeWith.metadata as Record<string, unknown>).result_comment_id).toBe(newest.id);
-      // The automatic reply is posted after commit and must not rewrite the
-      // bridge event or append another one for the same source task. Later
+      // The terminal snapshot must not rewrite the bridge event or append
+      // another one for the same source task. Later
       // events from the E2 child-status round are unrelated to this report.
       const bridgeEvents = store.listSessionEvents(f.leaderSession.id)
         .filter((event) => event.kind === "delegation_report" && event.taskId === second.id);
@@ -382,25 +383,24 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect((bridgeEvents[0]!.metadata as Record<string, unknown>).result_comment_id).toBe(newest.id);
     }), backend === "postgres" ? 15_000 : 5_000);
 
-    it("still queues the return when the automatic result comment fails", async () => withStore(backend, async (store) => {
+    it("still completes and queues a result-pointer return when the transactional auto comment fails", async () => withStore(backend, async (store) => {
       const f = fixture(store);
       const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       finishLeaderRound(store, f);
       expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
       store.buildTaskSessionProjection(childTask.id);
       store.startTask(childTask.id);
-      // The terminal writer now calls the repository transaction writer directly.
-      const issues = (store as unknown as { issues: Pick<MultiremiStore, "createIssueCommentWithinTransaction"> }).issues;
-      const original = issues.createIssueCommentWithinTransaction;
-      issues.createIssueCommentWithinTransaction = function (issueId, input, options) {
-        if (input.taskId === childTask.id) throw new Error("auto comment failed");
-        return original.call(this, issueId, input, options);
-      };
+      const write = spyOn(IssuesRepo.prototype, "createIssueCommentWithinTransaction").mockImplementation(() => {
+        throw new Error("auto comment failed");
+      });
       try {
         store.completeTask(childTask.id, { output: "Completed without an in-run comment" });
+        expect(write).toHaveBeenCalledTimes(1);
       } finally {
-        issues.createIssueCommentWithinTransaction = original;
+        write.mockRestore();
       }
+      expect(store.getTask(childTask.id)).toMatchObject({ status: "completed", result: "Completed without an in-run comment" });
+      expect(store.listIssueComments(f.child.id).filter(comment => comment.taskId === childTask.id)).toEqual([]);
       const returnTask = store.listTasksForIssue(f.parent.id)
         .find((task) => task.agentId === f.leader.id && task.parentTaskId === childTask.id)!;
       expect(returnTask).toBeTruthy();

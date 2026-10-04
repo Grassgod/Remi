@@ -138,15 +138,23 @@ Two further behaviours were decided with the fix's reviewers:
    contains duplicate reports. A cross-issue report without the metadata key
    falls back to the legacy latest-comment lookup for compatibility. New
    cross-issue terminal reports always include the key. No existing event is
-   rewritten and no fallback value is persisted. It is never back-filled: the
-   automatic result comment is posted after that transaction commits, so a
-   report with no in-run comment carries `result_comment_id: null` and the
-   prompt line
-   `Result comment: none at completion (the final reply is posted as a comment
-   after this report; result text follows)`. The report body is always the task
-   result, truncated to 16000 characters, which is the primary content.
-   Same-issue reports keep their pre-MUL-456 assembly: they do not query a
-   result comment and do not render a `Result comment:` line.
+   rewritten and no fallback value is persisted. When the run has no in-run
+   comment, completion writes its final reply, mirrored log row and turn-card
+   pointer in the same terminal transaction before freezing the report. The
+   terminal path reuses its owning transaction without opening another frame
+   (ADR 0011); dispatch, notifications and realtime pushes follow COMMIT. A
+   comment write failure rolls back that terminal attempt and completion then
+   commits once without an automatic reply, with a task-result reading pointer.
+   No partial comment or invented id survives the failed attempt.
+
+   ADR 0013 replaces the former full-result return body for both cross-issue
+   and same-issue reports: a bounded doorbell carries status, a short summary,
+   the conclusion-comment id and reading command, or `remi task get <id>` when
+   there is no comment. The summary is at most 500 characters and the terminal
+   doorbell is capped below 2 KiB in UTF-8 bytes. Cross-issue doorbells retain
+   one short source line, `来源：<Issue key>`, as well as the source issue/task
+   ids in metadata. Same-issue reports also resolve and expose their conclusion
+   comment; they follow the same reading contract rather than copying results.
 
 8. **The dependency gate is unchanged.** A return task is a self-delegation
    (`delegation_id` set, `delegated_by_agent_id === agent_id`) and an E2 round
@@ -173,7 +181,8 @@ Two further behaviours were decided with the fix's reviewers:
 - The return task still relies on the existing delegation machinery: the
   return cannot bounce, a retry chain reports once, and the parent status guard
   does not reopen a closed parent.
-- Residual risk: the automatic result comment is still best-effort and
-  published after commit. When it fails, the return prompt carries the fallback
-  line and the result text; no comment id is invented and no session event is
-  rewritten.
+- Residual risk: the automatic result comment is still best-effort. A write
+  failure falls back to the committed task result and a bounded doorbell with
+  its reading command; no comment id is invented and no session event is
+  rewritten. A dispatch failure after COMMIT retains the comment and terminal
+  state, with a durable dispatch intent for recovery.
