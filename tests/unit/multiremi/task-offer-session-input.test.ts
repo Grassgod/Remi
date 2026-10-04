@@ -143,6 +143,9 @@ test("task-token range reads are recorded without including bodies or credential
     })]);
     expect(JSON.stringify(info.mock.calls)).not.toContain(credential.token);
     expect(JSON.stringify(info.mock.calls)).not.toContain(peer.body);
+    info.mockImplementation(() => { throw new Error("telemetry unavailable"); });
+    expect((await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=1`,
+      { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(200);
     const other = f.store.createChatSession({ agentId: f.agent.id, creatorId: "other_user" });
     expect((await app.request(`/api/sessions/${other.id}/log/entry?from=0&to=1`,
       { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(403);

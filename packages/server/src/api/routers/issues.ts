@@ -1675,6 +1675,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const chat = loadChatSessionForCurrentUser(c, store, sessionId);
     return chat instanceof Response ? chat : chat.session.id;
   };
+  const recordLogRead = (message: string, data: Record<string, unknown>): void => {
+    // Optional read telemetry cannot make an authorized read fail.
+    try { log.info(message, data); } catch {}
+  };
   app.get("/api/sessions/:sessionId/log/locate", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
@@ -1696,7 +1700,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const token = currentTaskAccessToken(c);
       try {
         const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
-        if (token?.taskId) log.info("Session unread range read", { event: "session_log_range_read",
+        if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
           task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, from_seq: from, to_seq: to,
           complete: page.next_cursor === null, entries: page.entries.length });
         return c.json(page);
@@ -1717,7 +1721,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const entry = store.getConversationLogEntry(sessionId, seq);
     if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
     const token = currentTaskAccessToken(c);
-    if (token?.taskId) log.info("Session entry expanded", { event: "session_log_entry_expanded",
+    if (token?.taskId) recordLogRead("Session entry expanded", { event: "session_log_entry_expanded",
       task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, seq: entry.seq,
       folded_chars: Math.max(0, entry.body_md.length - 8_000) });
     const envelope = entry.metadata.envelope;

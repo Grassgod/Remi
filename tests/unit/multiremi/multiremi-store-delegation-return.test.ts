@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
@@ -287,6 +287,25 @@ describe("task-level agent delegation return", () => {
       } finally { resetMultiremiTestEnv(); }
     });
   }
+
+  it("keeps completion and a task-result pointer when the automatic comment write fails", () => {
+    const f = createDelegationFixture();
+    const run = db!.run.bind(db!);
+    const failure = spyOn(db!, "run").mockImplementation((sql: string, ...parameters: any[]) => {
+      if (sql.includes("INSERT INTO multiremi_issue_comments") && parameters[0]?.[3] === "agent") {
+        throw new Error("comment write unavailable");
+      }
+      return run(sql, ...parameters);
+    });
+    try {
+      f.store.completeTask(f.childTask.id, { output: "final reply" });
+      expect(f.store.getTask(f.childTask.id)?.status).toBe("completed");
+      const returned = f.store.getTask(f.store.getTask(f.childTask.id)!.delegationReturnTaskId!)!;
+      const report = inboxReportBody(f.store, returned, f.childTask.id);
+      expect(report).toContain(`结论评论：无；结果见 remi task get ${f.childTask.id}`);
+      expect(report).not.toMatch(/结论评论：cmt_/);
+    } finally { failure.mockRestore(); resetMultiremiTestEnv(); }
+  });
 
   it("returns every explicit continuation round once", () => {
     const fixture = createDelegationFixture();
