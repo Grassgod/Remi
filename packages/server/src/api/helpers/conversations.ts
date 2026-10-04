@@ -49,9 +49,18 @@ export function conversationEntrySource(
   depth = 0,
 ): string | null | undefined {
   if (depth > 4) return null;
-  if (entry.kind === "turn" || entry.metadata.human_request || entry.metadata.human_response) {
+  if (entry.kind === "turn" || entry.metadata.human_request) {
     const replyId = entry.reply_to_id ?? entry.parent_id;
     return entry.task_id ?? (replyId ? reply(replyId)?.task_id : null) ?? null;
+  }
+  if (entry.metadata.human_response) {
+    const replyId = entry.reply_to_id ?? entry.parent_id;
+    const question = replyId ? reply(replyId) : null;
+    const source = entry.task_id ?? question?.task_id;
+    if (source) return source;
+    // Ordinary decision replies also carry human_response. Inherit the
+    // question's visibility; missing or unresolved protected sources stay hidden.
+    return question ? conversationEntrySource(question, reply, target, depth + 1) : null;
   }
   // Edit/delete and lifecycle markers can contain the protected row's body.
   if (Number.isSafeInteger(entry.metadata.target_seq)) {

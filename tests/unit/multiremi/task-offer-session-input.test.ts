@@ -157,7 +157,21 @@ test("range reads every page, rejoins long Unicode bodies, and excludes own hist
   const f = fixture();
   const body = "😀中文".repeat(30_000);
   const long = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body });
-  for (let index = 0; index < 120; index++) f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: `entry ${index}` });
+  // Keep a real canonical message as the template; the extra rows exercise
+  // pagination, so prepare them in one batch instead of 120 domain writes.
+  const { db, transaction } = backendFixture();
+  const first = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "entry 0" });
+  const template = db.query("SELECT * FROM multiremi_conversation_log WHERE id=?").get(first.id)!;
+  const columns = Object.keys(template);
+  const rows = Array.from({ length: 119 }, (_, index) => {
+    const row = { ...template, id: `range_entry_${index + 1}`, seq: Number(template.seq) + index + 1, body_md: `entry ${index + 1}` };
+    return columns.map(column => row[column]);
+  });
+  transaction(() => {
+    db.run(`INSERT INTO multiremi_conversation_log (${columns.join(",")}) VALUES ${rows.map(() => `(${columns.map(() => "?").join(",")})`).join(",")}`, rows.flat());
+    db.run("UPDATE multiremi_conversation_heads SET head_seq=?,log_version=log_version+? WHERE session_id=?",
+      [Number(template.seq) + rows.length, rows.length, f.session.id]);
+  });
   const own = f.store.createIssueComment(f.issue.id, { authorType: "agent", authorId: f.agent.id, body: "OWN_HISTORY" });
   const to = f.store.getConversationLogHead(f.session.id)!.headSeq;
   let cursor: string | null = null;
