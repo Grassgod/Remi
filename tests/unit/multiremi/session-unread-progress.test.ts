@@ -193,6 +193,63 @@ for (const scenario of ["adjacent", "gap", "folded", "budget-folded", "reject"] 
   } finally { layer.closeAll(); layer.stop(); await layer.drain(); }
 });
 
+for (const accepted of [false, true]) test(`a recovery bootstrap resets old read progress only when accepted: ${accepted}`, async () => {
+  const f = fixture();
+  const old = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "OLD_CONTEXT" });
+  const legacy = f.claim();
+  f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: legacy.range.to_seq + 1, offset: 0 });
+  f.finish(legacy.task.id);
+  f.store.resetSessionAgentLane(f.session.id, f.agent.id);
+  const previous = f.store.getSessionAgentReadProgress(f.session.id, f.agent.id);
+  expect(previous.seq).toBeGreaterThan(0);
+  const trigger = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "RECOVER" });
+  const task = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: trigger.body, triggerCommentId: trigger.id });
+  const layer = new DaemonProtocolLayer({ store: f.store });
+  new DaemonTaskOffers({ store: f.store, layer, prepare: async claimed => {
+    const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
+    useTaskSessionInput(f.store, claimed, response);
+    return response;
+  } });
+  const frames: any[] = [];
+  const connection = layer.openSession({ send: text => { frames.push(JSON.parse(text)); return text.length; }, close() {} },
+    { masterToken: true, accessToken: null });
+  try {
+    await connection.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "reader-daemon",
+      cli_version: DAEMON_MIN_CLI_VERSION, caps: ["offer"], runtimes: [{ runtime_id: f.runtime.id, provider: "claude", max_concurrency: 1, active_task_ids: [] }] } }));
+    await layer.drain();
+    const offered = frames.find(frame => frame.t === "task.offer")!;
+    expect(offered.p.id).toBe(task.id);
+    expect(offered.p.session_projection.mode).toBe("bootstrap");
+    const range = JSON.parse(offered.p.session_projection.jsonl.split("\n")[0]);
+    expect(range.from_seq).toBe(0);
+    expect(range.instruction).toContain(`--from 0 --to ${range.to_seq}`);
+    expect(range.instruction).not.toContain("你上次读到");
+    expect(offered.p.session_projection.jsonl).not.toContain("OLD_CONTEXT");
+    expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(previous);
+    await connection.handleMessage(JSON.stringify({ v: 2, t: "res", re: String(offered.seq), ack: offered.seq,
+      p: accepted ? { ok: true } : { ok: false, code: "capacity" } }));
+    await layer.drain();
+    expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(accepted ? { seq: 0, offset: 0 } : previous);
+    if (accepted) {
+      const claimed = f.store.getTaskWithAgent(task.id)!;
+      const credential = await f.store.createTaskAccessToken(claimed, "local");
+      const oldSeq = f.store.locateConversationLogEntry(f.session.id, old.id)!.seq;
+      const app = createMultiremiApp({ store: f.store });
+      const read = await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=${oldSeq}`,
+        { headers: { Authorization: `Bearer ${credential.token}` } });
+      expect(read.status).toBe(200);
+      expect((await read.json() as any).entries[0].body_md).toBe("OLD_CONTEXT");
+      expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: oldSeq, offset: 0 });
+      f.finish(task.id);
+      // Stop the pump before claiming the next delta directly.
+      layer.closeAll(); layer.stop(); await layer.drain();
+      const next = f.claim();
+      expect(next.response.session_projection).toMatchObject({ mode: "delta" });
+      expect(next.range.from_seq).toBe(oldSeq);
+    }
+  } finally { layer.closeAll(); layer.stop(); await layer.drain(); }
+});
+
 test("Chat range reads use the same persistent high-water independent of provider completion", async () => {
   const f = fixture(); const chat = f.store.createChatSession({ agentId: f.agent.id });
   const task = f.store.sendChatMessage(chat.id, { body: "CHAT_UNREAD" }).task;

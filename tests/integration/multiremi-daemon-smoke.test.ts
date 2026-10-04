@@ -2225,8 +2225,18 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendOptions[2]?.sessionId).toBe("sess-chat-2");
       expect(sendOptions[3]?.sessionId ?? null).toBeNull();
       expect(prompts[3]).toContain("## Current Session Context");
-      expect(prompts[3]).toContain(`"body":"Start the chat"`);
-      expect(prompts[3]).toContain(`"body":"Second answer"`);
+      expect(prompts[3]).not.toContain(`"body":"Start the chat"`);
+      expect(prompts[3]).not.toContain(`"body":"Second answer"`);
+      expect(prompts[3]).not.toContain("你上次读到");
+      const range = prompts[3]!.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+      expect(range[1]).toBe(session.id); expect(range[2]).toBe("0");
+      expect(store.getSessionAgentReadProgress(session.id, agent.id)).toEqual({ seq: 0, offset: 0 });
+      const history = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/log/entry?from=${range[2]}&to=${range[3]}`,
+        { headers: { Authorization: "Bearer root-chat-resume-secret" } });
+      expect(history.status).toBe(200);
+      const page = await history.json() as any;
+      expect(page.next_cursor).toBeNull();
+      expect(page.entries.map((entry: any) => entry.body_md)).toContain("Start the chat");
       expect(prompts[3]?.match(/Recover from product history/g)).toHaveLength(1);
       expect(prompts[3]).toContain("`remi context`");
       expect(prompts[3]).not.toContain("## Available Repositories");
@@ -2242,6 +2252,12 @@ describe("Bun Multiremi daemon smoke", () => {
         sessionId: "sess-chat-3",
         latestTaskId: retry.id,
       });
+      const continued = store.sendChatMessage(session.id, { body: "Continue after cold recovery" });
+      await runDaemonOnce();
+      expect(store.getTask(continued.task.id)?.status).toBe("completed");
+      expect(sendOptions[4]?.sessionId).toBe("sess-chat-3");
+      expect(prompts[4]).toStartWith("# Delta Prompt");
+      expect(prompts[4]).toContain(`remi session log get ${session.id} --from 0 --to`);
     } finally {
       unsubscribeRetries(); now.mockRestore();
       server.stop(true);

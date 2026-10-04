@@ -120,6 +120,7 @@ test("cold start includes Issue title and description and reads the complete ran
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
   expect(prompt).toContain("COLD_START_TITLE"); expect(prompt).toContain("COLD_START_DESCRIPTION");
   expect(prompt).toContain(`remi session log get ${f.session.id} --from 0 --to ${range.to_seq}`);
+  expect(prompt).not.toContain("你上次读到");
   expect(prompt).not.toContain("FIRST_UNREAD");
 });
 

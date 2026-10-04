@@ -62,6 +62,9 @@ Issue/Chat 会话在 `multiremi_conversation_heads.agent_read_state` 可空 JSON
 折叠消息和未接受的 offer 不推进。每个 agent 首次访问已读状态时，用旧 Issue lane 游标或
 已完成 Chat 任务的投影检查点初始化并保存；这些旧投影曾完整内联，不要求重读全部历史。
 没有旧检查点的冷启动仍从 0 开始。初始化只做一次，之后 provider 检查点变化不影响已读位置。
+全新 provider bootstrap（含 stale_session 恢复）没有此前记忆，prompt 的未读范围始终从 0 开始。
+仅在接受 bootstrap offer 时重置实际高水位，再记账相邻的完整内联触发消息；准备或拒绝 offer 不重置。
+重置后的 delta 按新会话实际读取的高水位继续。
 内联记账每次最多检查 100 条元数据，不加载正文；旧镜像忽略此可空列，回滚无需删列。
 
 daemon 在 `hello.caps` 声明 `wiki.fetch` 时，服务端只查询 Wiki 元数据，不读取正文、不计算

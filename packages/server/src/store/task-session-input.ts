@@ -8,6 +8,7 @@ export function taskSessionInput(input: {
   toSeq: number;
   entries: ConversationLogEntry[];
   triggerSeqs: ReadonlySet<number>;
+  coldStart?: boolean;
   inlineChars?: number;
 }): string {
   const visible = input.entries.filter(entry => entry.visibility === "shown" && !entry.deleted_at
@@ -18,7 +19,7 @@ export function taskSessionInput(input: {
   return [
     JSON.stringify({ type: "unread_range", session_id: input.sessionId, from_seq: input.fromSeq,
       to_seq: input.toSeq, unread_count: unread.length,
-      instruction: unreadRangeHint(input.sessionId, input.fromSeq, input.toSeq, unread.length) }),
+      instruction: unreadRangeHint(input.sessionId, input.fromSeq, input.toSeq, unread.length, input.coldStart) }),
     ...visible.filter(entry => input.triggerSeqs.has(entry.seq)).map(entry => {
       const body = entry.body_md;
       const prefix = body.slice(0, limit);

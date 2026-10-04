@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { fetchTaskWikiBodies } from "@daemon/agent-runtime/workspace/wiki-fetch.js";
-import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { prepareIssueWikiWorkspace, readWikiFetchCache } from "@daemon/agent-runtime/workspace/wiki.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -26,6 +26,36 @@ function task(version = 1, body = "project body"): AgentTask {
   };
 }
 function root() { const path = mkdtempSync(join(tmpdir(), "mul498-wiki-fetch-")); roots.push(path); return path; }
+
+test("fetches Wiki before a lazy workspace exists without creating that directory", async () => {
+  const dir = join(root(), "discussions", "MUL-2", "session");
+  const current = task(); const calls: string[] = [];
+  expect(readWikiFetchCache(dir).size).toBe(0);
+  await fetchTaskWikiBodies(dir, current, async path => {
+    calls.push(path);
+    return { doc: { id: path.endsWith("project_doc") ? "project_doc" : "repo_doc",
+      body: path.endsWith("project_doc") ? "project body" : "repo body", version: 1 } };
+  });
+  expect(calls).toHaveLength(2);
+  expect(current.projectWikiDocs![0]!.body).toBe("project body");
+  expect(current.repositoryWikiContexts![0]!.docs[0]!.body).toBe("repo body");
+  expect(existsSync(dir)).toBe(false);
+});
+
+test("a lazy workspace without Wiki needs neither a directory nor downloads", async () => {
+  const dir = join(root(), "chats", "session");
+  const current = task(); current.projectWikiDocs = []; current.repositoryWikiContexts = [];
+  await fetchTaskWikiBodies(dir, current, async () => { throw new Error("unexpected download"); });
+  expect(existsSync(dir)).toBe(false);
+  expect(current.knowledgeWarnings).toEqual([]);
+});
+
+test("missing-cache handling still rejects symlink and regular-file workspace roots", () => {
+  const dir = root(); const alias = join(dir, "alias"); const file = join(dir, "file");
+  symlinkSync(dir, alias); writeFileSync(file, "file");
+  expect(() => readWikiFetchCache(alias)).toThrow("unsafe");
+  expect(() => readWikiFetchCache(file)).toThrow("unsafe");
+});
 
 test("fetches Wiki via existing endpoints, caches unchanged pages and refreshes only changed versions", async () => {
   const dir = root(); const calls: string[] = [];

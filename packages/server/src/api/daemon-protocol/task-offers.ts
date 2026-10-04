@@ -46,7 +46,7 @@ interface RuntimePump {
   cooldownReason: string | null;
   cooldownTimer: DaemonProtocolTimer | null;
   preparing: string | null;
-  pending: { taskId: string; agentId: string; inlineRead: { sessionId: string; seqs: number[]; toSeq: number } | null;
+  pending: { taskId: string; agentId: string; inlineRead: { sessionId: string; seqs: number[]; toSeq: number; coldStart: boolean } | null;
     session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
   accepted: Set<string>;
   sweep: boolean;
@@ -255,8 +255,9 @@ export class DaemonTaskOffers {
       }
       const timer = this.clock.setTimeout(() => this.rescind(runtimeId, pump, task.id), DAEMON_OFFER_TIMEOUT_MS);
       (timer as ReturnType<typeof setTimeout>).unref?.();
-      const projection = payload.session_projection as { session_id?: string; to_seq: number; jsonl?: string } | undefined;
+      const projection = payload.session_projection as { session_id?: string; to_seq: number; jsonl?: string; mode?: string } | undefined;
       const inlineRead = projection?.session_id && projection.jsonl ? { sessionId: projection.session_id, toSeq: projection.to_seq,
+        coldStart: projection.mode === "bootstrap",
         seqs: projection.jsonl.split("\n").filter(Boolean).map(line => JSON.parse(line))
           .filter(entry => entry.type === "triggering_message" && !entry.body_folded && !entry.body_omitted_chars)
           .map(entry => Number(entry.seq)) } : null;
@@ -284,7 +285,7 @@ export class DaemonTaskOffers {
         pump.accepted.add(pending.taskId);
         if (pending.inlineRead) {
           try { this.options.store.recordSessionAgentInlineRead(pending.inlineRead.sessionId, pending.agentId,
-            pending.inlineRead.seqs, pending.inlineRead.toSeq); }
+            pending.inlineRead.seqs, pending.inlineRead.toSeq, pending.inlineRead.coldStart); }
           catch { console.warn(JSON.stringify({ event: "session_log_read_progress_failed", task_id: pending.taskId })); }
         }
       }

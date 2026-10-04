@@ -153,8 +153,10 @@ export class ConversationLogRepo {
     });
   }
 
-  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number): SessionAgentReadProgress {
+  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
+      // An accepted bootstrap has no provider memory, even if an earlier session read the log.
+      if (coldStart) current = { seq: 0, offset: 0 };
       const inline = new Set(seqs);
       let seq = current.seq;
       const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, author_type, author_id

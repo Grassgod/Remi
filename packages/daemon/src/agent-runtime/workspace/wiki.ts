@@ -23,6 +23,9 @@ export const ISSUE_WIKI_BASE_DIRECTORY = ".multiremi/wiki-base";
 
 export function readWikiFetchCache(workDir: string): Map<string, { body: string; version: number; contentSha256?: string | null; doc: Partial<AgentTaskProjectDoc | AgentTaskRepositoryWikiDoc> }> {
   const cache = new Map<string, { body: string; version: number; contentSha256?: string | null; doc: Partial<AgentTaskProjectDoc | AgentTaskRepositoryWikiDoc> }>();
+  // Workspace preparation creates lazy discussion and Chat directories after fetching bodies.
+  try { lstatSync(workDir); }
+  catch (error) { if (isFsError(error, "ENOENT")) return cache; throw error; }
   const root = join(workDir, ISSUE_WIKI_BASE_DIRECTORY);
   const project = readManifest(workDir, join(root, "manifest.json"));
   for (const entry of project?.docs ?? []) {

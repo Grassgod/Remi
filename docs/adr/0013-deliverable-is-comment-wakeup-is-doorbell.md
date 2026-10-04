@@ -51,6 +51,11 @@ existing daemon versions as well as the updated worker.
   Issue lane cursor or completed Chat projection checkpoint. Legacy projections
   were inline; agents without an old checkpoint start at 0. Persist even 0 so
   later provider completion cannot be mistaken for an initial checkpoint.
+  A fresh provider bootstrap (including stale-session recovery) always offers
+  a range from 0, since the new provider has no earlier memory. Accepting that
+  offer resets the actual high-water before acknowledging contiguous inline
+  triggers; preparing or rejecting the offer does not reset it. The next delta
+  follows reads performed in this new provider session.
   Inline acknowledgement reads at most 100 metadata rows without loading bodies;
   range gap checks use an existence query rather than materializing the history.
   Folded triggers, rejected offers and out-of-order reads do not acknowledge gaps.
@@ -66,6 +71,8 @@ existing daemon versions as well as the updated worker.
   Old daemons retain complete bodies while the offer fits its soft budget;
   only enough pages are omitted to meet that budget. Omitted repository pages
   retain unavailable markers so existing local copies are preserved.
+  A not-yet-created workspace has no baseline cache. Fetching does not create
+  that directory; workspace preparation still owns creation and path validation.
 - Offers are measured and reduced at the server send boundary against a 512 KiB
   soft budget. Knowledge bodies go first, followed by trigger allowances, long
   descriptions and large optional context. If necessary, remaining text fields
