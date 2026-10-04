@@ -90,4 +90,3 @@ export function registerRetiredCliRoutes(app: Hono): void {
       c.json({ code: "route_retired", replacement }, 410));
   }
 }
-
