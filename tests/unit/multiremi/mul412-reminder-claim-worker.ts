@@ -1,5 +1,5 @@
 import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { readSync } from "node:fs";
 
 const url = process.env.MUL412_CLAIM_PG_URL;
@@ -31,27 +31,18 @@ try {
   send({ type: "ready", pid: process.pid, backendPid: Number(backend.pid) });
   waitAtBarrier();
 
-  const originalQuery = db.query.bind(db);
-  let dueBarrierReached = false;
-  db.query = (sql: string): SqlStatement => {
-    const statement = originalQuery(sql);
-    const isDueDecisionSelect = !dueBarrierReached
-      && sql.includes("SELECT decision.id, decision.issue_id")
-      && sql.includes("FROM multiremi_issue_decisions decision")
-      && sql.includes("decision.reminder_sent_at IS NULL");
-    if (!isDueDecisionSelect) return statement;
-    return {
-      get: (...params: unknown[]) => statement.get(...params),
-      all: (...params: unknown[]) => {
-        const rows = statement.all(...params) as Array<{ id: string }>;
-        dueBarrierReached = true;
-        send({ type: "due_selected", decisionIds: rows.map(row => String(row.id)) });
-        waitAtBarrier();
-        return rows;
-      },
-      run: (...params: unknown[]) => statement.run(...params),
-      values: (...params: unknown[]) => statement.values(...params),
-    };
+  const originalRun = db.run.bind(db);
+  let barrierReached = false;
+  db.run = (sql, params) => {
+    if (!barrierReached && sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") {
+      barrierReached = true;
+      // Both contenders must rendezvous before W; the second cannot reach a
+      // due SELECT while the first holds that workspace lock.
+      const rows = db.query("SELECT id FROM multiremi_message_decision_records WHERE workspace_id=? AND status='escalated' AND reminder_sent_at IS NULL ORDER BY id").all(workspaceId);
+      send({ type: "lock_waiting", decisionIds: rows.map(row => String(row.id)) });
+      waitAtBarrier();
+    }
+    return originalRun(sql, params);
   };
 
   const delivery = store.claimFeishuBotOutbound(workspaceId, runtimeId, new Date(now));

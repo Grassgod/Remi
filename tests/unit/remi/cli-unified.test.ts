@@ -44,6 +44,17 @@ afterEach(() => {
 });
 
 describe("unified CLI wire contracts", () => {
+  it("passes structured answers and rejects malformed responses before networking", async () => {
+    setup();
+    const response = { answers: { "First?": "Yes", "Second?": "No" } };
+    await registry.execute(["message", "send", "ises_1", "--reply-to", "hrq_1", "--response", JSON.stringify(response), "--output", "json"]);
+    expect((await requests[1]!.json() as any).response).toEqual(response);
+    for (const args of [["--reply-to", "hrq_1", "--response", "{"], ["--reply-to", "hrq_1", "--response", "[]"], ["--response", "{}"], ["--reply-to", "hrq_1", "--response", "{}", "--option", "Yes"]]) {
+      setup();
+      await expect(registry.execute(["message", "send", "ises_1", ...args])).rejects.toThrow();
+      expect(requests).toHaveLength(0);
+    }
+  });
   const cases: Array<{ args: string[]; method: string; path: string; body?: unknown; query?: Record<string, string> }> = [
     { args: ["message", "send", "ises_1", "--content", "Hello", "--to", "parent-owner", "--wake", "next-turn"], method: "POST", path: "/api/sessions/ises_1/messages",
       body: { body_md: "Hello", to: { type: "role", ref: "parent_owner" }, message_kind: "request", wake_requested: "next_turn", reply_to_id: null, dedupe_key: null } },

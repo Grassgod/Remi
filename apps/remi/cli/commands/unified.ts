@@ -37,6 +37,7 @@ export function unifiedCommandSpecs(): CommandSpec[] {
     ...["message", "turn"].map((domain): CommandSpec => ({ id: `${domain}.group`, path: [domain], description: domain === "message" ? "Send and manage conversation messages" : "Inspect and control turns", parse: "passthrough", run: async () => { throw new CliError("usage", `usage: remi ${domain} <command>`); } })),
     spec(["message", "send"], "write", [ref("conversation", false)], [
       ...textOptions, option("to"), option("to-type"), option("kind"), option("wake"), option("reply-to"),
+      { ...option("response"), description: "JSON permission or question response", conflictsWith: ["option"] },
       { ...option("option"), repeatable: true }, { ...option("attachment"), repeatable: true }, option("dedupe-key"),
     ], send),
     spec(["message", "list"], "read", [ref("conversation", false)], [
@@ -135,14 +136,22 @@ async function send(i: CommandInvocation): Promise<void> {
   const body = content(i) ?? "";
   const attachments = stringOptions(i, "attachment");
   const selected = stringOptions(i, "option");
-  if (!body.trim() && !attachments.length && !selected.length) throw new CliError("usage", "message send requires content, an attachment, or an option");
+  const rawResponse = stringOption(i, "response");
+  let response: Record<string, unknown> | undefined;
+  if (rawResponse != null) {
+    try { response = JSON.parse(rawResponse); } catch { throw new CliError("usage", "--response must be a JSON object"); }
+    if (!response || typeof response !== "object" || Array.isArray(response)) throw new CliError("usage", "--response must be a JSON object");
+    if (!stringOption(i, "reply-to")) throw new CliError("usage", "--response requires --reply-to");
+  }
+  if (!body.trim() && !attachments.length && !selected.length && !response) throw new CliError("usage", "message send requires content, an attachment, or an option");
   const kind = stringOption(i, "kind") ?? (stringOption(i, "reply-to") ? "reply" : "request");
   if (!MESSAGE_KINDS.includes(kind as typeof MESSAGE_KINDS[number])) throw new CliError("usage", "invalid --kind");
+  if (response && kind !== "reply") throw new CliError("usage", "--response requires --kind reply");
   const wake = (stringOption(i, "wake") ?? "now").replaceAll("-", "_");
   if (!["now", "next_turn", "inbox_only"].includes(wake)) throw new CliError("usage", "invalid --wake");
   const to = recipient(stringOption(i, "to"), stringOption(i, "to-type"));
   const payload = { body_md: body, to, message_kind: kind, wake_requested: wake, reply_to_id: stringOption(i, "reply-to"),
-    dedupe_key: stringOption(i, "dedupe-key"), ...(kind === "decision" ? { options: selected.map(decisionOption) } : selected.length ? { metadata: { selected_options: selected } } : {}) };
+    dedupe_key: stringOption(i, "dedupe-key"), ...(response ? { response } : {}), ...(kind === "decision" ? { options: selected.map(decisionOption) } : selected.length ? { metadata: { selected_options: selected } } : {}) };
   // Validate local files before capability negotiation or any server-side mutation.
   if (attachments.some((path) => /^https?:\/\//i.test(path))) throw new CliError("usage", "--attachment requires a local file path");
   const files: File[] = [];

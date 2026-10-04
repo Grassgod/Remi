@@ -4146,6 +4146,7 @@
       "body": [
         {
           "id": "tsk_yy6thkeq1n3e",
+          "turn_id": "tsk_yy6thkeq1n3e",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -4244,6 +4245,7 @@
         },
         {
           "id": "tsk_r4ic9doizq3q",
+          "turn_id": "tsk_r4ic9doizq3q",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -4342,6 +4344,7 @@
         },
         {
           "id": "tsk_2mewms2xbrsa",
+          "turn_id": "tsk_2mewms2xbrsa",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -4440,6 +4443,7 @@
         },
         {
           "id": "tsk_lnktpkuv95wd",
+          "turn_id": "tsk_lnktpkuv95wd",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -4538,6 +4542,7 @@
         },
         {
           "id": "tsk_snapshot",
+          "turn_id": "tsk_snapshot",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5197,6 +5202,7 @@
       "body": [
         {
           "id": "tsk_yy6thkeq1n3e",
+          "turn_id": "tsk_yy6thkeq1n3e",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5295,6 +5301,7 @@
         },
         {
           "id": "tsk_r4ic9doizq3q",
+          "turn_id": "tsk_r4ic9doizq3q",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5393,6 +5400,7 @@
         },
         {
           "id": "tsk_2mewms2xbrsa",
+          "turn_id": "tsk_2mewms2xbrsa",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5491,6 +5499,7 @@
         },
         {
           "id": "tsk_lnktpkuv95wd",
+          "turn_id": "tsk_lnktpkuv95wd",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5589,6 +5598,7 @@
         },
         {
           "id": "tsk_snapshot",
+          "turn_id": "tsk_snapshot",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -14303,6 +14313,7 @@
         "tasks": [
           {
             "id": "tsk_yy6thkeq1n3e",
+            "turn_id": "tsk_yy6thkeq1n3e",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14401,6 +14412,7 @@
           },
           {
             "id": "tsk_r4ic9doizq3q",
+            "turn_id": "tsk_r4ic9doizq3q",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14499,6 +14511,7 @@
           },
           {
             "id": "tsk_2mewms2xbrsa",
+            "turn_id": "tsk_2mewms2xbrsa",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14597,6 +14610,7 @@
           },
           {
             "id": "tsk_lnktpkuv95wd",
+            "turn_id": "tsk_lnktpkuv95wd",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14695,6 +14709,7 @@
           },
           {
             "id": "tsk_snapshot",
+            "turn_id": "tsk_snapshot",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -15432,6 +15447,7 @@
         "tasks": [
           {
             "id": "tsk_yy6thkeq1n3e",
+            "turn_id": "tsk_yy6thkeq1n3e",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -15530,6 +15546,7 @@
           },
           {
             "id": "tsk_r4ic9doizq3q",
+            "turn_id": "tsk_r4ic9doizq3q",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -15628,6 +15645,7 @@
           },
           {
             "id": "tsk_2mewms2xbrsa",
+            "turn_id": "tsk_2mewms2xbrsa",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -15726,6 +15744,7 @@
           },
           {
             "id": "tsk_lnktpkuv95wd",
+            "turn_id": "tsk_lnktpkuv95wd",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -15824,6 +15843,7 @@
           },
           {
             "id": "tsk_snapshot",
+            "turn_id": "tsk_snapshot",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -16919,6 +16939,7 @@
           "tasks": [
             {
               "id": "tsk_lnktpkuv95wd",
+              "turn_id": "tsk_lnktpkuv95wd",
               "taskKind": "direct",
               "agentId": "agt_snapshot",
               "runtimeId": "rt_snapshot",
@@ -17017,6 +17038,7 @@
             },
             {
               "id": "tsk_snapshot",
+              "turn_id": "tsk_snapshot",
               "taskKind": "direct",
               "agentId": "agt_snapshot",
               "runtimeId": "rt_snapshot",
@@ -20634,30 +20656,146 @@
       "key": "get-sweep GET /api/sessions/:sessionId/log",
       "route": "GET /api/sessions/:sessionId/log",
       "path": "/api/sessions/ise_snapshot/log",
-      "status": 410,
+      "status": 200,
       "body": {
-        "code": "route_retired",
-        "replacement": "remi message list <conversation>"
+        "entries": [
+          {
+            "sender_type": "platform",
+            "sender_id": null,
+            "to_type": "none",
+            "to_ref": null,
+            "to_agent_id": null,
+            "to_member_id": null,
+            "message_kind": "status",
+            "wake_requested": "inbox_only",
+            "wake_applied": "inbox_only",
+            "wake_reason": "requested_inbox_only",
+            "dedupe_key": null,
+            "options": null,
+            "reply_to_id": null,
+            "session_id": "ise_snapshot",
+            "seq": 0,
+            "id": "head_ise_snapshot",
+            "kind": "head",
+            "visibility": "shown",
+            "author_type": "system",
+            "author_id": null,
+            "task_id": null,
+            "body_md": "Snapshot issue\n\nIssue used by the snapshot",
+            "body_html": "<p>Snapshot issue</p>\n<p>Issue used by the snapshot</p>",
+            "render_version": "md-a9442f26e49a14bc",
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {
+              "title": "Snapshot issue"
+            },
+            "revision": 1,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          },
+          {
+            "sender_type": "member",
+            "sender_id": "mem_snapshot_one",
+            "to_type": "none",
+            "to_ref": null,
+            "to_agent_id": null,
+            "to_member_id": null,
+            "message_kind": "request",
+            "wake_requested": "inbox_only",
+            "wake_applied": "inbox_only",
+            "wake_reason": "no_recipient",
+            "dedupe_key": null,
+            "options": null,
+            "reply_to_id": null,
+            "session_id": "ise_snapshot",
+            "seq": 3,
+            "id": "sevt_u6dzsg7stnai",
+            "kind": "message",
+            "visibility": "shown",
+            "author_type": "member",
+            "author_id": "mem_snapshot_one",
+            "task_id": null,
+            "body_md": "Snapshot session message",
+            "body_html": "<p>Snapshot session message</p>",
+            "render_version": "md-a9442f26e49a14bc",
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {
+              "execution_scope": "",
+              "reactions": [],
+              "attachments": []
+            },
+            "revision": 2,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          },
+          {
+            "sender_type": "platform",
+            "sender_id": null,
+            "to_type": "none",
+            "to_ref": null,
+            "to_agent_id": null,
+            "to_member_id": null,
+            "message_kind": "request",
+            "wake_requested": "inbox_only",
+            "wake_applied": "inbox_only",
+            "wake_reason": "requested_inbox_only",
+            "dedupe_key": null,
+            "options": null,
+            "reply_to_id": null,
+            "session_id": "ise_snapshot",
+            "seq": 4,
+            "id": "sevt_5nowh2h5qvvj",
+            "kind": "result_published",
+            "visibility": "shown",
+            "author_type": "system",
+            "author_id": null,
+            "task_id": null,
+            "body_md": "Snapshot session result body",
+            "body_html": "<p>Snapshot session result body</p>",
+            "render_version": "md-a9442f26e49a14bc",
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {
+              "result_id": "sres_y5ezs4p8gkp8",
+              "title": "Snapshot result"
+            },
+            "revision": 1,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          }
+        ],
+        "head_seq": 4,
+        "log_version": 7,
+        "has_more_before": false,
+        "has_more_after": false
       }
     },
     {
       "key": "get-sweep GET /api/sessions/:sessionId/log/entry",
       "route": "GET /api/sessions/:sessionId/log/entry",
       "path": "/api/sessions/ise_snapshot/log/entry",
-      "status": 410,
+      "status": 400,
       "body": {
-        "code": "route_retired",
-        "replacement": "remi message get <message>"
+        "error": "exactly one of seq or id is required"
       }
     },
     {
       "key": "get-sweep GET /api/sessions/:sessionId/log/locate",
       "route": "GET /api/sessions/:sessionId/log/locate",
       "path": "/api/sessions/ise_snapshot/log/locate",
-      "status": 410,
+      "status": 400,
       "body": {
-        "code": "route_retired",
-        "replacement": "remi message get <message>"
+        "error": "id is required"
       }
     },
     {
@@ -23505,6 +23643,7 @@
         "cancelled_tasks": 1,
         "task": {
           "id": "tsk_btodjmtppou8",
+          "turn_id": "tsk_btodjmtppou8",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -23650,6 +23789,7 @@
         },
         "task": {
           "id": "tsk_d9havbvj3rg3",
+          "turn_id": "tsk_d9havbvj3rg3",
           "taskKind": "quick_create",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",

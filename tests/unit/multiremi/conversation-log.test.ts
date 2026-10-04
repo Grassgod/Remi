@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -32,9 +33,9 @@ describe("conversation log (MUL-426)", () => {
     const issue = store.createIssue({ title: "Locate visibility", workspaceId: "local" });
     const comment = store.createIssueComment(issue.id, { body: "remove me" });
     const sessionId = comment.issueSessionId!;
-    store.updateIssueComment(comment.id, { body: "edited" });
+    store.editMessage(comment.id, { body_md: "edited" });
     const hidden = store.listConversationLogEntries(sessionId).find((entry) => entry.kind === "message_edited")!;
-    store.deleteIssueComment(comment.id);
+    store.deleteMessage(comment.id);
     const app = createMultiremiApp({ store });
     const bodies = [];
     for (const id of [hidden.id, comment.id, "clog_missing"]) {
@@ -158,6 +159,9 @@ describe("conversation log (MUL-426)", () => {
     expect((await located.json()).seq).toBe(body.entries[0].seq);
     expect((await app.request(`/api/sessions/${session.id}/log?before=100&after=1`)).status).toBe(400);
     expect((await app.request(`/api/sessions/${session.id}/log/locate`)).status).toBe(400);
+    const expanded = await app.request(`/api/sessions/${session.id}/log/entry?seq=${body.entries[0].seq}`);
+    expect(expanded.status).toBe(200); expect((await expanded.json()).id).toBe(body.entries[0].id);
+    expect((await app.request(`/api/sessions/${session.id}/log/entry`)).status).toBe(400);
   });
 
   it("syncs Issue and Chat heads and keeps a supplied chat client_id", async () => {
@@ -258,5 +262,32 @@ describe("conversation log (MUL-426)", () => {
     expect(store.listChatMessagesFromLog(chat.id).map(message => message.body)).toEqual(["old message", "new message"]);
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages`)).status).toBe(404);
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
+  });
+});
+
+pendingTurnBackendTests("read-only display log", fixture => {
+  for (const kind of ["Issue", "Chat"] as const) it(`${kind}: task capability display reads leave every agent lane field unchanged`, async () => {
+    const { store, db } = fixture();
+    const agent = store.createAgent({ name: "Display reader", provider: "codex", visibility: "workspace" });
+    const issue = kind === "Issue" ? store.createIssue({ title: "Display Issue", assigneeType: "agent", assigneeId: agent.id }) : null;
+    const sessionId = issue ? store.getOrCreateDefaultIssueSession(issue.id).id : store.createChatSession({ agentId: agent.id, creatorId: "local" }).id;
+    const sent = store.sendMessage({ session_id: sessionId, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id }, message_kind: "request", body_md: "Display input", wake_requested: "now" });
+    const turn = store.getTurn(sent.turn_id!)!;
+    const token = await store.createAccessToken({ type: "task", name: "Display reader", taskId: turn.current_attempt_id!, agentId: agent.id, userId: "local", workspaceId: "local" });
+    const app = createMultiremiApp({ store, authToken: "display-master" }), headers = { Authorization: `Bearer ${token.token}` };
+    const lanes = () => db.query("SELECT * FROM multiremi_session_lanes WHERE session_id=? ORDER BY reader_type,reader_id,execution_scope").all(sessionId);
+    const before = lanes(), path = `/api/sessions/${sessionId}/log`;
+    for (const suffix of ["", `/locate?id=${sent.message.id}`, `/entry?id=${sent.message.id}`, `/entry?seq=${sent.message.seq}`]) {
+      const response = await app.request(path + suffix, { headers }); expect(response.status, suffix).toBe(200);
+      expect(lanes()).toEqual(before);
+    }
+    const card = await app.request(`${path}/entry?seq=${turn.seq}`, { headers });
+    expect(card.status).toBe(kind === "Issue" ? 200 : 404); expect(lanes()).toEqual(before);
+    for (const query of ["from=0", `to=${sent.message.seq}`, `from=0&to=${sent.message.seq}`]) {
+      const response = await app.request(`${path}?${query}`, { headers }); expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("remi message list"); expect(lanes()).toEqual(before);
+    }
+    const range = await app.request(`/api/sessions/${sessionId}/messages?from=0&to=${sent.message.seq}`, { headers });
+    expect(range.status).toBe(200); expect(store.getSessionAgentReadProgress(sessionId, agent.id).seq).toBe(sent.message.seq);
   });
 });

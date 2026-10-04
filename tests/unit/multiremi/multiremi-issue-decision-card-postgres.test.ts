@@ -18,6 +18,8 @@ import {
 import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteraction } from "../connectors/question-card-host-fixture.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -59,7 +61,7 @@ if (!available) console.warn("[multiremi-issue-decision-card-postgres] Postgres 
 
 const CLAIM_BARRIER_TIMEOUT_MS = 10_000;
 type ClaimWorkerMessage = {
-  type: "ready" | "due_selected" | "result" | "error";
+  type: "ready" | "lock_waiting" | "result" | "error";
   pid?: number;
   backendPid?: number;
   decisionIds?: string[];
@@ -214,11 +216,18 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   // Three cold stores perform durable schema checks and two upgrades on real PG.
   it("upgrades the Postgres 828291b9 schema twice without losing existing rows", () => {
     const upgradeDb = new PostgresSyncDatabase(pgUrl(UPGRADE_DB));
-    const baselineStore = new MultiremiStore(upgradeDb);
-    const scope = scaffold(undefined, baselineStore, upgradeDb);
-    const decision = escalate(scope, "production_change", baselineStore);
-    const card = baselineStore.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
-    const deliveryId = card.id;
+    // Build a genuinely pre-unified snapshot; downgrading an already migrated
+    // Store leaves the new migration marker and skips the historical upgrade.
+    bootstrapPreUnifiedSchema(upgradeDb);
+    const legacy = historicalWriters(upgradeDb), at = new Date().toISOString();
+    const agent = legacy.createAgent({ name: "Upgrade", provider: "codex" });
+    const issue = legacy.createIssue({ title: "PG upgrade", assigneeType: "agent", assigneeId: agent.id });
+    const task = legacy.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Legacy" });
+    const decision = { id: "dcs_pg_upgrade" }, deliveryId = "fbo_pg_upgrade";
+    upgradeDb.run("INSERT INTO multiremi_chat_sessions(id,workspace_id,agent_id,title,created_at,updated_at) VALUES('chat_upgrade','local',?,'Upgrade',?,?)", [agent.id,at,at]);
+    upgradeDb.run("INSERT INTO multiremi_feishu_bot_chat_bindings(id,workspace_id,app_id,agent_id,external_session_key,chat_session_id,created_at,updated_at) VALUES('binding_upgrade','local','cli_upgrade',?,'upgrade','chat_upgrade',?,?)", [agent.id,at,at]);
+    upgradeDb.run("INSERT INTO multiremi_issue_decisions(id,workspace_id,issue_id,source_issue_id,source_task_id,kind,title,body,options,status,created_by_agent_id,created_at,updated_at) VALUES(?,'local',?,?,?,'production_change','Deploy?','','[]','escalated',?,?,?)", [decision.id,issue.id,issue.id,task.id,agent.id,at,at]);
+    upgradeDb.run("INSERT INTO multiremi_feishu_bot_outbound_deliveries(id,workspace_id,binding_id,chat_id,body,status,available_at,created_at,updated_at,kind,decision_id,decision_issue_id) VALUES(?,'local','binding_upgrade','oc_upgrade','card','sending',?,?,?,'decision_card',?,?)", [deliveryId,at,at,at,decision.id,issue.id]);
     restoreMul412Baseline828291b9Schema(upgradeDb);
     expect(tableColumns(upgradeDb, "multiremi_issue_decisions")).not.toContain("reminder_sent_at");
     expect(tableColumns(upgradeDb, "multiremi_feishu_bot_outbound_deliveries")).not.toContain("decision_id");
@@ -226,12 +235,12 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
 
     new MultiremiStore(upgradeDb);
     new MultiremiStore(upgradeDb);
-    expect(tableColumns(upgradeDb, "multiremi_issue_decisions")).toContain("reminder_sent_at");
+    expect(tableColumns(upgradeDb, "multiremi_message_decision_records")).toContain("reminder_sent_at");
     expect(tableColumns(upgradeDb, "multiremi_feishu_bot_outbound_deliveries"))
       .toEqual(expect.arrayContaining(["decision_id", "decision_issue_id"]));
     expect(tableColumns(upgradeDb, "multiremi_issues"))
       .toEqual(expect.arrayContaining(["parent_done_grant_at", "parent_done_grant_by", "parent_done_grant_agent_id"]));
-    expect(upgradeDb.query("SELECT title, status FROM multiremi_issue_decisions WHERE id = ?").get(decision.id))
+    expect(upgradeDb.query("SELECT title, status FROM multiremi_message_decision_records WHERE id = ?").get(decision.id))
       .toEqual({ title: "Deploy?", status: "escalated" });
     expect(upgradeDb.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(deliveryId))
       .toEqual({ id: deliveryId, status: "sending" });
@@ -264,7 +273,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       claimToken: reminder.claimToken, status: "sent", externalMessageId: "om_pg_reminder",
     }, due);
     expect(store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId, new Date(due.getTime() + 3_600_000))).toBeNull();
-    const row = db.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?")
+    const row = db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?")
       .get(decision.id) as { reminder_sent_at: string | null };
     expect(row.reminder_sent_at).toBe(due.toISOString());
   });
@@ -311,8 +320,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         child.stdin.flush();
       }
       const selected = await Promise.all(nextMessages.map((next, index) =>
-        beforeBarrierTimeout(next(), `worker ${index + 1} due SELECT`)));
-      expect(selected.map(message => message.type)).toEqual(["due_selected", "due_selected"]);
+        beforeBarrierTimeout(next(), `worker ${index + 1} before workspace lock`)));
+      expect(selected.map(message => message.type)).toEqual(["lock_waiting", "lock_waiting"]);
       expect(selected.map(message => message.decisionIds)).toEqual([[decision.id], [decision.id]]);
 
       for (const child of processes) {

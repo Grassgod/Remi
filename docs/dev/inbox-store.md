@@ -14,6 +14,8 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 消息头在发送时冻结收件人。`source_turn_id` 验证发件轮的 agent 和工作区；`reply_to_id` 必须属于原对话。角色可能选择父单或委派来源对话。agent request 只有源为 Issue 轮、非旁支、目标在 Issue 上时才产生委派；符合条件的所有方向均为 `now / agent_dispatch`。self、不运行的收件人、依赖、来源和目标前置优先于派活规则。超过 `countDelegationPairHops` 的 `2L` 边界时消息保留，降为 `next_turn / pair_round_trip_limit`，不建或合并轮，说明通知和活动在同事务记录。L 默认 5，由 `MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT` 调整。
 
+用户 HTTP 发送会传入内部 `authorizeRecipient` 回调，在持有 workspace 锁且解析最终角色 agent 后、写消息之前执行访问检查。拒绝会回滚同事务上传的附件行，上传包装器清理文件。该回调不属于请求体或公共消息合约。提问答复进入 `answerMessageDecision` 后，permission/question response 先按原提问结构规范化并验证，再调用原子消费接口；无效结构不会消费请求或卡片 token。
+
 平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；谱系计数也沿触发 request 追溯。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。发布失败时回滚后只完成轮，reply_message_id 留空。
 
 [lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap；游标只前进。
@@ -21,6 +23,10 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 ## Store 消费接口
 
 类型及参数的事实来源为 [unified-model.ts](../../packages/contracts/src/unified-model.ts)、[InboxOperations](../../packages/server/src/store/inbox/operations.ts) 和 [Store facade](../../packages/server/src/store/store.ts)。HTTP/CLI 调用方负责鉴权、身份解析和参数校验；Store 同时校验消息源、收件人、对话与成员工作区边界。匿名旧领域评论允许 member/null，新用户入口应传入实际成员身份。
+
+消息列表和完整 turn input 从查询行直接批量投影，不再逐 ID 重新读取。HTTP 按页批量加载附件和反应。inbox 以有界候选页查正文，计数单独按对话和受保护的来源任务聚合；可见性缓存只在当前请求内使用，隐藏提问不计入未读和 attention 数。
+
+`sendMessageWithinTransaction` 发射 `inbox:new` 索引刷新，`readMessageInbox` / `readAgentMessageInbox` 发射 `inbox:read`，全读发射 `inbox:batch-read`。统一索引事件的 payload 仅有 `{index_only:true}`；`emitWorkspaceEvent` 在最外层事务提交后才通知现有 workspace realtime/peer，回滚会丢弃。读写新的 inbox API 获取计数，不依赖旧 inbox_items。
 
 | 功能 | Store 方法 | 结果或边界 |
 |---|---|---|

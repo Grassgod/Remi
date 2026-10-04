@@ -128,6 +128,9 @@ function main(): void {
 }
 
 export function classifyRoute(route: string): CliManifestRoute {
+  if (/^GET \/api\/sessions\/:sessionId\/log(?:\/entry|\/locate)?$/.test(route)) return {
+    cli_exempt: true, category: "pure_ui", reason: "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get.",
+  };
   if (RETIRED_CLI_ROUTES[route]) return {
     cli_exempt: true, category: "retired_route", reason: `已移除：改用 ${RETIRED_CLI_ROUTES[route]}`,
   };
@@ -203,9 +206,6 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
-    "GET /api/sessions/:sessionId/log": "session.log.window",
-    "GET /api/sessions/:sessionId/log/entry": "session.log.get",
-    "GET /api/sessions/:sessionId/log/locate": "session.log.locate",
     "GET /api/issues/children": "issue.children",
     "GET /api/multiremi/issues/children": "issue.children",
     "GET /api/issues/child-progress": "issue.child-progress",
