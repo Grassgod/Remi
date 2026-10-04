@@ -126,12 +126,13 @@ export class ConversationLogRepo {
     return state[agentId] ?? this.updateAgentReadProgress(sessionId, agentId, current => current);
   }
 
-  private legacyAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    // Legacy projections were inline, including logs delivered through relay lanes.
+  private storedAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
+    // Seed streamed progress from persisted lane and attempt receipts.
     const lane = this.ctx.db.query(`SELECT COALESCE(MAX(cursor_seq), 0) AS seq
-      FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?`).get(sessionId, agentId) as Row;
+      FROM multiremi_session_lanes WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`).get(sessionId, agentId) as Row;
     const chat = this.ctx.db.query(`SELECT COALESCE(MAX(projection_to_seq), 0) AS seq
-      FROM multiremi_tasks WHERE chat_session_id = ? AND agent_id = ? AND status = 'completed'`).get(sessionId, agentId) as Row;
+      FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id = a.turn_id
+      WHERE t.session_id = ? AND t.agent_id = ? AND a.status = 'completed'`).get(sessionId, agentId) as Row;
     return { seq: Math.min(Math.max(Number(lane.seq), Number(chat.seq)), this.getHead(sessionId)?.headSeq ?? 0), offset: 0 };
   }
 
@@ -142,7 +143,7 @@ export class ConversationLogRepo {
       this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = agent_read_state WHERE session_id = ?", [sessionId]);
       const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
       const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-      const current = state[agentId] ?? this.legacyAgentReadProgress(sessionId, agentId);
+      const current = state[agentId] ?? this.storedAgentReadProgress(sessionId, agentId);
       const next = advance(current);
       if (row && (!state[agentId] || next.seq !== current.seq || next.offset !== current.offset)) {
         state[agentId] = next;
@@ -164,7 +165,7 @@ export class ConversationLogRepo {
       if (start.seq > expected.seq) {
         if (current.offset || this.ctx.db.query(`SELECT 1 FROM multiremi_conversation_log
           WHERE session_id = ? AND seq > ? AND seq < ? AND visibility = 'shown' AND deleted_at IS NULL
-          AND (author_type <> 'agent' OR author_id IS NULL OR author_id <> ?) LIMIT 1`)
+          AND (sender_type <> 'agent' OR sender_id IS NULL OR sender_id <> ?) LIMIT 1`)
           .get(sessionId, current.seq, start.seq, agentId)) return current;
       } else if (start.seq === expected.seq && start.offset > expected.offset) return current;
       const lastSeq = Math.min(end.seq - 1, this.getHead(sessionId)?.headSeq ?? 0);
@@ -179,10 +180,14 @@ export class ConversationLogRepo {
       // An accepted bootstrap has no provider memory, even if an earlier session read the log.
       if (coldStart) current = { seq: 0, offset: 0 };
       const inline = new Set(seqs);
+      // Creating a turn now appends its pointer immediately. Accepting an
+      // inline trigger acknowledges only through the last delivered input,
+      // without advancing over the new turn or other trailing self entries.
+      const inlineToSeq = Math.min(toSeq, seqs.reduce((max, seq) => Math.max(max, seq), current.seq));
       let seq = current.seq;
-      const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, author_type, author_id
+      const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, sender_type AS author_type, sender_id AS author_id
         FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?`)
-        .all(sessionId, current.seq, toSeq, CONVERSATION_LOG_MAX_WINDOW) as Pick<ConversationLogEntry,
+        .all(sessionId, current.seq, inlineToSeq, CONVERSATION_LOG_MAX_WINDOW) as Pick<ConversationLogEntry,
           "seq" | "visibility" | "deleted_at" | "author_type" | "author_id">[];
       for (const entry of rows) {
         if (this.needsAgentRead(entry, agentId) && !inline.has(entry.seq)) break;

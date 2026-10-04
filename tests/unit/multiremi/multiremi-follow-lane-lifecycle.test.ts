@@ -25,11 +25,11 @@ describe("follow lane Runtime lifecycle", () => {
     for (const scope of ["", "delegation:departing", "delegation:surviving"]) {
       store.getOrCreateSessionAgentLane(side.id, agent.id, scope);
       db!.run(
-        `UPDATE multiremi_session_agent_lanes
+        `UPDATE multiremi_session_lanes
          SET provider_session_id = ?, runtime_id = ?, provider = 'claude',
              execution_fingerprint = 'prior-fingerprint', work_dir = '/prior-work',
              cursor_seq = 1, parent_cursor_seq = 2
-         WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
+         WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ? AND execution_scope = ?`,
         [
           `provider-${scope || "main"}`,
           scope === "delegation:surviving" ? survivor.id : runtime.id,

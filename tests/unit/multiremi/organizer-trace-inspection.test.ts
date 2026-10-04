@@ -64,7 +64,8 @@ describe("organizer trace inspection", () => {
     const issue = store.createIssue({ title: "Organizer tail", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
     store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
-    db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET status = 'completed' WHERE id = ?", [task.id]);
+    db!.run("UPDATE multiremi_turns SET status = 'completed' WHERE current_attempt_id = ?", [task.id]);
     db!.transaction(() => store.recordAttemptOutcomeWithinTransaction(task.id, {
       toolCallCount: 7, eventCount: 30, typeHistogram: [{ type: "tool_use", tool: "Read", count: 7 }],
     }))();

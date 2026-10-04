@@ -377,6 +377,7 @@ function migrateTurns(db: SqlDatabase, tasks: Row[]): void {
       const fallback=definition?.[2]?.match(/DEFAULT (.*)/)?.[1];
       if(fallback)db.exec(`ALTER TABLE multiremi_turn_attempts ALTER COLUMN ${info.name} SET DEFAULT ${fallback}`);
     }
+    ensurePostgresAttemptTurnForeignKey(db);
     db.exec("ALTER TABLE multiremi_turn_attempts ADD CONSTRAINT unified_attempt_status CHECK(status IN ('offered','accepted','running','waiting_local_directory','completed','failed','cancelled','lost'))");
   } else {
     db.exec("DROP TABLE multiremi_turn_attempts");
@@ -385,6 +386,16 @@ function migrateTurns(db: SqlDatabase, tasks: Row[]): void {
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_turn_attempts_turn_no ON multiremi_turn_attempts(turn_id, attempt_no);
     CREATE INDEX IF NOT EXISTS idx_multiremi_turn_attempts_runtime ON multiremi_turn_attempts(runtime_id,status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_turns_pending_lane ON multiremi_turns(session_id,agent_id,execution_scope) WHERE status='pending';`);
+}
+
+function ensurePostgresAttemptTurnForeignKey(db: SqlDatabase): void {
+  if (db.dialect !== "postgres") return;
+  const existing = db.query(`SELECT 1 FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+    WHERE c.contype = 'f' AND c.conrelid = 'multiremi_turn_attempts'::regclass
+      AND c.confrelid = 'multiremi_turns'::regclass AND a.attname = 'turn_id'`).get();
+  if (!existing) db.exec(`ALTER TABLE multiremi_turn_attempts ADD CONSTRAINT unified_attempt_turn_fk
+    FOREIGN KEY (turn_id) REFERENCES multiremi_turns(id)`);
 }
 
 function migrateLanes(db: SqlDatabase): void {
@@ -537,6 +548,7 @@ export function runUnifiedModelMigration(db: SqlDatabase, options: { reportDir?:
   const reportDir = options.reportDir ?? "reports/migrations";
   const applied = db.query("SELECT applied_at FROM multiremi_schema_migrations WHERE id=?").get(UNIFIED_MODEL_MIGRATION);
   if (applied) {
+    db.transaction(() => ensurePostgresAttemptTurnForeignKey(db))();
     const report=reconcileUnifiedModel(db);
     if(!existsSync(join(reportDir,`${UNIFIED_MODEL_MIGRATION}-after.json`))){
       const beforePath=join(reportDir,`${UNIFIED_MODEL_MIGRATION}-before.json`);

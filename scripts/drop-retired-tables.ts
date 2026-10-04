@@ -56,7 +56,7 @@ if (import.meta.main) {
     process.exit(values.help ? 0 : 2);
   }
   if (values["postgres-env"] && !process.env[values["postgres-env"]]) throw new Error("Selected PostgreSQL environment variable is not set");
-  const db = values.sqlite ? openSqliteDatabase(values.sqlite,{ readonly: !values.execute })
+  const db = values.sqlite ? openSqliteDatabase(values.sqlite,values.execute ? { readwrite: true } : { readonly: true })
     : new PostgresSyncDatabase(process.env[values["postgres-env"]!]!);
   try {
     if (!values.execute && db.dialect === "postgres") {

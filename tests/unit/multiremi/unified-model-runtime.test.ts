@@ -68,6 +68,49 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     for(const column of ['task_id','status','result'])expect(db.query('PRAGMA table_info(multiremi_autopilot_runs)').all().map((r:any)=>r.name)).not.toContain(column);
     expect(store.getAutopilotRun(run.id)?.status).toBe('running');
   });
+  it('queues consecutive run_only invocations in independent lanes and completes each once', () => {
+    const { store, db } = fixture();
+    const agent = store.createAgent({ name: 'Concurrent auto', provider: 'codex' });
+    const runtime = store.registerRuntime({ name: 'auto host', provider: 'codex' });
+    const auto = store.createAutopilot({ title: 'Repeat', assigneeId: agent.id, executionMode: 'run_only' });
+    const first = store.runAutopilot(auto.id);
+    const second = store.runAutopilot(auto.id);
+    expect(second.id).not.toBe(first.id);
+    expect(second.taskId).not.toBe(first.taskId);
+    const turns = db.query('SELECT session_id,execution_scope,status FROM multiremi_turns WHERE session_id=?').all(`auto_${auto.id}`);
+    expect(turns).toHaveLength(2);
+    expect(new Set(turns.map(t => t.execution_scope)).size).toBe(2);
+    expect(turns.every(t => t.status === 'pending')).toBeTrue();
+    for (let i = 0; i < 2; i++) {
+      const task = store.claimTask(runtime.id)!;
+      expect([first.taskId, second.taskId]).toContain(task.id);
+      store.startTask(task.id);
+      store.completeTask(task.id, { output: `answer ${i}` });
+    }
+    expect(store.getAutopilotRun(first.id)?.status).toBe('completed');
+    expect(store.getAutopilotRun(second.id)?.status).toBe('completed');
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_turns WHERE session_id=?').get(`auto_${auto.id}`).n)).toBe(2);
+  });
+  it('completes create_issue automation without re-ringing its own timer input', () => {
+    const { store, db } = fixture();
+    const agent = store.createAgent({ name: 'Issue auto', provider: 'codex' });
+    const runtime = store.registerRuntime({ name: 'auto host', provider: 'codex' });
+    const auto = store.createAutopilot({ title: 'Create Issue', assigneeId: agent.id, executionMode: 'create_issue' });
+    const run = store.runAutopilot(auto.id);
+    store.updateIssue(run.issueId!, { status: 'in_progress' });
+    expect(store.claimTask(runtime.id)?.id).toBe(run.taskId!);
+    store.startTask(run.taskId!);
+    store.completeTask(run.taskId!, { output: 'fixed' });
+    expect(store.getAutopilotRun(run.id)?.status).toBe('completed');
+    expect(store.getIssue(run.issueId!)?.status).toBe('in_review');
+    expect(db.query('SELECT status,wake_source FROM multiremi_turns WHERE issue_id=?').all(run.issueId)).toEqual([
+      { status: 'completed', wake_source: null },
+    ]);
+    expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_conversation_log WHERE session_id=? AND message_kind='reply' AND kind='message'")
+      .get(store.getTask(run.taskId!)!.issueSessionId!).n)).toBe(1);
+    expect(store.claimTask(runtime.id)).toBeNull();
+  });
   it('publishes one completion reply and derives the card and automation outcome from it',()=>{
     const {store,db}=fixture();const agent=store.createAgent({name:'Worker',provider:'codex'});
     const runtime=store.registerRuntime({name:'test',provider:'codex'});

@@ -2255,7 +2255,7 @@ describe("Multiremi session archives", () => {
     const chatTask = store.createTask({
       agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "chat trace",
     });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, chatTask.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [runtime.id, chatTask.id]);
 
     const chatBase = `/api/daemon/runtimes/${runtime.id}/chats/${chat.id}/session-archives`;
     const taskBase = `/api/daemon/runtimes/${runtime.id}/tasks/${task.id}/session-archives`;

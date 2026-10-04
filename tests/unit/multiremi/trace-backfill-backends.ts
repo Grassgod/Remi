@@ -1,9 +1,9 @@
 /**
  * SQLite and Postgres stores for the MUL-432 trace backfill tests.
  *
- * Every case runs on both backends. Postgres cases are skipped (not failed)
- * when `MULTIREMI_TEST_POSTGRES_URL` is unreachable, matching the other
- * `*-postgres` suites. Each Postgres case gets its own database cloned from a
+ * Every case runs on both backends. An explicitly configured unreachable PG
+ * fails the suite; only the optional default connection can skip. Each
+ * Postgres case gets its own database cloned from a
  * template migrated once per file, because the backfill scans the whole store
  * and cases must not see each other's subjects.
  */
@@ -16,13 +16,15 @@ export const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
 
 export async function probePostgres(): Promise<boolean> {
+  const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
   try {
-    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
     await admin`SELECT 1`;
-    await admin.end();
     return true;
-  } catch {
+  } catch (error) {
+    if (process.env.MULTIREMI_TEST_POSTGRES_URL) throw error;
     return false;
+  } finally {
+    await admin.end();
   }
 }
 

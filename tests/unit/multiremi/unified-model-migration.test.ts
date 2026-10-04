@@ -36,6 +36,43 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
     expect(headers).not.toContain("parent_id");
   });
 
+  it("rejects orphan attempts after historical migration and on reopen", () => {
+    const { db, store } = fixture();
+    const agent = store.createAgent({ name: "FK worker", provider: "codex" });
+    const issue = store.createIssue({ title: "Attempt FK" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "input" });
+    db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+    db.exec("CREATE TABLE mul505_attempt_evidence (attempt_id TEXT NOT NULL, FOREIGN KEY (attempt_id) REFERENCES multiremi_tasks(id))");
+    if (db.dialect === "postgres") {
+      db.exec("ALTER TABLE mul505_attempt_evidence ADD CONSTRAINT evidence_attempt_fk FOREIGN KEY (attempt_id) REFERENCES multiremi_tasks(id)");
+    }
+    db.run("INSERT INTO mul505_attempt_evidence(attempt_id) VALUES (?)", [task.id]);
+    const dir = reportDir();
+    if (db.dialect === "sqlite") db.exec("PRAGMA foreign_keys = ON");
+    runUnifiedModelMigration(db, { reportDir: dir });
+    const attempt = db.query("SELECT * FROM multiremi_turn_attempts WHERE id = ?").get(task.id)!;
+    const insertClone = (id: string, turnId: string) => {
+      const row = { ...attempt, id, turn_id: turnId, attempt_no: 2 };
+      db.transaction(() => db.run(`INSERT INTO multiremi_turn_attempts (${Object.keys(row).join(",")})
+        VALUES (${Object.keys(row).map(() => "?").join(",")})`, Object.values(row)))();
+    };
+    // Reproduce an already-applied PG snapshot that lost this FK. Startup
+    // repairs it while retaining the original attempt table and inbound FKs.
+    if (db.dialect === "postgres") {
+      db.exec("ALTER TABLE multiremi_turn_attempts DROP CONSTRAINT unified_attempt_turn_fk");
+      runUnifiedModelMigration(db, { reportDir: dir });
+    }
+    expect(() => insertClone("tsk_orphan", "missing_turn")).toThrow();
+    insertClone("tsk_valid_fk", task.id);
+    expect(db.query("SELECT attempt_id FROM mul505_attempt_evidence").get()?.attempt_id).toBe(task.id);
+    expect(() => db.transaction(() => db.run("DELETE FROM multiremi_turn_attempts WHERE id = ?", [task.id]))()).toThrow();
+    db.run("INSERT INTO mul505_attempt_evidence(attempt_id) VALUES ('tsk_valid_fk')");
+    expect(() => db.transaction(() => db.run("INSERT INTO mul505_attempt_evidence(attempt_id) VALUES ('missing_attempt')"))()).toThrow();
+    expect(db.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id = 'tsk_valid_fk'").get()?.turn_id).toBe(task.id);
+    runUnifiedModelMigration(db, { reportDir: dir });
+    expect(() => insertClone("tsk_orphan_again", "missing_turn")).toThrow();
+  });
+
   it("preserves attempts and agent checkpoints while collapsing retries, lifting headers and starting human cursors at head", () => {
     const { db,store }=fixture();
     const agent=store.createAgent({name:"historical worker",provider:"codex"});

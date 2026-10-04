@@ -5915,7 +5915,8 @@ ${placementAfter.sql}
     const replyCommentId = status === "completed" && task.issueId && task.agentId && !task.chatSessionId
       && body?.trim() && body.trim() !== "Task completed."
       && !this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)
-      ? createId("cmt") : null;
+      ? (this.ctx.db.query("SELECT reply_message_id FROM multiremi_turns WHERE current_attempt_id = ?")
+        .get(task.id)?.reply_message_id ?? createId("cmt")) : null;
     let resultCommentId = existingResultCommentId;
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.

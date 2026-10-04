@@ -210,12 +210,20 @@ export class AutopilotsRepo {
     return autopilot;
   }
 
-  private appendAutomationRequestWithinTransaction(autopilotId:string,agentId:string,prompt:string,issueSessionId:string|null,turnId:string):void {
+  private appendAutomationRequestWithinTransaction(autopilotId:string,agentId:string,prompt:string,issueSessionId:string|null,turnId:string):number {
     const autoSession=autopilotSessionId(autopilotId);
-    this.ctx.conversationLog().appendWithinTransaction({sessionId:issueSessionId??autoSession,kind:'message',authorType:'timer',authorId:autopilotId,bodyMd:prompt,
+    const request = this.ctx.conversationLog().appendWithinTransaction({sessionId:issueSessionId??autoSession,kind:'message',authorType:'timer',authorId:autopilotId,bodyMd:prompt,
       metadata:{envelope:{to:{role:'agent',agentId,issueSessionId:issueSessionId??autoSession},kind:'request',wake:'now',source:{},priority:4}}});
     if(issueSessionId)this.ctx.conversationLog().appendWithinTransaction({sessionId:autoSession,kind:'message',authorType:'timer',authorId:autopilotId,
       messageKind:'status',bodyMd:'Execution in Issue conversation',metadata:{turn_id:turnId,session_id:issueSessionId}});
+    return request.seq;
+  }
+
+  private bindAutomationInputWithinTransaction(attemptId: string, requestSeq: number): void {
+    // The timer request is the input this existing dispatch path executes.
+    // Bound it now so completion cannot re-ring the same request as unread.
+    this.ctx.db.run(`UPDATE multiremi_turns SET wake_seq = ?, input_from_seq = ?, input_to_seq = ?
+      WHERE current_attempt_id = ?`, [requestSeq, requestSeq - 1, requestSeq, attemptId]);
   }
 
   getAutopilot(id: string): MultiremiAutopilot | null {
@@ -517,7 +525,7 @@ export class AutopilotsRepo {
             const attemptId=createId('tsk');
             this.ctx.db.run('UPDATE multiremi_autopilot_runs SET turn_id=? WHERE id=?',[attemptId,run.id]);
             const requestBody=`${String(row.schedule_prompt)}\n\n## Scheduled Target\n${JSON.stringify(target)}\nThis task is bound to this single target. Do not process other projects or repositories.`;
-            this.appendAutomationRequestWithinTransaction(autopilot.id,agent.id,requestBody,null,attemptId);
+            const requestSeq = this.appendAutomationRequestWithinTransaction(autopilot.id,agent.id,requestBody,null,attemptId);
             const created = this.ctx.tasks().createTaskWithinTransaction({
               id:attemptId,agentId: agent.id, workspaceId: autopilot.workspaceId,
               prompt:requestBody,
@@ -525,6 +533,7 @@ export class AutopilotsRepo {
               issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
               assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
             }, scheduledChanges, scheduledEvents);
+            this.bindAutomationInputWithinTransaction(created.id, requestSeq);
             runAutopilotRunMutation(this.ctx.db, "UPDATE multiremi_autopilot_run_records SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
             return created;
           }
@@ -1583,7 +1592,7 @@ export class AutopilotsRepo {
       if(issue&&!issueSessionId)issueSessionId=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id,null).id;
       const attemptId=createId('tsk');
       this.ctx.db.run('UPDATE multiremi_autopilot_runs SET turn_id=? WHERE id=?',[attemptId,runId]);
-      this.appendAutomationRequestWithinTransaction(autopilot.id,agent.id,prompt,issueSessionId,attemptId);
+      const requestSeq = this.appendAutomationRequestWithinTransaction(autopilot.id,agent.id,prompt,issueSessionId,attemptId);
       let task: MultiremiTask;
       try {
         // MUL-400 E3 gate 3: a `trigger_issue` autopilot on a waiting issue must
@@ -1602,6 +1611,7 @@ export class AutopilotsRepo {
           parentTaskId: sourceTaskId,
           issueCreationRestricted,
         }, autopilotChanges, autopilotEvents);
+        this.bindAutomationInputWithinTransaction(task.id, requestSeq);
       } catch (err) {
         if (!(err instanceof IssueDependencyError) || err.code !== "dependencies_unmet") throw err;
         this.ctx.db.run('UPDATE multiremi_autopilot_runs SET turn_id=NULL WHERE id=?',[runId]);

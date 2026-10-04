@@ -180,8 +180,13 @@ function insertExecution(db:SqlDatabase,sql:string,params:unknown[]):{changes:nu
   const turnId=parent?.turn_id??input.id;
   if(input.parent_task_id&&Number(input.attempt??1)>1&&!parent)throw new Error("Retry parent attempt does not exist");
   if(!parent){
-    const auto=db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id);
+    const auto=db.query('SELECT a.session_id,r.id AS run_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id);
     const sessionId=input.issue_session_id??input.chat_session_id??auto?.session_id??`auto_orphan_${input.workspace_id}`;
+    // Independent automation runs share a conversation but each has its own
+    // execution lane. Existing entry points can queue more than one run.
+    if (auto && !input.issue_session_id && !input.chat_session_id && !input.execution_scope) {
+      input.execution_scope = `autopilot_run:${auto.run_id}`;
+    }
     const seq=appendExecutionLog(db,sessionId,turnId,"turn",input.agent_id);
     const turn:Record<string,unknown>={...Object.fromEntries(TURN_FIELDS.filter(k=>input[k]!==undefined).map(k=>[k,input[k]])),
       id:turnId,session_id:sessionId,seq,status:turnStatus(input.status??"queued"),current_attempt_id:input.id,legacy_prompt:input.prompt,created_at:input.created_at,
