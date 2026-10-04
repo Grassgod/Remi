@@ -37,6 +37,25 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("reads an unread range in one command and joins paginated long entries", async () => {
+    useCliEnv();
+    const get = specById("session.log.get");
+    let requests = 0;
+    globalThis.fetch = capabilityFetch(get.id, request => {
+      const url = new URL(request.url);
+      expect(url.searchParams.get("from")).toBe("0");
+      expect(url.searchParams.get("to")).toBe("50");
+      requests++;
+      return Response.json(requests === 1
+        ? { entries: [{ seq: 1, id: "cmt_1", body_md: "first ", body_offset: 0, body_omitted_chars: 5 }], next_cursor: '{"seq":1,"offset":6}' }
+        : { entries: [{ seq: 1, id: "cmt_1", body_md: "entry", body_offset: 6, body_omitted_chars: 0 },
+          { seq: 50, id: "cmt_50", body_md: "last", body_offset: 0 }], next_cursor: null });
+    });
+    const result = await capture(() => registryFor([get]).execute([...get.path, "ises_1", "--from", "0", "--to", "50", "--output", "json"]));
+    expect(requests).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject([{ seq: 1, body_md: "first entry" }, { seq: 50, body_md: "last" }]);
+  });
+
   for (const backend of ["sqlite", "pg"] as const) {
     it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
       `${backend}: session log get reports Issue claim, Chat reply and symbolic recipient delivery`, async () => {

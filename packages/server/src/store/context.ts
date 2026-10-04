@@ -292,7 +292,7 @@ export interface IssuesSurface {
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean },
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean; entryId?: string; commentId?: string },
   ): CreatedIssueComment;
   /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
   runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;
@@ -417,13 +417,7 @@ export interface IssuesSurface {
   restoreIssue(id: string): MultiremiIssue;
   archiveEligibleIssues(now?: Date): MultiremiIssue[];
   issueArchiveSweepIntervalMs(): number;
-  isSquadLeaderDelegation(input: {
-    issue: MultiremiIssue;
-    sourceTask: MultiremiTask | null;
-    authorAgentId: string | null;
-    targetAgentId: string;
-    issueSessionId: string | null;
-  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision;
+  resolveAgentDelegation: import("./repos/issues-repo.js").IssuesRepo["resolveAgentDelegation"];
   /** MUL-412: one decision by its own id (the Feishu card lane keys on it). */
   getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
   /** One decision scoped to the Issue it hangs on. */
@@ -578,6 +572,8 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  countDelegationPairHops: import("./repos/tasks-repo.js").TasksRepo["countDelegationPairHops"];
+  recordDelegationRoundTripLimitedWithinTransaction: import("./repos/tasks-repo.js").TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"];
   ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
   createTaskWithinWorkspaceLock(input: CreateTaskInput, childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue, gateIssueBeforeReplacement?: MultiremiIssue | null, executionScopeOverride?: string): MultiremiTask;
@@ -753,7 +749,7 @@ export interface ConversationLogSurface {
     fromSeq: number,
     toSeq: number,
   ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
-  updateTurnCardWithinTransaction(
+  recordAttemptOutcomeWithinTransaction(
     taskId: string,
     fields: {
       status?: string | null;
@@ -1529,17 +1525,17 @@ export class StoreContext {
     return assignment?.daemon ?? null;
   }
 
-  // Legacy comment rows remain the mutation source until the legacy tables retire.
+  // The comment wire is projected from canonical message storage.
   getRawIssueComment(id: string): MultiremiIssueComment | null {
-    const row = this.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
+    const row = this.db.query("SELECT * FROM multiremi_issue_message_records WHERE id = ?").get(id) as Row | null;
     return row ? toIssueComment(row) : null;
   }
 
   // Wake-up and task trigger readers use the current, non-deleted log comment.
   getLogIssueComment(id: string): MultiremiIssueComment | null {
     if (!id.startsWith("cmt_")) return null;
-    const row = this.db.query(`SELECT log.*, s.issue_id, log.session_id AS issue_session_id,
-      log.body_md AS body, CASE WHEN log.kind = 'system' THEN 'system' ELSE 'comment' END AS type
+    const row = this.db.query(`SELECT log.*,log.sender_type AS author_type,log.sender_id AS author_id,log.reply_to_id AS parent_id, s.issue_id, log.session_id AS issue_session_id,
+      log.body_md AS body, CASE WHEN log.sender_type = 'platform' THEN 'system' ELSE 'comment' END AS type
       FROM multiremi_conversation_log log
       JOIN multiremi_issue_sessions s ON s.id = log.session_id
       WHERE log.id = ? AND log.kind IN ('message', 'system') AND log.deleted_at IS NULL`).get(id) as Row | null;

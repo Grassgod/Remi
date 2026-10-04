@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -307,6 +308,7 @@ describe("snapshot TTL GC", () => {
     const f = fixture();
     const expired = f.tree("old", Date.now() - ttlMs * 2);
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: "http://127.0.0.1:1",
       workspacesRoot: f.root,
       repoCacheRoot: f.repoCacheRoot,

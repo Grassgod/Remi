@@ -50,6 +50,7 @@ import {
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
+import { LastAssistantMessage } from "./last-assistant-message.js";
 import {
   DaemonProtocolClient,
   DaemonProtocolRpcError,
@@ -142,6 +143,7 @@ import {
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
+import { fetchTaskWikiBodies } from "@daemon/agent-runtime/workspace/wiki-fetch.js";
 import { prepareChatRepositories } from "@daemon/agent-runtime/workspace/chat-repos.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
@@ -1072,6 +1074,7 @@ export class MultiremiDaemon {
       daemonId: this.options.daemonId ?? this.options.runtimeName,
       cliVersion: multiremiVersion,
       launchedBy: this.options.launchedBy,
+      caps: ["offer", "steer.push", "trace.read", "trace.subscribe", "wiki.fetch"],
       log,
       ...options.protocolClientOptions,
     });
@@ -3748,7 +3751,7 @@ export class MultiremiDaemon {
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       let wikiMaterialized = false;
-      if (!resolvedWorkDir.localDirectory && !task.issueSessionId) {
+      if (!resolvedWorkDir.localDirectory) {
         wikiMaterialized = Boolean(await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task));
       }
       return { ...prepared, wikiMaterialized };
@@ -4157,6 +4160,9 @@ export class MultiremiDaemon {
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const chatRepoAutoCheckout = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
+    if (!task.runtimeWorkspaceId && !resolvedWorkDir.localDirectory) {
+      await fetchTaskWikiBodies(codeWorkDir, task, path => this.client.readTaskWiki(path, task.authToken ?? "", signal));
+    }
     const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>
       chatRepoAutoCheckout
         ? this.prepareChatTaskWorkspace(task, resolvedWorkDir, signal)
@@ -4235,7 +4241,7 @@ export class MultiremiDaemon {
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    let output = "";
+    const output = new LastAssistantMessage();
     let sawCompaction = false;
     let seq = 1;
     const nextSeq = () => seq++;
@@ -4319,6 +4325,7 @@ export class MultiremiDaemon {
         );
         prompt = buildSteerInjectionPrompt(preparedMessages);
         await recordSteerBatch(messages, true);
+        output.boundary();
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
       // The completion transaction remains the authoritative steer barrier.
@@ -4353,8 +4360,7 @@ export class MultiremiDaemon {
               }
               lastTurnMessage = message;
               if (message.type === "compaction") sawCompaction = true;
-              // Assistant text becomes the task result / issue activity body.
-              if (message.type === "text" && message.content) output += message.content;
+              output.push(message);
             }
             // The front buffer coalesces token chunks for up to 200ms while
             // tool/lifecycle boundaries flush immediately. Delivery remains
@@ -4390,7 +4396,7 @@ export class MultiremiDaemon {
           }
         }
         if (forceAnswerExpired) {
-          log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
+          log.warn(`Task ${task.id} force-answer grace elapsed; delivering last reply`);
           // Steers that arrived too late to act on are still recorded/consumed
           // so the audit trail is complete and completion is not blocked.
           if (steered.length) await recordSteerBatch(steered, false);
@@ -4413,7 +4419,7 @@ export class MultiremiDaemon {
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
-        if (!output.trim() && !(last?.text ?? "").trim() && sawCompaction) {
+        if (!output.text && !(last?.text ?? "").trim() && sawCompaction) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return {
             output: "Agent returned empty output after compaction.",
@@ -4424,7 +4430,7 @@ export class MultiremiDaemon {
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
         }
-        const candidate = output.trim() || last?.text || "Task completed.";
+        const candidate = output.result(last?.text);
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };

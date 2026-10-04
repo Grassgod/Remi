@@ -783,6 +783,8 @@ export const DAEMON_PROTOCOL_CAPS = [
   "trace.read",
   /** daemon accepts `trace.subscribe` / `trace.fetch` and emits `trace.push`. */
   "trace.subscribe",
+  /** daemon fetches Wiki bodies through existing HTTP read endpoints after offer. */
+  "wiki.fetch",
 ] as const;
 
 export type DaemonProtocolCap = (typeof DAEMON_PROTOCOL_CAPS)[number];
@@ -791,6 +793,7 @@ export type DaemonProtocolCap = (typeof DAEMON_PROTOCOL_CAPS)[number];
 
 /** Largest protocol payload either side emits, in bytes. */
 export const DAEMON_FRAME_MAX_BYTES = 1024 * 1024;
+export const DAEMON_OFFER_BUDGET_BYTES = 512 * 1024;
 
 /** `Bun.serve` `maxPayloadLength`; above the protocol cap so a violation is readable. */
 export const DAEMON_WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;

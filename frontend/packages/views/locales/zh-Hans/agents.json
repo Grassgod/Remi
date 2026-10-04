@@ -462,6 +462,7 @@
     "final_answer": "最终回复",
     "copy_answer": "复制",
     "tokens_context": "{{value}} 上下文",
+    "context_usage": "上下文 {{value}}",
     "waiting_dispatch": "正在等待可用运行时...",
     "waiting_start": "正在等待任务启动...",
     "waiting_local_directory": "正在等待本地目录释放...",

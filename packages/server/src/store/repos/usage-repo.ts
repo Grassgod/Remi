@@ -22,10 +22,10 @@ export class UsageRepo {
       throw new Error(`Runtime not found: ${runtimeId}`);
     }
     const rows = runtimeId === undefined
-      ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_tasks WHERE runtime_id IS NOT NULL").all() as Row[]
+      ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id IS NOT NULL").all() as Row[]
       : runtimeId === null
-        ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_tasks WHERE runtime_id IS NULL").all() as Row[]
-        : this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_tasks WHERE runtime_id = ?").all(runtimeId) as Row[];
+        ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id IS NULL").all() as Row[]
+        : this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id = ?").all(runtimeId) as Row[];
     const usage = new Map<string, MultiremiRuntimeUsage & { taskIds: Set<string> }>();
     for (const row of rows) {
       const rowRuntimeId = nullableString(row.runtime_id);
@@ -272,7 +272,7 @@ export class UsageRepo {
     }
     return this.ctx.db.query(
       `SELECT t.*
-       FROM multiremi_tasks t
+       FROM multiremi_turn_execution_records t
        LEFT JOIN multiremi_issues i ON i.id = t.issue_id
        WHERE ${clauses.join(" AND ")}
        ORDER BY COALESCE(t.completed_at, t.failed_at, t.cancelled_at, t.started_at, t.dispatched_at, t.updated_at, t.created_at) ASC`,

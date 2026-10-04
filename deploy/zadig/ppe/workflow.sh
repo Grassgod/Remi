@@ -377,6 +377,17 @@ if [[ "${PPE_ACTION}" == "deploy" ]]; then
     platform|platform-daemon) ;;
     *) printf 'invalid PPE_MODE: %s\n' "${PPE_MODE}" >&2; exit 64 ;;
   esac
+
+  package_json_url="https://raw.githubusercontent.com/Grassgod/Remi/${GIT_COMMIT}/package.json"
+  if ! target_package_json="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 "${package_json_url}")"; then
+    printf 'Failed to fetch package.json for commit %s\n' "${GIT_COMMIT}" >&2
+    exit 1
+  fi
+  multiremi_version="$(printf '%s\n' "${target_package_json}" | sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  if ! [[ "${multiremi_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+    printf 'Missing or invalid package.json version for commit %s\n' "${GIT_COMMIT}" >&2
+    exit 64
+  fi
 else
   : "${PPE_LEASE_ID:?PPE_LEASE_ID is required for ${PPE_ACTION}}"
   [[ "${PPE_LEASE_ID}" =~ ^[a-f0-9]{32}$ ]] || { printf 'invalid PPE_LEASE_ID\n' >&2; exit 64; }
@@ -531,7 +542,8 @@ build_jobs=()
 if registry_manifest_exists api; then
   printf 'Reusing API image for commit %s\n' "${GIT_COMMIT}"
 else
-  run_build ppe-build-api deploy/docker/Dockerfile.api "${api_image}" "${PPE_API_BUILD_MEMORY}"
+  run_build ppe-build-api deploy/docker/Dockerfile.api "${api_image}" "${PPE_API_BUILD_MEMORY}" \
+    "MULTIREMI_VERSION=${multiremi_version}"
   build_jobs+=(ppe-build-api)
 fi
 if registry_manifest_exists web; then
@@ -671,6 +683,8 @@ spec:
         image: ${api_image}
         imagePullPolicy: Always
         env:
+        # Override dev even when reusing an image built before MUL-502.
+        - { name: MULTIREMI_VERSION, value: "${multiremi_version}" }
         - { name: HOME, value: /srv/multiremi }
         - { name: NODE_ENV, value: development }
         - { name: MULTIREMI_HOST, value: 0.0.0.0 }
@@ -766,6 +780,7 @@ spec:
         imagePullPolicy: Always
         command: [bun, apps/remi/main.ts, daemon, start, --foreground]
         env:
+        - { name: MULTIREMI_VERSION, value: "${multiremi_version}" }
         - { name: HOME, value: /srv/multiremi }
         - { name: CODEX_HOME, value: /srv/multiremi/.codex }
         - { name: MULTIREMI_SERVER_URL, value: http://api:6120 }
@@ -809,6 +824,6 @@ expires_at="$(date -u -d "+${PPE_TTL_HOURS} hours" +%FT%TZ)"
 "${kubectl_bin}" -n "${namespace}" patch configmap "${lease_name}" --type merge \
   -p "{\"data\":{\"state\":\"active\",\"expires_at\":\"${expires_at}\"}}" >/dev/null
 deploy_succeeded=1
-printf 'PPE slot: %s\nCommit: %s\nMode: %s\nURL: %s\nExpires: %s\nAPI image: %s\nWeb image: %s\n' \
-  "${PPE_SLOT}" "${GIT_COMMIT}" "${PPE_MODE}" "$(slot_url "${PPE_SLOT}")" "${expires_at}" "${api_digest}" "${web_digest}"
+printf 'PPE slot: %s\nCommit: %s\nVersion: %s\nMode: %s\nURL: %s\nExpires: %s\nAPI image: %s\nWeb image: %s\n' \
+  "${PPE_SLOT}" "${GIT_COMMIT}" "${multiremi_version}" "${PPE_MODE}" "$(slot_url "${PPE_SLOT}")" "${expires_at}" "${api_digest}" "${web_digest}"
 emit_result active

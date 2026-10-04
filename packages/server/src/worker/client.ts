@@ -753,6 +753,11 @@ export class MultiremiDaemonClient {
     return this.requestAttachmentBytes(path, this.headers(undefined, taskToken), signal);
   }
 
+  async readTaskWiki(path: string, taskToken: string, signal?: AbortSignal): Promise<Record<string, any>> {
+    if (!taskToken) throw new Error("Wiki download requires the task credential");
+    return this.request(path, { method: "GET", headers: this.headers(undefined, taskToken), signal });
+  }
+
   async downloadFeishuBotOutboundAttachment(
     runtimeId: string, deliveryId: string, claimToken: string, attachmentId: string,
   ): Promise<Buffer> {

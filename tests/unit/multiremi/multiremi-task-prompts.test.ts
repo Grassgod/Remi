@@ -65,7 +65,7 @@ describe("assembled task prompt audit", () => {
     expect(await response.json()).toEqual({ error: "prompt not recorded" });
   });
 
-  it("sends only sibling results published since the previous prompt on a delta turn", async () => {
+  it("keeps sibling results out of bootstrap and delta offers while preserving authorized result reads", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({
@@ -86,7 +86,9 @@ describe("assembled task prompt audit", () => {
 
     const firstClaim = await taskOfferResponse(store, runtime.id);
     expect(firstClaim.status).toBe(200);
-    expect((await firstClaim.json()).task.issue_session_results.map((result: any) => result.id)).toEqual([oldResult.id]);
+    const firstWire = (await firstClaim.json()).task;
+    expect(firstWire.issue_session_results).toEqual([]);
+    expect(JSON.stringify(firstWire)).not.toContain(oldResult.body);
 
     const firstPrompt = "# Bootstrap Prompt\n\n## Current Request\nBootstrap";
     store.recordTaskPrompt(first.id, {
@@ -120,6 +122,12 @@ describe("assembled task prompt audit", () => {
     const claimed = (await secondClaim.json()).task;
     expect(claimed.id).toBe(second.id);
     expect(claimed.session_projection.mode).toBe("delta");
-    expect(claimed.issue_session_results.map((result: any) => result.id)).toEqual([newResult.id]);
+    expect(claimed.issue_session_results).toEqual([]);
+    expect(JSON.stringify(claimed)).not.toContain(oldResult.body);
+    expect(JSON.stringify(claimed)).not.toContain(newResult.body);
+    const results = await app.request(`/api/issues/${issue.id}/session-results`,
+      { headers: { Authorization: `Bearer ${claimed.auth_token}` } });
+    expect(results.status).toBe(200);
+    expect((await results.json() as any[]).map(result => result.id).sort()).toEqual([oldResult.id, newResult.id].sort());
   });
 });

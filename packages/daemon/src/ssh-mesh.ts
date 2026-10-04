@@ -164,8 +164,35 @@ function isSshMeshLockLost(error: unknown): error is SshMeshError {
   return error instanceof SshMeshError && error.code === "ssh_mesh_lock_lost";
 }
 
+function canonicalSshMeshHome(home: string): string {
+  return existsSync(home) ? realpathSync(home) : resolve(home);
+}
+
+// Capture at module load, before any test can replace HOME. userInfo() may
+// derive its home from HOME, so re-reading it later could protect a test's
+// temporary home instead of the real one.
+const protectedSshMeshHomes = new Set<string>();
+if (process.env.HOME) protectedSshMeshHomes.add(canonicalSshMeshHome(process.env.HOME));
+try {
+  protectedSshMeshHomes.add(canonicalSshMeshHome(userInfo().homedir));
+} catch {
+  // Some service accounts have no user database entry; the initial HOME still applies.
+}
+
+function resolveSshMeshHome(home: string): string {
+  const canonicalHome = canonicalSshMeshHome(home);
+  if (process.env.NODE_ENV === "test" && protectedSshMeshHomes.has(canonicalHome)) {
+    throw new SshMeshError(
+      "ssh_mesh_real_home_in_test",
+      "Tests must not use the real SSH Mesh home: inject sshMeshManager or pass paths with a temporary home",
+      "error",
+    );
+  }
+  return canonicalHome;
+}
+
 export function defaultSshMeshPaths(workspaceId: string, home = homedir()): SshMeshPaths {
-  const canonicalHome = existsSync(home) ? realpathSync(home) : resolve(home);
+  const canonicalHome = resolveSshMeshHome(home);
   return sshMeshPathsForRoot(
     workspaceId,
     join(canonicalHome, ".multiremi", "ssh"),
@@ -182,7 +209,7 @@ export function sshMeshPathsForRoot(
   meshRoot: string,
   home = homedir(),
 ): SshMeshPaths {
-  const canonicalHome = existsSync(home) ? realpathSync(home) : resolve(home);
+  const canonicalHome = resolveSshMeshHome(home);
   const resolvedMeshRoot = resolve(meshRoot);
   const workspaceComponent = `workspace-${createHash("sha256").update(workspaceId).digest("hex").slice(0, 16)}`;
   const workspaceRoot = join(resolvedMeshRoot, "workspaces", workspaceComponent);
@@ -221,7 +248,10 @@ export class SshMeshManager {
     this.workspaceId = options.workspaceId;
     this.daemonId = options.daemonId;
     this.getConfigWire = options.getConfig;
-    this.paths = { ...defaultSshMeshPaths(options.workspaceId), ...options.paths };
+    this.paths = {
+      ...defaultSshMeshPaths(options.workspaceId, options.paths?.home ?? homedir()),
+      ...options.paths,
+    };
     this.commandRunner = options.commandRunner ?? runSshMeshCommand;
     this.now = options.now ?? Date.now;
     this.retryDelaysMs = options.retryDelaysMs?.length ? [...options.retryDelaysMs] : [...RETRY_DELAYS_MS];

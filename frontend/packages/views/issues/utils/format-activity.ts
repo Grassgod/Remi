@@ -21,6 +21,8 @@ function delegationReturnReason(reason: string | undefined, t: IssuesT): string 
       return t(($) => $.activity.delegation_return_reason_deferred_lane_busy);
     case "source_not_issue_task":
       return t(($) => $.activity.delegation_return_reason_source_not_issue_task);
+    case "target_not_issue_task":
+      return t(($) => $.activity.delegation_return_reason_target_not_issue_task);
     case "source_side_session":
       return t(($) => $.activity.delegation_return_reason_source_side_session);
     case "source_not_squad_leader":
@@ -79,6 +81,8 @@ function commentMentionReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.comment_mention_reason_unsupported_direction);
     case "unlinked_agent_comment":
       return t(($) => $.activity.comment_mention_reason_unlinked_agent_comment);
+    case "pair_round_trip_limit":
+      return t(($) => $.activity.comment_mention_reason_pair_round_trip_limit);
     case "target_unavailable":
       return t(($) => $.activity.comment_mention_reason_target_unavailable);
     case "dependencies_unmet":
@@ -171,6 +175,12 @@ export function formatActivity(
     case "delegation_return_skipped":
       return t(($) => $.activity.delegation_return_skipped, {
         reason: delegationReturnReason(details.reason, t),
+      });
+    case "delegation_round_trip_limited":
+      return t(($) => $.activity.delegation_round_trip_limited, {
+        source: details.sourceAgentName ?? details.sourceAgentId ?? "?",
+        target: details.targetAgentName ?? details.targetAgentId ?? "?",
+        limit: details.limit ?? "?",
       });
     case "child_done_parent_triggered":
       return t(($) => $.activity.child_done_parent_triggered);

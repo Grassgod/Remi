@@ -16,7 +16,7 @@ export function commentDispatchReplayEnabled(): boolean {
 // uses the pending-hint index below, never the log or the full lane history.
 export const RE_RING_SWEEP_CANDIDATES_SQL = `SELECT l.session_id, l.agent_id, l.execution_scope,
   l.cursor_seq, l.swept_to_seq, l.wake_hint_seq, l.last_task_id, h.head_seq, s.issue_id, s.workspace_id
-FROM multiremi_session_agent_lanes l
+FROM multiremi_agent_lane_records l
 JOIN multiremi_conversation_heads h ON h.session_id = l.session_id
 JOIN multiremi_issue_sessions s ON s.id = l.session_id AND s.status = 'active'
 JOIN multiremi_agents a ON a.id = l.agent_id AND a.archived_at IS NULL AND a.workspace_id = s.workspace_id
@@ -24,7 +24,7 @@ WHERE l.status = 'active' AND substr(l.execution_scope, 1, 6) <> 'relay:'
   AND l.wake_hint_seq > l.swept_to_seq
   AND h.head_seq > CASE WHEN l.cursor_seq > l.swept_to_seq THEN l.cursor_seq ELSE l.swept_to_seq END
   AND NOT EXISTS (
-    SELECT 1 FROM multiremi_tasks t
+    SELECT 1 FROM multiremi_turn_execution_records t
     WHERE t.issue_session_id = l.session_id AND t.agent_id = l.agent_id AND t.execution_scope = l.execution_scope
       AND t.status IN ('queued','dispatched','running','waiting_local_directory','awaiting_human'))`;
 
@@ -32,7 +32,7 @@ WHERE l.status = 'active' AND substr(l.execution_scope, 1, 6) <> 'relay:'
 // recipients and relay scopes are visited once to retire their stale hints.
 export const RE_RING_SWEEP_PAGE_SQL = `WITH lane_page AS (
   SELECT session_id, agent_id, execution_scope, last_task_id
-  FROM multiremi_session_agent_lanes
+  FROM multiremi_agent_lane_records
   WHERE status = 'active' AND wake_hint_seq > swept_to_seq
   ORDER BY COALESCE(swept_at, ''), session_id, agent_id, execution_scope LIMIT ?
 )

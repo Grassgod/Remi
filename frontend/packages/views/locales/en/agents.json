@@ -473,6 +473,7 @@
     "final_answer": "Final answer",
     "copy_answer": "Copy",
     "tokens_context": "{{value}} ctx",
+    "context_usage": "Context {{value}}",
     "waiting_dispatch": "Waiting for an available runtime...",
     "waiting_start": "Waiting for the task to start...",
     "waiting_local_directory": "Waiting for the local directory to become available...",

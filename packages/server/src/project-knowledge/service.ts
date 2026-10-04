@@ -63,7 +63,7 @@ export interface ProjectKnowledgeServiceContract {
   migrationStatus(workspaceId: string): Promise<ProjectKnowledgeMigrationStatus>;
   backfill(workspaceId: string, input?: { dryRun?: boolean; resume?: boolean; projectId?: string | null; statuses?: string[] }): Promise<ProjectKnowledgeMigrationResult>;
   verify(workspaceId: string, projectId?: string | null): Promise<ProjectKnowledgeMigrationResult>;
-  hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal, metadataOnly?: boolean): Promise<MultiremiTaskWithAgent>;
   /** A service whose OpenViking calls all share one deadline; use one per API request. */
   withRequestDeadline(budgetMs?: number): ProjectKnowledgeServiceContract;
 }
@@ -494,7 +494,13 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     return result;
   }
 
-  async hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent> {
+  async hydrateTaskKnowledge(task: MultiremiTaskWithAgent, signal?: AbortSignal, metadataOnly = false): Promise<MultiremiTaskWithAgent> {
+    if (metadataOnly) {
+      const docs = (projectId: string) => this.store.listProjectDocs(projectId, { kind: "wiki", includeBody: false })
+        .map(doc => ({ ...doc, contentSha256: null }));
+      return { ...task, projectDocs: null, projectWikiDocs: task.project ? docs(task.project.id) : [],
+        projectContexts: task.projectContexts.map(context => ({ ...context, docs: docs(context.project.id) })) };
+    }
     if (this.mode !== "openviking") {
       // Project-bound Chat materializes its Wiki even when SQL is the source
       // of truth. Keep Memory on demand and preserve legacy task hydration.

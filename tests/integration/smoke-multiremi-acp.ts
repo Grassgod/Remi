@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -152,6 +153,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
     });
 
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       provider,

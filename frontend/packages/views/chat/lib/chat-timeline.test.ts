@@ -11,6 +11,28 @@ const msg = (seq: number, type: string, content: string): TraceEvent => ({
 });
 
 describe("toChatTimeline", () => {
+  it("merges the complete answer across usage and execution metadata", () => {
+    const items = toChatTimeline([
+      msg(1, "thinking", "Checking."),
+      msg(2, "text", "Fixed the bug "),
+      { ...msg(3, "usage", ""), meta: { used: 210908, size: 1000000 } },
+      msg(4, "execution", ""),
+      msg(5, "text", "and added tests."),
+    ]);
+    expect(items.map((item) => item.type)).toEqual(["thinking", "text"]);
+    expect(splitTimeline(items).final.map((item) => item.content)).toEqual(["Fixed the bug and added tests."]);
+  });
+
+  it("redacts an answer credential after fragments separated by usage are joined", () => {
+    const items = toChatTimeline([
+      msg(1, "text", "Authorization: Bearer abc123xyz."),
+      msg(2, "usage", ""),
+      msg(3, "text", "def456"),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.content).toBe("Authorization: Bearer [REDACTED]");
+  });
+
   it("drops bridge compaction status rows", () => {
     const items = toChatTimeline([
       msg(1, "text", "Looking into it."),
