@@ -5629,7 +5629,7 @@ ${placementAfter.sql}
         if(delegator?.archivedAt&&delegator.workspaceId===report.source.workspaceId&&returnIssue&&!['done','cancelled'].includes(returnIssue.status)){
           sendMessageWithinTransaction(this.ctx,{session_id:issueSessionId,sender:{type:'platform',id:null},
             source_turn_id:this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(report.source.id)?.turn_id,
-            to:{type:'agent',ref:delegator.id},message_kind:'report',wake_requested:'now',
+            to:{type:'role',ref:'delegator'},message_kind:'report',wake_requested:'now',
             dedupe_key:`delegation_terminal:${report.source.id}`,
             body_md:delegationTerminalReportSection(report,report.resultCommentId?this.ctx.issues().getIssueComment(report.resultCommentId)?.body:undefined),
             metadata:{message_source:{issueId:report.source.issueId,taskId:report.source.id,commentId:report.resultCommentId}}},deferredEvents);

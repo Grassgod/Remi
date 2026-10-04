@@ -457,7 +457,7 @@ describe("task-level agent delegation return", () => {
     expect(store.getTask(taskId)!.delegationId).toBeTruthy();
     expect(store.listIssueActivity(issue.id)
       .some((activity) => activity.type === "wake_downgraded"
-        && (activity.data as Record<string, unknown>).taskId === taskId))
+        && (activity.data as Record<string, unknown>).sourceTaskId === taskId))
       .toBeFalse();
   });
 
