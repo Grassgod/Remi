@@ -429,6 +429,8 @@ interface ReadonlyContentProps {
    * timeline entry); a fresh array on every parent render busts the memo.
    */
   attachments?: Attachment[];
+  /** Resolve uncached attachment URLs at download time; pass a stable callback. */
+  loadAttachments?: () => Promise<Attachment[]>;
   /**
    * Typographic density.
    *
@@ -459,6 +461,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   content,
   className,
   attachments,
+  loadAttachments,
   density = "default",
   headingAnchors = false,
   copyCodeBlocks = false,
@@ -478,7 +481,7 @@ export const ReadonlyContent = memo(function ReadonlyContent({
     : [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex];
 
   return (
-    <AttachmentDownloadProvider attachments={attachments}>
+    <AttachmentDownloadProvider attachments={attachments} loadAttachments={loadAttachments}>
       <div
         ref={wrapperRef}
         // Compact owns its own base font-size in CSS (em-relative children
