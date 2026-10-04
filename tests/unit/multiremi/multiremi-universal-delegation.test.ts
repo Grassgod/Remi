@@ -270,6 +270,141 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(store.listTasks().length).toBe(before + 1);
       }), timeout);
 
+    for (const leaderEntry of ["task", "mention"] as const) {
+      it(`two dispatchers share B/S1 with leader ${leaderEntry} and QA ${leaderEntry === "task" ? "mention" : "task"}, then return independently (R10)`,
+        async () => withStore(backend, async store => {
+          const f = fixture(store);
+          const leaderSession = store.createIssueSession(f.a.id, { title: "Leader S0" });
+          const leaderSource = store.createTask({ agentId: f.leader.id, issueId: f.a.id,
+            issueSessionId: leaderSession.id, prompt: "Independent leader dispatch." });
+          start(store, leaderSource);
+          const sources = [
+            { task: leaderSource, entry: leaderEntry },
+            { task: f.source, entry: leaderEntry === "task" ? "mention" : "task" },
+          ] as const;
+          for (const source of sources) {
+            if (source.entry === "task") await dispatch(store, source.task, f.b, f.atlas.id, "task", f.s1.id);
+            else expect((await mention(store, source.task, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
+          }
+          const children = store.listTasksForIssue(f.b.id);
+          expect(children).toHaveLength(2);
+          expect(new Set(children.map(task => task.delegationId)).size).toBe(2);
+          for (const { task: source } of sources) {
+            const child = children.find(task => task.parentTaskId === source.id)!;
+            expect(child.delegationId).toStartWith("dlg_");
+            expect(child).toMatchObject({ agentId: f.atlas.id, issueSessionId: f.s1.id,
+              delegatedByAgentId: source.agentId, delegatedFromIssueSessionId: source.issueSessionId });
+            expect((await mention(store, source, f.b, f.s1.id, f.atlas.id)).status).toBe(201);
+          }
+          expect(store.listTasksForIssue(f.b.id)).toHaveLength(2);
+          for (const { task: source } of sources) store.completeTask(source.id, { output: "Waiting for Atlas." });
+          for (let i = 0; i < children.length; i++) {
+            const child = store.claimTask(f.atlas.runtimeId!)!;
+            expect(children.map(task => task.id)).toContain(child.id);
+            store.buildTaskSessionProjection(child.id);
+            store.startTask(child.id);
+            store.completeTask(child.id, { output: `Result for ${child.delegatedByAgentId}.` });
+          }
+          const returnedIds = new Set<string>();
+          for (const { task: source } of sources) {
+            const child = children.find(task => task.parentTaskId === source.id)!;
+            const returned = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
+            returnedIds.add(returned.id);
+            expect(returned).toMatchObject({ agentId: source.agentId, issueId: f.a.id,
+              issueSessionId: source.issueSessionId, parentTaskId: child.id,
+              delegationId: child.delegationId, delegatedByAgentId: source.agentId });
+            expect(inboxReportBody(store, returned, child.id)).toContain(`Result for ${source.agentId}.`);
+            expect(store.listSessionEvents(source.issueSessionId!).filter(event => event.kind === "delegation_report")
+              .map(event => event.taskId)).toEqual([child.id]);
+            start(store, returned);
+            store.completeTask(returned.id, { output: "Reviewed independently." });
+          }
+          expect(returnedIds.size).toBe(2);
+          expect(activity(store, f.a.id, "delegation_return_triggered")).toHaveLength(2);
+          expect(store.listTasksForIssue(f.a.id).filter(task => task.issueSessionId === f.wrong.id)).toHaveLength(0);
+          expect(store.listTasks("queued")).toHaveLength(0);
+        }), timeout);
+    }
+
+    for (const assignment of ["explicit", "project_default", "reassign"] as const) {
+      it(`agent ${assignment} assignment creates an undelegated first round with no return (E6)`,
+        async () => withStore(backend, async store => {
+          const f = fixture(store);
+          const project = store.createProject({ title: "First-round project",
+            defaultAssigneeType: "agent", defaultAssigneeId: f.atlas.id });
+          store.updateIssue(f.a.id, { projectId: project.id });
+          const targetAgentId = assignment === "explicit" ? f.leader.id : f.atlas.id;
+          let issueId: string;
+          if (assignment === "reassign") {
+            const existing = store.createIssue({ title: "Previously assigned issue", projectId: project.id,
+              assigneeType: "agent", assigneeId: f.leader.id, status: "in_progress" });
+            expect(store.listTasksForIssue(existing.id)).toHaveLength(0);
+            const response = await request(store, f.source, `/api/multiremi/issues/${existing.id}/assign`, {
+              assigneeType: "agent", assigneeId: targetAgentId,
+            });
+            expect(response.status).toBe(200);
+            issueId = existing.id;
+          } else {
+            const response = await request(store, f.source, "/api/issues", {
+              title: `Agent-created ${assignment} issue`,
+              ...(assignment === "explicit" ? { assignee_type: "agent", assignee_id: targetAgentId } : {}),
+            });
+            expect(response.status).toBe(201);
+            const created = await response.json() as { id: string; task_id: string; dispatch_status: string };
+            expect(created.dispatch_status).toBe("dispatched");
+            expect(created.task_id).toBeTruthy();
+            issueId = created.id;
+          }
+          expect(store.getIssue(issueId)).toMatchObject({ projectId: project.id,
+            assigneeType: "agent", assigneeId: targetAgentId });
+          const tasks = store.listTasksForIssue(issueId);
+          expect(tasks).toHaveLength(1);
+          const task = tasks[0]!;
+          expect(task).toMatchObject({ agentId: targetAgentId, delegationId: null, delegatedByAgentId: null,
+            delegatedFromIssueSessionId: null, delegationSkipReason: null, delegationReturnTaskId: null });
+          const before = store.listTasks().length;
+          start(store, task);
+          store.completeTask(task.id, { output: "First round finished." });
+          expect(store.getTask(task.id)).toMatchObject({ status: "completed", delegationReturnTaskId: null });
+          expect(store.listTasks()).toHaveLength(before);
+          for (const id of [f.a.id, issueId]) {
+            expect(activity(store, id, "delegation_return_triggered")).toHaveLength(0);
+            expect(activity(store, id, "delegation_return_skipped")).toHaveLength(0);
+          }
+          expect(store.listSessionEvents(f.s0.id).filter(event => event.kind === "delegation_report")).toHaveLength(0);
+        }), timeout);
+    }
+
+    for (const executionMode of ["create_issue", "trigger_issue", "run_only"] as const) {
+      it(`real ${executionMode} autopilot creates an undelegated task with no return (C4)`,
+        async () => withStore(backend, async store => {
+          const f = fixture(store);
+          const autopilot = store.createAutopilot({ title: `Automatic ${executionMode} work`,
+            assigneeId: f.atlas.id, executionMode, createdByType: "agent", createdById: f.qa.id });
+          const run = store.runAutopilot(autopilot.id, { sourceTaskId: f.source.id,
+            ...(executionMode === "trigger_issue" ? { triggerIssueId: f.b.id } : {}) });
+          expect(run.status).toBe("running");
+          expect(run.taskId).toBeTruthy();
+          const task = store.getTask(run.taskId!)!;
+          expect(task).toMatchObject({ status: "queued", agentId: f.atlas.id, autopilotRunId: run.id, parentTaskId: f.source.id,
+            delegationId: null, delegatedByAgentId: null, delegatedFromIssueSessionId: null,
+            delegationSkipReason: null, delegationReturnTaskId: null });
+          if (executionMode === "run_only") expect(task.issueId).toBeNull();
+          else expect(task.issueId).toBe(run.issueId);
+          const before = store.listTasks().length;
+          start(store, task);
+          store.completeTask(task.id, { output: "Automatic work finished." });
+          expect(store.getTask(task.id)).toMatchObject({ status: "completed", delegationReturnTaskId: null });
+          expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
+          expect(store.listTasks()).toHaveLength(before);
+          for (const id of new Set([f.a.id, task.issueId].filter((id): id is string => id !== null))) {
+            expect(activity(store, id, "delegation_return_triggered")).toHaveLength(0);
+            expect(activity(store, id, "delegation_return_skipped")).toHaveLength(0);
+          }
+          expect(store.listSessionEvents(f.s0.id).filter(event => event.kind === "delegation_report")).toHaveLength(0);
+        }), timeout);
+    }
+
     for (const limit of [1, 2, 5]) {
       it(`real dispatch/terminal-return loop refuses dispatch ${limit + 1} at L=${limit}`,
         async () => withLimit(limit === 5 ? undefined : String(limit), () => withStore(backend, async store => {
