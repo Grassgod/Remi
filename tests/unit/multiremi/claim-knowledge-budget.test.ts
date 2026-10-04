@@ -34,7 +34,10 @@ describe("claim knowledge budget", () => {
     for (const mode of ["bootstrap", "delta"]) {
       const prompt = buildTaskPrompt({ ...hydrated, sessionProjection: { mode, jsonl: "" } } as any);
       expect(prompt).toContain("Knowledge Availability Warnings");
-      expect(prompt).toContain("not loaded");
+      expect(prompt).toContain("Wiki暂不可用，用 remi wiki 取");
+      expect(prompt.match(/暂不可用/g)).toHaveLength(1);
+      expect(prompt).not.toContain("Project Wiki loading failed");
+      expect(prompt).not.toContain("Repository Wiki loading failed");
     }
   });
 

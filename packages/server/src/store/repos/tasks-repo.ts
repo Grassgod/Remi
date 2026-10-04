@@ -7,6 +7,7 @@ import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-pro
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget, RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
+import { envelopeSummary } from "../envelope-body.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { reRingSweepEnabled, RE_RING_SWEEP_CANDIDATES_SQL, RE_RING_SWEEP_PAGE_SQL, RE_RING_SWEEP_LANE_LIMIT,
@@ -521,6 +522,7 @@ export interface DelegationWakeupInput {
   triggerCommentId?: string | null;
   terminalStatus?: "completed" | "failed" | "cancelled" | null;
   terminalBody?: string | null;
+  resultCommentId?: string | null;
 }
 
 export interface DelegationWakeupResult {
@@ -545,8 +547,52 @@ type DelegationSkipReason =
   | "no_lineage" | "delegator_unavailable" | "already_covered"
   | "coalesced_into_pending_return" | "covered_by_queued_task" | "deferred_lane_busy"
   | "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
-  | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch"
+  | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | "target_not_issue_task"
   | "covered_by_delegate_wakeup" | "delegator_issue_closed" | "delegator_session_missing";
+
+export function pairRoundTripLimit(): number {
+  const value = Number(process.env.MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT);
+  return Number.isSafeInteger(value) && value > 0 ? value : 5;
+}
+
+/** Count the existing alternating pair segment, including delegated return turns. */
+export function countDelegationPairHops(
+  source: MultiremiTask,
+  targetAgentId: string,
+  getParent: (id: string) => MultiremiTask | null,
+  lastMemberMessageAt: string | null,
+  maxHops: number,
+): number {
+  let task: MultiremiTask | null = source;
+  let expectedAgentId = source.agentId;
+  let hops = 0;
+  const seen = new Set<string>();
+  while (task && hops < maxHops) {
+    if (seen.has(task.id) || task.workspaceId !== source.workspaceId
+      || task.agentId !== expectedAgentId || !task.delegationId || !task.delegatedByAgentId
+      || (lastMemberMessageAt !== null && task.createdAt <= lastMemberMessageAt)) break;
+    seen.add(task.id);
+    hops += 1;
+    if (hops === maxHops) break;
+    expectedAgentId = expectedAgentId === source.agentId ? targetAgentId : source.agentId;
+    task = task.parentTaskId ? getParent(task.parentTaskId) : null;
+  }
+  return hops;
+}
+
+export class DelegationRoundTripLimitError extends Error {
+  readonly code = "pair_round_trip_limit";
+  constructor(
+    readonly sourceTask: MultiremiTask,
+    readonly targetAgentId: string,
+    readonly targetIssueId: string,
+    readonly hops: number,
+    readonly limit: number,
+  ) {
+    super(`Agent pair round-trip limit (${limit}) reached; wait for human intervention`);
+    this.name = "DelegationRoundTripLimitError";
+  }
+}
 
 interface DelegationReturnDrainResult {
   createdTasks: MultiremiTask[];
@@ -702,6 +748,8 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  * was accepted before the run ended would be silently stranded.
  */
 export class TaskSteerPendingError extends Error {}
+
+class AgentReplyCommentError extends Error {}
 
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
@@ -1047,6 +1095,51 @@ function fallbackSwitchPlan(parent: MultiremiTask, agent: MultiremiAgent | null,
 export class TasksRepo {
   private readonly acceptedOfferLeases = new Set<string>();
   constructor(private ctx: StoreContext) {}
+
+  countDelegationPairHops(source: MultiremiTask, targetAgentId: string, limit = pairRoundTripLimit()): number {
+    const lastMember = this.ctx.db.query(`SELECT MAX(created_at) AS created_at
+      FROM multiremi_conversation_log WHERE session_id = ? AND author_type = 'member'`)
+      .get(source.issueSessionId) as { created_at: string | null };
+    return countDelegationPairHops(source, targetAgentId, (id) => this.getTask(id), lastMember.created_at, 2 * limit);
+  }
+
+  recordDelegationRoundTripLimited(error: DelegationRoundTripLimitError): void {
+    const events = createCommitEventQueue();
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(error.sourceTask.workspaceId);
+      this.recordDelegationRoundTripLimitedWithinTransaction(error, [], events);
+    })();
+    this.ctx.emitCommitEvents(events);
+  }
+
+  recordDelegationRoundTripLimitedWithinTransaction(
+    error: DelegationRoundTripLimitError,
+    collector: ChildStatusChangeCollector,
+    events: CommitEventQueue,
+  ): void {
+    const source = error.sourceTask;
+    const sourceAgent = this.ctx.agents().getAgent(source.agentId);
+    const targetAgent = this.ctx.agents().getAgent(error.targetAgentId);
+    const dedupeKey = `pair_round_trip_limit:${source.id}:${error.targetAgentId}`;
+    const delivery = this.ctx.inbox().sendEnvelopeWithinTransaction({
+      to: { role: "agent", issueSessionId: source.issueSessionId!, agentId: source.agentId },
+      kind: "lifecycle", wake: "inbox_only", dedupeKey,
+      body: `${sourceAgent?.name ?? source.agentId} 与 ${targetAgent?.name ?? error.targetAgentId} 的自动来回已达 ${error.limit} 次上限（MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT），已停止自动叫醒，等人介入。来源任务：${source.id}；已有跳数：${error.hops}。`,
+      source: { issueId: source.issueId!, taskId: source.id },
+    }, collector, events)[0];
+    if (!delivery || delivery.deduplicated) return;
+    for (const issueId of new Set([source.issueId!, error.targetIssueId])) {
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "system", actorId: null, type: "delegation_round_trip_limited",
+        body: error.message,
+        data: { reason: error.code, sourceTaskId: source.id, sourceAgentId: source.agentId,
+          sourceAgentName: sourceAgent?.name ?? source.agentId, targetAgentId: error.targetAgentId,
+          targetAgentName: targetAgent?.name ?? error.targetAgentId, sourceIssueId: source.issueId,
+          sourceIssueSessionId: source.issueSessionId, targetIssueId: error.targetIssueId,
+          hops: error.hops, limit: error.limit, dedupeKey },
+      }, events);
+    }
+  }
 
   recordTaskOffered(taskId: string, runtimeId: string, at = nowIso()): boolean {
     return Boolean(this.ctx.db.query(
@@ -4743,7 +4836,9 @@ ${placementAfter.sql}
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
-    const deferredEvents = createCommitEventQueue();
+    let deferredEvents = createCommitEventQueue();
+    const ownsTransaction = !this.ctx.db.inTransaction;
+    let skipAutoReply = false;
     const completeWithinTransaction = () => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -4780,11 +4875,23 @@ ${placementAfter.sql}
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       this.markEmptyTraceAtTerminal(taskId, input.traceEventCount);
       const completed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents);
+      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents,
+        "turn_end", skipAutoReply);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
       return { task: completed, followUps };
     };
-    const terminal = this.ctx.db.inTransaction ? completeWithinTransaction() : this.ctx.db.transaction(completeWithinTransaction)();
+    let terminal: ReturnType<typeof completeWithinTransaction>;
+    try {
+      terminal = ownsTransaction ? this.ctx.db.transaction(completeWithinTransaction)() : completeWithinTransaction();
+    } catch (error) {
+      if (!ownsTransaction || !(error instanceof AgentReplyCommentError)) throw error;
+      // Roll back partial comment writes and PG statement failures, then finish once with a result pointer.
+      log.warn(`agent reply comment skipped for ${taskId}: ${error.message}`);
+      skipAutoReply = true;
+      childStatusChanges.length = 0;
+      deferredEvents = createCommitEventQueue();
+      terminal = this.ctx.db.transaction(completeWithinTransaction)();
+    }
     const task = terminal.task;
     // Chat's turn card is the assistant reply, so it exists only after the
     // terminal transaction. Issue turn cards already receive their receipt at claim.
@@ -4792,7 +4899,6 @@ ${placementAfter.sql}
       this.recordChatInboxDeliveryAfterReply(task);
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents(deferredEvents);
-      this.postAgentReplyComment(task, input.output);
       for (const delegationReturn of terminal.followUps.delegationReturns) {
         this.ctx.notifyTaskEnqueued(delegationReturn);
       }
@@ -5412,7 +5518,7 @@ ${placementAfter.sql}
     // most once per terminal transaction and shared by the bridge metadata and
     // the return prompt. `undefined` means "not resolved yet"; the drain
     // resolves it when the cross-issue bridge branch did not run.
-    let triggerResultCommentId: string | null | undefined;
+    let triggerResultCommentId = input.resultCommentId;
     const drainTerminalReturns = (): DelegationWakeupResult => {
       if (!returnSessionId || !terminalStatus) {
         return { task: null, created: false, covered: false };
@@ -5466,7 +5572,7 @@ ${placementAfter.sql}
       // (comment writes do not take the workspace lifecycle lock), and both
       // writes commit in one transaction, so resolve here and thread the value
       // through the drain below.
-      triggerResultCommentId = this.lastDelegationResultCommentId(source);
+      if (triggerResultCommentId === undefined) triggerResultCommentId = this.lastDelegationResultCommentId(source);
       const bridge = existing ?? this.ctx.issueSessions().appendSessionEventWithinTransaction(returnSession.id, {
         authorType: "system",
         kind: "delegation_report",
@@ -5647,9 +5753,7 @@ ${placementAfter.sql}
       const crossIssue = source.issueId != null && source.issueId !== returnIssueId;
       const hasResultCommentSnapshot = reportMetadata != null
         && Object.hasOwn(reportMetadata, "result_comment_id");
-      const resultCommentId = !crossIssue
-        ? null
-        : hasResultCommentSnapshot
+      const resultCommentId = hasResultCommentSnapshot
           ? nullableString(reportMetadata.result_comment_id)
           : isTrigger && trigger.resultCommentId !== undefined
             ? trigger.resultCommentId
@@ -5691,7 +5795,8 @@ ${placementAfter.sql}
         to: { role: "delegator", delegationId: report.source.delegationId! },
         kind: "report", wake: "now", outcome: report.terminalStatus === "completed" ? "done" : report.terminalStatus,
         dedupeKey: `delegation_terminal:${report.source.id}`,
-        body: delegationTerminalReportSection(report),
+        body: delegationTerminalReportSection(report, report.resultCommentId
+          ? this.ctx.issues().getIssueComment(report.resultCommentId)?.body : undefined),
         source: { issueId: report.source.issueId ?? undefined, taskId: report.source.id,
           commentId: report.resultCommentId ?? undefined },
       }, childStatusChanges, deferredEvents)[0]!;
@@ -5784,12 +5889,35 @@ ${placementAfter.sql}
     }, deferredEvents);
   }
 
+  getTaskWakeSequences(taskId: string): number[] {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const rows = task.issueId
+      ? this.ctx.db.query(`SELECT data AS payload FROM multiremi_issue_activity
+          WHERE issue_id = ? AND type IN ('pending_turn_created', 'pending_turn_coalesced') AND created_at >= ?`)
+        .all(task.issueId, task.createdAt) as { payload: string }[]
+      : this.ctx.db.query(`SELECT payload FROM multiremi_system_events WHERE resource_id = ?
+          AND event IN ('pending_turn_created', 'pending_turn_coalesced')`)
+        .all(task.id) as { payload: string }[];
+    const seqs = new Set<number>();
+    for (const row of rows) {
+      const data = parseJson<Record<string, unknown>>(row.payload, {});
+      if (data.task_id === taskId && Number.isSafeInteger(data.seq) && Number(data.seq) > 0) seqs.add(Number(data.seq));
+    }
+    if (task.triggerCommentId) {
+      const entry = this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId);
+      if (entry?.session_id === (task.chatSessionId ?? task.issueSessionId)) seqs.add(entry.seq);
+    }
+    return [...seqs].sort((a, b) => a - b);
+  }
+
   private lastDelegationResultCommentId(source: MultiremiTask): string | null {
     if (!source.issueId) return null;
     const row = this.ctx.db.query(
       `SELECT id FROM multiremi_issue_comments
-       WHERE issue_id = ? AND task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
-    ).get(source.issueId, source.id) as { id: string } | null;
+       WHERE issue_id = ? AND task_id = ? AND author_type = 'agent' AND author_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+    ).get(source.issueId, source.id, source.agentId) as { id: string } | null;
     return row?.id ?? null;
   }
 
@@ -5802,9 +5930,17 @@ ${placementAfter.sql}
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
     reRingOrigin = "turn_end",
+    skipAutoReply = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
+    const existingResultCommentId = task.delegationId && task.delegatedByAgentId !== task.agentId
+      ? this.lastDelegationResultCommentId(task) : null;
+    const replyCommentId = status === "completed" && task.issueId && task.agentId && !task.chatSessionId
+      && body?.trim() && body.trim() !== "Task completed."
+      && !this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)
+      ? createId("cmt") : null;
+    let resultCommentId = existingResultCommentId;
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.
     if (status !== "cancelled") {
@@ -5962,9 +6098,10 @@ ${placementAfter.sql}
       }, deferredEvents);
       // Issue turns keep the reply as a standalone threadable `message` row and
       // point the card at it; the card itself only carries the lifecycle state.
-      const replyComment = status === "completed" && !workspaceLockHeld
-        ? this.postAgentReplyComment(task, body)
+      const replyComment = status === "completed" && !skipAutoReply
+        ? this.postAgentReplyCommentWithinTransaction(task, body, replyCommentId ?? undefined)
         : null;
+      resultCommentId ??= replyComment?.id ?? null;
       if (task.issueSessionId) {
         const event = {
           authorType: status === "completed" ? "agent" : "system",
@@ -6025,12 +6162,14 @@ ${placementAfter.sql}
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
+                resultCommentId,
               }, childStatusChanges, deferredEvents)
             : this.ensureDelegationWakeup({
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
+                resultCommentId,
               });
           // The unified writer put fresh returns on the owner's commit queue.
         }
@@ -6058,7 +6197,7 @@ ${placementAfter.sql}
         const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
         const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
         const outcome = status === "completed" ? "done" : status;
-        const reason = status === "failed" ? (task.failureReason ?? body ?? "unknown") : body;
+        const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
         const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
           + (reason ? `，原因 ${reason}` : "");
         const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
@@ -6565,7 +6704,13 @@ ${placementAfter.sql}
   // triggering comment when the task came from an @mention. Legacy daemons
   // still report the "Task completed." placeholder — skip it, it says nothing.
   /** Returns the reply comment it created, or null when the run posted none. */
-  private postAgentReplyComment(task: MultiremiTask, output: string | null): { id: string } | null {
+  private postAgentReplyComment(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {
+    return this.ctx.db.inTransaction
+      ? this.postAgentReplyCommentWithinTransaction(task, output, commentId)
+      : this.ctx.db.transaction(() => this.postAgentReplyCommentWithinTransaction(task, output, commentId))();
+  }
+
+  private postAgentReplyCommentWithinTransaction(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {
     if (!task.issueId || !task.agentId || task.chatSessionId) return null;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return null;
@@ -6573,8 +6718,7 @@ ${placementAfter.sql}
     try {
       // If the agent already posted its own comment during this run (the normal
       // path for @mention/comment-triggered tasks — it replies in-thread via a
-      // tool), don't also post the accumulated transcript text: that double-posts
-      // and the auto-reply is the lower-quality, narration-heavy version. The
+      // tool), don't also post the final message: that double-posts. The
       // auto-reply stays for direct assignments where the agent doesn't comment.
       if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)) {
         return null;
@@ -6594,21 +6738,24 @@ ${placementAfter.sql}
       // and member notifications follow COMMIT: a dispatch SQL failure must
       // keep the reply and complete the task, since no client can retry it.
       const deferredEvents = createCommitEventQueue();
-      const created = this.ctx.db.transaction(() => {
-        const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
-          withinTransaction: true,
-          deferredEvents,
-          deferDispatch: true,
-        });
-        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
-        return created;
-      })();
+      const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
+        withinTransaction: true,
+        deferredEvents,
+        deferDispatch: true,
+        commentId,
+      });
+      this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
       reply = { id: created.comment.id };
-      this.ctx.emitCommitEvents(deferredEvents);
-      this.ctx.issues().runIssueCommentPostCommit(created, input);
+      afterCommit(this.ctx.db, () => {
+        try {
+          this.ctx.emitCommitEvents(deferredEvents);
+          this.ctx.issues().runIssueCommentPostCommit(created, input);
+        } catch (error) {
+          log.warn(`agent reply comment skipped for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
     } catch (err) {
-      // Task completion must never fail because the reply couldn't be posted.
-      log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new AgentReplyCommentError(err instanceof Error ? err.message : String(err), { cause: err });
     }
     return reply;
   }
@@ -6645,6 +6792,7 @@ ${placementAfter.sql}
     retryCreated: boolean,
   ): string | null {
     if (!task.issueId) return null;
+    if (status === "failed" && task.failureReason === "offer_too_large") return null;
 
     // An infrastructure retry is still the same active attempt chain. Ordinary
     // queued siblings have not started yet and keep the historical todo state.
@@ -6955,33 +7103,22 @@ function normalizeTriggerSummary(value: unknown): string | null {
 
 
 
-function delegationTerminalReportSection(report: DelegationTerminalReport): string {
-  const body = report.terminalBody?.trim();
+function delegationTerminalReportSection(report: DelegationTerminalReport, commentBody?: string): string {
   const lines = [
     report.terminalStatus === "completed"
       ? `${report.sourceAgentName} completed a task you delegated.`
       : report.terminalStatus === "failed"
         ? `${report.sourceAgentName} could not complete a task you delegated.`
         : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
-    "Read the latest Session Updates and terminal reports, then continue owning the parent task.",
-    "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
-    "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
-    "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
-    "Do not repeat work that the teammate already completed.",
-    "",
-    `## Terminal Report: ${report.sourceAgentName}`,
-    `Source task: ${report.source.id}`,
     `Status: ${report.terminalStatus}`,
+    ...(report.crossIssue && report.sourceIssueKey ? [`来源：${report.sourceIssueKey}`] : []),
+    report.resultCommentId
+      ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
+      : `结论评论：无；结果见 remi task get ${report.source.id}`,
+    `摘要：${envelopeSummary(report.terminalStatus === "cancelled" ? null
+      : report.terminalStatus === "completed" ? commentBody ?? report.terminalBody : report.terminalBody)}`,
+    "请读该评论后继续负责父任务；本轮所有委派都终态后再发一次轮次总结。",
   ];
-  if (report.crossIssue) {
-    lines.push(`Issue: ${report.sourceIssueKey ?? "unknown"} (${report.source.issueId})`);
-    lines.push(report.resultCommentId
-      ? `Result comment: ${report.resultCommentId}`
-      : "Result comment: none at completion (the final reply is posted as a comment after this report; result text follows)");
-  }
-  lines.push(`Delegation: ${report.source.delegationId ?? "none"}`);
-  if (!body) return lines.join("\n");
-  lines.push("", body);
   return lines.join("\n");
 }
 

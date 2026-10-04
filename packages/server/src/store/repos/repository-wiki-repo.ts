@@ -94,9 +94,13 @@ export type RepositoryWikiStoreBatchOperation =
 export class RepositoryWikiRepo {
   constructor(private readonly ctx: StoreContext) {}
 
-  list(workspaceId: string, repositoryId: string): MultiremiRepositoryWikiDoc[] {
+  list(workspaceId: string, repositoryId: string, input: { includeBody?: boolean } = {}): MultiremiRepositoryWikiDoc[] {
+    const columns = input.includeBody === false ? `id, repository_id, workspace_id, path, title, summary,
+      tags, refs, source_task_id, source_issue_id, author_type, author_id, updated_by_type, updated_by_id,
+      source_revision, status, status_message, version, storage_backend, content_uri, content_sha256,
+      sync_status, sync_error, snapshot_oid, compilation_run_id, created_at, updated_at` : "*";
     return (this.ctx.db.query(
-      `SELECT * FROM multiremi_repository_wiki_docs
+      `SELECT ${columns} FROM multiremi_repository_wiki_docs
        WHERE workspace_id = ? AND repository_id = ? ORDER BY path`,
     ).all(workspaceId, repositoryId) as Row[]).map(toRepositoryWikiDoc);
   }

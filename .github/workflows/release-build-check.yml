@@ -41,9 +41,24 @@ on:
       - "scripts/**"
       - "tests/**"
       - "tsconfig.json"
+  # Full run on demand, e.g. `gh workflow run release-build-check.yml --ref main`
+  # after the workflow was disabled and re-enabled: a main push only triggers
+  # it when a later commit lands, and the release gate needs a run on the exact
+  # SHA it tags. Runs the backend suite like a main push (MUL-516).
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# MUL-516: a new push to a pull request cancels that pull request's run still in
+# progress — only the latest head is worth checking. Runs on main never cancel
+# one another: each gets a group of its own, because the release gate needs a
+# successful run for the exact main SHA it tags. A group shared by main pushes is
+# not enough even without cancel-in-progress — GitHub keeps one pending run per
+# group and cancels the older pending one when a third arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   session-archive-platform:
@@ -106,10 +121,12 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      # A manual dispatch carries neither base, so it compares against the
+      # parent commit — the previous main for a merge commit.
       - name: Require refreshed dependencies for a new release version
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: bun run release:check --base-ref "$RELEASE_BASE_SHA"
+        run: bun run release:check --base-ref "${RELEASE_BASE_SHA:-$(git rev-parse HEAD^)}"
 
       - name: Install dependencies from the public registry
         run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
@@ -133,11 +150,21 @@ jobs:
       # the list never ran in CI — tests/unit/multiremi/multiremi-api-auth.test.ts
       # failed on main from 5e8ee09f onward while this workflow stayed green
       # (MUL-128/MUL-129). Run the whole backend suite instead: `bunfig.toml`
-      # scopes `bun test` to `tests/`, so this is every `tests/**/*.test.ts`
-      # (~1.7k tests, ~2min). Harnesses needing real providers/browsers/Postgres
-      # are named `*.ts` without `.test` and stay out of discovery — see
-      # TESTING.md.
+      # scopes `bun test` to `tests/`, so this is every `tests/**/*.test.ts`.
+      # Harnesses needing real providers/browsers/Postgres are named `*.ts`
+      # without `.test` and stay out of discovery — see TESTING.md.
+      #
+      # MUL-516: pull requests skip this step. The suite runs serially and takes
+      # ~75 of the job's ~88 minutes, and it re-ran on every push to every pull
+      # request. It runs on every push to main (and on a manual run) instead,
+      # and the release gate (`release.yml` / `platform-release.yml`) only
+      # accepts a successful main push or manual run on main for the tagged
+      # SHA, so nothing ships without it. Only the
+      # step is skipped, not the job: `build` still reports, so a required check
+      # never sits pending. A red suite on main is traced to its merge and fixed
+      # or reverted the same day — see TESTING.md.
       - name: Backend test suite
+        if: github.event_name != 'pull_request'
         # The Postgres service container above is only reachable if the suite is
         # told where it is. Without this the PG integration tests fall back to a
         # default URL, which happens to match the service container here -- but a

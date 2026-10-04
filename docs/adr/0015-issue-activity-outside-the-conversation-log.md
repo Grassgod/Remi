@@ -1,4 +1,4 @@
-# ADR 0013: Issue activity stays outside the conversation log; the window read attaches it by time span
+# ADR 0015: Issue activity stays outside the conversation log; the window read attaches it by time span
 
 ## Status
 

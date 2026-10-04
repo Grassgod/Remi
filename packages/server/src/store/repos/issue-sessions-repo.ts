@@ -758,6 +758,14 @@ export class IssueSessionsRepo {
         // Task writer below takes W again for free; taking W here is what keeps
         // the order W -> D instead of the D -> W the sentinel caught.
         this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
+        const parentTaskId = resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id");
+        const sourceTask = parentTaskId ? this.ctx.tasks().getTask(parentTaskId) : null;
+        const creatorType = input.createdByType ?? input.created_by_type ?? "system";
+        const creatorId = input.createdById ?? input.created_by_id ?? null;
+        const delegation = creatorType === "agent" && sourceTask
+          ? this.ctx.issues().resolveAgentDelegation({ sourceTask, authorAgentId: creatorId,
+            targetAgentId: agentId, targetIssue: this.ctx.issues().getIssue(session.issueId) })
+          : null;
         this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
         return this.ctx.tasks().createTaskWithinTransaction({
           agentId,
@@ -769,7 +777,11 @@ export class IssueSessionsRepo {
           assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
           assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
           assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
-          parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+          parentTaskId,
+          ...(delegation?.ok ? {
+            delegationId: createId("dlg"), delegatedByAgentId: sourceTask!.agentId,
+            delegatedFromIssueSessionId: delegation.delegatedFromIssueSessionId,
+          } : delegation?.reason ? { delegationSkipReason: delegation.reason } : {}),
         }, childStatusChanges, deferredEvents);
       })();
     } catch (err) {

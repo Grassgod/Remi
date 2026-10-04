@@ -24,6 +24,9 @@ import {
 } from "@multiremi/contracts/conversation-log";
 
 type Row = Record<string, unknown>;
+/** Last fully read seq, plus consumed characters of seq + 1. */
+export type SessionAgentReadProgress = { seq: number; offset: number };
+export type SessionLogReadPosition = { seq: number; offset: number };
 
 /** Cap on one page of the window read; the route rejects anything larger. */
 export const CONVERSATION_LOG_MAX_WINDOW = 100;
@@ -95,6 +98,78 @@ export type UpdateConversationLogInput = {
 
 export class ConversationLogRepo {
   constructor(private ctx: StoreContext) {}
+
+  getSessionAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
+    const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
+    const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
+    return state[agentId] ?? this.updateAgentReadProgress(sessionId, agentId, current => current);
+  }
+
+  private legacyAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
+    // Legacy projections were inline, including logs delivered through relay lanes.
+    const lane = this.ctx.db.query(`SELECT COALESCE(MAX(cursor_seq), 0) AS seq
+      FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?`).get(sessionId, agentId) as Row;
+    const chat = this.ctx.db.query(`SELECT COALESCE(MAX(projection_to_seq), 0) AS seq
+      FROM multiremi_tasks WHERE chat_session_id = ? AND agent_id = ? AND status = 'completed'`).get(sessionId, agentId) as Row;
+    return { seq: Math.min(Math.max(Number(lane.seq), Number(chat.seq)), this.getHead(sessionId)?.headSeq ?? 0), offset: 0 };
+  }
+
+  private updateAgentReadProgress(sessionId: string, agentId: string,
+    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress): SessionAgentReadProgress {
+    return this.ctx.db.transaction(() => {
+      // Serialize the JSON read/modify/write across agents and server processes.
+      this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = agent_read_state WHERE session_id = ?", [sessionId]);
+      const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
+      const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
+      const current = state[agentId] ?? this.legacyAgentReadProgress(sessionId, agentId);
+      const next = advance(current);
+      if (row && (!state[agentId] || next.seq !== current.seq || next.offset !== current.offset)) {
+        state[agentId] = next;
+        this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = ? WHERE session_id = ?", [toJson(state), sessionId]);
+      }
+      return next;
+    })();
+  }
+
+  private needsAgentRead(entry: Pick<ConversationLogEntry, "visibility" | "deleted_at" | "author_type" | "author_id">, agentId: string): boolean {
+    return entry.visibility === "shown" && !entry.deleted_at
+      && !(entry.author_type === "agent" && entry.author_id === agentId);
+  }
+
+  recordSessionAgentRangeRead(sessionId: string, agentId: string,
+    start: SessionLogReadPosition, end: SessionLogReadPosition): SessionAgentReadProgress {
+    return this.updateAgentReadProgress(sessionId, agentId, current => {
+      const expected = { seq: current.seq + 1, offset: current.offset };
+      if (start.seq > expected.seq) {
+        if (current.offset || this.ctx.db.query(`SELECT 1 FROM multiremi_conversation_log
+          WHERE session_id = ? AND seq > ? AND seq < ? AND visibility = 'shown' AND deleted_at IS NULL
+          AND (author_type <> 'agent' OR author_id IS NULL OR author_id <> ?) LIMIT 1`)
+          .get(sessionId, current.seq, start.seq, agentId)) return current;
+      } else if (start.seq === expected.seq && start.offset > expected.offset) return current;
+      const lastSeq = Math.min(end.seq - 1, this.getHead(sessionId)?.headSeq ?? 0);
+      const offset = lastSeq === end.seq - 1 ? end.offset : 0;
+      if (lastSeq < current.seq || lastSeq === current.seq && offset <= current.offset) return current;
+      return { seq: lastSeq, offset };
+    });
+  }
+
+  recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false): SessionAgentReadProgress {
+    return this.updateAgentReadProgress(sessionId, agentId, current => {
+      // An accepted bootstrap has no provider memory, even if an earlier session read the log.
+      if (coldStart) current = { seq: 0, offset: 0 };
+      const inline = new Set(seqs);
+      let seq = current.seq;
+      const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, author_type, author_id
+        FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?`)
+        .all(sessionId, current.seq, toSeq, CONVERSATION_LOG_MAX_WINDOW) as Pick<ConversationLogEntry,
+          "seq" | "visibility" | "deleted_at" | "author_type" | "author_id">[];
+      for (const entry of rows) {
+        if (this.needsAgentRead(entry, agentId) && !inline.has(entry.seq)) break;
+        seq = entry.seq;
+      }
+      return seq > current.seq ? { seq, offset: 0 } : current;
+    });
+  }
 
   /**
    * The write hook C's Live Hub implements. B1 ships an empty implementation;

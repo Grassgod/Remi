@@ -293,7 +293,7 @@ export interface IssuesSurface {
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean },
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue; deferDispatch?: boolean; commentId?: string },
   ): CreatedIssueComment;
   /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
   runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;
@@ -418,13 +418,7 @@ export interface IssuesSurface {
   restoreIssue(id: string): MultiremiIssue;
   archiveEligibleIssues(now?: Date): MultiremiIssue[];
   issueArchiveSweepIntervalMs(): number;
-  isSquadLeaderDelegation(input: {
-    issue: MultiremiIssue;
-    sourceTask: MultiremiTask | null;
-    authorAgentId: string | null;
-    targetAgentId: string;
-    issueSessionId: string | null;
-  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision;
+  resolveAgentDelegation: import("./repos/issues-repo.js").IssuesRepo["resolveAgentDelegation"];
   /** MUL-412: one decision by its own id (the Feishu card lane keys on it). */
   getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
   /** One decision scoped to the Issue it hangs on. */
@@ -579,6 +573,8 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  countDelegationPairHops: import("./repos/tasks-repo.js").TasksRepo["countDelegationPairHops"];
+  recordDelegationRoundTripLimitedWithinTransaction: import("./repos/tasks-repo.js").TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"];
   ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
   createTaskWithinWorkspaceLock(input: CreateTaskInput, childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue, gateIssueBeforeReplacement?: MultiremiIssue | null, executionScopeOverride?: string): MultiremiTask;

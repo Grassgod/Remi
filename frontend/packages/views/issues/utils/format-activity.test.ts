@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TimelineEntry } from "@multiremi/core/types";
+import { createI18n } from "@multiremi/core/i18n/react";
 import { formatActivity, priorityLabel, statusLabel, type IssuesT } from "./format-activity";
 
 /**
@@ -223,6 +224,51 @@ describe("formatActivity", () => {
         t,
       ),
     ).toBe('activity.delegation_return_skipped {"reason":"new_reason"}');
+  });
+
+  it.each([
+    {
+      locale: "zh-Hans",
+      load: () => import("../../locales/zh-Hans/issues.json"),
+      limited: "Leader 与 QA 的自动来回已达 5 次上限，已停止自动派活，等人介入",
+      mention: "未派发 agent 提及：双方 agent 的自动来回已达上限",
+      skipped: "未触发委派回程：目标任务没有 Issue",
+    },
+    {
+      locale: "en",
+      load: () => import("../../locales/en/issues.json"),
+      limited: "stopped automatic dispatch between Leader and QA at the 5 round-trip limit; waiting for a person",
+      mention: "did not dispatch the agent mention: the agent pair reached its automatic round-trip limit",
+      skipped: "did not queue a delegation return: the target task has no issue",
+    },
+    {
+      locale: "ja",
+      load: () => import("../../locales/ja/issues.json"),
+      limited: "Leader と QA の自動往復が上限 5 回に達したため停止し、人の介入を待っています",
+      mention: "agent メンションをディスパッチしませんでした: agent 間の自動往復が上限に達しました",
+      skipped: "委任元への通知を行いませんでした: 対象タスクに Issue がありません",
+    },
+    {
+      locale: "ko",
+      load: () => import("../../locales/ko/issues.json"),
+      limited: "Leader와 QA의 자동 왕복이 5회 한도에 도달해 중단하고 사람의 개입을 기다립니다",
+      mention: "agent 멘션을 디스패치하지 않았습니다: agent 간 자동 왕복 한도에 도달했습니다",
+      skipped: "위임 반환을 대기열에 넣지 않았습니다: 대상 작업에 Issue가 없습니다",
+    },
+  ] as const)("renders the round-trip limit and new reasons in $locale", async ({ locale, load, limited, mention, skipped }) => {
+    const bundle = (await load()).default;
+    const i18n = createI18n(locale, { [locale]: { issues: bundle } });
+    const localizedT = i18n.getFixedT(locale, "issues") as IssuesT;
+    expect(formatActivity(activity("delegation_round_trip_limited", {
+      details: { sourceAgentName: "Leader", sourceAgentId: "agt_leader",
+        targetAgentName: "QA", targetAgentId: "agt_qa", limit: 5 },
+    }), localizedT)).toBe(limited);
+    expect(formatActivity(activity("comment_mention_skipped", {
+      details: { reason: "pair_round_trip_limit" },
+    }), localizedT)).toBe(mention);
+    expect(formatActivity(activity("delegation_return_skipped", {
+      details: { reason: "target_not_issue_task" },
+    }), localizedT)).toBe(skipped);
   });
 
   it("explains child-done parent wakeups and skipped reasons", () => {
