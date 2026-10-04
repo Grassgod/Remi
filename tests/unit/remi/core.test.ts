@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "@shared/config.js";
-import { SESSIONS_FILE } from "@shared/config.js";
 import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 import type { IncomingMessage } from "@connectors/base.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
@@ -177,7 +176,7 @@ const Remi = class extends RemiCore {
     remiConfig: RemiConfig,
     botProjects: ConstructorParameters<typeof RemiCore>[2] = null,
   ) {
-    super(remiConfig, makeAgent(tmpDir), botProjects);
+    super(remiConfig, makeAgent(tmpDir), botProjects, null, { home: tmpDir });
   }
 };
 
@@ -199,6 +198,15 @@ afterEach(() => {
 });
 
 describe("RemiCore", () => {
+  it("persists metrics under the injected home", () => {
+    const remi = new Remi(config);
+    expect(remi.metrics.metricsDir).toBe(join(tmpDir, "metrics"));
+    remi.metrics.updateUsage("five_hour", "2026-10-05T00:00:00.000Z", "allowed");
+    const quotas = JSON.parse(readFileSync(join(tmpDir, "metrics", ".usage-quotas.json"), "utf8"));
+    expect(quotas).toHaveLength(1);
+    expect(quotas[0].rateLimitType).toBe("five_hour");
+  });
+
   it("handles message", async () => {
     const remi = new Remi(config);
     remi.addProvider(new MockProvider());
@@ -268,7 +276,7 @@ describe("RemiCore", () => {
   });
 
   it("applies the agent max concurrency across different lanes", async () => {
-    const remi = new RemiCore(config, makeAgent(tmpDir, { maxConcurrentTasks: 1 }));
+    const remi = new RemiCore(config, makeAgent(tmpDir, { maxConcurrentTasks: 1 }), null, null, { home: tmpDir });
     const provider = new ConcurrencyProvider();
     remi.addProvider(provider);
 
@@ -338,7 +346,7 @@ describe("RemiCore", () => {
       calls.push({ sessionKey, topicId });
       sessDb.ensureTopicSessionBinding(sessionKey, topicCwd);
       return topicCwd;
-    });
+    }, { home: tmpDir });
     remi.addProvider(new MockProvider());
 
     await remi.handleMessage({
@@ -489,12 +497,13 @@ describe("RemiCore", () => {
   });
 
   it("migrates sessions.json on first load", async () => {
+    const sessionsFile = join(tmpDir, "sessions.json");
     // Write a legacy sessions file
     const sessData = {
       entries: [["restored-chat", "sess-restored"]],
       savedAt: Date.now(),
     };
-    writeFileSync(SESSIONS_FILE, JSON.stringify(sessData), "utf-8");
+    writeFileSync(sessionsFile, JSON.stringify(sessData), "utf-8");
 
     const remi = new Remi(config);
     const row = sessDb.getSession("restored-chat");
@@ -503,8 +512,9 @@ describe("RemiCore", () => {
     expect(row!.display_name).toContain("Remi·");
 
     // Original file renamed
-    expect(existsSync(SESSIONS_FILE)).toBe(false);
-    expect(existsSync(SESSIONS_FILE + ".migrated")).toBe(true);
+    expect(existsSync(sessionsFile)).toBe(false);
+    expect(existsSync(sessionsFile + ".migrated")).toBe(true);
+    expect(JSON.parse(readFileSync(sessionsFile + ".migrated", "utf8"))).toEqual(sessData);
   });
 
   it("/clear clears session_id but keeps display_name", async () => {
@@ -532,6 +542,22 @@ describe("RemiCore", () => {
     // session_id cleared but display_name preserved
     expect(sessDb.getSessionId("chat-clear")).toBeNull();
     expect(sessDb.getDisplayName("chat-clear")).toBe(nameBefore);
+  });
+
+  it("migrates an explicit legacy file without modifying the home sessions file", () => {
+    const homeSessions = join(tmpDir, "sessions.json");
+    const legacyFile = join(tmpDir, "legacy-sessions.json");
+    const sentinel = '{"entries":[["untouched","sess-sentinel"]]}';
+    writeFileSync(homeSessions, sentinel);
+    writeFileSync(legacyFile, JSON.stringify({ entries: [["imported", "sess-imported"]] }));
+
+    new RemiCore(config, makeAgent(tmpDir), null, null, { home: tmpDir, sessionsFile: legacyFile });
+
+    expect(sessDb.getSessionId("imported")).toBe("sess-imported");
+    expect(sessDb.getSession("untouched")).toBeNull();
+    expect(readFileSync(homeSessions, "utf8")).toBe(sentinel);
+    expect(existsSync(legacyFile)).toBe(false);
+    expect(existsSync(legacyFile + ".migrated")).toBe(true);
   });
 
   it("/p lists only the server-projected Multiremi projects", async () => {
