@@ -1,6 +1,6 @@
 import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { ChatTimelineItem } from "@multiremi/core/chat";
-import { buildTraceTimeline, coalesceTimelineItems } from "../../common/task-transcript/build-timeline";
+import { buildTraceTimeline } from "../../common/task-transcript/build-timeline";
 
 /**
  * Adapt a task transcript to what the compact chat surface can render.
@@ -13,7 +13,7 @@ import { buildTraceTimeline, coalesceTimelineItems } from "../../common/task-tra
  * final answer inside the fold and leave `final` empty.
  */
 export function toChatTimeline(events: readonly TraceEvent[]): ChatTimelineItem[] {
-  return coalesceTimelineItems(buildTraceTimeline(events)).filter(
-    (item) => !["compaction", "usage", "execution"].includes(item.type),
+  return buildTraceTimeline(events).filter(
+    (item) => item.type !== "compaction",
   ) as ChatTimelineItem[];
 }

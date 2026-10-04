@@ -473,6 +473,7 @@
     "final_answer": "최종 답변",
     "copy_answer": "복사",
     "tokens_context": "{{value}} 컨텍스트",
+    "context_usage": "컨텍스트 {{value}}",
     "waiting_dispatch": "사용 가능한 런타임을 기다리는 중...",
     "waiting_start": "작업 시작을 기다리는 중...",
     "waiting_local_directory": "로컬 디렉터리를 사용할 수 있을 때까지 기다리는 중...",

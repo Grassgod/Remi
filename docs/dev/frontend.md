@@ -62,6 +62,8 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
+执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并不会跨越不同的 `meta.parent_tool_call_id`。Chat 在此结果上只额外过滤 compaction。弹窗事件数基于处理后的时间线，上下文标签独立读取 seq 最新的 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。
+
 任务列表包含按状态分页的缓存结构；详情只需要已有列表中的某个对象时，使用 `findCachedIssue`，避免为查缓存额外挂载完整列表查询。列表、看板、我的单的「显示子单」偏好由各自的 view store 持久化，默认关闭；查询键与请求都包含服务端 `top_level_only` 过滤值，不能在客户端裁掉子单。父单进度从服务端 child-progress buckets 显示。工作台复用查询缓存区分待人工输入与待验收，不能只根据单个任务的完成状态自行推导整个 issue 的展示。
 
 Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked_by`，没有提示时不挂载提示槽。兼容详情仅在 backlog 查询未完成前置单；其他状态返回空数组，保留普通首屏的查询预算。负责人自己拍板和已回答记录不触发横条；依赖编辑和强制开始失效详情缓存，WS 的部分更新保留详情独有字段。

@@ -43,7 +43,7 @@ import { api, type TaskTraceRead } from "@multiremi/core/api";
 import { useTranscriptViewStore } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
-import { buildEntries, countToolCalls, nestEntries, type TimelineItem } from "./build-timeline";
+import { buildEntries, countToolCalls, nestEntries, type ContextUsage, type TimelineItem } from "./build-timeline";
 import { useT } from "../../i18n";
 import {
   formatProvider,
@@ -65,6 +65,7 @@ interface AgentTranscriptDialogProps {
   items: TimelineItem[];
   agentName: string;
   isLive?: boolean;
+  contextUsage?: ContextUsage | null;
   /**
    * Optional content rendered between the header chips and the event list.
    * Used by autopilot run rows to surface the inbound webhook trigger
@@ -95,6 +96,7 @@ export function AgentTranscriptDialog({
   items,
   agentName,
   isLive = false,
+  contextUsage,
   headerSlot,
   promptFallback,
   initialView = "execution",
@@ -568,13 +570,22 @@ export function AgentTranscriptDialog({
 
             {/* Token usage — input→output when the bridge splits them, else the
                 ACP context total. cost intentionally omitted (not on the wire). */}
-            {usage && (
+            {usage && (usage.inputTokens || usage.outputTokens || !contextUsage) && (
               <MetadataChip icon={<Coins className="h-3 w-3" />}>
                 {usage.inputTokens || usage.outputTokens
                   ? `${formatTokens(usage.inputTokens ?? 0)}→${formatTokens(usage.outputTokens ?? 0)}`
                   : usage.totalTokens
                     ? t(($) => $.transcript.tokens_context, { value: formatTokens(usage.totalTokens) })
                     : null}
+              </MetadataChip>
+            )}
+            {contextUsage && (
+              <MetadataChip>
+                {t(($) => $.transcript.context_usage, {
+                  value: contextUsage.size == null
+                    ? formatTokens(contextUsage.used)
+                    : `${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.size)}`,
+                })}
               </MetadataChip>
             )}
             <ExecutionModelInfo task={task} usageModel={usage?.model} agentModel={agentInfo?.model} agentThinkingLevel={agentInfo?.thinking_level} />
