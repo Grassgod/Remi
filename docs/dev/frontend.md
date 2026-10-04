@@ -12,6 +12,8 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 前端属于[根 Bun workspace](../../package.json)，当前应用目录只有 `frontend/apps/web/`。`@multiremi/*` 是现有包名；包导出直接指向 TypeScript 源文件，由 [Next.js 配置](../../frontend/apps/web/next.config.ts)的 `transpilePackages` 编译。
 
+前端从 `@multiremi/contracts` 根入口只能 `import type`；运行时的值走[子路径导出](../../packages/contracts/package.json)（如 `@multiremi/contracts/issue-activity`）。根入口是 `export * from "./x.js"` 的汇总，webpack 无法解析这些 `.js`，值导入会让 `next build` 失败，而单测和 `tsc` 都发现不了。[架构测试](../../tests/arch/frontend-contracts-root-imports.test.ts)会拦截这类导入。
+
 | 位置 | 职责与入口 |
 | --- | --- |
 | [apps/web/app/](../../frontend/apps/web/app/) | Next.js 路由和布局；页面接线到业务组件 |

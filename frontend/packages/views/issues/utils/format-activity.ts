@@ -2,7 +2,7 @@ import type { IssueStatus, IssuePriority, TimelineEntry } from "@multiremi/core/
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multiremi/core/issues/config";
 import { formatDateOnly } from "@multiremi/core/issues/date";
 import type { useT } from "../../i18n";
-import { issueActivityLayer } from "@multiremi/contracts";
+import { issueActivityLayer } from "@multiremi/contracts/issue-activity";
 
 export type IssuesT = ReturnType<typeof useT<"issues">>["t"];
 

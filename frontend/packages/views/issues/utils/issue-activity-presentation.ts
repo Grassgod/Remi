@@ -1,4 +1,4 @@
-import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts";
+import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts/issue-activity";
 import type { TimelineEntry } from "@multiremi/core/types";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { isSystemDetail } from "../components/issue-log-presentation";

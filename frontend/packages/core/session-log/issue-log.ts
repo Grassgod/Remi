@@ -7,7 +7,7 @@ import type { IssueLogBootstrap, SessionLogRow, SessionLogWindow } from "../api/
 import { SessionLogEntrySchema } from "../api/schemas/session-log";
 import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub";
 import { createSafeId } from "../utils";
-import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts";
+import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts/issue-activity";
 
 /** A bounded presentation window over C7; persisted coverage may be sparse. */
 export class IssueLogReplica extends ReplicaView {
