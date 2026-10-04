@@ -1272,7 +1272,7 @@ export class IssuesRepo {
   /** First page per status, including counts and labels from one read snapshot. */
   listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false): IssueStatusPages {
     if (this.ctx.db.inTransaction) throw new Error("status pages require their own read snapshot");
-    return this.ctx.db.transaction(() => {
+    const snapshot = this.ctx.db.transaction(() => {
       if (this.ctx.db.dialect === "postgres") {
         this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
       }
@@ -1318,7 +1318,10 @@ export class IssuesRepo {
           archived_total: this.countIssues({ workspaceId: this.listIssuesWorkspaceId(resolved), archivedOnly: true }),
         } : {}),
       };
-    })();
+    });
+    // SQLite's deferred transaction keeps one WAL read snapshot while allowing
+    // another connection to commit writes. Store writers still use IMMEDIATE.
+    return (snapshot.deferred ?? snapshot)();
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
