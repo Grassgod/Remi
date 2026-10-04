@@ -83,15 +83,12 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 外层回滚会丢弃这些回调。不能在 PostgreSQL 事务内用裸 `try/catch` 吞掉 SQL 错误，否则事务会进入 aborted 状态。
 调用方事件队列先保留活动位置，提交后补齐路由；路由失败时移除该活动，保持其余评论事件的顺序。
 
-[InboxRepo](../packages/server/src/store/repos/inbox-repo.ts)将 E2、E3 通知、E4 和委派回报写成接收会话的系统评论，
-`metadata.envelope` 保留寻址与去重信息。状态、日志条目与 `wake_seq` 在同一深度 1 的事务提交；评论 @ 复用原日志条目。
-平台种下的 queued 行由部分唯一索引约束，人的 Chat 队列、评论轮和续接排除在索引外；
-人的评论按 Q-B 常量并入 queued；延后评论派发及编辑/删除恢复在原事务留下 system event intent，
-提交后原子消费，逾期由既有调度器重放（按认领次数 fencing）。Issue `now` 信封事务更新收件 lane 的 `wake_hint_seq`；
-现有维护周期仅按部分索引轮转未扫提示，用 `swept_to_seq` 增量判定到龄 envelope 并补种 `re_ring`。
-无待查的历史 lane 不取锁或写行；归档与 relay 提示清掉，活动任务阻挡保留提示；Chat/relay 不补轮。
-委派 lane 的周期、轮末和评论变更恢复继承原上游父任务，完成回报保持上游 scope。实现和迁移入口见
-[pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
+[统一存储](../packages/server/src/store/unified-model-schema.ts)把消息头放到日志列，工作身份放到 turns，执行放到 turn_attempts，agent/member 游标共用 session_lanes。
+[启动迁移](../packages/server/src/store/unified-model-migration.ts)预检后一次切换；运行路径不再读写三张退役对话表。
+执行消费者使用 [只读投影](../packages/server/src/store/turn-execution-records.ts)，写入口更新规范表；轮卡由 [轮和当前尝试](../packages/server/src/store/turn-attempts.ts)投影，统计及最终回复不再镜像到日志 turn 行。
+重试、redispatch 与孤儿恢复只替换尝试，不写 Issue 状态。自动化账本引用轮，在 `auto_*` 对话保留 timer 输入与运行消息。
+[sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)是唯一消息写入口，领域 producer 与执行投影均经它落库；[lane 状态机](../packages/server/src/store/inbox/lane-machine.ts)负责 pending 合并、运行中插话、补铃和兜底扫描。人的收件箱使用 member lane；提问与决定及其一次性令牌保存在消息。Issue 只由轮和未答 decision 推导，子单变化发送父单 status。Daemon 适配器与用户接口所需 Store facade 已提供，传输/CLI/页面由消费者集成；接口和事务边界见[统一收件箱 Store](dev/inbox-store.md)。
+完整边界见 [ADR 0015](adr/0015-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

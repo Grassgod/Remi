@@ -29,7 +29,7 @@ export function registerIssueDecisionCardFixture(entry: CardPatchMetadata & {
   const stop = registerQuestionCardClient(entry.appId, {
     getRequest: async () => null, respond: async () => { throw new Error("not a task fixture"); },
     getDecision: entry.getDecision,
-    answer: (_issueId, _decisionId, answer, credential) => entry.submit(answer, credential.operatorOpenId, credential.token),
+    answer: (_decisionId, answer, credential) => entry.submit(answer, credential.operatorOpenId, credential.token),
   });
   return { dispose: cleanup(patch.dispose, stop) };
 }
@@ -43,7 +43,7 @@ export function registerTaskInteractionFixture(entry: CardPatchMetadata & {
   let consumed = false;
   const stop = registerQuestionCardClient(entry.appId, {
     getRequest: async () => patch.current() ?? entry.request,
-    respond: async (_taskId, _requestId, response, credential) => {
+    respond: async (_requestId, response, credential) => {
       if (credential.operatorOpenId !== entry.recipientOpenId) throw Object.assign(new Error("recipient_mismatch"), { code: "recipient_mismatch" });
       if (credential.token !== "card-token-fixture") throw Object.assign(new Error("token_invalid"), { code: "token_invalid" });
       if (consumed) throw Object.assign(new Error("token_consumed"), { code: "token_consumed" });

@@ -1272,14 +1272,14 @@ export class FeishuIngestRepo {
   private markProposalInboxHandled(inboxItemId: string | null): void {
     if (!inboxItemId) return;
     this.ctx.db.run(
-      "UPDATE multiremi_inbox_items SET read = 1, archived = 1 WHERE id = ?",
+      "UPDATE multiremi_conversation_log SET resolved_at=COALESCE(resolved_at,updated_at) WHERE id = ?",
       [inboxItemId],
     );
   }
 
   private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {
     if (!taskId) return;
-    const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_tasks WHERE id = ?").get(taskId) as Row | null;
+    const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_turn_execution_records WHERE id = ?").get(taskId) as Row | null;
     if (!task || String(task.workspace_id) !== workspaceId) {
       throw new Error("task_id must reference a task in this workspace");
     }

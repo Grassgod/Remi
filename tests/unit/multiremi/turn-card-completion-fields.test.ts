@@ -4,8 +4,8 @@
  * the real server's terminal transaction. Only `trace.event_count`, `tool_call_count`,
  * `type_histogram` and `model` are written (ruling (z)); the frame's
  * `final_reply_md` is not, so the chat card keeps its assistant message and the
- * Issue card its `final_entry_id`. The card stays the one persisted at reply
- * completion (B1 deviation B). A daemon that sends no fields writes nothing and
+ * Issue card its `final_entry_id`. The card is created with the turn and stays the same row at reply
+ * completion. A daemon that sends no fields writes nothing and
  * fails nothing. A card write failure rolls back the terminal transition and
  * the daemon can replay the report. On SQLite and Postgres.
  */
@@ -134,9 +134,11 @@ function expectNoFrameFields(entry: ConversationLogEntry) {
  */
 function watchSeam(world: World) {
   const patches: Array<{ patch: ConversationLogPatch; inTransaction: boolean }> = [];
+  const entries: ConversationLogEntry[] = [];
   world.store.setConversationLogListener({
     onEntry: (_session, payload) => {
       if ("target_seq" in payload) patches.push({ patch: payload, inTransaction: Boolean(world.db.inTransaction) });
+      else entries.push(payload);
     },
   });
   const target = world.db as unknown as { transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown };
@@ -162,6 +164,7 @@ function watchSeam(world: World) {
   });
   return {
     patches,
+    entries,
     calls,
     restore() {
       spy.mockRestore();
@@ -211,13 +214,18 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it("task.complete with the fields writes the four onto the chat card persisted at reply completion", async () => {
+    it("task.complete updates the existing chat turn card in place with all four fields", async () => {
       await withWorld(backend, async (world) => {
         const chat = world.store.createChatSession({ agentId: world.agentId, workspaceId: "local", creatorId: "local" });
         const sent = world.store.sendChatMessage(chat.id, { content: "hello" });
         expect(world.store.claimTask(world.runtimeId)?.id).toBe(sent.task.id);
         world.store.startTask(sent.task.id);
-        expect(world.store.findTurnEntry(sent.task.id)).toBeNull();
+        const before = card(world, sent.task.id);
+        expect(before.visibility).toBe("hidden");
+        expect(world.store.locateConversationLogEntry(chat.id, before.id)).toBeNull();
+        expect(world.store.listConversationLogShown(chat.id).filter((row) => row.kind === "turn")).toHaveLength(0);
+        expect(world.store.conversationLogWindow(chat.id).entries.filter((row) => row.kind === "turn")).toHaveLength(0);
+        expect(world.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_conversation_log WHERE session_id=? AND kind='turn'").get(chat.id).n).toBe(1);
         const seam = watchSeam(world);
         try {
           const reply = await serverReport(world.store, world.runtimeId, "task.complete",
@@ -228,13 +236,25 @@ for (const backend of backends) {
         }
         const message = world.store.listChatMessages(chat.id).find((row) => row.taskId === sent.task.id && row.role === "assistant")!;
         const after = card(world, sent.task.id);
-        // B1 deviation B: the card is the assistant message's row, created when
-        // the reply landed; the seam updated it in place.
-        expect({ id: after.id, session: after.session_id }).toEqual({ id: message.id, session: chat.id });
+        expect({ id: after.id, seq: after.seq, session: after.session_id })
+          .toEqual({ id: before.id, seq: before.seq, session: chat.id });
+        expect(after.metadata.final_entry_id).toBe(message.id);
+        expect(after.visibility).toBe("shown");
+        expect(world.store.locateConversationLogEntry(chat.id, before.id)).toMatchObject({ id: before.id, seq: before.seq });
+        // A full entry restores the card in replicas that consumed its hidden
+        // marker before completion; a patch has no cached display row to edit.
+        expect(seam.entries.filter((row) => row.id === before.id).at(-1))
+          .toMatchObject({ id: before.id, seq: before.seq, kind: "turn", visibility: "shown", metadata: CARD_FIELDS });
+        expect(world.store.conversationLogWindow(chat.id).entries.filter((row) => row.kind === "turn")).toHaveLength(1);
         expect(world.store.listConversationLogEntries(chat.id).filter((row) => row.task_id === sent.task.id && row.kind === "turn"))
           .toHaveLength(1);
         expect(after.metadata).toMatchObject({ ...CARD_FIELDS, status: "completed", final_reply_md: "chat answer" });
         expect(seam.calls).toEqual([{ taskId: sent.task.id, fields: FIELDS, changed: true, depth: 1 }]);
+        const replay = await serverReport(world.store, world.runtimeId, "task.complete",
+          { task_id: sent.task.id, output: "chat answer", ...FIELDS });
+        expect(replay.ok).toBe(true);
+        expect(card(world, sent.task.id).revision).toBe(after.revision);
+        expect(world.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_conversation_log WHERE session_id=? AND kind='turn'").get(chat.id).n).toBe(1);
       });
     }, TIMEOUT);
 
@@ -251,17 +271,34 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it("completes a one-shot task without a turn card", async () => {
+    it("completes a one-shot task on its existing auto conversation card with all four fields", async () => {
       await withWorld(backend, async (world) => {
         const task = world.store.createTask({ agentId: world.agentId, workspaceId: "local", prompt: "One-shot" });
+        const before = card(world, task.id);
+        expect(before.session_id).toStartWith("auto_");
         expect(world.store.claimTask(world.runtimeId)?.id).toBe(task.id);
         world.store.startTask(task.id);
-        expect(world.store.findTurnEntry(task.id)).toBeNull();
-        const reply = await serverReport(world.store, world.runtimeId, "task.complete",
-          { task_id: task.id, output: "done", ...FIELDS });
-        expect(reply).toEqual({ ok: true });
+        const seam = watchSeam(world);
+        try {
+          const reply = await serverReport(world.store, world.runtimeId, "task.complete",
+            { task_id: task.id, output: "done", ...FIELDS });
+          expect(reply).toEqual({ ok: true });
+        } finally {
+          seam.restore();
+        }
         expect(world.store.getTask(task.id)?.status).toBe("completed");
-        expect(world.store.findTurnEntry(task.id)).toBeNull();
+        const after = card(world, task.id);
+        expect({ id: after.id, seq: after.seq, session: after.session_id })
+          .toEqual({ id: before.id, seq: before.seq, session: before.session_id });
+        expect(after.metadata).toMatchObject({ ...CARD_FIELDS, status: "completed" });
+        expect(after.metadata.final_reply_md ?? null).toBeNull();
+        expect(world.store.getConversationLogEntryById(String(after.metadata.final_entry_id)))
+          .toMatchObject({ session_id: before.session_id, body_md: "done" });
+        expect(world.store.listConversationLogEntries(before.session_id).filter((row) => row.kind === "turn"))
+          .toHaveLength(1);
+        expect(seam.calls).toEqual([{ taskId: task.id, fields: FIELDS, changed: true, depth: 1 }]);
+        await serverReport(world.store, world.runtimeId, "task.complete", { task_id: task.id, output: "done", ...FIELDS });
+        expect(card(world, task.id).revision).toBe(after.revision);
       });
     }, TIMEOUT);
 

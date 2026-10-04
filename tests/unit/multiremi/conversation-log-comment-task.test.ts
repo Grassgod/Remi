@@ -59,7 +59,7 @@ describe("MUL-427 ruling (e): comment task associations", () => {
           expect(line.task_id).toBeNull();
         }
         const matches = db.query(`SELECT COUNT(*) AS n FROM multiremi_conversation_log
-          WHERE session_id = ? AND author_type = 'agent' AND author_id = ? AND task_id = ? AND kind = 'message'`)
+          WHERE session_id = ? AND sender_type = 'agent' AND sender_id = ? AND task_id = ? AND kind = 'message'`)
           .get(session.id, agent.id, task.id) as { n: number };
         expect(Number(matches.n)).toBe(1);
       });

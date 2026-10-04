@@ -12,6 +12,7 @@ import "@shared/db/sqlite-custom.js";
 import { dispatch } from "./cli/index.js";
 
 dispatch(process.argv.slice(2)).catch((e: Error) => {
-  console.error("Fatal:", e.message);
+  if (e.message.startsWith("已移除：")) console.error(e.message);
+  else console.error("Fatal:", e.message);
   process.exit(1);
 });

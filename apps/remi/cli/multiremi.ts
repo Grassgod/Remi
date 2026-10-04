@@ -95,6 +95,7 @@ import {
   shellQuote,
 } from "./multiremi/service.js";
 import { showHelp } from "./multiremi/help.js";
+import { assertNotRetired } from "./core/retired-commands.js";
 import { prepareDaemonEnvironment } from "./multiremi/environment.js";
 import { repo } from "./multiremi/commands/repo.js";
 import { attachment } from "./multiremi/commands/attachment.js";
@@ -133,6 +134,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const SUPERVISOR_INSTANCE_ENV = "MULTIREMI_SUPERVISOR_INSTANCE_ID";
 
 export async function runMultiremi(args: string[], runOptions: RunMultiremiOptions = {}): Promise<void> {
+  assertNotRetired(args);
   const parsed = parseArgs(args);
   setLogLevel(String(parsed.options.logLevel ?? parsed.options["log-level"] ?? process.env.REMI_LOG_LEVEL ?? "INFO"));
   const programName = runOptions.programName ?? "remi multiremi";
@@ -630,10 +632,10 @@ export function controlPlaneConciergeHost(deps: {
       const { config, agent } = assignment;
       stopQuestionCardClient?.();
       stopQuestionCardClient = registerQuestionCardClient(config.app_id, {
-        getRequest: (taskId, requestId) => daemon.getFeishuBotHumanRequest(taskId, requestId),
-        respond: (taskId, requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
-        getDecision: (issueId, decisionId) => daemon.getFeishuIssueDecision(issueId, decisionId),
-        answer: (issueId, decisionId, answer, credential) => daemon.answerFeishuIssueDecision(issueId, decisionId, { answer, ...credential }),
+        getRequest: messageId => daemon.getMessageHumanRequest(messageId),
+        respond: (messageId, response, credential) => daemon.respondFeishuBotHumanRequest(messageId, response, credential),
+        getDecision: messageId => daemon.getFeishuIssueDecision(messageId),
+        answer: (messageId, answer, credential) => daemon.answerFeishuIssueDecision(messageId, { answer, ...credential }),
       });
       displayName = agent.name;
       const handle = await boot(
@@ -740,8 +742,8 @@ export function controlPlaneConciergeHost(deps: {
             taskId, displayName, sessionId: null, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
-            prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(taskId, requestId, openId),
-            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
+            prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
+            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(requestId, response, credential),
           }, {
             ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
@@ -854,7 +856,7 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
   if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
-  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
     card: card!,
@@ -1260,9 +1262,9 @@ export function createFeishuTaskHandler(
       displayName: submitted.agentName,
       sessionId: null,
       getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
-      prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(submitted.taskId, requestId, openId),
+      prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
       respondHumanRequest: (requestId, response, credential) =>
-        daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response, credential),
+        daemon.respondFeishuBotHumanRequest(requestId, response, credential),
     });
   };
 }

@@ -49,6 +49,11 @@ import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIs
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
 describe("translateSqliteToPg", () => {
+  it("preserves explicitly installed foreign keys", () => {
+    const sql = "ALTER TABLE multiremi_turn_attempts ADD CONSTRAINT attempt_turn_fk FOREIGN KEY (turn_id) REFERENCES multiremi_turns(id)";
+    expect(translateSqliteToPg(sql)).toBe(sql);
+  });
+
   it("numbers ? placeholders positionally, skipping ? inside string literals", () => {
     expect(translateSqliteToPg("SELECT * FROM t WHERE a = ? AND b = ?")).toBe(
       "SELECT * FROM t WHERE a = $1 AND b = $2",
@@ -393,7 +398,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         ...(source === "delegation_return" ? {
           delegationId: `dlg_exemption_${wsCounter}`, delegatedByAgentId: agent.id, parentTaskId: previous.id,
         } : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+        ...(source === "parent_wakeup" ? { parentTaskId: previous.id } : {}),
       });
       stop();
       expect(db.maxTransactionDepth).toBe(1);
@@ -421,7 +426,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     const task = store.createTask({
       agentId: agent.id, issueId: issue.id, prompt: "existing continuation",
-      attempt: 2, preserveIssueStatus: true,
+      attempt: 2,
     });
     db.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });

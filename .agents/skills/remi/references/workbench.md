@@ -3,20 +3,24 @@
 ## 收件箱与提醒
 
 ```sh
-remi inbox summary --json
-remi inbox list --json
-remi inbox page --help
-remi inbox unread-count --json
+remi inbox --json
+remi inbox --limit 50 --cursor <cursor> --json
+remi inbox read <conversation> --to <seq> --json
+remi inbox read-all --json
 remi notification get --json
 remi notification channel list --json
 remi notification delivery list --json
 ```
 
-收件箱属于当前工作区和当前接收者，不通过指定另一个 member ID 查看别人的收件箱。read 标为已读，archive 收起通知，不等于完成对应 Issue、回答人类请求或批准提案。用户要求处理工作时沿项目/Task/提案链接完成实际动作。
+收件箱属于当前工作区和当前接收者，不通过指定另一个 member ID 查看别人的收件箱。read 推进对话游标，不等于完成对应 Issue、回答人类请求或批准提案。用户要求处理工作时沿项目/Task/提案链接完成实际动作。
 
-`inbox mark-all-read`、`archive-all`、`archive-all-read`、`archive-completed` 含批量写入语义，先看列表和汇总确定范围。分页按目标命令返回的 cursor/分页契约继续；只读一页时不能声称“没有其他待办”。
+`inbox read-all` 含批量写入语义，先看列表和汇总确定范围。分页按目标命令返回的 cursor/分页契约继续；只读一页时不能声称“没有其他待办”。
 
 通知偏好用 notification update，出站渠道用 notification channel create/update/delete。消息采集 Source 与通知发送 channel 不是同一对象。`notification delivery retry` 会再次发送投递，先看原投递状态并确认用户要求重试，不能用它探测渠道配置。
+
+## Message 与 Turn
+
+收件箱只推进已读位置，不逐条归档。决定答复用 `remi message send <conversation> --reply-to <message> --option <answer>`；轮次用 `remi turn list/get` 读取。业务动作和读游标分别核验。
 
 ## 收藏与工作台
 

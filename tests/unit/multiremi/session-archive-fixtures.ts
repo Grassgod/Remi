@@ -143,13 +143,24 @@ export async function buildArchiveFixture(options: ArchiveFixtureOptions): Promi
     ).get(options.subject.id) as { runtime_id: string; workspace_id: string } | null;
     if (owner?.runtime_id) {
       for (const taskId of Object.keys(options.traces ?? {})) {
-        db.run(
-          `INSERT OR IGNORE INTO multiremi_tasks
-           (id, agent_id, runtime_id, issue_id, workspace_id, status, prompt, created_at, updated_at)
-           VALUES (?, 'agt_archive_fixture', ?, ?, ?, 'completed', 'fixture', ?, ?)`,
-          [taskId, owner.runtime_id, options.subject.id, owner.workspace_id,
-            "2026-09-27T00:00:00.000Z", "2026-09-27T00:00:00.000Z"],
-        );
+        const session = db.query(
+          "SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? AND is_default = 1",
+        ).get(options.subject.id) as { id: string };
+        const at = "2026-09-27T00:00:00.000Z";
+        if (db.query("SELECT id FROM multiremi_turn_attempts WHERE id = ?").get(taskId)) continue;
+        const seq = db.query(`UPDATE multiremi_conversation_heads SET head_seq = head_seq + 1
+          WHERE session_id = ? RETURNING head_seq`).get(session.id) as { head_seq: number };
+        db.run(`INSERT INTO multiremi_turns
+          (id, session_id, seq, agent_id, issue_id, workspace_id, status, current_attempt_id, legacy_prompt, created_at)
+          VALUES (?, ?, ?, 'agt_archive_fixture', ?, ?, 'completed', ?, 'fixture', ?)`,
+          [taskId, session.id, seq.head_seq, options.subject.id, owner.workspace_id, taskId, at]);
+        db.run(`INSERT INTO multiremi_turn_attempts
+          (id, turn_id, attempt_no, runtime_id, status, created_at, updated_at)
+          VALUES (?, ?, 1, ?, 'completed', ?, ?)`, [taskId, taskId, owner.runtime_id, at, at]);
+        db.run(`INSERT INTO multiremi_conversation_log
+          (session_id, seq, id, kind, visibility, sender_type, sender_id, task_id, created_at, updated_at)
+          VALUES (?, ?, ?, 'turn', 'shown', 'agent', 'agt_archive_fixture', ?, ?, ?)`,
+          [session.id, seq.head_seq, taskId, taskId, at, at]);
       }
     }
   }

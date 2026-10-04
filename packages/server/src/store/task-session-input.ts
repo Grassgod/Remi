@@ -27,8 +27,8 @@ export function taskSessionInput(input: {
       return JSON.stringify({ type: "triggering_message", seq: entry.seq, id: entry.id,
         author_type: entry.author_type, author_id: entry.author_id, task_id: entry.task_id,
         body: prefix, ...(omitted ? { body_folded: true, body_omitted_chars: omitted,
-          expand: `remi session log get ${input.sessionId} ${entry.seq}`,
-          expand_hint: expandHint(omitted, `remi session log get ${input.sessionId} ${entry.seq}`) } : {}) });
+          expand: `remi message list ${input.sessionId} --from ${entry.seq - 1} --to ${entry.seq}`,
+          expand_hint: expandHint(omitted, `remi message list ${input.sessionId} --from ${entry.seq - 1} --to ${entry.seq}`) } : {}) });
     }),
   ].join("\n");
 }

@@ -16,7 +16,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -262,7 +261,7 @@ describe("MUL-448 comment run link comes from the credential", () => {
     expect(response.status).toBe(201);
     const comment = ((await response.json()).comment) as { id: string };
 
-    const dispatched = HUMAN_COMMENT_JOINS_QUEUED_ROUND
+    const dispatched = true
       ? store.listIssueActivity(issue.id).filter(activity => activity.type === "pending_turn_coalesced"
         && (activity.data as Record<string, unknown>).commentId === comment.id)
         .map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)

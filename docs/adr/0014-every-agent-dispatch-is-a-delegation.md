@@ -3,6 +3,9 @@
 ## Status
 
 Accepted (MUL-510). Depends on ADR 0013 / PR #353 (MUL-498).
+Amended by [ADR 0015](0015-unified-message-inbox-and-turn.md) (MUL-493): decisions 5–6 change from a 409 /
+`comment_mention_skipped` to a stored message downgraded to the next turn
+(`wake_reason=pair_round_trip_limit`); the notice and activity stay.
 Supersedes ADR 0005 decision 1 and revises its dispatch skip reasons.
 
 ## Context

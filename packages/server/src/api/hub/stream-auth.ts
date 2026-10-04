@@ -178,7 +178,7 @@ export const TRACE_STREAM_FACTS_SQL = `SELECT t.workspace_id AS workspace_id, t.
        (SELECT count(*) FROM multiremi_workspace_members m
          WHERE m.workspace_id = t.workspace_id AND m.user_id = ? AND m.archived_at IS NULL
            AND m.role IN ('owner', 'admin')) AS is_admin
-  FROM multiremi_tasks t
+  FROM multiremi_turn_execution_records t
   LEFT JOIN multiremi_chat_sessions c ON c.id = t.chat_session_id
   LEFT JOIN multiremi_agents a ON a.id = t.agent_id AND a.archived_at IS NULL
  WHERE t.id = ?`;

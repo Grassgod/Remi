@@ -3,7 +3,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 export function readSessionLogRange(store: MultiremiStore, sessionId: string,
   from: number, to: number, cursor?: string, excludeAgentId?: string | null) {
   const start = cursor ? JSON.parse(cursor) as { seq: number; offset: number } : { seq: from + 1, offset: 0 };
-  if (!Number.isSafeInteger(start.seq) || start.seq < from + 1 || start.seq > to + 1
+  if (!start || !Number.isSafeInteger(start.seq) || start.seq < from + 1 || start.seq > to + 1
     || !Number.isSafeInteger(start.offset) || start.offset < 0) throw new Error("Invalid range cursor");
   const readTo = Math.min(to, store.getConversationLogHead(sessionId)?.headSeq ?? 0);
   const rows = store.listConversationLogRangePage(sessionId, start.seq - 1, readTo, 100);

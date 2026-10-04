@@ -25,41 +25,6 @@ import type { RouterDeps } from "./deps.js";
 export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
-  app.post("/api/chat/attachments/send", async (c) => {
-    const token = currentTaskAccessToken(c);
-    if (!token?.taskId) return c.json({ error: "a current Chat task credential is required" }, 403);
-    const task = store.getTask(token.taskId);
-    if (!task?.chatSessionId || task.workspaceId !== token.workspaceId) {
-      return c.json({ error: "current task is not a Chat task" }, 403);
-    }
-    const form = await c.req.formData();
-    const files = form.getAll("file");
-    if (!files.length || files.length > 10 || files.some(file => !(file instanceof File))) {
-      return c.json({ error: "between 1 and 10 file fields are required" }, 400);
-    }
-    const content = stringFormValue(form.get("content")) ?? "";
-    if (content.length > 200_000) return c.json({ error: "content is too long" }, 400);
-    // Validate every file before writing any bytes or enqueueing a delivery.
-    const uploads = (files as File[]).map((file, index) => ({ file,
-      // Bun 1.3.14 can lose an empty multipart File's name. Still identify the
-      // offending field and reject it cleanly instead of failing sanitization.
-      filename: sanitizeChatAttachmentFilename(file.name || `file #${index + 1}`),
-    }));
-    for (const { file, filename } of uploads) {
-      const error = chatAttachmentValidationError(filename, file.size);
-      if (error) return c.json({ error }, file.size > CHAT_ATTACHMENT_MAX_BYTES ? 413 : 400);
-    }
-    try {
-      const files = uploads.map(({ file, filename }) => ({ filename,
-        bytes: async () => new Uint8Array(await file.arrayBuffer()), contentType: detectContentTypeFromFilename(filename) }));
-      const delivery = await persistUploadedAttachments(task.workspaceId, files,
-        inputs => store.sendChatAttachments(task.id, inputs, content));
-      return c.json(delivery, 202);
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : "attachment delivery failed" }, 400);
-    }
-  });
-
   app.get("/api/multiremi/attachments/:id", (c) => {
     const attachment = store.getAttachment(c.req.param("id"));
     if (!attachment) return c.json({ error: "attachment not found" }, 404);

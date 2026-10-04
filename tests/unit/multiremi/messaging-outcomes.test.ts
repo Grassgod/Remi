@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -58,6 +59,24 @@ function message(overrides: Partial<CanonicalMessage> = {}): CanonicalMessage {
 }
 
 describe("messaging outcomes", () => {
+  it("exposes proposals without an Issue in the canonical inbox and marks their conversation read", async () => {
+    const { store, ownerId } = seed();
+    const proposal = store.messagingOutcomes.proposeIssue(REF, {
+      workspaceId: "local", recipientId: ownerId, title: "Unassigned proposal", actorType: "agent", actorId: "agent_1",
+    });
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/inbox");
+    expect(response.status).toBe(200);
+    const page = await response.json() as any;
+    const item = page.items.find((message: any) => message.id === proposal.inboxItem!.id);
+    expect(item).toBeTruthy();
+    expect(item.session_id).toBe("auto_orphan_inbox_local");
+    expect((await app.request(`/api/messages/${item.id}`)).status).toBe(200);
+    expect((await app.request("/api/inbox/read", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }),
+    })).status).toBe(200);
+    expect((await (await app.request("/api/inbox")).json() as any).unread_count).toBe(0);
+  });
   it("refuses the outcomes that have a dedicated command, and requires a reason for the rest", () => {
     const { store } = seed();
     const outcomes = store.messagingOutcomes;

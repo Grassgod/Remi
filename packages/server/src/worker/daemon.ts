@@ -1221,16 +1221,19 @@ export class MultiremiDaemon {
     return this.client.listFeishuIssueDecisionCards(this.options.runtimeId!);
   }
 
-  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
-    return this.client.getFeishuIssueDecision(issueId, decisionId);
+  getFeishuIssueDecision(decisionId: string): Promise<MultiremiIssueDecision | null> {
+    return this.client.getFeishuIssueDecision(decisionId);
   }
 
   answerFeishuIssueDecision(
-    issueId: string,
     decisionId: string,
     input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
-    return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
+    return this.client.answerFeishuIssueDecision(decisionId, input);
+  }
+
+  getMessageHumanRequest(requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return this.client.getMessageHumanRequest(requestId);
   }
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
@@ -1260,17 +1263,16 @@ export class MultiremiDaemon {
     }
   }
 
-  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
-    return this.client.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
+  prepareTaskHumanRequestCard(requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+    return this.client.prepareTaskHumanRequestCard(requestId, recipientOpenId);
   }
 
   respondFeishuBotHumanRequest(
-    taskId: string,
     requestId: string,
     response: Record<string, unknown>,
     credential?: { token: string; operatorOpenId: string },
   ): Promise<MultiremiTaskHumanRequest> {
-    return this.client.respondTaskHumanRequest(taskId, requestId, response, credential);
+    return this.client.respondTaskHumanRequest(requestId, response, credential);
   }
 
   resetFeishuBotSession(revision: number, externalSessionKey: string): Promise<boolean> {

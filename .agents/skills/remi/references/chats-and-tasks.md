@@ -1,51 +1,42 @@
-# Chat、队列与 Task
+# Chat、消息、收件箱与轮
 
-## 开始或继续会话
+## Message
 
 ```sh
 remi chat list --json
-remi chat get <chat-id> --json
-remi chat message list <chat-id> --json
-remi chat create --agent <agent-id> --project <project-id> --json
-remi chat message create <chat-id> --content-file <request.md> --json
+remi chat get <chat> --json
+remi chat create --agent <agent> --project <project> --json
+remi message list <chat> --json
+remi message send <chat> --to <agent> --kind request --content-file <request.md> --json
+remi message send --attachment <report.html> --content "<summary>" --json
 ```
 
-继续已有话题先读取对应 Chat；用户要求新的会话时才 create。项目与 `--runtime-workspace` 是互斥工作位置，选择见 [Runtime](runtimes.md)。create 保存会话，message create 发送工作内容并可能启动执行，记录返回的 Task ID。
+继续已有话题先读取对应 Chat。项目与 `--runtime-workspace` 是互斥工作位置，选择见 [Runtime](runtimes.md)。同一对话里同一 agent 接着原会话；不同工作用不同对话。发送响应记录消息 ID、实际叫醒结果和关联 turn ID。未指定收件人是普通发言。
 
-选择 Project 后，使用项目指令、资源、Memory 和 Wiki；有项目 `local_directory` 时在所选真实目录执行，否则 daemon 自动准备项目显式声明的仓库，已有 worktree 后续直接复用。Runtime 工作区保持注册目录，不自动检出仓库。仓库准备失败时先读返回的提示，确需重试或刷新再用 `remi repo checkout`；目录选择和项目失效行为见 [Chat 契约](../../../../docs/chat.md#项目仓库与工作目录)。
+正在跑的轮收到定向的 `now` 消息会插话；有待办轮时合并进该轮。查看未读输入用 `message list <chat> --unread-by <agent>`，未读消息可 `message edit <message> --content-file <file>` 或 `message delete <message> --yes`；按消息顺序读取。`pin/unpin` 管置顶；`archive` 停止未完成运行并使 Chat 只读，`restore` 恢复。
 
-Chat 与 Issue 独立：在聊天中创建 Issue 只创建工作项，Chat 保持自己的上下文，不接收 Issue 活动播报。需要查看 Issue 进展时使用 [Issue 查询](issues-and-sessions.md)；飞书群 Issue 话题保留自己的归属与更新入口。
+Chat 与 Issue 各有自己的对话。项目资源、目录准备和失效行为见 [Chat 契约](../../../../docs/chat.md)。不要为读取状态再发一次工作请求。
 
-`pin/unpin` 只改变置顶，`archive` 会停止未完成运行并使 Chat 只读，`restore` 恢复可用状态；不要用 archive 实现“稍后再看”。
-
-## 排队消息和正在运行的任务
+## Inbox
 
 ```sh
-remi chat pending <chat-id> --json
-remi chat queue list <chat-id> --json
-remi chat queue update <chat-id> <queued-task-id> --content-file <revised-request.md> --json
-remi chat queue list <chat-id> --json
-remi task get <task-id> --json
-remi task inspect <task-id> --json
-remi task message list <task-id> --json
-remi task steer --help
+remi inbox --json
+remi inbox read <conversation> --to <seq> --json
+remi inbox read-all --json
+remi message send <conversation> --reply-to <decision-message> --option "<actual-answer>" --json
 ```
 
-queue update 只编辑未开始的排队消息；remove/clear 移除排队工作；**queue prioritize 会停止当前执行，再让选中消息优先执行**，不是仅重排展示列表。正在执行的补充指令使用 task steer，并读回 steer list；任务取消使用 task cancel。不要为了追问进展再发一次 message create。
+收件箱是发给当前接收者的消息和每条对话的读游标。读取游标只前进，不代表完成 Issue 或回答决定。读清 decision 消息及选项后提交用户实际答案，不编造批准。
 
-Task 的 prompt、消息和 human request 可能包含用户私密内容或模型上下文，汇报只摘取与问题相关的部分。`task inspect` 是诊断元数据，应与最新消息、状态及 Runtime 心跳一起判断，不能单独证明执行健康。
-
-## 独立任务与人类请求
+## Turn
 
 ```sh
-remi task create --agent <agent-id> --prompt "<requested-work>" --json
-remi task get <task-id> --json
-remi task request list <task-id> --json
-remi task request respond --help
+remi turn list --chat <chat> --json
+remi turn get <turn> --input --attempts --json
+remi turn trace read <turn> --json
+remi turn wrap-up <turn> --json
+remi turn cancel <turn> --yes --json
+remi turn retry <turn> --cold --yes --json
 ```
 
-独立执行用 task create；有关联的工作保留已确认的 `--issue` 或 `--chat`。不要猜 Task 有直接本地目录参数；需要持久工作位置时从已配置的 Issue / Chat 发起。
-
-遇到人类请求先读取该 request 的类型、选项和状态，再把用户实际答案按当前响应契约提交到 `task request respond <task> <request> --file ...`。不能因任务等待就代替用户批准或编造输入。`task redispatch` 是 task 身份的专用能力，不作为人类操作的通用重试入口。
-
-收尾核对 Task 终态、最终消息或成果；失败保留真实错误和可继续的 ID。响应丢失先查询关联 Chat、Issue runs 或已有 Task，避免重复提交。Runtime 在线、请求 200、成功保存配置都不能代替执行完成。
+轮是执行单位，尝试记录机器、模型、trace 和失败证据；重试只新增尝试。诊断结合输入、当前尝试、trace 和 Runtime 心跳，不能把请求成功当完成。汇报只摘取与问题相关的私密输入；失败保留真实错误和可继续的 ID。

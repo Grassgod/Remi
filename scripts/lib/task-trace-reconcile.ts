@@ -941,38 +941,18 @@ async function activePointerInconsistency(
   }
 }
 
-/**
- * Compare a task's `turn` card with the summary of its rows. A task without a
- * card (a one-shot Task, a chat turn whose reply never landed) is counted, not
- * a mismatch: the backfill has nothing to write there.
- */
+/** Compare historical trace summaries with their own attempts, never the current card. */
 function checkTurnCard(
   db: SqlDatabase,
   summary: TraceBackfillTurnSummary,
   context: SubjectContext,
   detail: Record<string, unknown>,
 ): void {
-  const raw = db.query(
-    "SELECT metadata FROM multiremi_conversation_log WHERE task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
-  ).get(summary.taskId) as { metadata: unknown } | null;
-  if (!raw) {
-    context.turnCard(false);
-    return;
-  }
+  const raw=db.query('SELECT event_count,tool_call_count,type_histogram,model FROM multiremi_turn_attempts WHERE id=?').get(summary.taskId);
+  if(!raw){context.turnCard(false);return;}
   context.turnCard(true);
-  let metadata: unknown = raw.metadata;
-  if (typeof metadata === "string") {
-    try {
-      metadata = JSON.parse(metadata) as unknown;
-    } catch {
-      metadata = null;
-    }
-  }
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    context.mismatch("turn_card", { ...detail, reason: "card metadata is not an object" });
-    return;
-  }
-  const card = metadata as ConversationLogTurnMetadata;
+  const decode=(value:unknown)=>typeof value==='string'?JSON.parse(value):value;
+  const card={...raw,type_histogram:decode(raw.type_histogram),model:decode(raw.model)} as ConversationLogTurnMetadata;
   const fields = traceBackfillTurnCardDiff(card, summary);
   if (fields.length === 0) return;
   context.mismatch("turn_card", {

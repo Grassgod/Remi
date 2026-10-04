@@ -1,7 +1,8 @@
+import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
-import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { invalidatingDatabase } from "@multiremi/store/request-read-cache.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -4325,6 +4326,7 @@ runMigrations(this.db);
     return this.issues.linkAttachmentsToIssue(issueId, attachmentIds);
   }
 
+  linkAttachmentsToComment(commentId:string,issueId:string,ids:string[]) {return this.issues.linkAttachmentsToComment(commentId,issueId,ids);}
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void {
     return this.issues.linkAttachmentsToChatMessage(chatSessionId, chatMessageId, attachmentIds);
   }
@@ -4521,12 +4523,12 @@ runMigrations(this.db);
     return this.conversationLog.findTurnEntry(taskId);
   }
 
-  /** Update a task's `turn` card in place, bumping `revision`. */
-  updateTurnCardWithinTransaction(
+  /** Store attempt outcomes; the card is projected from normalized storage. */
+  recordAttemptOutcomeWithinTransaction(
     taskId: string,
-    fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
+    fields: Parameters<ConversationLogRepo["recordAttemptOutcomeWithinTransaction"]>[1],
   ): ConversationLogEntry | null {
-    return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
+    return this.conversationLog.recordAttemptOutcomeWithinTransaction(taskId, fields);
   }
 
   /**
@@ -4709,10 +4711,6 @@ runMigrations(this.db);
 
   countDelegationPairHops(...args: Parameters<TasksRepo["countDelegationPairHops"]>): number {
     return this.tasks.countDelegationPairHops(...args);
-  }
-
-  recordDelegationRoundTripLimited(...args: Parameters<TasksRepo["recordDelegationRoundTripLimited"]>): void {
-    this.tasks.recordDelegationRoundTripLimited(...args);
   }
 
   recordDelegationRoundTripLimitedWithinTransaction(...args: Parameters<TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"]>): void {
@@ -5490,6 +5488,54 @@ runMigrations(this.db);
 
   markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
     return this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
+  }
+
+  reactMessage(...args:Parameters<import("./inbox/operations.js").InboxOperations["reactMessage"]>) {return this.inbox.operations.reactMessage(...args);}
+  listMessages(...args: Parameters<InboxRepo["operations"]["listMessages"]>) { return this.inbox.operations.listMessages(...args); }
+  editMessage(...args: Parameters<InboxRepo["operations"]["editMessage"]>) { return this.inbox.operations.editMessage(...args); }
+  deleteMessage(...args: Parameters<InboxRepo["operations"]["deleteMessage"]>) { return this.inbox.operations.deleteMessage(...args); }
+  resolveMessage(...args: Parameters<InboxRepo["operations"]["resolveMessage"]>) { return this.inbox.operations.resolveMessage(...args); }
+  listMessageInbox(...args: Parameters<InboxRepo["operations"]["listMessageInbox"]>) { return this.inbox.operations.listMessageInbox(...args); }
+  readMessageInbox(...args: Parameters<InboxRepo["operations"]["readMessageInbox"]>) { return this.inbox.operations.readMessageInbox(...args); }
+  readAllMessageInbox(...args: Parameters<InboxRepo["operations"]["readAllMessageInbox"]>) { return this.inbox.operations.readAllMessageInbox(...args); }
+  listReaderMessageInbox(...args: Parameters<InboxRepo["operations"]["listReaderMessageInbox"]>) { return this.inbox.operations.listReaderMessageInbox(...args); }
+  readAgentMessageInbox(...args: Parameters<InboxRepo["operations"]["readAgentMessageInbox"]>) { return this.inbox.operations.readAgentMessageInbox(...args); }
+  getTurn(...args: Parameters<InboxRepo["operations"]["getTurn"]>) { return this.inbox.operations.getTurn(...args); }
+  getTurnForAttempt(attemptId: string) {
+    const row = this.db.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(attemptId);
+    return row ? this.getTurn(String(row.turn_id)) : null;
+  }
+  listTurns(...args: Parameters<InboxRepo["operations"]["listTurns"]>) { return this.inbox.operations.listTurns(...args); }
+  listTurnAttempts(...args: Parameters<InboxRepo["operations"]["listTurnAttempts"]>) { return this.inbox.operations.listTurnAttempts(...args); }
+  getTurnTrace(...args: Parameters<InboxRepo["operations"]["getTurnTrace"]>) { return this.inbox.operations.getTurnTrace(...args); }
+  getTurnInput(...args: Parameters<InboxRepo["operations"]["getTurnInput"]>) { return this.inbox.operations.getTurnInput(...args); }
+  cancelTurn(...args: Parameters<InboxRepo["operations"]["cancelTurn"]>) { return this.inbox.operations.cancelTurn(...args); }
+  wrapUpTurn(...args: Parameters<InboxRepo["operations"]["wrapUpTurn"]>) { return this.inbox.operations.wrapUpTurn(...args); }
+  retryTurn(...args: Parameters<InboxRepo["operations"]["retryTurn"]>) { return this.inbox.operations.retryTurn(...args); }
+  issueMessageCardToken(...args: Parameters<InboxRepo["operations"]["issueMessageCardToken"]>) { return this.inbox.operations.issueMessageCardToken(...args); }
+  answerMessageDecision(...args: Parameters<InboxRepo["operations"]["answerMessageDecision"]>) { return this.inbox.operations.answerMessageDecision(...args); }
+  getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
+  getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
+  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = []) {
+    const events=createCommitEventQueue();
+    const result=this.db.transaction(()=>{
+      if (uploads.length) this.ctx.lockWorkspaceRuntimeLifecycle(uploads[0]!.workspaceId!);
+      if (input.dedupe_key && this.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?").get(input.session_id, input.dedupe_key)) {
+        return this.inbox.sendMessageWithinTransaction(input, events);
+      }
+      const attachmentIds = uploads.map(upload => this.createAttachment(upload).id);
+      const sent = this.inbox.sendMessageWithinTransaction({ ...input, attachment_ids: [...(input.attachment_ids ?? []), ...attachmentIds] },events);
+      for (const id of attachmentIds) {
+        const attachment = this.getAttachment(id);
+        if (attachment && attachment.commentId !== sent.message.id && attachment.chatMessageId !== sent.message.id) this.deleteAttachment(id);
+      }
+      return sent;
+    })();
+    afterCommit(this.db,()=>this.ctx.emitCommitEvents(events));
+    return result;
+  }
+  createTurnForMessageWithinWorkspaceLock(...args: Parameters<TasksRepo["createTurnForMessageWithinWorkspaceLock"]>) {
+    return this.tasks.createTurnForMessageWithinWorkspaceLock(...args);
   }
 
   sendEnvelopeWithinTransaction(

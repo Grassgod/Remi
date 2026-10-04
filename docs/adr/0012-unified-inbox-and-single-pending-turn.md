@@ -5,6 +5,8 @@
 
 ## Context
 
+被 ADR 0013 修订：消息、收件箱与轮的当前模型取代旧命令和任务入口；下文保留决策史实。
+
 Three wake paths grew independently: delegation returns
 (`drainDelegationReturnsWithinWorkspaceLock`), child terminal notifications
 (MUL-400 E2), and comment mentions. Each has its own "find the queued task"

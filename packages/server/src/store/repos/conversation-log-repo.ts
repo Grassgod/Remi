@@ -1,3 +1,7 @@
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
+import { createCommitEventQueue } from '../context.js';
+import { projectTurnCard } from "@multiremi/store/turn-attempts.js";
+import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
 // Conversation log domain: the single per-session log that replaces the three
 // conversation tables (MUL-402 / ADR 0006). One row is one display unit; every
 // other lifecycle fact is a hidden marker on the same seq axis.
@@ -27,6 +31,13 @@ type Row = Record<string, unknown>;
 /** Last fully read seq, plus consumed characters of seq + 1. */
 export type SessionAgentReadProgress = { seq: number; offset: number };
 export type SessionLogReadPosition = { seq: number; offset: number };
+
+// Chat streams its in-flight trace separately; show its persisted card only at
+// the terminal outcome, while keeping the turn pointer addressable from creation.
+const SHOWN_ROW_SQL = `visibility = 'shown' AND deleted_at IS NULL
+  AND NOT (kind = 'turn' AND session_id LIKE 'chat_%' AND EXISTS
+    (SELECT 1 FROM multiremi_turns t WHERE t.id = multiremi_conversation_log.id
+      AND t.status IN ('pending','running','awaiting_human')))`;
 
 /** Cap on one page of the window read; the route rejects anything larger. */
 export const CONVERSATION_LOG_MAX_WINDOW = 100;
@@ -66,6 +77,10 @@ export type AppendConversationLogInput = {
   id?: string;
   kind: ConversationLogKind;
   authorType: string;
+  messageKind?: import("@multiremi/contracts/unified-model.js").MessageKind;
+  messageHeader?: import("@multiremi/contracts/unified-model.js").MessageHeader;
+  /** Atomic completion stages a message before its product metadata is published. */
+  visibility?: ConversationLogVisibility;
   authorId?: string | null;
   taskId?: string | null;
   bodyMd?: string;
@@ -97,35 +112,57 @@ export type UpdateConversationLogInput = {
 };
 
 export class ConversationLogRepo {
-  constructor(private ctx: StoreContext) {}
+  constructor(private ctx: StoreContext) {
+    registerExecutionMessageWriter(ctx.db,(sessionId,id,senderId,body,input)=>{
+      const events=createCommitEventQueue();
+      const source=input.taskId&&ctx.db.query('SELECT id FROM multiremi_turns WHERE id=?').get(input.taskId);
+      const result=sendMessageWithinTransaction(ctx,{id,session_id:sessionId,sender:{type:(input.senderType??'agent') as 'agent'|'timer',id:senderId},
+        source_turn_id:source?input.taskId:null,to:{type:'none'},body_md:body,message_kind:(input.messageKind??'reply') as 'reply'|'status',
+        wake_requested:'inbox_only',metadata:input.metadata,visibility:input.visibility==='hidden'?'hidden':'shown'},events);
+      afterCommit(ctx.db,()=>ctx.emitCommitEvents(events));return result.message.seq;
+    });
+    registerTurnChangeHook(ctx.db, (turnId,created) => {
+      const row=ctx.db.query("SELECT session_id,seq FROM multiremi_turns WHERE id=?").get(turnId);
+      if (!row) return;
+      ctx.db.run("UPDATE multiremi_conversation_log SET revision=revision+1,updated_at=? WHERE session_id=? AND seq=?",[nowIso(),row.session_id,row.seq]);
+      this.touchSessionWithinTransaction(row.session_id);
+      const entry=this.getEntryWithinTransaction(row.session_id,Number(row.seq));
+      if(entry)this.emit(entry.session_id,created || entry.session_id.startsWith("chat_") ?entry:toPatch(entry.seq,entry.revision,{metadata:entry.metadata,body_md:entry.body_md,body_html:entry.body_html,render_version:entry.render_version},entry.updated_at));
+    });
+  }
+  private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
 
   getSessionAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-    const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-    return state[agentId] ?? this.updateAgentReadProgress(sessionId, agentId, current => current);
+    const row = this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+      WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId) as Row | null;
+    return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current);
   }
 
-  private legacyAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    // Legacy projections were inline, including logs delivered through relay lanes.
+  private storedAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
+    // Seed streamed progress from persisted lane and attempt receipts.
     const lane = this.ctx.db.query(`SELECT COALESCE(MAX(cursor_seq), 0) AS seq
-      FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?`).get(sessionId, agentId) as Row;
+      FROM multiremi_session_lanes WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`).get(sessionId, agentId) as Row;
     const chat = this.ctx.db.query(`SELECT COALESCE(MAX(projection_to_seq), 0) AS seq
-      FROM multiremi_tasks WHERE chat_session_id = ? AND agent_id = ? AND status = 'completed'`).get(sessionId, agentId) as Row;
+      FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id = a.turn_id
+      WHERE t.session_id = ? AND t.agent_id = ? AND a.status = 'completed'`).get(sessionId, agentId) as Row;
     return { seq: Math.min(Math.max(Number(lane.seq), Number(chat.seq)), this.getHead(sessionId)?.headSeq ?? 0), offset: 0 };
   }
 
   private updateAgentReadProgress(sessionId: string, agentId: string,
     advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress): SessionAgentReadProgress {
     return this.ctx.db.transaction(() => {
-      // Serialize the JSON read/modify/write across agents and server processes.
-      this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = agent_read_state WHERE session_id = ?", [sessionId]);
-      const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-      const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-      const current = state[agentId] ?? this.legacyAgentReadProgress(sessionId, agentId);
+      const seed=this.storedAgentReadProgress(sessionId,agentId),at=nowIso();
+      this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,cursor_offset,created_at,updated_at)
+        VALUES(?,'agent',?,'',?,?,?,?) ON CONFLICT DO NOTHING`,[sessionId,agentId,seed.seq,seed.offset,at,at]);
+      this.ctx.db.run(`UPDATE multiremi_session_lanes SET updated_at=updated_at
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[sessionId,agentId]);
+      const row=this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId)!;
+      const current={seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
       const next = advance(current);
-      if (row && (!state[agentId] || next.seq !== current.seq || next.offset !== current.offset)) {
-        state[agentId] = next;
-        this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = ? WHERE session_id = ?", [toJson(state), sessionId]);
+      if (next.seq !== current.seq || next.offset !== current.offset) {
+        this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?,updated_at=?
+          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[next.seq,next.offset,at,sessionId,agentId]);
       }
       return next;
     })();
@@ -143,7 +180,7 @@ export class ConversationLogRepo {
       if (start.seq > expected.seq) {
         if (current.offset || this.ctx.db.query(`SELECT 1 FROM multiremi_conversation_log
           WHERE session_id = ? AND seq > ? AND seq < ? AND visibility = 'shown' AND deleted_at IS NULL
-          AND (author_type <> 'agent' OR author_id IS NULL OR author_id <> ?) LIMIT 1`)
+          AND (sender_type <> 'agent' OR sender_id IS NULL OR sender_id <> ?) LIMIT 1`)
           .get(sessionId, current.seq, start.seq, agentId)) return current;
       } else if (start.seq === expected.seq && start.offset > expected.offset) return current;
       const lastSeq = Math.min(end.seq - 1, this.getHead(sessionId)?.headSeq ?? 0);
@@ -158,10 +195,14 @@ export class ConversationLogRepo {
       // An accepted bootstrap has no provider memory, even if an earlier session read the log.
       if (coldStart) current = { seq: 0, offset: 0 };
       const inline = new Set(seqs);
+      // Creating a turn now appends its pointer immediately. Accepting an
+      // inline trigger acknowledges only through the last delivered input,
+      // without advancing over the new turn or other trailing self entries.
+      const inlineToSeq = Math.min(toSeq, seqs.reduce((max, seq) => Math.max(max, seq), current.seq));
       let seq = current.seq;
-      const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, author_type, author_id
+      const rows = this.ctx.db.query(`SELECT seq, visibility, deleted_at, sender_type AS author_type, sender_id AS author_id
         FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?`)
-        .all(sessionId, current.seq, toSeq, CONVERSATION_LOG_MAX_WINDOW) as Pick<ConversationLogEntry,
+        .all(sessionId, current.seq, inlineToSeq, CONVERSATION_LOG_MAX_WINDOW) as Pick<ConversationLogEntry,
           "seq" | "visibility" | "deleted_at" | "author_type" | "author_id">[];
       for (const entry of rows) {
         if (this.needsAgentRead(entry, agentId) && !inline.has(entry.seq)) break;
@@ -203,16 +244,6 @@ export class ConversationLogRepo {
   /** The seq `head` row occupies; also the anchor when no anchor is requested. */
   static readonly HEAD_SEQ = 0;
 
-  private legacyHeadSeq(sessionId: string): number {
-    const issue = this.ctx.db.query(
-      "SELECT MAX(seq) AS seq FROM multiremi_session_events WHERE session_id = ?",
-    ).get(sessionId) as { seq: number | string | null } | null;
-    const chat = this.ctx.db.query(
-      "SELECT message_sequence AS seq FROM multiremi_chat_sessions WHERE id = ?",
-    ).get(sessionId) as { seq: number | string | null } | null;
-    return Math.max(0, Number(issue?.seq ?? 0), Number(chat?.seq ?? 0));
-  }
-
   private ensureCounterWithinTransaction(sessionId: string, at: string, seq = 0): void {
     // Acquire the writer lock before reading legacy rows. SQLite's deferred
     // transaction otherwise cannot upgrade a concurrent read to a write.
@@ -222,7 +253,7 @@ export class ConversationLogRepo {
        ON CONFLICT(session_id) DO NOTHING`,
       [sessionId, at],
     );
-    const initialSeq = Math.max(seq, this.legacyHeadSeq(sessionId));
+    const initialSeq = Math.max(seq, 0);
     this.ctx.db.run(
       `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
        VALUES (?, ?, 0, ?)
@@ -312,8 +343,52 @@ export class ConversationLogRepo {
 
   /** Allocate seq and insert. The caller already owns the transaction. */
   appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
-    const visibility = CONVERSATION_LOG_KIND_VISIBILITY[input.kind];
-    if (!visibility) throw new Error(`Unknown conversation log kind: ${input.kind}`);
+    if(['message','system','delegation_report'].includes(input.kind)&&!input.messageHeader){
+      const events=createCommitEventQueue(),session=this.ctx.issueSessions().getIssueSession(input.sessionId),chat=this.ctx.chat().getChatSession(input.sessionId);
+      const workspaceId=session?.workspaceId??chat?.workspaceId??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(input.sessionId)?.workspace_id;
+      const type=input.authorType==='system'||input.authorType==='external'?'platform':input.authorType;
+      const member=type==='member'?this.ctx.workspaces().getWorkspaceMemberByRef(input.authorId??'local',workspaceId):null;
+      const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
+      const result=sendMessageWithinTransaction(this.ctx,{id:input.id,session_id:input.sessionId,
+        sender:{type:type as 'agent'|'member'|'platform'|'timer',id:member?.id??input.authorId??null},source_turn_id:source?.turn_id??null,
+        to:{type:'none'},message_kind:input.messageKind??(input.kind==='delegation_report'?'report':input.parentId?'reply':type==='member'?'request':'status'),
+        wake_requested:'inbox_only',body_md:input.bodyMd??'',reply_to_id:input.parentId,metadata:input.metadata},events);
+      afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return this.getEntryById(result.message.id)!;
+    }
+    if (input.kind==='turn' && input.taskId) {
+      const turn=this.ctx.db.query("SELECT t.session_id,t.seq FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?").get(input.taskId);
+      if(turn)return this.getEntryWithinTransaction(turn.session_id,Number(turn.seq))!;
+    }
+    const kind = input.kind === 'system' || input.kind === 'delegation_report' ? 'message' : input.kind;
+    const visibility = kind==='message' ? input.visibility??CONVERSATION_LOG_KIND_VISIBILITY[kind] : CONVERSATION_LOG_KIND_VISIBILITY[kind];
+    if (!visibility) throw new Error(`Unknown conversation log kind: ${kind}`);
+    const metadata:any={...input.metadata};
+    const envelope=metadata.envelope;delete metadata.envelope;
+    if(envelope){const {to,kind,wake,dedupeKey,replyTo,recipient_agent_id,...provenance}=envelope;
+      metadata.message_source=provenance.source;metadata.priority=provenance.priority;
+      metadata.message_outcome=provenance.outcome;metadata.address_context=Object.fromEntries(Object.entries(to??{}).filter(([k])=>k!=='role'&&k!=='agentId'));}
+    let toType:string|null="none",toRef:string|null=null,toAgent:string|null=null,toMember:string|null=null;
+    if(envelope){
+      const address=envelope.to??{},role=address.role;
+      toType=role==='agent'||role==='chat'?'agent':'role';toRef=toType==='agent'?address.agentId:role;
+      toAgent=envelope.recipient_agent_id??(toType==='agent'?address.agentId:null);
+      let issueId=role==='issue_owner'?address.issueId:null;
+      if(role==='parent_owner')issueId=this.ctx.db.query('SELECT parent_issue_id FROM multiremi_issues WHERE id=?').get(address.childIssueId)?.parent_issue_id;
+      if(issueId&&!toAgent){const owner=this.ctx.db.query('SELECT assignee_type,assignee_id FROM multiremi_issues WHERE id=?').get(issueId);
+        if(owner?.assignee_type==='agent')toAgent=owner.assignee_id;else if(owner?.assignee_type==='member')toMember=owner.assignee_id;}
+      if(role==='delegator'&&!toAgent){const source=this.ctx.db.query('SELECT delegated_by_agent_id FROM multiremi_turn_execution_records WHERE id=?').get(envelope.source?.taskId??input.taskId);toAgent=source?.delegated_by_agent_id??null;}
+    }
+    const messageKind=input.messageKind??(input.kind==='head'||input.kind==='turn'?'status':envelope?.kind==='decision_needed'?'decision':envelope?.kind==='lifecycle'?'status':envelope?.kind??(input.kind==='system'?'status':input.kind==='delegation_report'?'report':input.authorType==='agent'?'reply':'request'));
+    if(kind==='turn'){input={...input,bodyMd:'',metadata:{}};}
+    // Completion stages the output once in the terminal transaction; the
+    // product writer publishes that same message with its thread metadata.
+    const staged=input.id?this.getEntryById(input.id):null;
+    if(staged?.metadata.pending_completion===true){
+      const {pending_completion,...prior}=staged.metadata;
+      this.ctx.db.run("UPDATE multiremi_conversation_log SET visibility='shown',reply_to_id=?,sender_type=?,sender_id=? WHERE id=?",[input.parentId??null,input.authorType,input.authorId??null,input.id]);
+      const entry=this.updateWithinTransaction(staged.session_id,staged.seq,{fields:{body_md:input.bodyMd??'',metadata:{...prior,...metadata}}})!;
+      this.emit(entry.session_id,entry);return entry;
+    }
     // `head` is the row at seq 0, not an event: it takes no allocation, so the
     // first real append still gets seq 1 and `cursor_seq = 0` keeps meaning
     // "nothing read" for every lane.
@@ -322,25 +397,28 @@ export class ConversationLogRepo {
       : input.kind === "head" ? 0 : this.nextSeqWithinTransaction(input.sessionId);
     if (input.seq != null) this.raiseHeadWithinTransaction(input.sessionId, seq);
     const id = input.id ?? createId("clog");
+    const workId=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId)?.turn_id??input.taskId:null;
     const now = input.createdAt ?? nowIso();
     const updatedAt = input.updatedAt ?? now;
     const rendered = renderMarkdown(input.bodyMd ?? "");
     this.ctx.db.run(
       `INSERT INTO multiremi_conversation_log (
-         session_id, seq, id, kind, visibility, author_type, author_id, task_id,
-         body_md, body_html, render_version, parent_id,
+         session_id, seq, id, kind, visibility, sender_type, sender_id, task_id,
+         body_md, body_html, render_version, reply_to_id,
          resolved_at, resolved_by_type, resolved_by_id,
-         metadata, revision, created_at, updated_at, deleted_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         metadata, revision, created_at, updated_at, deleted_at,
+         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,dedupe_key,
+         options,card_token_hash,card_token_recipient,card_token_consumed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.sessionId,
         seq,
         id,
-        input.kind,
+        kind,
         visibility,
-        input.authorType,
+        input.authorType === "system" || input.authorType === "external" ? "platform" : input.authorType,
         input.authorId ?? null,
-        input.taskId ?? null,
+        workId,
         input.bodyMd ?? "",
         rendered.html,
         rendered.render_version,
@@ -348,11 +426,18 @@ export class ConversationLogRepo {
         input.resolvedAt ?? null,
         input.resolvedByType ?? null,
         input.resolvedById ?? null,
-        toJson(input.metadata ?? {}),
+        toJson(kind==='turn'?{}:metadata),
         input.revision ?? 1,
         now,
         updatedAt,
         input.deletedAt ?? null,
+        input.messageHeader?.to_type??toType,input.messageHeader?.to_ref??toRef,
+        input.messageHeader?.to_agent_id??toAgent,input.messageHeader?.to_member_id??toMember,
+        input.messageHeader?.message_kind??messageKind,input.messageHeader?.wake_requested??envelope?.wake??"inbox_only",
+        input.messageHeader?.wake_applied??envelope?.wake??"inbox_only",input.messageHeader?.wake_reason??(envelope?"migration":"requested_inbox_only"),
+        input.messageHeader?.dedupe_key??envelope?.dedupeKey??null,
+        input.messageHeader?.options?toJson(input.messageHeader.options):null,input.messageHeader?.card_token_hash??null,
+        input.messageHeader?.card_token_recipient??null,input.messageHeader?.card_token_consumed_at??null,
       ],
     );
     // One `log_version` bump per log mutation: the allocator already counted
@@ -408,24 +493,24 @@ export class ConversationLogRepo {
 
   getEntry(sessionId: string, seq: number, query?: ConversationLogQuery | null): ConversationLogEntry | null {
     const row = this.runQuery(query, "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq = ?", [sessionId, seq]).get() as Row | null;
-    return row ? toConversationLogEntry(row) : null;
+    return row ? this.materialize(row) : null;
   }
 
   getEntryWithinTransaction(sessionId: string, seq: number): ConversationLogEntry | null {
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq = ?",
     ).get(sessionId, seq) as Row | null;
-    return row ? toConversationLogEntry(row) : null;
+    return row ? this.materialize(row) : null;
   }
 
   getEntryById(id: string): ConversationLogEntry | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_conversation_log WHERE id = ?").get(id) as Row | null;
-    return row ? toConversationLogEntry(row) : null;
+    return row ? this.materialize(row) : null;
   }
 
   /** Locate one row's seq by id, for deep links. */
   locate(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
-    const row = this.runQuery(query, "SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ? AND visibility = 'shown' AND deleted_at IS NULL", [sessionId, id]).get() as Row | null;
+    const row = this.runQuery(query, `SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ? AND ${SHOWN_ROW_SQL}`, [sessionId, id]).get() as Row | null;
     if (!row) return null;
     const head = this.getHead(sessionId, query);
     return { id: String(row.id), seq: Number(row.seq ?? 0), head_seq: head?.headSeq ?? 0 };
@@ -442,6 +527,8 @@ export class ConversationLogRepo {
     const sets: string[] = [];
     const params: unknown[] = [];
     const fields = { ...input.fields };
+    if(current.kind==='turn'&&(fields.metadata!==undefined||fields.body_md!==undefined||fields.body_html!==undefined))
+      throw new Error('Turn log rows are pointers; update the turn or attempt instead');
     if (fields.body_md !== undefined || fields.body_html !== undefined || fields.render_version !== undefined) {
       const rendered = renderMarkdown(fields.body_md ?? current.body_md);
       fields.body_html = rendered.html;
@@ -533,7 +620,7 @@ export class ConversationLogRepo {
     const anchor = requestedAnchor == null
       ? headSeq
       : Math.max(0, Math.min(Math.floor(requestedAnchor), headSeq));
-    const visible = "visibility = 'shown' AND deleted_at IS NULL";
+    const visible = SHOWN_ROW_SQL;
     const rows: Row[] = [];
     let hasMoreBefore = false;
     let hasMoreAfter = false;
@@ -574,7 +661,7 @@ export class ConversationLogRepo {
       rows.push(...newest.slice(0, limit).reverse());
       hasMoreAfter = anchor < headSeq;
     }
-    const entries = rows.map(toConversationLogEntry);
+    const entries = rows.map(row=>this.materialize(row));
     let prevEntryCreatedAt: string | null = null;
     if (entries.length) {
       const previous = this.runQuery(
@@ -615,15 +702,14 @@ export class ConversationLogRepo {
   }
 
   /**
-   * The `turn` card for a task, if one exists. A task's card is created when the
-   * task is created (Issue) or when its reply lands (chat), and is then updated
-   * in place through its lifecycle, so the lookup is by `task_id`.
+   * The `turn` card for a task, if one exists. Every task's card is created with its
+   * turn, including Chat and automation, then projected from its current attempt.
    */
   findTurnEntry(taskId: string): ConversationLogEntry | null {
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_conversation_log WHERE task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
+      "SELECT * FROM multiremi_conversation_log WHERE id = (SELECT turn_id FROM multiremi_turn_attempts WHERE id=?) AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
     ).get(taskId) as Row | null;
-    return row ? toConversationLogEntry(row) : null;
+    return row ? this.materialize(row) : null;
   }
 
   /**
@@ -632,75 +718,31 @@ export class ConversationLogRepo {
    * replica keys on. No card means nothing to update (a chat turn whose reply
    * has not landed yet).
    */
-  updateTurnCardWithinTransaction(
-    taskId: string,
-    fields: {
-      status?: string | null;
-      finalReplyMd?: string | null;
-      finalEntryId?: string | null;
-      summary?: string | null;
-      toolCallCount?: number | null;
-      eventCount?: number | null;
-      typeHistogram?: unknown[] | null;
-      usage?: unknown[] | null;
-      model?: unknown | null;
-      elapsedMs?: number | null;
-      failureReason?: string | null;
-      inbox?: { delivered_from_seq: number; delivered_to_seq: number; delivered_at: string; task_id: string };
-    },
-  ): ConversationLogEntry | null {
-    const current = this.findTurnEntry(taskId);
-    if (!current) return null;
-    const metadata: Record<string, unknown> = { ...current.metadata };
-    if (fields.status !== undefined) metadata.status = fields.status;
-    if (fields.finalReplyMd !== undefined) metadata.final_reply_md = fields.finalReplyMd;
-    if (fields.finalEntryId !== undefined) metadata.final_entry_id = fields.finalEntryId;
-    if (fields.summary !== undefined) metadata.summary = fields.summary;
-    if (fields.toolCallCount !== undefined) metadata.tool_call_count = fields.toolCallCount;
-    if (fields.eventCount !== undefined) metadata.event_count = fields.eventCount;
-    if (fields.typeHistogram !== undefined) metadata.type_histogram = fields.typeHistogram;
-    if (fields.usage !== undefined) metadata.usage = fields.usage;
-    if (fields.model !== undefined) metadata.model = fields.model;
-    if (fields.elapsedMs !== undefined) metadata.elapsed_ms = fields.elapsedMs;
-    if (fields.failureReason !== undefined) metadata.failure_reason = fields.failureReason;
-    if (fields.inbox !== undefined) metadata.inbox = fields.inbox;
-    return this.updateWithinTransaction(current.session_id, current.seq, { fields: { metadata } });
+  recordAttemptOutcomeWithinTransaction(taskId:string,fields:{
+    status?:string|null;finalReplyMd?:string|null;finalEntryId?:string|null;summary?:string|null;
+    toolCallCount?:number|null;eventCount?:number|null;typeHistogram?:unknown[]|null;usage?:unknown[]|null;
+    model?:unknown|null;elapsedMs?:number|null;failureReason?:string|null;
+    inbox?:{delivered_from_seq:number;delivered_to_seq:number;delivered_at:string;task_id:string};
+  }):ConversationLogEntry|null {
+    const attempt=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(taskId);
+    if(!attempt)return null;
+    const mapping:Record<string,string>={summary:'progress_summary',toolCallCount:'tool_call_count',eventCount:'event_count',typeHistogram:'type_histogram',usage:'usage',model:'model',failureReason:'failure_reason'};
+    const values:Record<string,unknown>={};
+    for(const [key,column] of Object.entries(mapping))if((fields as any)[key]!==undefined)values[column]=['typeHistogram','usage','model'].includes(key)?toJson((fields as any)[key]):(fields as any)[key];
+    const keys=Object.keys(values);
+    if(keys.length)this.ctx.db.run(`UPDATE multiremi_turn_attempts SET ${keys.map(k=>`${k}=?`).join(',')} WHERE id=?`,[...keys.map(k=>values[k]),taskId]);
+    if(fields.finalEntryId!==undefined&&fields.finalEntryId!==null)this.ctx.db.run('UPDATE multiremi_turns SET reply_message_id=? WHERE id=? AND current_attempt_id=?',[fields.finalEntryId,attempt.turn_id,taskId]);
+    notifyTurnChanged(this.ctx.db,attempt.turn_id);
+    return this.findTurnEntry(taskId);
   }
-
-  recordTurnInboxDeliveryWithinTransaction(taskId: string, fromSeq: number, toSeq: number): ConversationLogEntry | null {
-    return this.updateTurnCardWithinTransaction(taskId, { inbox: {
-      delivered_from_seq: fromSeq,
-      delivered_to_seq: toSeq,
-      delivered_at: new Date().toISOString(),
-      task_id: taskId,
-    } });
+  recordTurnInboxDeliveryWithinTransaction(taskId:string,fromSeq:number,toSeq:number):ConversationLogEntry|null {
+    this.ctx.db.run('UPDATE multiremi_turns SET input_from_seq=?,input_to_seq=? WHERE current_attempt_id=?',[fromSeq,toSeq,taskId]);
+    const row=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(taskId);
+    if(row)notifyTurnChanged(this.ctx.db,row.turn_id);
+    return this.findTurnEntry(taskId);
   }
-
-  /** A recipient's shown turn receipt may cover an envelope newer than the turn. */
-  hasInboxReceiptCovering(sessionId: string, agentId: string, seq: number): boolean {
-    // CASE guards both parsing and conversion: WHERE predicate order is not
-    // guaranteed, and SQLite otherwise compares JSON strings above numbers.
-    // PG deployments and CI use PG 17; pg_input_is_valid also rejects text
-    // that is valid JSON but cannot be represented as jsonb.
-    const deliveredToSeq = this.ctx.db.dialect === "postgres"
-      ? `CASE WHEN pg_input_is_valid(log.metadata, 'jsonb') THEN
-           CASE WHEN jsonb_typeof(log.metadata::jsonb #> '{inbox,delivered_to_seq}') = 'number'
-             THEN (log.metadata::jsonb #>> '{inbox,delivered_to_seq}')::numeric END
-         END`
-      : `CASE WHEN json_valid(log.metadata) THEN
-           CASE WHEN json_type(log.metadata, '$.inbox.delivered_to_seq') IN ('integer', 'real')
-             THEN json_extract(log.metadata, '$.inbox.delivered_to_seq') END
-         END`;
-    return Boolean(this.ctx.db.query(
-      `SELECT 1 AS present FROM multiremi_conversation_log log
-       WHERE log.session_id = ? AND log.kind = 'turn'
-         AND log.visibility = 'shown' AND log.deleted_at IS NULL
-         AND (log.author_id = ? OR (log.author_id IS NULL AND EXISTS (
-           SELECT 1 FROM multiremi_tasks task WHERE task.id = log.task_id AND task.agent_id = ?
-         )))
-         AND ${deliveredToSeq} >= ?
-       LIMIT 1`,
-    ).get(sessionId, agentId, agentId, seq));
+  hasInboxReceiptCovering(sessionId:string,agentId:string,seq:number):boolean {
+    return Boolean(this.ctx.db.query('SELECT 1 AS present FROM multiremi_turns WHERE session_id=? AND agent_id=? AND input_to_seq>=? LIMIT 1').get(sessionId,agentId,seq));
   }
 
   /** Shown rows in the inclusive seq range, oldest first. */
@@ -712,15 +754,15 @@ export class ConversationLogRepo {
     const rows = (to == null
       ? this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND visibility = 'shown' AND deleted_at IS NULL
+         WHERE session_id = ? AND seq > ? AND ${SHOWN_ROW_SQL}
          ORDER BY seq ASC${limitSql}`,
       ).all(...(limit == null ? [sessionId, since] : [sessionId, since, limit]))
       : this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND seq <= ? AND visibility = 'shown' AND deleted_at IS NULL
+         WHERE session_id = ? AND seq > ? AND seq <= ? AND ${SHOWN_ROW_SQL}
          ORDER BY seq ASC${limitSql}`,
       ).all(...(limit == null ? [sessionId, since, to] : [sessionId, since, to, limit]))) as Row[];
-    return rows.map(toConversationLogEntry);
+    return rows.map(row=>this.materialize(row));
   }
 
   /** Every row, hidden included, oldest first. Used by projections and backfill. */
@@ -732,21 +774,21 @@ export class ConversationLogRepo {
         "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
       ).all(sessionId, since)
       : this.ctx.db.query(CONVERSATION_LOG_RANGE_SQL).all(sessionId, since, to)) as Row[];
-    return rows.map(toConversationLogEntry);
+    return rows.map(row=>this.materialize(row));
   }
 
   /** The bounded range page shared by SQLite fill and the Postgres read pool. */
   listRangePage(sessionId: string, afterSeq: number, toSeq: number, limit: number): ConversationLogEntry[] {
     const rows = this.ctx.db.query(CONVERSATION_LOG_RANGE_PAGE_SQL)
       .all(sessionId, afterSeq, toSeq, limit) as Row[];
-    return rows.map(toConversationLogEntry);
+    return rows.map(row=>this.materialize(row));
   }
 
   listByTask(taskId: string): ConversationLogEntry[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_conversation_log WHERE task_id = ? ORDER BY seq ASC",
     ).all(taskId) as Row[];
-    return rows.map(toConversationLogEntry);
+    return rows.map(row=>this.materialize(row));
   }
 
   private runQuery(
@@ -788,25 +830,39 @@ export function toConversationLogEntry(row: Row): ConversationLogEntry {
   const kind = String(row.kind) as ConversationLogKind;
   const visibility = String(row.visibility ?? CONVERSATION_LOG_KIND_VISIBILITY[kind] ?? "shown") as ConversationLogVisibility;
   return {
+    ...Object.fromEntries(['sender_type','sender_id','to_type','to_ref','to_agent_id','to_member_id','message_kind','wake_requested','wake_applied','wake_reason','dedupe_key','options','card_token_hash','card_token_recipient','card_token_consumed_at','reply_to_id'].map(k=>[k,row[k]??null])),
     session_id: sessionId,
     seq: Number(row.seq ?? 0),
     id: String(row.id),
     kind,
     visibility,
-    author_type: String(row.author_type ?? "system"),
-    author_id: nullableString(row.author_id),
+    author_type: String(row.sender_type === "platform" ? "system" : row.sender_type),
+    author_id: nullableString(row.sender_id),
     task_id: nullableString(row.task_id),
     body_md: String(row.body_md ?? ""),
     body_html: nullableString(row.body_html),
     render_version: nullableString(row.render_version),
-    parent_id: nullableString(row.parent_id),
+    parent_id: nullableString(row.reply_to_id),
     resolved_at: nullableString(row.resolved_at),
     resolved_by_type: nullableString(row.resolved_by_type),
     resolved_by_id: nullableString(row.resolved_by_id),
-    metadata: parseJson<ConversationLogEntryMetadata>(row.metadata, {}),
+    metadata: messageMetadata(row),
     revision: Number(row.revision ?? 1),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at ?? row.created_at),
     deleted_at: nullableString(row.deleted_at),
   };
+}
+
+/** Existing execution consumers receive a projection built solely from columns. */
+function messageMetadata(row:Row):ConversationLogEntryMetadata {
+  const metadata:any=parseJson(row.metadata,{});
+  if(row.kind==='message' && row.to_type!==null && row.to_type!=='none'){
+    const role=row.to_type==='agent'?'agent':row.to_ref;
+    metadata.envelope={to:{...metadata.address_context,role,...(role==='agent'?{agentId:row.to_agent_id,issueSessionId:row.session_id}:{})},
+      kind:row.message_kind==='status'?'lifecycle':row.message_kind==='decision'?'decision_needed':row.message_kind,
+      wake:row.wake_applied,dedupeKey:row.dedupe_key??undefined,replyTo:row.reply_to_id??undefined,
+      source:metadata.message_source??{},priority:metadata.priority??4,recipient_agent_id:row.to_agent_id??undefined,outcome:metadata.message_outcome};
+  }
+  return metadata;
 }

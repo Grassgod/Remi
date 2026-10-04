@@ -489,70 +489,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   /**
-   * Read one Issue decision a card click is answering (MUL-412).
-   *
-   * Guarded by the same predicate as the write: the Issue must have an active
-   * topic binding under this host's app, and the token must belong to the
-   * daemon that hosts it. Without an answer the card would still be clickable
-   * after the web settled it.
-   */
-  app.get("/api/daemon/issues/:issueId/decisions/:decisionId", (c) => {
-    const issueId = c.req.param("issueId");
-    const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
-    if (denied) return denied;
-    const decision = store.getIssueDecision(issueId, c.req.param("decisionId"));
-    if (!decision) return c.json({ error: "decision not found" }, 404);
-    c.header("Cache-Control", "no-store");
-    return c.json({ decision });
-  });
-
-  /**
-   * Answer an Issue decision from a card click (MUL-412).
-   *
-   * The answerer is derived from the callback's operator, never from the body:
-   * the host may only tell us `operator_open_id`, and it has to be the person
-   * the card was addressed to. That open_id is then resolved to a live
-   * workspace member — an unmapped, archived or agent identity is refused —
-   * and the write goes through the same store function the HTTP answer route
-   * uses, so the history, the activities, the inbox and the wakeup of the
-   * source Issue's owner are identical.
-   */
-  app.post("/api/daemon/issues/:issueId/decisions/:decisionId/answer", async (c) => {
-    const issueId = c.req.param("issueId");
-    const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
-    if (denied) return denied;
-    const body = await readJsonStrict<{ answer?: unknown; token?: unknown; operator_open_id?: unknown }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const decisionId = c.req.param("decisionId");
-    const context = store.getFeishuIssueDecisionCardContext(
-      store.getIssue(issueId)?.workspaceId ?? "local", decisionId);
-    if (!context || context.issue.id !== issueId) return c.json({ error: "decision not found" }, 404);
-    const operatorOpenId = cleanString(typeof body.operator_open_id === "string" ? body.operator_open_id : null);
-    const answer = cleanString(typeof body.answer === "string" ? body.answer : null);
-    if (!answer) return c.json({ error: "answer is required" }, 400);
-    try {
-      const decision = store.answerIssueDecision(issueId, decisionId, {
-        answer, reason: "Answered from the Feishu decision card", overturn: null,
-      }, { type: "member", id: operatorOpenId ?? "", taskId: null }, {
-        cardCredential: { token: typeof body.token === "string" ? body.token : "", operatorOpenId: operatorOpenId ?? "" },
-      });
-      return c.json({ decision });
-    } catch (error) {
-      // The write may have raced a withdrawal or another terminal transition.
-      // Only the canonical row can prove that the decision ended; an HTTP
-      // status alone cannot distinguish that from a rolled-back write.
-      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
-      if (error instanceof IssueDecisionError && error.status === 403) {
-        return c.json({ error: error.message, code: (error as IssueDecisionError & { code?: string }).code }, 403);
-      }
-      const decision = store.getIssueDecision(issueId, decisionId);
-      if (decision && decision.status !== "escalated") return c.json({ decision });
-      if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
-      throw error;
-    }
-  });
-
-  /**
    * Cards this Runtime must keep answering clicks for (MUL-407). The host's
    * click map is process-local, so it re-registers from here on every start;
    * unlike a Task-stream card there is no presentation checkpoint to replay.
@@ -878,42 +814,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
-  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/card", async (c) => {
-    const taskId = c.req.param("taskId");
-    const denied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (denied) return denied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    const body = await readJsonStrict<{ recipient_open_id?: unknown }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const card = store.prepareTaskStreamQuestionCard(request.id, typeof body.recipient_open_id === "string" ? body.recipient_open_id : "");
-    if (!card) return c.json({ error: "card recipient or request is invalid" }, 409);
-    c.header("Cache-Control", "no-store");
-    return c.json({ card });
-  });
-  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/respond", async (c) => {
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const body = await readJsonStrict<{ response?: Record<string, unknown>; token?: unknown; operator_open_id?: unknown }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
-    try {
-      const responded = store.respondTaskHumanRequest(request.id, {
-        response: body.response ?? {},
-        cardCredential: {
-          token: typeof body.token === "string" ? body.token : "",
-          operatorOpenId: typeof body.operator_open_id === "string" ? body.operator_open_id : "",
-        },
-      });
-      return c.json({ request: responded });
-    } catch (error) {
-      if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
-      throw error;
-    }
-  });
-
   app.get("/api/daemon/tasks/:taskId/status", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);

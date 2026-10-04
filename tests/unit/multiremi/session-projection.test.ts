@@ -36,7 +36,7 @@ describe("bounded Session projections", () => {
     expect(rendered).toMatchObject({
       type: "session_event", seq: 1, body_folded: true,
       body_summary: body.slice(0, 600), body_omitted_chars: body.length - 600,
-      expand: "remi session log get ises_1 1", metadata: { a: 2, z: 1 },
+      expand: "remi message get sevt_1", metadata: { a: 2, z: 1 },
     });
     expect(rendered.body).toBeUndefined();
     expect(projection).toMatchObject({

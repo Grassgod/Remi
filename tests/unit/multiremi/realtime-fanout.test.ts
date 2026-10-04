@@ -414,7 +414,7 @@ describe("realtime fanout — two servers over one database", () => {
         name: "Peer decision member",
         email: "peer-decision@example.test",
       });
-      storeA.createWorkspaceMember({
+      const member = storeA.createWorkspaceMember({
         workspaceId: "local",
         userId: user.id,
         name: "Peer decision member",
@@ -486,13 +486,9 @@ describe("realtime fanout — two servers over one database", () => {
         const runtimeBase = `http://127.0.0.1:${serverB.port}`;
         await Bun.sleep(100);
         const postsBeforeCreate = { ...two.postCounts };
-        const createdResponse = await fetch(`${uiBase}/api/issues/${issue.id}/decisions`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${browserToken.token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: "production_change", title: "Ship through the peer?" }),
-        });
-        expect(createdResponse.status, await createdResponse.clone().text()).toBe(201);
-        const created = (await createdResponse.json() as any).decision;
+        const created = storeA.createIssueDecision(issue.id, {
+          kind: "production_change", title: "Ship through the peer?",
+        }, { type: "member", id: member.id, taskId: null });
         const createDeadline = Date.now() + WS_TIMEOUT_MS;
         while ((!frames.some((frame) => frame.type === "decision:created")
           || two.postCounts.a === postsBeforeCreate.a) && Date.now() < createDeadline) {
@@ -511,7 +507,7 @@ describe("realtime fanout — two servers over one database", () => {
           externalMessageId: "om_peer_decision_card",
           interactionOpenId: "ou_peer_decision",
         });
-        const readPath = `/api/daemon/issues/${issue.id}/decisions/${created.id}`;
+        const readPath = `/api/daemon/messages/${created.id}`;
         expect((await fetch(`${uiBase}${readPath}`, {
           headers: { Authorization: `Bearer ${daemonToken.token}` },
         })).status).toBe(421);
@@ -521,7 +517,7 @@ describe("realtime fanout — two servers over one database", () => {
 
         const postsBeforeAnswer = { ...two.postCounts };
         const daemon = new MultiremiDaemonClient(runtimeBase, daemonToken.token);
-        const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
+        const answered = await daemon.answerFeishuIssueDecision(created.id, {
           answer: "yes",
           operatorOpenId: "ou_peer_decision",
           token: cardCredential!.t as string,
