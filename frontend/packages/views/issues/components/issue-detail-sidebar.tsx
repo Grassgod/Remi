@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import {
   generatedIssuesOptions,
-  issueDependenciesOptions,
   issueDetailOptions,
   issueKeys,
 } from "@multiremi/core/issues/queries";
@@ -97,8 +96,7 @@ export function IssueDetailSidebar({
   const { t: tRuntime } = useT("runtimes");
   const paths = useWorkspacePaths();
   const openChildren = childIssues.filter((child) => child.status !== "done" && child.status !== "cancelled").length;
-  const { data: dependencies = [] } = useQuery(issueDependenciesOptions(issue.workspace_id, issueId));
-  const unmetPrerequisites = dependencies.filter((dependency) => dependency.direction === "blocked_by" && dependency.depends_on_issue?.status !== "done").length;
+  const unmetPrerequisites = (issue.blocked_by ?? []).length;
   const propertiesOpen = sections.isOpen("properties");
   const parentIssueOpen = sections.isOpen("parentIssue");
   const codeChangesOpen = sections.isOpen("codeChanges");

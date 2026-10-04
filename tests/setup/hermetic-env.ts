@@ -13,8 +13,13 @@
  * Rather than patch that one variable, strip the repo's whole env namespace before
  * any test module is evaluated: a test that wants an env var must set it itself.
  * Prefix matching means a newly added `MULTIREMI_*` knob can never reintroduce this
- * class of bug. Individual tests that set/restore env still work — they capture
- * `undefined` at import time and restore to `undefined`.
+ * class of bug. Tests that set/restore env capture the preload's defaults.
+ *
+ * MUL-512: stripping path knobs also exposed production HOME fallbacks. Create a
+ * private run root after scrubbing and redirect the existing product path knobs
+ * into it. Never assign HOME here: Bun 1.3.14 fixes homedir()/userInfo().homedir
+ * at process startup. `bun run test` changes HOME before starting `bun test` and
+ * checks the entire home afterward; direct `bun test` has only the path-knob layer.
  *
  * The policy (what is stripped, what is deliberately kept) lives in
  * `./hermetic-env-policy.ts`. This file is the only place that applies it, so
@@ -26,7 +31,11 @@
  *
  * Guarded by `tests/arch/hermetic-test-env.test.ts`.
  */
-import { HERMETIC_ENV_DEFAULTS, HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { afterAll } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { HERMETIC_ENV_DEFAULTS, HERMETIC_ENV_RUN_ROOT_PATHS, HERMETIC_ENV_SENTINEL, scrubInheritedEnv } from "./hermetic-env-policy.js";
 
 const removed = scrubInheritedEnv();
 
@@ -41,6 +50,20 @@ for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
   process.env[name] = value;
 }
 if (explicitSentinel === "0") process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = "0";
+
+const runRoot = mkdtempSync(join(tmpdir(), "remi-bun-test-"));
+process.env.MULTIREMI_TEST_RUN_ROOT = runRoot;
+for (const [name, subpath] of Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)) {
+  process.env[name] = join(runRoot, subpath);
+}
+function cleanupRunRoot(): void {
+  try { rmSync(runRoot, { recursive: true, force: true }); }
+  catch { /* Open SQLite handles can prevent cleanup on Windows. */ }
+}
+// Bun 1.3.14's test runner does not emit process exit events on normal completion.
+// A preload afterAll runs once after the suite, including ordinary test failures.
+afterAll(cleanupRunRoot);
+process.on("exit", cleanupRunRoot);
 
 (globalThis as Record<symbol, unknown>)[HERMETIC_ENV_SENTINEL] = { removed };
 

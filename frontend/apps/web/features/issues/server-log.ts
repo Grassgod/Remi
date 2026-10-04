@@ -88,7 +88,8 @@ export async function readIssueLogBootstrap(slug: string, issueId: string, selec
   const logPath = `/api/sessions/${encodeURIComponent(session.id)}/log`;
   const [window, headWindow, parentIssue, members, children, tasks] = await Promise.all([
     readWithSessionCookie<IssueLogBootstrap["window"]>({ cookie, slug, signal,
-      path: targetSeq === undefined ? `${logPath}?before=30` : `${logPath}?anchor=${targetSeq}&before=15&after=15`,
+      path: (targetSeq === undefined ? `${logPath}?before=30` : `${logPath}?anchor=${targetSeq}&before=15&after=15`)
+        + (session.is_default ? "&with_activity=1" : ""),
       schema: SessionLogWindowSchema }),
     readWithSessionCookie<IssueLogBootstrap["window"]>({ cookie, slug, signal, path: `${logPath}?anchor=0&before=1`, schema: SessionLogWindowSchema }),
     issue.parent_issue_id ? readWithSessionCookie<Issue>({ cookie, slug, signal, path: `/api/issues/${encodeURIComponent(issue.parent_issue_id)}`, schema: IssueDetailSchema }) : null,

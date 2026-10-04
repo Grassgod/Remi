@@ -18,7 +18,8 @@ describe("release workflows", () => {
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(build);
     expect(steps[gate].run).toContain("release-build-check.yml/runs?head_sha=$SHA");
-    expect(steps[gate].run).toContain("event=push&branch=main&status=success");
+    expect(steps[gate].run).toContain("branch=main&status=success");
+    expect(steps[gate].run).toContain('select(.event == "push" or .event == "workflow_dispatch")');
     expect(release.jobs.release.permissions.actions).toBe("read");
     expect(JSON.stringify(release)).not.toContain("release:prepare");
     const ci = readWorkflow("release-build-check.yml");
@@ -42,6 +43,10 @@ describe("release workflows", () => {
     const platform = readWorkflow("platform-release.yml");
     expect(platform.on.workflow_call.inputs.tag.type).toBe("string");
     expect(platform.on.workflow_dispatch.inputs.tag.type).toBe("string");
+
+    const gate = platform.jobs.validate.steps.find((step: any) => step.run?.includes("release-build-check.yml/runs"));
+    expect(gate?.run).toContain("release-build-check.yml/runs?head_sha=$SHA&branch=main&status=success");
+    expect(gate?.run).toContain('select(.event == "push" or .event == "workflow_dispatch")');
 
     const serialized = JSON.stringify(platform);
     expect(serialized).toContain("remi-api:sha-${{ needs.validate.outputs.sha }}");

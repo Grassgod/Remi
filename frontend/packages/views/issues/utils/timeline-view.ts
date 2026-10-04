@@ -68,6 +68,21 @@ export function buildTimelineView(timeline: readonly TimelineEntry[]): TimelineV
     });
   }
 
+  const coalesced = coalesceActivities(timeline);
+
+  // Group consecutive activities together so the connector line works
+  const groups: TimelineGroup[] = [];
+  for (const entry of coalesced) {
+    if (entry.type === "activity") {
+      const last = groups[groups.length - 1];
+      if (last?.type === "activities") last.entries.push(entry);
+      else groups.push({ type: "activities", entries: [entry] });
+    } else groups.push({ type: "comment", entries: [entry] });
+  }
+  return { parentRefs, parentIds, groups };
+}
+
+export function coalesceActivities(timeline: readonly TimelineEntry[]): TimelineEntry[] {
   const coalesced: TimelineEntry[] = [];
   for (const entry of timeline) {
     if (entry.type === "activity") {
@@ -76,34 +91,20 @@ export function buildTimelineView(timeline: readonly TimelineEntry[]): TimelineV
         !NEVER_COALESCE_ACTIONS.has(entry.action!) &&
         prev?.type === "activity" &&
         prev.action === entry.action &&
+        (entry.action !== "issue_field_changed" || prev.details?.field === entry.details?.field) &&
         prev.actor_type === entry.actor_type &&
         prev.actor_id === entry.actor_id &&
         (NO_TIME_LIMIT_ACTIONS.has(entry.action!) ||
           Math.abs(new Date(entry.created_at).getTime() - new Date(prev.created_at).getTime()) <= COALESCE_MS)
       ) {
-        coalesced[coalesced.length - 1] = { ...entry, coalesced_count: (prev.coalesced_count ?? 1) + 1 };
+        coalesced[coalesced.length - 1] = { ...entry, id: prev.id, coalesced_count: (prev.coalesced_count ?? 1) + 1 };
         continue;
       }
     }
     coalesced.push(entry);
   }
 
-  // Group consecutive activities together so the connector line works
-  const groups: TimelineGroup[] = [];
-  for (const entry of coalesced) {
-    if (entry.type === "activity") {
-      const last = groups[groups.length - 1];
-      if (last?.type === "activities") {
-        last.entries.push(entry);
-      } else {
-        groups.push({ type: "activities", entries: [entry] });
-      }
-    } else {
-      groups.push({ type: "comment", entries: [entry] });
-    }
-  }
-
-  return { parentRefs, parentIds, groups };
+  return coalesced;
 }
 
 export function flattenGroups(

@@ -662,12 +662,15 @@ export class ConversationLogRepo {
       hasMoreAfter = anchor < headSeq;
     }
     const entries = rows.map(row=>this.materialize(row));
+    let prevEntryCreatedAt: string | null = null;
     if (entries.length) {
-      hasMoreBefore = (this.runQuery(
+      const previous = this.runQuery(
         input.query,
-        `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq < ? AND ${visible} ORDER BY seq DESC LIMIT 1`,
+        `SELECT seq, created_at FROM multiremi_conversation_log WHERE session_id = ? AND seq < ? AND ${visible} ORDER BY seq DESC LIMIT 1`,
         [sessionId, entries[0]!.seq],
-      ).get() as Row | null) != null;
+      ).get() as Row | null;
+      hasMoreBefore = previous != null;
+      prevEntryCreatedAt = previous ? String(previous.created_at) : null;
       hasMoreAfter = (this.runQuery(
         input.query,
         `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND ${visible} ORDER BY seq ASC LIMIT 1`,
@@ -680,6 +683,7 @@ export class ConversationLogRepo {
       log_version: logVersion,
       has_more_before: hasMoreBefore,
       has_more_after: hasMoreAfter,
+      prev_entry_created_at: prevEntryCreatedAt,
     };
     if (hasMoreBefore && entries.length) {
       // `seq >= 1` and the plain visibility filter keep this on the

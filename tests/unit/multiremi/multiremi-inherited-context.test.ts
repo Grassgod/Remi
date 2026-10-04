@@ -21,7 +21,7 @@ const diagnosticColumns = [
   "inherited_projection_recorded_at",
 ] as const;
 
-function fixture(largeParent = false) {
+function fixture(largeParent = false, parentAuthorType: "agent" | "member" = "agent") {
   const store = createLocalStore();
   const runtime = store.registerRuntime({ name: "Inherited diagnostics", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Reader", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
@@ -29,7 +29,7 @@ function fixture(largeParent = false) {
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   for (let index = 0; index < (largeParent ? 24 : 2); index++) {
     store.appendSessionEvent(parent.id, {
-      authorType: "agent", authorId: agent.id,
+      authorType: parentAuthorType, authorId: parentAuthorType === "agent" ? agent.id : "local",
       body: `Parent ${index}: ${largeParent ? "历史".repeat(4_000) : "Reference decision"}`,
     });
   }
@@ -91,7 +91,20 @@ describe("persisted inherited context diagnostics", () => {
     expect(own.omitted_events).toBe(0);
     expect(inherited.truncated).toBe(false);
     expect(inherited.omitted_events).toBe(0);
-    expect(inherited.jsonl).toContain('"body_folded":true');
+    // MUL-498/ADR 0013 offers range metadata, excluding this agent's own history.
+    // The range spans all 24 seqs even though none requires an unread body.
+    expect(inherited.jsonl.split("\n").map((line: string) => JSON.parse(line))).toEqual([
+      expect.objectContaining({
+        type: "unread_range", session_id: parent.id, from_seq: 0, to_seq: 24, unread_count: 0,
+        instruction: expect.stringContaining(`remi session log get ${parent.id} --from 0 --to 24`),
+      }),
+    ]);
+    expect(inherited.jsonl).not.toContain("Parent 0:");
+    const ownRange = await app.request(`/api/sessions/${parent.id}/log/entry?from=0&to=24`, {
+      headers: { Authorization: `Bearer ${claimed.auth_token}` },
+    });
+    expect(ownRange.status).toBe(200);
+    expect(await ownRange.json()).toMatchObject({ entries: [], next_cursor: null });
     expect(inherited.estimated_tokens).not.toBe(own.estimated_tokens);
     const budget = Math.floor(resolveProjectionTokenBudget({ provider: agent.provider, model: agent.model, degradeLevel: 0 }) * 0.4);
     expect(inherited.estimated_tokens).toBeLessThanOrEqual(budget);
@@ -123,6 +136,37 @@ describe("persisted inherited context diagnostics", () => {
       truncated: inherited.truncated, omitted_events: inherited.omitted_events,
       estimated_tokens: inherited.estimated_tokens, token_budget: budget, recorded_at: stored.inheritedProjectionRecordedAt,
     });
+  });
+
+  it("offers a frozen inherited range and reads every non-own parent body through task-token pagination", async () => {
+    const { store, runtime, parent, task, app } = fixture(true, "member");
+    store.appendSessionEvent(parent.id, { authorType: "member", authorId: "local", body: "After the snapshot cutoff" });
+    const claim = await taskOfferResponse(store, runtime.id, { headers, authToken: "MASTER" });
+    expect(claim.status).toBe(200);
+    const claimed = (await claim.json()).task;
+    expect(claimed.id).toBe(task.id);
+    const inherited = claimed.inherited_session_projection;
+    expect(inherited.jsonl.split("\n").map((line: string) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ type: "unread_range", session_id: parent.id, from_seq: 0, to_seq: 24, unread_count: 24 }),
+    ]);
+    expect(inherited.jsonl).not.toContain("Parent 0:");
+    const bodies = new Map<number, string>();
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const response = await app.request(`/api/sessions/${parent.id}/log/entry?from=0&to=24${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {
+        headers: { Authorization: `Bearer ${claimed.auth_token}` },
+      });
+      expect(response.status).toBe(200);
+      const page = await response.json();
+      for (const entry of page.entries) bodies.set(entry.seq, (bodies.get(entry.seq) ?? "") + entry.body_md);
+      cursor = page.next_cursor;
+      expect(++pages).toBeLessThan(20);
+    } while (cursor);
+    expect(pages).toBeGreaterThan(1);
+    expect(bodies.size).toBe(24);
+    for (let index = 0; index < 24; index++) expect(bodies.get(index + 1)).toBe(`Parent ${index}: ${"历史".repeat(4_000)}`);
+    expect(bodies.has(25)).toBe(false);
   });
 
   it("persists the model and degradation dependent 40 percent budget with the returned projection", () => {

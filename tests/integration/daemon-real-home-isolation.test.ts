@@ -1,13 +1,13 @@
 import { expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 
 // Include directories, even empty ones: a leftover lock directory is a write.
-function sshSnapshot(home: string): Record<string, string> {
+function homeSnapshot(home: string): Record<string, string> {
   const snapshot: Record<string, string> = {};
   function visit(relativePath: string): void {
     const path = join(home, relativePath);
@@ -15,17 +15,32 @@ function sshSnapshot(home: string): Record<string, string> {
     if (stat.isDirectory()) {
       snapshot[relativePath] = "directory";
       for (const name of readdirSync(path).sort()) visit(join(relativePath, name));
-    } else {
+    } else if (stat.isSymbolicLink()) {
+      snapshot[relativePath] = `symlink:${readlinkSync(path)}`;
+    } else if (stat.isFile()) {
       snapshot[relativePath] = createHash("sha256").update(readFileSync(path)).digest("hex");
+    } else {
+      snapshot[relativePath] = `special:${stat.mode}`;
     }
   }
-  visit(".multiremi/ssh");
-  visit(".ssh");
+  for (const name of readdirSync(home).sort()) visit(name);
   return snapshot;
 }
 
-it("leaves the process startup home's Mesh and OpenSSH files untouched after daemon steer tests", async () => {
-  const home = mkdtempSync(join(tmpdir(), "daemon-real-home-isolation-"));
+function childEnv(home: string, cacheRoot: string): NodeJS.ProcessEnv {
+  const env = { ...process.env, HOME: home, USERPROFILE: home,
+    GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(cacheRoot, "transpiler"),
+    BUN_INSTALL_CACHE_DIR: join(cacheRoot, "install") };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("XDG_")) delete (env as NodeJS.ProcessEnv)[name];
+  }
+  return env;
+}
+
+it("leaves the entire startup home untouched after daemon and archive tests", async () => {
+  const root = mkdtempSync(join(tmpdir(), "daemon-real-home-isolation-"));
+  const home = join(root, "home");
   const meshRoot = join(home, ".multiremi", "ssh");
   const workspaceRoot = join(meshRoot, "workspaces", "workspace-25bf8e1a2393f110");
   const fixtures: Record<string, string> = {
@@ -40,34 +55,69 @@ it("leaves the process startup home's Mesh and OpenSSH files untouched after dae
       "Host personal\n  HostName 10.0.0.2\n",
     ].join("\n"),
     [join(home, ".ssh", "authorized_keys")]: `ssh-ed25519 ${"A".repeat(64)} personal\n`,
+    [join(home, ".multiremi", "outbox", "sentinel")]: "preserve outbox\n",
+    [join(home, ".remi", "multiremi", "session-archives", "sentinel")]: "preserve archives\n",
+    [join(home, ".remi", "multiremi", "workspaces", "sentinel")]: "preserve workspaces\n",
   };
   try {
     for (const [path, contents] of Object.entries(fixtures)) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, contents, { mode: 0o600 });
     }
-    const before = sshSnapshot(home);
-    const child = Bun.spawn([process.execPath, "test", "tests/integration/multiremi-daemon-steer.test.ts"], {
+    const before = homeSnapshot(home);
+    const child = Bun.spawn([process.execPath, "test",
+      "tests/integration/multiremi-daemon-steer.test.ts",
+      "tests/integration/multiremi-approval-e2e.test.ts",
+      "tests/integration/multiremi-drain-outbox.test.ts",
+    ], {
       cwd: REPO_ROOT,
-      env: { ...process.env, HOME: home },
+      env: childEnv(home, join(root, "cache")),
       stdout: "pipe",
       stderr: "pipe",
     });
-    const timeout = setTimeout(() => child.kill(), 45_000);
+    const timeout = setTimeout(() => child.kill(), 90_000);
     try {
       const [exitCode, stdout, stderr] = await Promise.all([
         child.exited,
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
-      if (exitCode !== 0) throw new Error(`Steer child exited ${exitCode}\n${stdout}\n${stderr}`);
-      expect(sshSnapshot(home)).toEqual(before);
+      if (exitCode !== 0) throw new Error(`Daemon/archive child exited ${exitCode}\n${stdout}\n${stderr}`);
+      expect(homeSnapshot(home)).toEqual(before);
     } finally {
       clearTimeout(timeout);
       if (child.exitCode === null) child.kill();
       await child.exited;
     }
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
-}, 60_000);
+}, 120_000);
+
+it("the whole-home snapshot detects added, changed and deleted files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "home-snapshot-canary-"));
+  const home = join(root, "home");
+  mkdirSync(home);
+  try {
+    writeFileSync(join(home, "existing"), "before");
+    const before = homeSnapshot(home);
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { homedir } from "node:os";
+      import { mkdirSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      mkdirSync(join(homedir(), ".remi"));
+      writeFileSync(join(homedir(), ".remi", "canary"), "canary");
+      writeFileSync(join(homedir(), "existing"), "after");
+    `], { cwd: REPO_ROOT, env: childEnv(home, join(root, "cache")), stdout: "pipe", stderr: "pipe" });
+    const [exitCode, , stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const after = homeSnapshot(home);
+    expect(after).not.toEqual(before);
+    expect(after[join(".remi", "canary")]).toBeDefined();
+    expect(after.existing).not.toBe(before.existing);
+    rmSync(join(home, "existing"));
+    expect(homeSnapshot(home).existing).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 10_000);

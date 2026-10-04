@@ -217,11 +217,10 @@ export function invalidatingDatabase<T extends object>(database: T): T {
       if (key === "transaction" && typeof value === "function") {
         return (fn: (...args: unknown[]) => unknown) => {
           type TxFn = (...args: unknown[]) => unknown;
-          const built = value.apply(target, [fn]) as TxFn & { immediate?: TxFn };
+          const built = value.apply(target, [fn]) as TxFn & { immediate?: TxFn; deferred?: TxFn };
           // bun:sqlite offers an IMMEDIATE outer BEGIN and keeps nested calls as SAVEPOINTs.
           // The Postgres transaction function has no variant, so it stays unchanged.
-          const runTransaction = typeof built.immediate === "function" ? built.immediate : built;
-          return (...args: unknown[]) => {
+          const wrapTransaction = (runTransaction: TxFn): TxFn => (...args: unknown[]) => {
             let callbacks: Array<() => void> = [];
             try {
               return withinTransaction(() => {
@@ -255,6 +254,12 @@ export function invalidatingDatabase<T extends object>(database: T): T {
               }
             }
           };
+          const wrapped = wrapTransaction(typeof built.immediate === "function" ? built.immediate : built);
+          // A read snapshot needs the same cache/commit bookkeeping without
+          // reserving SQLite's writer lock. PostgreSQL keeps its native runner.
+          return typeof built.deferred === "function"
+            ? Object.assign(wrapped, { deferred: wrapTransaction(built.deferred) })
+            : wrapped;
         };
       }
       if (key === "afterCommit" && typeof value === "function") {

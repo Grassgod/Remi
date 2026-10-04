@@ -475,6 +475,16 @@
     "loading": "加载中…"
   },
   "activity": {
+    "group_summary": "{{count}} 条动态 · {{summary}} 等",
+    "recent_limit": "本窗口仅显示最近 200 条动态",
+    "status_set": "把状态改为 {{status}}",
+    "priority_set": "把优先级改为 {{priority}}",
+    "title_set": "把标题改为 {{title}}",
+    "project_changed": "更改了项目",
+    "parent_changed": "更改了父单",
+    "label_attached": "添加了标签 {{name}}",
+    "label_detached": "移除了标签 {{name}}",
+    "system_activity": "更新了系统细节",
     "expand_earlier": "展开更早 {{count}} 条",
     "expand_newer": "展开更新 {{count}} 条",
     "remaining_earlier": "还有 {{count}} 条更早",

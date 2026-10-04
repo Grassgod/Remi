@@ -78,7 +78,7 @@ jobs:
         run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
 
       - name: Verify native Issue session archive traversal
-        run: bun test tests/unit/daemon/session-archive.test.ts
+        run: bun run test tests/unit/daemon/session-archive.test.ts
 
       - name: Verify pinned ACP bridges and bundled agent runtimes
         env:
@@ -144,7 +144,7 @@ jobs:
       # test is the first gate that catches it). These files run again as part
       # of the full suite below; the duplication buys the fast failure.
       - name: Architecture guard tests
-        run: bun test tests/arch/
+        run: bun run test tests/arch/
 
       # This step used to enumerate ~20 test files by hand, so anything outside
       # the list never ran in CI — tests/unit/multiremi/multiremi-api-auth.test.ts
@@ -178,7 +178,7 @@ jobs:
           # rather than only inside the preload. It reads the first lock class of
           # every outermost transaction and fails any W -> N -> D inversion.
           MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "1"
-        run: bun test
+        run: bun run test
 
       # This workflow path-filters on `frontend/**` but used to build only the
       # server/CLI, so a broken web app went green. These two steps are the
