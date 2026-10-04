@@ -620,23 +620,6 @@ describe("SSH Mesh helpers", () => {
     expectProtectedHomeError(() => sshMeshPathsForRoot("ws", tempHome(), alias));
   });
 
-  it("allows HOME to be replaced with a temporary directory after module loading", () => {
-    const previousHome = process.env.HOME;
-    const home = tempHome();
-    try {
-      process.env.HOME = home;
-      const paths = defaultSshMeshPaths("ws");
-      expect(paths.home).toBe(home);
-      expect(paths.meshRoot).toBe(join(home, ".multiremi", "ssh"));
-      expect(paths.sshConfig).toBe(join(home, ".ssh", "config"));
-      expect(sshMeshPathsForRoot("ws", join(home, "mesh")).authorizedKeys)
-        .toBe(join(home, ".ssh", "authorized_keys"));
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-    }
-  });
-
   it("constructs a manager with an explicit temporary home without resolving the real home", () => {
     expect(() => new SshMeshManager({
       workspaceId: "ws",

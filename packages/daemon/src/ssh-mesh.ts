@@ -168,8 +168,9 @@ function canonicalSshMeshHome(home: string): string {
   return existsSync(home) ? realpathSync(home) : resolve(home);
 }
 
-// Capture before tests can replace HOME. userInfo() may also derive its home
-// from HOME, so re-reading it later could protect the test's temporary home.
+// Capture at module load, before any test can replace HOME. userInfo() may
+// derive its home from HOME, so re-reading it later could protect a test's
+// temporary home instead of the real one.
 const protectedSshMeshHomes = new Set<string>();
 if (process.env.HOME) protectedSshMeshHomes.add(canonicalSshMeshHome(process.env.HOME));
 try {
@@ -190,7 +191,7 @@ function resolveSshMeshHome(home: string): string {
   return canonicalHome;
 }
 
-export function defaultSshMeshPaths(workspaceId: string, home = process.env.HOME ?? homedir()): SshMeshPaths {
+export function defaultSshMeshPaths(workspaceId: string, home = homedir()): SshMeshPaths {
   const canonicalHome = resolveSshMeshHome(home);
   return sshMeshPathsForRoot(
     workspaceId,
@@ -206,7 +207,7 @@ export function defaultSshMeshPaths(workspaceId: string, home = process.env.HOME
 export function sshMeshPathsForRoot(
   workspaceId: string,
   meshRoot: string,
-  home = process.env.HOME ?? homedir(),
+  home = homedir(),
 ): SshMeshPaths {
   const canonicalHome = resolveSshMeshHome(home);
   const resolvedMeshRoot = resolve(meshRoot);
@@ -248,7 +249,7 @@ export class SshMeshManager {
     this.daemonId = options.daemonId;
     this.getConfigWire = options.getConfig;
     this.paths = {
-      ...defaultSshMeshPaths(options.workspaceId, options.paths?.home ?? process.env.HOME ?? homedir()),
+      ...defaultSshMeshPaths(options.workspaceId, options.paths?.home ?? homedir()),
       ...options.paths,
     };
     this.commandRunner = options.commandRunner ?? runSshMeshCommand;
