@@ -19,6 +19,8 @@ import { ContentEditor, ReadonlyContent, type ContentEditorRef, useFileDropZone,
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { useT } from "../../i18n";
 
+const EMPTY_ATTACHMENTS: Attachment[] = [];
+
 // Mirrors conversation-log-repo.ts syncIssueHeadWithinTransaction; keep these formats aligned.
 export function splitIssueHeadBody(body: string, title: string): string {
   if (body === title) return "";
@@ -39,7 +41,7 @@ export function IssueLogHead({ issueId, title, entry, currentUserId, onSaved }: 
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<Attachment[]>([]);
   const editor = useRef<ContentEditorRef>(null);
-  const { data: attachments = [] } = useQuery({ ...issueAttachmentsOptions(issueId), enabled: editing });
+  const { data: attachments = EMPTY_ATTACHMENTS } = useQuery({ ...issueAttachmentsOptions(issueId), enabled: editing });
   // Use this row's title during renames. Its body_html includes the title, so render the extracted Markdown.
   const description = splitIssueHeadBody(entry.body_md,
     typeof entry.metadata.title === "string" ? entry.metadata.title : title);
