@@ -36,8 +36,8 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   const {event,dependencyCheckEventId}=ctx.autopilots().enqueueIssueStatusChangedEvent({issue:updated,previousStatus:issue.status,
     actorType:'agent',actorId:owner?.id??last?.agent_id??null,automationSourceTaskId:last?.current_attempt_id??null});
   const changes:import('../repos/tasks-repo.js').ChildStatusChangeCollector=[];
-  ctx.issues().notifyChildStatusChangeWithinTransaction(issue,updated,last?.current_attempt_id??'',changes,events,{statusChangeEventId:event?.id});
-  if(last)changes.push({previous:issue,issue:updated,taskId:last.current_attempt_id,dependencyCheckEventId});
+  ctx.issues().notifyChildStatusChangeWithinTransaction(issue,updated,last?.current_attempt_id??'',changes,events,{statusChangeEventId:event?.id,taskTerminalStatus:['completed','failed','cancelled'].includes(last?.status)?last.status:undefined});
+  if(last)changes.push({previous:issue,issue:updated,taskId:last.current_attempt_id,dependencyCheckEventId,taskTerminalStatus:['completed','failed','cancelled'].includes(last.status)?last.status:undefined});
   if(changes.length)afterCommit(ctx.db,()=>ctx.tasks().runCollectedChildStatusChanges(changes));
   events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:'agent',actorId:owner?.id??last?.agent_id??null,
     payload:{issue:{id:issueId,status,completed_at:null,archived_at:null,updated_at:at},status_changed:true,prev_status:issue.status}});

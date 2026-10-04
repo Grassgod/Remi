@@ -1,3 +1,4 @@
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Chat domain (chat sessions and chat messages), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
@@ -477,14 +478,17 @@ export class ChatRepo {
     const staged=input.role==='assistant'&&input.taskId?this.ctx.db.query('SELECT reply_message_id FROM multiremi_turns WHERE current_attempt_id=?').get(input.taskId)?.reply_message_id:null;
     const id=staged??input.id??createId('msg');
     const task=input.taskId?this.ctx.tasks().getTask(input.taskId):null;
-    const entry=this.ctx.conversationLog().appendWithinTransaction({
-      sessionId:session.id,id,kind:'message',authorType:input.role==='assistant'?'agent':input.role==='user'?'member':'system',
-      authorId:input.role==='assistant'?task?.agentId:input.role==='user'?session.creatorId:null,
-      taskId:input.taskId,bodyMd:input.body,createdAt:input.createdAt,
-      metadata:{...input.metadata,...(input.clientId?{client_id:input.clientId}:{}),
-        failure_reason:input.failureReason??null,elapsed_ms:input.elapsedMs??null,
-        pending_agent_delivery:input.pendingAgentDelivery??false,agent_delivery_task_id:input.agentDeliveryTaskId??null},
-    });
+    const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
+    const member=this.ctx.workspaces().getWorkspaceMemberByRef(session.creatorId??'local',session.workspaceId)
+      ??this.ctx.workspaces().listWorkspaceMembers(session.workspaceId).find(m=>m.role==='owner');
+    const result=sendMessageWithinTransaction(this.ctx,{id,session_id:session.id,
+      sender:{type:input.role==='assistant'?'agent':input.role==='user'?'member':'platform',id:input.role==='assistant'?task?.agentId??null:input.role==='user'?member?.id??null:null},
+      source_turn_id:input.role==='assistant'?source?.turn_id:null,
+      to:input.role==='user'||input.pendingAgentDelivery?{type:'agent',ref:session.agentId}:{type:'none'},
+      message_kind:input.role==='assistant'?'reply':'request',wake_requested:input.role==='user'||input.pendingAgentDelivery?'now':'inbox_only',
+      body_md:input.body,metadata:{...input.metadata,...(input.clientId?{client_id:input.clientId}:{}),failure_reason:input.failureReason??null,elapsed_ms:input.elapsedMs??null,
+        pending_agent_delivery:input.pendingAgentDelivery??false,agent_delivery_task_id:input.agentDeliveryTaskId??null}},createCommitEventQueue());
+    const entry=this.ctx.conversationLog().getConversationLogEntryById(result.message.id)!;
     if(input.role==='assistant'&&input.taskId)this.ctx.db.run('UPDATE multiremi_turns SET reply_message_id=? WHERE current_attempt_id=?',[id,input.taskId]);
     return conversationLogChatMessage(entry);
   }
@@ -576,26 +580,15 @@ export class ChatRepo {
       const queued = this.getPendingChatTask(session.id) != null;
       const now = nowIso();
       const messageId = createId("msg");
-      const task = this.ctx.tasks().createTaskWithinTransaction({
-        agentId: session.agentId,
-        chatSessionId: session.id,
-        // Issue ownership belongs to the Feishu transport binding, never Chat.
-        issueId: this.ctx.feishuBot().getFeishuIssueIdForChatSession(session.id),
-        workspaceId: session.workspaceId,
-        holdsWorkspace: false,
-        prompt: body,
-        // Same authoritative-camelCase read as the other task-creation paths.
-        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
-      }, childStatusChanges, deferredEvents);
-      this.appendChatMessageWithinTransaction({
-        id: messageId,
-        chatSessionId: session.id,
-        taskId: task.id,
-        role: "user",
-        body,
-        clientId: input.client_id,
-        createdAt: now,
-      });
+      const member=this.ctx.workspaces().getWorkspaceMemberByRef(session.creatorId??'local',session.workspaceId)
+        ??this.ctx.workspaces().listWorkspaceMembers(session.workspaceId).find(m=>m.role==='owner');
+      if(!member)throw new Error('Chat author is not a workspace member');
+      const written=sendMessageWithinTransaction(this.ctx,{id:messageId,session_id:session.id,sender:{type:'member',id:member.id},
+        to:{type:'agent',ref:session.agentId},message_kind:'request',wake_requested:'now',body_md:body,metadata:{client_id:input.client_id}},deferredEvents,
+        {holdsWorkspace:false,issueId:this.ctx.feishuBot().getFeishuIssueIdForChatSession(session.id)});
+      const turn=written.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(written.turn_id):null;
+      if(!turn)throw new Error('Chat recipient unavailable');
+      const task=this.ctx.tasks().getTask(turn.current_attempt_id)!;
       const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
       if (attachmentIds.length) {
         this.ctx.issues().linkAttachmentsToChatMessage(session.id, messageId, attachmentIds);

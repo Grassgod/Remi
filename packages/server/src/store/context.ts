@@ -1,3 +1,4 @@
+import { sendMessageWithinTransaction } from './inbox/send-message.js';
 // Cross-domain shared surface for MultiremiStore and its domain repositories.
 // Holds the db handle, the realtime listener registries, the analytics/metric buffers and the
 // private helpers that more than one domain calls. Every member here was moved verbatim out of
@@ -309,6 +310,7 @@ export interface IssuesSurface {
   getAttachment(id: string): MultiremiAttachment | null;
   createAttachment(input: CreateAttachmentInput): MultiremiAttachment;
   listAttachmentsForChatMessage(id: string): MultiremiAttachment[];
+  linkAttachmentsToComment(commentId:string,issueId:string,attachmentIds:string[]):void;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
@@ -572,6 +574,7 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  completeTask: import("./repos/tasks-repo.js").TasksRepo["completeTask"];
   createTurnForMessageWithinWorkspaceLock: import("./repos/tasks-repo.js").TasksRepo["createTurnForMessageWithinWorkspaceLock"];
   countDelegationPairHops: import("./repos/tasks-repo.js").TasksRepo["countDelegationPairHops"];
   recordDelegationRoundTripLimitedWithinTransaction: import("./repos/tasks-repo.js").TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"];
@@ -1581,31 +1584,18 @@ export class StoreContext {
     const member = this.resolveWorkspaceMemberForNotification(workspaceId, rawRecipientId);
     if (!member || member.archivedAt) return null;
     if (!input.bypassMute && this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
-    const id = createId("inb");
-    const now = nowIso();
-    this.db.run(
-      `INSERT INTO multiremi_inbox_items (
-        id, workspace_id, issue_id, member_id, recipient_type, recipient_id, severity,
-        actor_type, actor_id, type, title, body, details, read, archived, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`,
-      [
-        id,
-        workspaceId,
-        issue?.id ?? null,
-        member.id,
-        recipientType,
-        member.id,
-        input.severity ?? routing?.severity ?? "info",
-        input.actorType ?? "system",
-        input.actorId ?? null,
-        input.type,
-        input.title,
-        input.body ?? null,
-        input.details == null ? null : toJson(input.details),
-        now,
-      ],
-    );
-    const row = this.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
+    const id=createId('inb');
+    const events=createCommitEventQueue();
+    const write=()=>{
+      this.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const sessionId=issue?this.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id).id:`auto_orphan_inbox_${workspaceId}`;
+      sendMessageWithinTransaction(this,{id,session_id:sessionId,sender:{type:'platform',id:null},to:{type:'member',ref:member.id},
+        message_kind:'status',wake_requested:'now',body_md:input.body??input.title,
+        metadata:{inbox_item:{type:input.type,title:input.title,severity:input.severity??routing?.severity??'info',details:input.details??null}}},events,{id,workspaceId});
+    };
+    if(this.db.inTransaction)write();else this.db.transaction(write)();
+    afterCommit(this.db,()=>this.emitCommitEvents(events));
+    const row=this.db.query('SELECT * FROM multiremi_member_inbox_records WHERE id=?').get(id) as Row|null;
     const item = toInboxItem(row!, issue);
     if (input.emitEvent) {
       this.emitWorkspaceEvent({

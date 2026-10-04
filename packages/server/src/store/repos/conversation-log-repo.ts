@@ -1,5 +1,7 @@
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
+import { createCommitEventQueue } from '../context.js';
 import { projectTurnCard } from "@multiremi/store/turn-attempts.js";
-import { registerTurnChangeHook, registerExecutionMessageHook, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
+import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
 // Conversation log domain: the single per-session log that replaces the three
 // conversation tables (MUL-402 / ADR 0006). One row is one display unit; every
 // other lifecycle fact is a hidden marker on the same seq axis.
@@ -77,6 +79,8 @@ export type AppendConversationLogInput = {
   authorType: string;
   messageKind?: import("@multiremi/contracts/unified-model.js").MessageKind;
   messageHeader?: import("@multiremi/contracts/unified-model.js").MessageHeader;
+  /** Atomic completion stages a message before its product metadata is published. */
+  visibility?: ConversationLogVisibility;
   authorId?: string | null;
   taskId?: string | null;
   bodyMd?: string;
@@ -109,7 +113,14 @@ export type UpdateConversationLogInput = {
 
 export class ConversationLogRepo {
   constructor(private ctx: StoreContext) {
-    registerExecutionMessageHook(ctx.db,id=>{const entry=this.getEntryById(id);if(entry)this.emit(entry.session_id,entry);});
+    registerExecutionMessageWriter(ctx.db,(sessionId,id,senderId,body,input)=>{
+      const events=createCommitEventQueue();
+      const source=input.taskId&&ctx.db.query('SELECT id FROM multiremi_turns WHERE id=?').get(input.taskId);
+      const result=sendMessageWithinTransaction(ctx,{id,session_id:sessionId,sender:{type:(input.senderType??'agent') as 'agent'|'timer',id:senderId},
+        source_turn_id:source?input.taskId:null,to:{type:'none'},body_md:body,message_kind:(input.messageKind??'reply') as 'reply'|'status',
+        wake_requested:'inbox_only',metadata:input.metadata,visibility:input.visibility==='hidden'?'hidden':'shown'},events);
+      afterCommit(ctx.db,()=>ctx.emitCommitEvents(events));return result.message.seq;
+    });
     registerTurnChangeHook(ctx.db, (turnId,created) => {
       const row=ctx.db.query("SELECT session_id,seq FROM multiremi_turns WHERE id=?").get(turnId);
       if (!row) return;
@@ -332,12 +343,24 @@ export class ConversationLogRepo {
 
   /** Allocate seq and insert. The caller already owns the transaction. */
   appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    if(['message','system','delegation_report'].includes(input.kind)&&!input.messageHeader){
+      const events=createCommitEventQueue(),session=this.ctx.issueSessions().getIssueSession(input.sessionId),chat=this.ctx.chat().getChatSession(input.sessionId);
+      const workspaceId=session?.workspaceId??chat?.workspaceId??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(input.sessionId)?.workspace_id;
+      const type=input.authorType==='system'||input.authorType==='external'?'platform':input.authorType;
+      const member=type==='member'?this.ctx.workspaces().getWorkspaceMemberByRef(input.authorId??'local',workspaceId):null;
+      const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
+      const result=sendMessageWithinTransaction(this.ctx,{id:input.id,session_id:input.sessionId,
+        sender:{type:type as 'agent'|'member'|'platform'|'timer',id:member?.id??input.authorId??null},source_turn_id:source?.turn_id??null,
+        to:{type:'none'},message_kind:input.messageKind??(input.kind==='delegation_report'?'report':input.parentId?'reply':type==='member'?'request':'status'),
+        wake_requested:'inbox_only',body_md:input.bodyMd??'',reply_to_id:input.parentId,metadata:input.metadata},events);
+      afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return this.getEntryById(result.message.id)!;
+    }
     if (input.kind==='turn' && input.taskId) {
       const turn=this.ctx.db.query("SELECT t.session_id,t.seq FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?").get(input.taskId);
       if(turn)return this.getEntryWithinTransaction(turn.session_id,Number(turn.seq))!;
     }
     const kind = input.kind === 'system' || input.kind === 'delegation_report' ? 'message' : input.kind;
-    const visibility = CONVERSATION_LOG_KIND_VISIBILITY[kind];
+    const visibility = kind==='message' ? input.visibility??CONVERSATION_LOG_KIND_VISIBILITY[kind] : CONVERSATION_LOG_KIND_VISIBILITY[kind];
     if (!visibility) throw new Error(`Unknown conversation log kind: ${kind}`);
     const metadata:any={...input.metadata};
     const envelope=metadata.envelope;delete metadata.envelope;

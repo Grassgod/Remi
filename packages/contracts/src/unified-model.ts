@@ -44,6 +44,10 @@ export type UnifiedMessage = Omit<ConversationLogEntry, "author_type" | "author_
 
 /** Caller owns the transaction and its deferred event queue. */
 export interface SendMessageInput {
+  /** Internal id used by atomic lifecycle producers. */
+  id?: string;
+  /** Internal staging of an atomic terminal reply. */
+  visibility?: 'shown' | 'hidden';
   session_id: string;
   sender: { type: MessageSenderType; id: string | null };
   to: MessageRecipient;

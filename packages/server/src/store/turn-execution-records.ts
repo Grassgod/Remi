@@ -69,6 +69,9 @@ export function splitExecutionSql(sql: string, delimiter: string): string[] {
 }
 const messageHooks=new WeakMap<SqlDatabase,(id:string)=>void>();
 export function registerExecutionMessageHook(db:SqlDatabase,hook:(id:string)=>void):void{messageHooks.set(db,hook);}
+type ExecutionLogMessageInput={senderType?:string;messageKind?:string;metadata?:Record<string,unknown>;visibility?:string;taskId?:string};
+const messageWriters=new WeakMap<SqlDatabase,(sessionId:string,id:string,agentId:string,body:string,input:ExecutionLogMessageInput)=>number>();
+export function registerExecutionMessageWriter(db:SqlDatabase,writer:(sessionId:string,id:string,agentId:string,body:string,input:ExecutionLogMessageInput)=>number):void {messageWriters.set(db,writer);}
 const changeHooks = new WeakMap<SqlDatabase, (turnId:string,created:boolean)=>void>();
 export function registerTurnChangeHook(db:SqlDatabase, hook:(turnId:string,created:boolean)=>void):void { changeHooks.set(db,hook); }
 export function notifyTurnChanged(db:SqlDatabase,turnId:string,created=false):void { changeHooks.get(db)?.(turnId,created); }
@@ -159,6 +162,10 @@ export function turnExecutionMutationStatement(db:SqlDatabase,sql:string):SqlSta
 }
 
 export function appendExecutionLog(db:SqlDatabase,sessionId:string,id:string,kind:string,agentId:string,body="",input:{senderType?:string;messageKind?:string;metadata?:Record<string,unknown>;visibility?:string;taskId?:string}={}):number{
+  if(kind==='message'){
+    const writer=messageWriters.get(db);if(!writer)throw new Error('Execution messages require the canonical inbox writer');
+    return writer(sessionId,id,agentId,body,input);
+  }
   const at=nowIso();
   db.run(`INSERT INTO multiremi_conversation_heads(session_id,head_seq,log_version,updated_at) VALUES(?,0,0,?) ON CONFLICT(session_id) DO NOTHING`,[sessionId,at]);
   db.run(`INSERT INTO multiremi_conversation_log(session_id,seq,id,kind,visibility,sender_type,body_md,created_at,updated_at)
@@ -167,7 +174,6 @@ export function appendExecutionLog(db:SqlDatabase,sessionId:string,id:string,kin
   const rendered=renderMarkdown(body);
   db.run(`INSERT INTO multiremi_conversation_log(session_id,seq,id,kind,visibility,sender_type,sender_id,task_id,body_md,body_html,render_version,
     message_kind,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[sessionId,seq,id,kind,input.visibility??'shown',input.senderType??'agent',agentId,kind==='turn'?id:input.taskId??null,body,rendered.html,rendered.render_version,input.messageKind??(kind==='turn'?'status':'reply'),JSON.stringify(input.metadata??{}),at,at]);
-  if(kind==='message'&&input.visibility!=='hidden')messageHooks.get(db)?.(id);
   return Number(seq);
 }
 function insertExecution(db:SqlDatabase,sql:string,params:unknown[]):{changes:number;lastInsertRowid:number;rows:any[]}{

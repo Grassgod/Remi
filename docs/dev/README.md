@@ -30,12 +30,12 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
-| 改系统收件箱、平台待处理轮或唤醒事务 | [ADR 0012](../adr/0012-unified-inbox-and-single-pending-turn.md)、[ADR 0003 决策 8](../adr/0003-parent-status-derived-from-children.md) | 信封去重、平台轮次索引、评论合并与同事务编辑补救 |
+| 改系统收件箱、平台待处理轮或唤醒事务 | [统一收件箱 Store](inbox-store.md)、[ADR 0015](../adr/0015-unified-message-inbox-and-turn.md) | 唯一入口、叫醒降级、合并/插话/补铃、member 游标与消费者接口 |
 | 改提问卡片答复鉴权、令牌轮换或宿主重启恢复 | [ADR 0011](../adr/0011-question-card-one-time-token.md) | 服务端一次性令牌、收件人绑定与成员映射的边界 |
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
-| 改 agent 派活、来回上限、委派回叫或 `wake_source` | [ADR 0014](../adr/0014-every-agent-dispatch-is-a-delegation.md)、[ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 通用派活入口、来源会话、计数拒绝、D4 去重和回程血缘 |
+| 改 agent 派活、来回上限、委派回叫或 `wake_source` | [ADR 0014](../adr/0014-every-agent-dispatch-is-a-delegation.md)、[ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 通用派活入口、来源会话、谱系计数降级、D4 去重和回程血缘 |
 | 改任务结果、门铃正文、未读输入或 Wiki 下载 | [ADR 0013](../adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)、[daemon 协议](../daemon-protocol-v2.md) | 最后顶层消息、事务内结论评论、完整范围读取、Wiki 缓存与派单预算 |
-| 改消息头、轮/尝试存储、统一 lane 或启动迁移 | [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md)、[切换手册](../deploy/unified-model-cutover.md) | 存储投影、四项启动预检、只读对账与删表边界；消息状态机和用户接口另行集成 |
+| 改消息头、轮/尝试存储、统一 lane 或启动迁移 | [ADR 0015](../adr/0015-unified-message-inbox-and-turn.md)、[切换手册](../deploy/unified-model-cutover.md) | 存储投影、四项启动预检、lane 迁移、消息状态机、只读对账与删表边界；传输和用户接口由消费者集成 |
 | 改会话日志表、轮次卡、trace 归属或 Session Archive 主体 | [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md) | 契约类型、被否决的替代方案和回到源码的位置 |
 | 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0012](../adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、升级等待与 offer；pending/配置和任务输入走下行帧及 RPC，跨进程触发依赖实时扇出；outbox 与 trace 归 v2-A |
 | 改浏览器实时订阅、Live Hub 或前端本地副本 | [浏览器实时 v2](realtime-v2.md)、[ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的端点与归属、订阅鉴权、续传与退避、resync 广播；C1 已落核心、按角色锁与 health 字段 |

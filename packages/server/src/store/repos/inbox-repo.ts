@@ -1,3 +1,4 @@
+import { InboxOperations } from "../inbox/operations.js";
 import { getMessage, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
@@ -25,139 +26,46 @@ export interface EnvelopeDelivery extends EnsurePendingTurnResult {
 }
 
 export class InboxRepo {
-  constructor(private ctx: StoreContext) {}
+  readonly operations:InboxOperations;
+  constructor(private ctx: StoreContext) { this.operations=new InboxOperations(ctx); }
 
   sendEnvelopeWithinTransaction(
     env: Envelope,
     collector: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): EnvelopeDelivery[] {
-    if (!this.ctx.db.inTransaction) throw new Error("sendEnvelopeWithinTransaction requires an open transaction");
-    const recipients = this.resolveRecipients(env);
-    const entries = new Map<string, { entry: ConversationLogEntry; deduplicated: boolean }>();
-    const deliveries: EnvelopeDelivery[] = [];
-    const sourceComment = env.source.commentId ? this.ctx.issues().getIssueComment(env.source.commentId) : null;
-    const sourceTask = env.source.taskId ? this.ctx.tasks().getTask(env.source.taskId) : null;
-    const { body: rawBody, ...envelope } = env;
-    const body = clampEnvelopeBody(rawBody);
-    const envelopeMetadata: EnvelopeMetadata["envelope"] = {
-      ...envelope,
-      priority: envelopePriority({ ...env, senderType: sourceComment?.authorType,
-        lifecycleEvent: sourceTask?.status === "failed" ? "task_failed"
-          : sourceTask?.status === "cancelled" ? "task_cancelled" : undefined }),
-    };
-    for (const recipient of recipients) {
-      const sessionId = recipient.issueSessionId ?? recipient.chatSessionId!;
-      if (recipient.issueSessionId) {
-        this.ctx.issueSessions().getOrCreateSessionAgentLane(sessionId, recipient.agentId, recipient.executionScope);
-      }
-      const recipientBody = clampEnvelopeBody(env.to.role === "relay" && recipient.issueId && recipient.chatSessionId
-        ? body.replaceAll("{{cursor}}", String(this.ctx.issueSessions().getOrCreateSessionAgentLane(
-          this.ctx.issueSessions().getOrCreateDefaultIssueSession(recipient.issueId).id,
-          recipient.agentId, `${RELAY_EXECUTION_SCOPE_PREFIX}${recipient.chatSessionId}`,
-        ).cursorSeq))
-        : body);
-      if (sourceComment && this.ctx.issueWorkspaceId(sourceComment.issueId) !== recipient.workspaceId
-        || sourceTask && sourceTask.workspaceId !== recipient.workspaceId) {
-        throw new Error("Envelope source belongs to another workspace");
-      }
-      let stored = entries.get(sessionId);
-      if (!stored) {
-        const id = createId('cmt');
-        // Legacy appenders lock the session row before its log head. Keep that
-        // order while they coexist with the new writer.
-        const sessionTable = recipient.issueSessionId ? "multiremi_issue_sessions" : "multiremi_chat_sessions";
-        if (this.ctx.db.run(`UPDATE ${sessionTable} SET updated_at = updated_at WHERE id = ?`, [sessionId]).changes !== 1) {
-          throw new Error(`Envelope session is missing: ${sessionId}`);
-        }
-        if (this.ctx.db.run(`UPDATE multiremi_conversation_heads SET updated_at = updated_at
-          WHERE session_id = ?`, [sessionId]).changes !== 1) {
-          throw new Error(`Envelope session head is missing: ${sessionId}`);
-        }
-        const duplicate=env.dedupeKey===undefined?null:this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?').get(sessionId,env.dedupeKey);
-        const previous = duplicate?this.ctx.conversationLog().getConversationLogEntryById(duplicate.id):null;
-        if (previous) {
-          if (previous.session_id !== sessionId) throw new Error("Envelope id belongs to another session");
-          stored = { entry: previous, deduplicated: true };
-        } else {
-          const metadata: EnvelopeMetadata = { envelope: {
-            ...envelopeMetadata,
-            ...(env.to.role === "issue_owner" || env.to.role === "parent_owner" || env.to.role === "delegator"
-              ? { recipient_agent_id: recipient.agentId } : {}),
-          } };
-          if (recipient.issueSessionId) {
-            const comment = this.ctx.issues().createSystemIssueCommentWithinTransaction(
-              recipient.issueId!, recipientBody, { type: "envelope", ...metadata }, deferredEvents,
-              null, recipient.issueSessionId, id,
-            );
-            deferredEvents.workspace.push({ type: "comment:created", workspaceId: recipient.workspaceId,
-              actorType: "system", actorId: comment.authorId, payload: { comment } });
-          } else {
-            const written = this.ctx.chat().createPendingAgentIssueUpdateWithinTransaction(sessionId, recipientBody, { id, metadata: { ...metadata } });
-            afterCommit(this.ctx.db, () => this.ctx.emitChatEvent(written.session, "chat:message", { message: written.message }, {
-              actorType: "system", actorId: null,
-            }));
-          }
-          const entry = this.ctx.conversationLog().getConversationLogEntryById(id);
-          if (!entry) throw new Error("Envelope was not appended to the conversation log");
-          stored = { entry, deduplicated: false };
-        }
-        entries.set(sessionId, stored);
-      }
-      if (recipient.issueSessionId && stored.entry.metadata.envelope?.wake === "now") {
-        // Persist the addressed lane's discovery hint with the envelope. A
-        // deduplicated delivery must never move the hint backwards.
-        this.ctx.db.run(`UPDATE multiremi_session_lanes
-          SET wake_hint_seq = CASE WHEN wake_hint_seq < ? THEN ? ELSE wake_hint_seq END
-          WHERE reader_type = 'agent' AND session_id = ? AND reader_id = ? AND execution_scope = ?`,
-          [stored.entry.seq, stored.entry.seq, sessionId, recipient.agentId, recipient.executionScope]);
-      }
-      const lane: PendingTurnLane = recipient.issueSessionId
-        ? { kind: "issue", issueSessionId: recipient.issueSessionId, agentId: recipient.agentId,
-          executionScope: recipient.executionScope }
-        : { kind: "chat", chatSessionId: recipient.chatSessionId!, agentId: recipient.agentId, issueId: recipient.issueId };
-      const sourceIssue = env.source.issueId ? this.ctx.issues().getIssue(env.source.issueId) : null;
-      const reason = env.to.role === "relay" ? "relay"
-        : env.to.role === "delegator" ? "delegation_return"
-        : env.source.decisionId ? "decision"
-        : env.kind === "lifecycle" ? "dependency"
-        : sourceIssue && sourceIssue.id !== recipient.issueId
-          ? sourceIssue.parentIssueId === recipient.issueId ? "child_status" : "dependency"
-          : `envelope:${env.kind}`;
-      const turn: EnsurePendingTurnResult = stored.deduplicated || env.wake === "inbox_only"
-        ? { task: null, action: "none" }
-        : this.ctx.tasks().ensurePendingTurnWithinTransaction({
-          lane,
-          wake: { reason, seq: stored.entry.seq, commentId: recipient.issueSessionId ? stored.entry.id : null, mode: env.wake },
-          steerBody: recipientBody,
-          create: () => {
-            return this.ctx.tasks().createTaskWithinWorkspaceLock({
-              agentId: recipient.agentId, issueId: recipient.issueId, issueSessionId: recipient.issueSessionId,
-              chatSessionId: recipient.chatSessionId, workspaceId: recipient.workspaceId,
-              prompt: `读收件箱\n\n${sessionId}:${stored!.entry.seq} (${stored!.entry.id})`,
-              parentTaskId: env.to.role === "delegator" ? sourceTask?.id ?? null : null,
-              wakeSource: reason, preserveIssueStatus: true,
-              triggerCommentId: recipient.issueSessionId ? stored!.entry.id : null,
-              ...(env.to.role === "delegator" && sourceTask ? {
-                delegationId: sourceTask.delegationId,
-                delegatedByAgentId: recipient.agentId,
-                priority: sourceTask.priority,
-                assignmentAuthorType: "system" as const,
-                assignmentAuthorId: null,
-              } : {}),
-              ...(lane.kind === "chat" ? { holdsWorkspace: false, requestingUserName: "Multiremi" } : {}),
-            }, collector, deferredEvents, undefined, recipient.executionScope);
-          },
-        });
-      if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
-      if (turn.action === "coalesced" && turn.task!.wakeSource === "re_ring") {
-        // Replace the recovery range with the concrete entry that just arrived.
-        runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET prompt = ? WHERE id = ? AND status = 'queued'", [
-          `读收件箱\n\n${sessionId}:${stored.entry.seq} (${stored.entry.id})`, turn.task!.id,
-        ]);
-        turn.task = this.ctx.tasks().getTask(turn.task!.id)!;
-      }
-      deliveries.push({ recipient, entry: stored.entry, deduplicated: stored.deduplicated, ...turn });
+    if(!this.ctx.db.inTransaction)throw new Error('Envelope producer requires a transaction');
+    const address=env.to;
+    const members=(address.role==='issue_owner'||address.role==='parent_owner')?(()=>{
+      const issueId=address.role==='issue_owner'?address.issueId:this.ctx.issues().getIssue(address.childIssueId)?.parentIssueId;
+      const issue=issueId?this.ctx.issues().getIssue(issueId):null;
+      if(issue?.assigneeType!=='member'||!issue.assigneeId)return [];
+      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
+      return [{workspaceId:issue.workspaceId,agentId:'',issueId:issue.id,issueSessionId:session.id,chatSessionId:null,executionScope:''}];
+    })():[];
+    const recipients=members.length?members:this.resolveRecipients(env);
+    const source=env.source.taskId?this.ctx.tasks().getTask(env.source.taskId):null;
+    const deliveries:EnvelopeDelivery[]=[];
+    for(const recipient of recipients){
+      const sessionId=recipient.issueSessionId??recipient.chatSessionId!;
+      const before=env.dedupeKey?this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?').get(sessionId,env.dedupeKey):null;
+      const member=members.length?this.ctx.issues().getIssue(recipient.issueId!)!.assigneeId:null;
+      const reply=env.replyTo?this.getMessage(env.replyTo):null;
+      const activeBefore=this.ctx.db.query("SELECT id FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status IN ('pending','running','awaiting_human')").get(sessionId,recipient.agentId,recipient.executionScope);
+      const sourceTurn=source?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(source.id):null;
+      const result=sendMessageWithinTransaction(this.ctx,{session_id:sessionId,sender:{type:'platform',id:null},source_turn_id:sourceTurn?.turn_id??null,
+        to:member?{type:'member',ref:member}:{type:'agent',ref:recipient.agentId},message_kind:env.kind==='lifecycle'?'status':env.kind==='decision_needed'?'decision':env.kind,
+        wake_requested:env.wake,body_md:env.body,dedupe_key:env.dedupeKey,
+        reply_to_id:reply?.session_id===sessionId?reply.id:null,execution_scope:recipient.executionScope,
+        metadata:{message_source:env.source,message_outcome:env.outcome,priority:envelopePriority(env),address_context:env.to},
+      },deferredEvents,env.to.role==='delegator'&&source?{
+        delegationId:source.delegationId,delegatedByAgentId:recipient.agentId,delegatedFromIssueSessionId:source.delegatedFromIssueSessionId,
+        priority:source.priority,parentTaskId:null,wakeSource:'delegation_return',
+      }:{});
+      const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
+      const task=turn?this.ctx.tasks().getTask(turn.current_attempt_id):null;
+      const entry=this.ctx.conversationLog().getConversationLogEntryById(result.message.id)!;
+      deliveries.push({recipient,entry,deduplicated:!!before,task,action:!task?'none':task.status==='queued'?activeBefore?'coalesced':'created':'steered'});
     }
     return deliveries;
   }

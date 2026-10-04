@@ -5,6 +5,8 @@ import { createId } from '@multiremi/ids.js';
 import { clampEnvelopeBody } from '../envelope-body.js';
 import { countDelegationPairHops, pairRoundTripLimit, DelegationRoundTripLimitError } from '../repos/tasks-repo.js';
 import { resolveWake } from './wake-policy.js';
+import { deriveIssueStatusWithinTransaction } from './issue-status.js';
+import { lockLane } from './lane-machine.js';
 import { ensurePendingTurn } from './lane-machine.js';
 import { parseJson } from '../helpers.js';
 
@@ -27,7 +29,10 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const originalSession=ctx.issueSessions().getIssueSession(sessionId);
   const originalChat=ctx.chat().getChatSession(sessionId);
   const auto=ctx.db.query('SELECT workspace_id FROM multiremi_autopilots WHERE session_id=?').get(sessionId);
-  const workspaceId=originalSession?.workspaceId??originalChat?.workspaceId??auto?.workspace_id;
+  const workspaceId=originalSession?.workspaceId??originalChat?.workspaceId??auto?.workspace_id
+    ??ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id
+    ??ctx.db.query('SELECT workspace_id FROM multiremi_turns WHERE session_id=? LIMIT 1').get(sessionId)?.workspace_id
+    ??(sessionId.startsWith('auto_orphan_')&&createInput.id?createInput.workspaceId:null);
   if(!workspaceId)throw new Error('Message conversation not found');
   ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
   const issue=originalSession?ctx.issues().getIssue(originalSession.issueId):null;
@@ -37,7 +42,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   if(input.sender.type==='agent'){
     const sender=ctx.agents().getAgent(input.sender.id??'');
     if(!sender||sender.workspaceId!==workspaceId)throw new Error('Message sender belongs to another workspace');
-  } else if(input.sender.type==='member'){
+  } else if(input.sender.type==='member'&&input.sender.id!==null){
     const sender=ctx.workspaces().getWorkspaceMember(input.sender.id??'');
     if(!sender||sender.workspaceId!==workspaceId||sender.archivedAt)throw new Error('Message sender is not an active workspace member');
   }
@@ -73,7 +78,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const table=originalSession||sessionId.startsWith('ises_')?'multiremi_issue_sessions':originalChat?'multiremi_chat_sessions':null;
   if(table)ctx.db.run(`UPDATE ${table} SET updated_at=updated_at WHERE id=?`,[sessionId]);
   if(!ctx.conversationLog().getConversationLogHead(sessionId))ctx.conversationLog().ensureConversationLogHead(sessionId,{bodyMd:''});
-  ctx.db.run('UPDATE multiremi_conversation_heads SET updated_at=updated_at WHERE session_id=?',[sessionId]);
+  ctx.db.run('UPDATE multiremi_conversation_heads SET workspace_id=COALESCE(workspace_id,?),updated_at=updated_at WHERE session_id=?',[workspaceId,sessionId]);
   const duplicate=input.dedupe_key?ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?').get(sessionId,input.dedupe_key):null;
   if(duplicate){const message=getMessage(ctx,duplicate.id)!;const turn=ctx.db.query('SELECT id FROM multiremi_turns WHERE trigger_message_id=?').get(message.id);
     return {message,wake_applied:message.wake_applied,wake_reason:message.wake_reason,...(turn?{turn_id:turn.id}:{})};}
@@ -98,7 +103,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     dependenciesMet:!targetIssue||targetIssue.status!=='backlog'||!!createInput.dependencyForce||ctx.issues().listUnmetPrerequisites(targetIssue.id).length===0,
     sourceSideSession:!!sourceSession&&sourceSession.inheritMode!=='none',sourceHasIssue:input.sender.type==='agent'?!!source?.issue_id:undefined,
     targetHasIssue:!!targetIssue,pairHops:hops,pairLimit:limit,
-    isReplyToDelegator:reply?.sender_type==='agent'&&reply.sender_id===recipientId,isLeader:!!isLeader,isParentOwner:parentAgent?.id===recipientId,
+    isReplyToDelegator:reply?.sender_type==='agent'&&reply.sender_id===recipientId||source?.delegated_by_agent_id===recipientId,isLeader:!!isLeader,isParentOwner:parentAgent?.id===recipientId,
   });
   const header:MessageHeader={sender_type:input.sender.type,sender_id:input.sender.id,to_type:input.to.type,
     to_ref:input.to.type==='none'?null:input.to.ref,to_agent_id:recipientType==='agent'?recipientId:null,to_member_id:recipientType==='member'?recipientId:null,
@@ -106,16 +111,43 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     reply_to_id:sessionId===input.session_id?input.reply_to_id??null:null,dedupe_key:input.dedupe_key??null,options:input.options??null,
     card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
   const body=input.sender.type==='platform'&&['status','report'].includes(input.message_kind)?clampEnvelopeBody(input.body_md):input.body_md;
-  const entry=ctx.conversationLog().appendWithinTransaction({sessionId,id:createId(sessionId.startsWith('ises_')?'cmt':'msg'),kind:'message',authorType:input.sender.type,
-    authorId:input.sender.id,taskId:source?.id??null,bodyMd:body,parentId:header.reply_to_id,messageHeader:header,
+  const existing=input.id?getMessage(ctx,input.id):null;
+  if(existing&&(existing.session_id!==sessionId||existing.sender_type!==input.sender.type||existing.sender_id!==input.sender.id))throw new Error('Cannot readdress a message owned by another sender');
+  let entry;
+  if(existing){
+    if(existing.to_agent_id&&existing.to_agent_id!==recipientId)throw new Error('A routed message cannot change recipient');
+    ctx.db.run(`UPDATE multiremi_conversation_log SET to_type=?,to_ref=?,to_agent_id=?,to_member_id=?,message_kind=?,
+      wake_requested=?,wake_applied=?,wake_reason=?,dedupe_key=?,options=?,task_id=COALESCE(?,task_id) WHERE id=?`,
+      [header.to_type,header.to_ref,header.to_agent_id,header.to_member_id,header.message_kind,header.wake_requested,header.wake_applied,header.wake_reason,
+        header.dedupe_key,header.options?JSON.stringify(header.options):null,source?.id??null,existing.id]);
+    ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{fields:{metadata:{...existing.metadata,...input.metadata,pending_completion:false}}});
+    ctx.db.run("UPDATE multiremi_conversation_log SET visibility='shown' WHERE id=?",[existing.id]);
+    entry=ctx.conversationLog().getConversationLogEntryById(existing.id)!;
+  }else{
+  entry=ctx.conversationLog().appendWithinTransaction({sessionId,id:input.id??createId(sessionId.startsWith('ises_')?'cmt':'msg'),kind:'message',authorType:input.sender.type,
+    authorId:input.sender.id,taskId:source?.id??null,bodyMd:body,parentId:header.reply_to_id,messageHeader:header,visibility:input.visibility,
     metadata:{...input.metadata,...(input.execution_scope?{execution_scope:input.execution_scope}:{})}});
-  const message=getMessage(ctx,entry.id)!;
+  }
+  let message=getMessage(ctx,entry.id)!;
   if(recipientType==='member'&&recipientId){
     const at=entry.created_at;
     ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,created_at,updated_at)
       VALUES(?,'member',?,'',?,?) ON CONFLICT DO NOTHING`,[sessionId,recipientId,at,at]);
   }
-  const scope=input.execution_scope??'';
+  let scope=input.execution_scope??'';
+  let delegatedLane:any=null;
+  if(policy.reason==='agent_dispatch'&&source&&targetIssue){
+    const latest=ctx.db.query('SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=? ORDER BY created_at DESC,id DESC LIMIT 1').get(targetIssue.id,recipientId);
+    if(latest?.delegated_by_agent_id===input.sender.id&&latest.delegated_from_issue_session_id===source.session_id)delegatedLane=latest;
+    scope=input.execution_scope??delegatedLane?.execution_scope??createInput.delegationId??createId('dlg');
+  }
+  if(message.metadata.execution_scope!==scope){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,entry.seq,{fields:{metadata:{...message.metadata,execution_scope:scope}}});message=getMessage(ctx,entry.id)!;}
+  if(input.attachment_ids?.length){
+    for(const id of input.attachment_ids){const attachment=ctx.issues().getAttachment(id);
+      if(!attachment||attachment.workspaceId!==workspaceId)throw new Error('Attachment belongs to another workspace');
+      if(attachment.commentId&&attachment.commentId!==message.id||attachment.chatMessageId&&attachment.chatMessageId!==message.id)throw new Error('Attachment already belongs to another message');}
+    if(originalSession)ctx.issues().linkAttachmentsToComment(message.id,originalSession.issueId,input.attachment_ids);else if(originalChat)ctx.issues().linkAttachmentsToChatMessage(originalChat.id,message.id,input.attachment_ids);else throw new Error('Automation attachments require an Issue or Chat');
+  }
   if(recipientType==='agent'&&recipientId){
     // A downgraded message remains discoverable, but only now contributes a wake hint.
     if(policy.applied==='now'){
@@ -129,13 +161,25 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     const sourceTask=ctx.tasks().getTask(source.current_attempt_id)!;
     ctx.tasks().recordDelegationRoundTripLimitedWithinTransaction(new DelegationRoundTripLimitError(sourceTask,recipientId,targetIssue.id,hops,limit),[],events);
   }
+  if(input.message_kind==='decision'&&source){
+    lockLane(ctx,source.session_id,source.agent_id,source.execution_scope);
+    ctx.db.run("UPDATE multiremi_turns SET status='awaiting_human',waiting_on_message_id=? WHERE id=? AND status IN ('pending','running','awaiting_human')",[message.id,source.id]);
+  }
+  if(input.message_kind==='reply'&&reply?.message_kind==='decision'){
+    ctx.db.run('UPDATE multiremi_conversation_log SET resolved_at=COALESCE(resolved_at,?) WHERE id=?',[message.created_at,reply.id]);
+    const waiting=ctx.db.query("SELECT * FROM multiremi_turns WHERE waiting_on_message_id=? AND status='awaiting_human'").all(reply.id);
+    for(const turn of waiting){lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
+      ctx.db.run("UPDATE multiremi_turns SET status='running',waiting_on_message_id=NULL WHERE id=? AND status='awaiting_human'",[turn.id]);}
+  }
   let turnInput=createInput;
   if(policy.reason==='agent_dispatch'&&source?.issue_id&&sourceSession){
-    turnInput={...createInput,delegationId:createInput.delegationId??createId('dlg'),delegatedByAgentId:input.sender.id,
+    turnInput={...createInput,delegationId:delegatedLane?.delegation_id??createInput.delegationId??scope,delegatedByAgentId:input.sender.id,
       delegatedFromIssueSessionId:sourceSession.id,parentTaskId:null};
   }
-  const turnId=ensurePendingTurn(ctx,message,{...input,session_id:sessionId},events,turnInput);
+  const turnId=ensurePendingTurn(ctx,message,{...input,execution_scope:scope,session_id:sessionId},events,turnInput);
   if(policy.applied!==input.wake_requested&&targetIssue)ctx.appendIssueActivity(targetIssue.id,{actorType:'system',actorId:null,type:'wake_downgraded',
     body:policy.reason,data:{message_id:message.id,requested:input.wake_requested,applied:policy.applied,reason:policy.reason}},events);
+  const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
+  for(const id of affected)if(id)deriveIssueStatusWithinTransaction(ctx,id,events);
   return {message,wake_applied:policy.applied,wake_reason:policy.reason,...(turnId?{turn_id:turnId}:{})};
 }

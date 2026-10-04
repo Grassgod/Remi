@@ -1850,13 +1850,6 @@ export interface CreateTaskInput {
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
   /**
-   * Server-internal: do not let this task's creation park its Issue at `todo`.
-   * MUL-400 E2 uses it for the round that wakes a parent owner after a child
-   * ends, so a manual child edit cannot knock the parent out of `in_review`.
-   */
-  preserveIssueStatus?: boolean;
-  preserve_issue_status?: boolean;
-  /**
    * Server-internal: a credential-verified member explicitly started an Issue
    * that is still waiting on prerequisites. Public task creation strips both
    * spellings before the task funnel sees them.

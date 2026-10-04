@@ -1,0 +1,47 @@
+import {it,expect,spyOn} from 'bun:test';
+import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
+import {IssuesRepo} from '@multiremi/store/repos/issues-repo.js';
+pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
+  function setup(){const {store,db}=fixture();const agent=store.createAgent({name:'Daemon worker',provider:'codex'});
+    store.registerRuntime({id:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',name:'Bridge runtime',provider:'codex',workspaceId:'local'});
+    const issue=store.createIssue({title:'Bridge',assigneeType:'agent',assigneeId:agent.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const sent=store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:agent.id},message_kind:'request',wake_requested:'now',body_md:'start'});
+    const attempt=store.claimTask('rt_inbox_bridge')!;store.startTask(attempt.id);
+    const bridge=store.getDaemonTurnBridge(),scope={runtimeId:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',workspaceId:'local'},offer=bridge.offerInput(store.getTaskWithAgent(attempt.id)!);
+    return {store,db,agent,issue,session,sent,attempt,bridge,scope,offer};}
+  it('checks current attempt/runtime and confirms input contiguously',()=>{const f=setup();const payload={turn_id:f.sent.turn_id,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,message_ids:f.offer.input_messages.map(m=>m.id)};
+    expect(f.bridge.rpc('turn.input',{...payload,attempt_id:'wrong'},f.scope).ok).toBe(false);
+    expect(f.bridge.rpc('turn.input',{...payload,message_ids:[]},f.scope).ok).toBe(false);
+    expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);
+    expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(f.offer.input_to_seq);});
+  it('decision/permission waits, member reply resumes, wrap-up is a marker',()=>{const f=setup();
+    const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission'}},f.scope);
+    expect(requested.ok).toBe(true);expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('awaiting_human');
+    const message=requested.message as any;f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Yes'});
+    expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('running');expect(f.bridge.rpc('turn.decision.get',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,message_id:message.id},f.scope).status).toBe('resolved');
+    const before=f.store.getSessionAgentReadProgress(f.session.id,f.agent.id);f.store.wrapUpTurn(f.sent.turn_id!);expect(f.bridge.snapshot(f.scope,new Set([f.attempt.id])).wrapUps).toHaveLength(1);expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual(before);});
+  it('completes atomically, re-rings unread interrupt, completion replay is idempotent',()=>{const f=setup();const later=f.store.sendMessage({session_id:f.session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:f.agent.id},message_kind:'request',wake_requested:'now',body_md:'interrupt'});
+    const input={payload:{turn_id:f.sent.turn_id!,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,reply:{body_md:'done',message_kind:'final' as const}},completionFields:null};
+    const done=f.bridge.complete(input,f.scope);expect(done.ok).toBe(true);expect(f.store.getMessage(String(done.reply_message_id))?.message_kind).toBe('final');
+    expect(f.store.listTurns({workspace_id:'local',session_id:f.session.id}).filter(t=>t.status==='pending')).toHaveLength(1);expect(later.message.seq).toBeGreaterThan(f.store.getTurn(f.sent.turn_id!)!.input_to_seq!);
+    expect(f.bridge.complete(input,f.scope)).toEqual(done);});
+  it('reply write failure completes without a reply pointer',()=>{const f=setup();const write=spyOn(IssuesRepo.prototype,'createIssueCommentWithinTransaction').mockImplementation(()=>{throw new Error('injected reply write failure');});
+    try{expect(f.bridge.complete({payload:{turn_id:f.sent.turn_id!,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,reply:{body_md:'done',message_kind:'reply'}},completionFields:null},f.scope).ok).toBe(true);
+      expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('completed');expect(f.store.getTurn(f.sent.turn_id!)?.reply_message_id).toBeNull();}finally{write.mockRestore();}});
+  it('snapshots only new now input for the current lane and folds large bodies',()=>{const f=setup();
+    const send=(body:string,wake:'now'|'next_turn',to=f.agent.id)=>f.store.sendMessage({session_id:f.session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:to},message_kind:'request',wake_requested:wake,body_md:body});
+    send('later','next_turn');const other=f.store.createAgent({name:'Other',provider:'codex'});send('other','now',other.id);
+    const long=send('x'.repeat(20000),'now'),snapshot=f.bridge.snapshot(f.scope,new Set([f.attempt.id]));
+    expect(snapshot.messages.map(m=>m.message.id)).toEqual([long.message.id]);
+    expect(snapshot.messages[0]!.message.body_md.length).toBeLessThan(9000);
+    expect(snapshot.messages[0]!.message.body_md).toContain('还有 12000 字没看');
+    expect(f.store.getMessage(long.message.id)?.body_md.length).toBe(20000);
+    const offer=f.bridge.offerInput(f.store.getTaskWithAgent(f.attempt.id)!);
+    const receipt={turn_id:f.sent.turn_id,attempt_id:f.attempt.id,input_to_seq:offer.input_to_seq,message_ids:offer.input_messages.map(m=>m.id)};
+    expect(f.bridge.rpc('turn.input',receipt,f.scope).code).toBe('input_gap');
+    f.store.recordSessionAgentRangeRead(f.session.id,f.agent.id,{seq:1,offset:0},{seq:offer.input_to_seq+1,offset:0});
+    expect(f.bridge.rpc('turn.input',receipt,f.scope).ok).toBe(true);
+    expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(offer.input_to_seq);
+  });
+
+});

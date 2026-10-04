@@ -32,7 +32,7 @@ pendingTurnBackendTests("transactional inbox writers", (fixture) => {
             issueSessionId: lane.kind === "issue" ? lane.issueSessionId : null,
             issueId: lane.kind === "issue" ? issue.id : lane.issueId,
             chatSessionId: lane.kind === "chat" ? lane.chatSessionId : null,
-            prompt: "Read the inbox", wakeSource: wake.reason, preserveIssueStatus: true,
+            prompt: "Read the inbox", wakeSource: wake.reason,
           }, collector, queue, undefined, lane.kind === "issue" ? lane.executionScope : "");
           queue.enqueuedTasks.push(task);
           return f.store.getTask(task.id)!;
