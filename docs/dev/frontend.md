@@ -68,7 +68,7 @@ Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked
 
 Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/packages/views/issues/components/issue-log-head.tsx) 用详情标题渲染只读标题，按同一 head 行的 `metadata.title` 精确移除一次 Markdown 前缀，避免改标题时混用版本。描述交给 `ReadonlyContent`，复用已有附件查询缓存并启用普通代码块复制；冷缓存只在下载点击时加载附件列表，按 URL 找到 ID 后调用已有下载入口刷新签名，首屏不请求附件列表。编辑和保存都只包含描述，不消费带标题的 `body_html`。服务端与 agent 的日志契约不变。
 
-文件卡片的 [客户端白名单](../../frontend/packages/ui/markdown/file-cards.ts) 与 [服务端预处理](../../packages/server/src/render/preprocess.ts) 必须同步。除已有 upload/CDN 链接外，`!file` 接受严格的 `/api/attachments/<id>/content`：ID 仅含字母、数字、下划线和连字符，可带查询串，但不能含 `)`、空白或 `..`；其他 API 路径仍被拒绝。Chat 保留正文中的附件标记，由共享 Markdown 渲染卡片，`AttachmentList` 按 URL 去重。MUL-499 改了文件卡片 prepass，但因全表回填负载过高，暂不提升 [渲染版本](../../packages/server/src/render/render-version.ts)；旧 `body_html` 维持现状，待 MUL-513 将回填改为游标推进并加节流后再升版本。
+文件卡片的 [客户端白名单](../../frontend/packages/ui/markdown/file-cards.ts) 与 [服务端预处理](../../packages/server/src/render/preprocess.ts) 必须同步。除已有 upload/CDN 链接外，`!file` 接受严格的 `/api/attachments/<id>/content`：ID 仅含字母、数字、下划线和连字符，可带查询串，但不能含 `)`、空白或 `..`；其他 API 路径仍被拒绝。Chat 保留正文中的附件标记，由共享 Markdown 渲染卡片，`AttachmentList` 按 URL 去重。改变服务端输出时同批提升 [渲染版本](../../packages/server/src/render/render-version.ts) 的 pipeline revision，让旧 `body_html` 可被重渲染任务识别。
 
 收件箱页面使用 `useInfiniteQuery` 按游标每次读取 50 条；侧栏关注数与页内未读数来自独立的 `/api/inbox/summary`，摘要查询 `staleTime` 为 30 秒，不需要加载完整列表。筛选、日期分组、成功自动运行及同父单通知的折叠应用于已加载页；父单元数据由服务端投影提供，但只投影通知所属工作区内仍存在的父单，组内失败、卡住、待决定通知优先。父单分组头不提供整组归档，展开后逐条归档；行内操作始终保留固定宽度，悬停只改变可见性。链接指向尚未加载的通知时，页面继续加载后续页，读取失败不能当作通知不存在。读/归档 mutation 和 WS 更新同时维护旧列表缓存与分页缓存，并刷新摘要；具体分组和计数契约见[收件箱边界](../inbox-workbench-boundary.md)。
 
