@@ -49,6 +49,7 @@ import {
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
+import { LastAssistantMessage } from "./last-assistant-message.js";
 import {
   DaemonProtocolClient,
   DaemonProtocolRpcError,
@@ -4210,7 +4211,7 @@ export class MultiremiDaemon {
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    let output = "";
+    const output = new LastAssistantMessage();
     let sawCompaction = false;
     let seq = 1;
     const nextSeq = () => seq++;
@@ -4296,6 +4297,7 @@ export class MultiremiDaemon {
         );
         prompt = buildSteerInjectionPrompt(preparedMessages);
         await recordSteerBatch(messages, true);
+        output.boundary();
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
       // The completion transaction remains the authoritative steer barrier.
@@ -4330,8 +4332,7 @@ export class MultiremiDaemon {
               }
               lastTurnMessage = message;
               if (message.type === "compaction") sawCompaction = true;
-              // Assistant text becomes the task result / issue activity body.
-              if (message.type === "text" && message.content) output += message.content;
+              output.push(message);
             }
             // The front buffer coalesces token chunks for up to 200ms while
             // tool/lifecycle boundaries flush immediately. Delivery remains
@@ -4367,7 +4368,7 @@ export class MultiremiDaemon {
           }
         }
         if (forceAnswerExpired) {
-          log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
+          log.warn(`Task ${task.id} force-answer grace elapsed; delivering last reply`);
           // Steers that arrived too late to act on are still recorded/consumed
           // so the audit trail is complete and completion is not blocked.
           if (steered.length) await recordSteerBatch(steered, false);
@@ -4390,7 +4391,7 @@ export class MultiremiDaemon {
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
-        if (!output.trim() && !(last?.text ?? "").trim() && sawCompaction) {
+        if (!output.text && !(last?.text ?? "").trim() && sawCompaction) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return {
             output: "Agent returned empty output after compaction.",
@@ -4401,7 +4402,7 @@ export class MultiremiDaemon {
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
         }
-        const candidate = output.trim() || last?.text || "Task completed.";
+        const candidate = output.text || last?.text || "Task completed.";
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
