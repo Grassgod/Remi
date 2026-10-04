@@ -307,21 +307,18 @@ async function runCancelledReturnSnapshotCase(
     const automaticComment = store.listIssueComments(f.child.id)
       .find((comment) => comment.taskId === childTask.id && comment.id !== inRunCommentId);
     expect(automaticComment).toBeDefined();
+    const resultCommentId = inRunCommentId ?? automaticComment!.id;
     expect(selects.count()).toBe(1);
-    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
-    expect(inboxReportBody(store, firstReturn, childTask.id)).toContain(inRunCommentId
-      ? `Result comment: ${inRunCommentId}`
-      : "Result comment: none at completion");
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
+    expect(inboxReportBody(store, firstReturn, childTask.id)).toContain(`结论评论：${resultCommentId}`);
 
     await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
     const sourceAfterCancel = store.getTask(childTask.id)!;
     const replacement = store.getTask(sourceAfterCancel.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
-    expect(inboxReportBody(store, replacement, childTask.id)).toContain(inRunCommentId
-      ? `Result comment: ${inRunCommentId}`
-      : "Result comment: none at completion");
-    expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`Result comment: ${automaticComment!.id}`);
-    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
+    expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${resultCommentId}`);
+    if (inRunCommentId) expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`结论评论：${automaticComment!.id}`);
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
     expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
     expect(selects.count()).toBe(1);
   });
@@ -355,14 +352,13 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
     const automaticComment = store.listIssueComments(f.child.id)
       .find((comment) => comment.taskId === childTask.id)!;
     expect(automaticComment).toBeDefined();
-    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBeNull();
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(automaticComment.id);
     expect(selects.count()).toBe(1);
 
     await requestJson(base, `/api/tasks/${e2Round.id}/cancel`, credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(e2Round.id);
-    expect(inboxReportBody(store, replacement, childTask.id)).toContain("Result comment: none at completion");
-    expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`Result comment: ${automaticComment.id}`);
+    expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${automaticComment.id}`);
     expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
     expect(selects.count()).toBe(1);
   });
@@ -407,7 +403,7 @@ async function runMissingSnapshotCompatibilityCase(store: MultiremiStore): Promi
     rawDb(store).run("DELETE FROM multiremi_issue_comments WHERE id = ?", [envelope.id]);
     await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
-    expect(inboxReportBody(store, replacement, childTask.id)).toContain(`Result comment: ${automaticComment.id}`);
+    expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${automaticComment.id}`);
     expect(selects.count()).toBe(2);
   });
 }
@@ -448,9 +444,8 @@ async function runRedispatchThenDrainSnapshotCase(store: MultiremiStore): Promis
     await reportThroughDaemon(store, credentials.daemon, second.id, "complete",
       { output: "Second automatic result C2" });
     expect(store.getTask(first.id)?.delegationReturnTaskId).toBe(replacement.id);
-    expect(inboxReportBody(store, replacement, first.id)).not.toContain(`Result comment: ${firstAutomaticComment.id}`);
-    expect(inboxReportBody(store, store.getTask(replacement.id)!, first.id)).not.toContain(`Result comment: ${firstAutomaticComment.id}`);
-    expect(inboxReportBody(store, store.getTask(replacement.id)!, first.id)).toContain("Result comment: none at completion");
+    expect(inboxReportBody(store, replacement, first.id)).toContain(`结论评论：${firstAutomaticComment.id}`);
+    expect(inboxReportBody(store, store.getTask(replacement.id)!, first.id)).toContain(`结论评论：${firstAutomaticComment.id}`);
     expect(firstSelects.count()).toBe(1);
   });
 }
@@ -503,16 +498,15 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     const bridgeBeforeCancel = JSON.stringify(bridge());
     const automaticComment = store.listIssueComments(f.child.id)
       .find((comment) => comment.taskId === childTask.id && comment.id !== inRunCommentId)!;
+    const resultCommentId = inRunCommentId ?? automaticComment.id;
     expect(selects.count()).toBe(1);
-    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
 
     await requestJson(base, `/api/tasks/${manual.id}/cancel`, credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(manual.id);
-    expect(inboxReportBody(store, replacement, childTask.id)).toContain(inRunCommentId
-      ? `Result comment: ${inRunCommentId}`
-      : "Result comment: none at completion");
-    expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`Result comment: ${automaticComment.id}`);
+    expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${resultCommentId}`);
+    if (inRunCommentId) expect(inboxReportBody(store, replacement, childTask.id)).not.toContain(`结论评论：${automaticComment.id}`);
     expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
     expect(selects.count()).toBe(1);
     expect(store.listIssueActivity(f.parent.id).some((activity) =>
@@ -539,26 +533,15 @@ async function runSameIssueResultCommentParityCase(store: MultiremiStore): Promi
     await reportThroughDaemon(store, credentials.daemon, delegated.id, "complete",
       { output: "Same-issue terminal result." });
     const firstReturn = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
-    const expectedBody = [
-      "Worker completed a task you delegated.",
-      "Read the latest Session Updates and terminal reports, then continue owning the parent task.",
-      "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
-      "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
-      "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
-      "Do not repeat work that the teammate already completed.",
-      "",
-      "## Terminal Report: Worker",
-      `Source task: ${delegated.id}`,
-      "Status: completed",
-      `Delegation: ${delegated.delegationId}`,
-      "",
-      "Same-issue terminal result.",
-    ].join("\n");
-    expect(inboxReportBody(store, firstReturn, delegated.id)).toBe(expectedBody);
-    expect(inboxReportBody(store, firstReturn, delegated.id)).not.toContain("Result comment:");
+    const expectedBody = inboxReportBody(store, firstReturn, delegated.id);
+    const automatic = store.listIssueComments(f.parent.id).find(comment => comment.taskId === delegated.id)!;
+    expect(expectedBody).toContain("Worker completed a task you delegated.\nStatus: completed\n");
+    expect(expectedBody).toContain(`结论评论：${automatic.id}`);
+    expect(expectedBody).toContain("摘要：Same-issue terminal result.");
+    expect(Buffer.byteLength(expectedBody)).toBeLessThan(2_048);
     expect(inboxReportBody(store, firstReturn, delegated.id)).not.toContain("Issue:");
     expect(firstReturn.prompt).not.toContain("Same-issue terminal result.");
-    expect(selects.count()).toBe(0);
+    expect(selects.count()).toBe(1);
     expect(store.listSessionEvents(f.leaderSession.id)
       .filter((event) => event.kind === "delegation_report" && event.taskId === delegated.id)).toHaveLength(0);
 
@@ -566,8 +549,8 @@ async function runSameIssueResultCommentParityCase(store: MultiremiStore): Promi
     const replacement = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
     expect(inboxReportBody(store, replacement, delegated.id)).toBe(expectedBody);
-    expect(inboxReportBody(store, replacement, delegated.id)).not.toContain("Result comment:");
-    expect(selects.count()).toBe(0);
+    expect(inboxReportBody(store, replacement, delegated.id)).toContain(`结论评论：${automatic.id}`);
+    expect(selects.count()).toBe(2);
   });
 }
 
@@ -671,11 +654,11 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(bridgeCommentId).not.toBe(first.id);
         expect(bridgeCommentId).toBe(later.id);
         const report = inboxReportBody(store, returnTask, childTask.id);
-        expect(report).toContain(`Result comment: ${bridgeCommentId}`);
+        expect(report).toContain(`结论评论：${bridgeCommentId}`);
         // The inbox Result comment line is the bridge's id, so the injected
         // comment id never appears on that line.
-        const promptLine = report.split("\n").find((line) => line.startsWith("Result comment: "));
-        expect(promptLine).toBe(`Result comment: ${bridgeCommentId}`);
+        const promptLine = report.split("\n").find((line) => line.startsWith("结论评论："));
+        expect(promptLine).toBe(`结论评论：${bridgeCommentId}（remi comment list ${f.child.id} --thread ${bridgeCommentId}）`);
         // One resolution on the terminal path: the fix threads the first value
         // through the drain instead of issuing a second SELECT.
         expect(injector.count()).toBe(1);
@@ -695,7 +678,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(injector.count()).toBe(1);
         const returnTask = store.listTasksForIssue(f.parent.id)
           .find((task) => task.agentId === f.leader.id && task.parentTaskId === childTask.id)!;
-        expect(inboxReportBody(store, returnTask, childTask.id)).toContain("Result comment: none at completion");
+        expect(inboxReportBody(store, returnTask, childTask.id)).toContain("结论评论：无");
         const bridge = store.listSessionEvents(f.leaderSession.id)
           .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
         expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
@@ -716,7 +699,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       }, PG_TEST_TIMEOUT);
     }
 
-    it("keeps same-issue report assembly on the main behavior without result-comment reads", async () => {
+    it("includes the same-issue automatic reply id and reuses it after cancellation", async () => {
       await withStore(backend, async (store) => {
         await runSameIssueResultCommentParityCase(store);
       });
@@ -728,7 +711,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       });
     }, PG_TEST_TIMEOUT);
 
-    it("reuses the null snapshot after a queued E2 coverage round is cancelled", async () => {
+    it("reuses the automatic reply snapshot after a queued E2 coverage round is cancelled", async () => {
       await withStore(backend, async (store) => {
         await runCancelledE2SnapshotCase(store);
       });

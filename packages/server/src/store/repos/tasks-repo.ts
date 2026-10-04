@@ -7,6 +7,7 @@ import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-pro
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget, RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
+import { envelopeSummary } from "../envelope-body.js";
 import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import { reRingSweepEnabled, RE_RING_SWEEP_CANDIDATES_SQL, RE_RING_SWEEP_PAGE_SQL, RE_RING_SWEEP_LANE_LIMIT,
@@ -521,6 +522,7 @@ export interface DelegationWakeupInput {
   triggerCommentId?: string | null;
   terminalStatus?: "completed" | "failed" | "cancelled" | null;
   terminalBody?: string | null;
+  resultCommentId?: string | null;
 }
 
 export interface DelegationWakeupResult {
@@ -621,6 +623,7 @@ interface TaskTerminalFollowUps {
   retry: MultiremiTask | null;
   delegationReturns: MultiremiTask[];
   roundPushTasks: MultiremiTask[];
+  replyCommentId?: string | null;
 }
 
 export interface CancelTaskResult {
@@ -4792,7 +4795,7 @@ ${placementAfter.sql}
       this.recordChatInboxDeliveryAfterReply(task);
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents(deferredEvents);
-      this.postAgentReplyComment(task, input.output);
+      this.postAgentReplyComment(task, input.output, terminal.followUps.replyCommentId ?? undefined);
       for (const delegationReturn of terminal.followUps.delegationReturns) {
         this.ctx.notifyTaskEnqueued(delegationReturn);
       }
@@ -5412,7 +5415,7 @@ ${placementAfter.sql}
     // most once per terminal transaction and shared by the bridge metadata and
     // the return prompt. `undefined` means "not resolved yet"; the drain
     // resolves it when the cross-issue bridge branch did not run.
-    let triggerResultCommentId: string | null | undefined;
+    let triggerResultCommentId = input.resultCommentId;
     const drainTerminalReturns = (): DelegationWakeupResult => {
       if (!returnSessionId || !terminalStatus) {
         return { task: null, created: false, covered: false };
@@ -5466,7 +5469,7 @@ ${placementAfter.sql}
       // (comment writes do not take the workspace lifecycle lock), and both
       // writes commit in one transaction, so resolve here and thread the value
       // through the drain below.
-      triggerResultCommentId = this.lastDelegationResultCommentId(source);
+      if (triggerResultCommentId === undefined) triggerResultCommentId = this.lastDelegationResultCommentId(source);
       const bridge = existing ?? this.ctx.issueSessions().appendSessionEventWithinTransaction(returnSession.id, {
         authorType: "system",
         kind: "delegation_report",
@@ -5647,9 +5650,7 @@ ${placementAfter.sql}
       const crossIssue = source.issueId != null && source.issueId !== returnIssueId;
       const hasResultCommentSnapshot = reportMetadata != null
         && Object.hasOwn(reportMetadata, "result_comment_id");
-      const resultCommentId = !crossIssue
-        ? null
-        : hasResultCommentSnapshot
+      const resultCommentId = hasResultCommentSnapshot
           ? nullableString(reportMetadata.result_comment_id)
           : isTrigger && trigger.resultCommentId !== undefined
             ? trigger.resultCommentId
@@ -5691,7 +5692,8 @@ ${placementAfter.sql}
         to: { role: "delegator", delegationId: report.source.delegationId! },
         kind: "report", wake: "now", outcome: report.terminalStatus === "completed" ? "done" : report.terminalStatus,
         dedupeKey: `delegation_terminal:${report.source.id}`,
-        body: delegationTerminalReportSection(report),
+        body: delegationTerminalReportSection(report, report.resultCommentId
+          ? this.ctx.issues().getIssueComment(report.resultCommentId)?.body : undefined),
         source: { issueId: report.source.issueId ?? undefined, taskId: report.source.id,
           commentId: report.resultCommentId ?? undefined },
       }, childStatusChanges, deferredEvents)[0]!;
@@ -5788,8 +5790,9 @@ ${placementAfter.sql}
     if (!source.issueId) return null;
     const row = this.ctx.db.query(
       `SELECT id FROM multiremi_issue_comments
-       WHERE issue_id = ? AND task_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
-    ).get(source.issueId, source.id) as { id: string } | null;
+       WHERE issue_id = ? AND task_id = ? AND author_type = 'agent' AND author_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+    ).get(source.issueId, source.id, source.agentId) as { id: string } | null;
     return row?.id ?? null;
   }
 
@@ -5805,6 +5808,12 @@ ${placementAfter.sql}
   ): TaskTerminalFollowUps {
     const now = nowIso();
     this.cancelPendingHumanRequestsWithinTransaction(task.id, now);
+    const existingResultCommentId = task.delegationId && task.delegatedByAgentId !== task.agentId
+      ? this.lastDelegationResultCommentId(task) : null;
+    const replyCommentId = status === "completed" && task.issueId && task.agentId && !task.chatSessionId
+      && body?.trim() && body.trim() !== "Task completed."
+      && !this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)
+      ? createId("cmt") : null;
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.
     if (status !== "cancelled") {
@@ -5963,7 +5972,7 @@ ${placementAfter.sql}
       // Issue turns keep the reply as a standalone threadable `message` row and
       // point the card at it; the card itself only carries the lifecycle state.
       const replyComment = status === "completed" && !workspaceLockHeld
-        ? this.postAgentReplyComment(task, body)
+        ? this.postAgentReplyComment(task, body, replyCommentId ?? undefined)
         : null;
       if (task.issueSessionId) {
         const event = {
@@ -6025,12 +6034,14 @@ ${placementAfter.sql}
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
+                resultCommentId: existingResultCommentId ?? replyCommentId,
               }, childStatusChanges, deferredEvents)
             : this.ensureDelegationWakeup({
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
+                resultCommentId: existingResultCommentId ?? replyCommentId,
               });
           // The unified writer put fresh returns on the owner's commit queue.
         }
@@ -6058,7 +6069,7 @@ ${placementAfter.sql}
         const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
         const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
         const outcome = status === "completed" ? "done" : status;
-        const reason = status === "failed" ? (task.failureReason ?? body ?? "unknown") : body;
+        const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
         const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
           + (reason ? `，原因 ${reason}` : "");
         const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
@@ -6200,7 +6211,7 @@ ${placementAfter.sql}
         }
       }
     }
-    return { retry, delegationReturns, roundPushTasks };
+    return { retry, delegationReturns, roundPushTasks, replyCommentId };
   }
 
   /** Terminal task writers call this inside their task transaction. */
@@ -6565,7 +6576,7 @@ ${placementAfter.sql}
   // triggering comment when the task came from an @mention. Legacy daemons
   // still report the "Task completed." placeholder — skip it, it says nothing.
   /** Returns the reply comment it created, or null when the run posted none. */
-  private postAgentReplyComment(task: MultiremiTask, output: string | null): { id: string } | null {
+  private postAgentReplyComment(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {
     if (!task.issueId || !task.agentId || task.chatSessionId) return null;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return null;
@@ -6599,6 +6610,7 @@ ${placementAfter.sql}
           withinTransaction: true,
           deferredEvents,
           deferDispatch: true,
+          commentId,
         });
         this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
         return created;
@@ -6955,33 +6967,21 @@ function normalizeTriggerSummary(value: unknown): string | null {
 
 
 
-function delegationTerminalReportSection(report: DelegationTerminalReport): string {
-  const body = report.terminalBody?.trim();
+function delegationTerminalReportSection(report: DelegationTerminalReport, commentBody?: string): string {
   const lines = [
     report.terminalStatus === "completed"
       ? `${report.sourceAgentName} completed a task you delegated.`
       : report.terminalStatus === "failed"
         ? `${report.sourceAgentName} could not complete a task you delegated.`
         : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
-    "Read the latest Session Updates and terminal reports, then continue owning the parent task.",
-    "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
-    "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
-    "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
-    "Do not repeat work that the teammate already completed.",
-    "",
-    `## Terminal Report: ${report.sourceAgentName}`,
-    `Source task: ${report.source.id}`,
     `Status: ${report.terminalStatus}`,
+    report.resultCommentId
+      ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
+      : `结论评论：无；结果见 remi task get ${report.source.id}`,
+    `摘要：${envelopeSummary(report.terminalStatus === "cancelled" ? null
+      : report.terminalStatus === "completed" ? commentBody ?? report.terminalBody : report.terminalBody)}`,
+    "请读该评论后继续负责父任务；本轮所有委派都终态后再发一次轮次总结。",
   ];
-  if (report.crossIssue) {
-    lines.push(`Issue: ${report.sourceIssueKey ?? "unknown"} (${report.source.issueId})`);
-    lines.push(report.resultCommentId
-      ? `Result comment: ${report.resultCommentId}`
-      : "Result comment: none at completion (the final reply is posted as a comment after this report; result text follows)");
-  }
-  lines.push(`Delegation: ${report.source.delegationId ?? "none"}`);
-  if (!body) return lines.join("\n");
-  lines.push("", body);
   return lines.join("\n");
 }
 

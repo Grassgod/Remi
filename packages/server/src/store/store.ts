@@ -4052,7 +4052,7 @@ runMigrations(this.db);
   createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue; deferDispatch?: boolean },
+    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue; deferDispatch?: boolean; commentId?: string },
   ): import("./context.js").CreatedIssueComment {
     return this.issues.createIssueCommentWithinTransaction(issueId, input, options);
   }

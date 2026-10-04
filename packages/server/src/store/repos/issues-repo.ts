@@ -27,6 +27,7 @@ import {
 } from "@multiremi/store/context.js";
 import type { ChildStatusChange, ChildStatusChangeCollector, TriggerCommentRecoveryLane } from "./tasks-repo.js";
 import type { Envelope } from "@multiremi/contracts/inbox.js";
+import { envelopeSummary } from "../envelope-body.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -460,6 +461,7 @@ interface ReactionInput {
  */
 type CreateIssueCommentOptions =
   | {
+    commentId?: string;
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
@@ -467,6 +469,7 @@ type CreateIssueCommentOptions =
     deferredEvents?: CommitEventQueue;
   }
   | {
+    commentId?: string;
     deferAgentMentionDispatch?: boolean;
     deferDispatch?: boolean;
     splitAssigneeDispatch?: boolean;
@@ -806,7 +809,7 @@ export class IssuesRepo {
         data: { decision_id: decision.id, parent_issue_id: parent.id, answerer_type: actor.type },
       }, events);
       const source = this.getIssue(decision.sourceIssueId)!;
-      const body = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${answer}\nFor subsequent actions cite decision:${decision.id}.`;
+      const body = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${envelopeSummary(answer)}\nFor subsequent actions cite decision:${decision.id}.`;
       const sourceOwner = this.decisionOwner(source);
       if (sourceOwner) this.ctx.inbox().sendEnvelopeWithinTransaction({
         to: { role: "issue_owner", issueId: source.id }, kind: "reply", wake: "now",
@@ -817,7 +820,7 @@ export class IssuesRepo {
         this.ctx.inbox().sendEnvelopeWithinTransaction({
           to: { role: "issue_owner", issueId: parent.id }, kind: "reply", wake: "now",
           dedupeKey: `decision_overturn:${decision.id}:${answered.history.length}`, replyTo: decision.id,
-          body: `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`,
+          body: `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${envelopeSummary(answer)}\nSee the decision history on ${parent.key}.`,
           source: { issueId: source.id, decisionId: decision.id },
         }, changes, events);
       }
@@ -4848,7 +4851,7 @@ export class IssuesRepo {
     if (parent && parent.issueSessionId && parent.issueSessionId !== issueSessionId) {
       throw new Error("Reply must belong to the parent comment's session");
     }
-    const id = createId("cmt");
+    const id = options.commentId ?? createId("cmt");
     const now = nowIso();
     const body = rawBody.trim();
     const taskId = cleanOptionalString(input.taskId ?? input.task_id) ?? null;
