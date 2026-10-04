@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
  * Hand-maintained knob. Also the marker the QA re-render check looks for: rows
  * written by an older pipeline carry a different version and get backfilled.
  */
-export const RENDER_PIPELINE_REVISION = 2;
+export const RENDER_PIPELINE_REVISION = 1;
 
 /**
  * Versions of the libraries whose output is part of the HTML.

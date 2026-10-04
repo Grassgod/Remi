@@ -266,12 +266,7 @@ export function preprocessLinks(text: string): string {
 
 const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|ico|bmp|tiff?)$/i;
 
-// Keep both patterns aligned with frontend/packages/ui/markdown/file-cards.ts.
-// The API alternative allows only attachment content paths, never arbitrary APIs.
-const ATTACHMENT_CONTENT_URL_PATTERN = /\/api\/attachments\/[A-Za-z0-9_-]+\/content(?:\?(?![^)\s]*\.\.)[^)\s]*)?/;
-export const FILE_CARD_URL_PATTERN = new RegExp(
-  `/uploads/[^)]*|https?://[^)]+|${ATTACHMENT_CONTENT_URL_PATTERN.source}`,
-);
+export const FILE_CARD_URL_PATTERN = /\/uploads\/[^)]*|https?:\/\/[^)]+/;
 
 const NEW_FILE_CARD_RE = new RegExp(
   `^!file\\[((?:\\\\.|[^\\]])*)\\]\\((${FILE_CARD_URL_PATTERN.source})\\)$`,

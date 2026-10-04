@@ -21,22 +21,16 @@ const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|ico|bmp|tiff?)$/i
  * Restricted to:
  * - `/uploads/...` site-relative paths (LocalStorage backend with no LOCAL_UPLOAD_BASE_URL)
  * - `http(s)://...` absolute URLs (S3 / CloudFront / hosted)
- * - `/api/attachments/<id>/content` with an optional query (authenticated files)
  *
  * Anything else — `javascript:`, `data:`, protocol-relative `//host/x`, other
  * APIs `/api/…`, path-traversal `/../…` — is rejected so a stored file-card
  * cannot be turned into an out-of-band navigation.
- * Keep the patterns aligned with packages/server/src/render/preprocess.ts.
  */
-const ATTACHMENT_CONTENT_URL_PATTERN = /\/api\/attachments\/[A-Za-z0-9_-]+\/content(?:\?(?![^)\s]*\.\.)[^)\s]*)?/
-export const FILE_CARD_URL_PATTERN = new RegExp(
-  `/uploads/[^)]*|https?://[^)]+|${ATTACHMENT_CONTENT_URL_PATTERN.source}`,
-)
+export const FILE_CARD_URL_PATTERN = /\/uploads\/[^)]*|https?:\/\/[^)]+/
 
-/** Renderers keep legacy upload/CDN prefixes and require an exact API path match. */
+/** Prefix test applied by renderers to validate `data-href` before opening it. */
 export function isAllowedFileCardHref(href: string): boolean {
   return /^(https?:\/\/|\/uploads\/)/i.test(href)
-    || ATTACHMENT_CONTENT_URL_PATTERN.exec(href)?.[0] === href
 }
 
 /** New syntax: !file[name](url) — unambiguous, no hostname matching needed. */
