@@ -54,7 +54,7 @@ describe("applyChatDoneToCache", () => {
 
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     applyChatDoneToCache(qc, donePayload());
-    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
+    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({ supports_queue: true });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["task-trace", taskId] });
   });
 
@@ -67,7 +67,7 @@ describe("applyChatDoneToCache", () => {
 
     applyChatDoneToCache(qc, donePayload());
 
-    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
+    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({ supports_queue: true });
   });
 
   it("settles pending tasks when older servers omit message fields", () => {
@@ -82,7 +82,7 @@ describe("applyChatDoneToCache", () => {
       donePayload({ message_id: undefined, content: undefined }),
     );
 
-    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
+    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({ supports_queue: true });
   });
 });
 

@@ -14,6 +14,8 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 发送到 agent 时，无论直接收件人还是角色解析后的最终 agent，都执行与旧任务派发一致的访问检查；拒绝会回滚消息、轮和附件。human request 及其答复沿用来源任务/agent 可见性，在 message 单条、列表、范围、inbox 和展示读取中一致过滤；答复被拒绝不会消费 pending 提问或恢复 awaiting_human 轮。共享 agent 的提问仍允许有权的活跃成员答复，不限于原收件人。
 
+Issue 决定及其答复在消息、日志和收件箱读取中统一检查来源 Issue、目标 Issue 与会话工作区的关系；跨工作区迁移留下的旧决定不返回正文，单条读取返回 404。会话仍引用已迁移的目标 Issue 时，消息和只读日志读取返回 404。
+
 消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用现有 `/api/attachments/:id/file`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
 
 ## Message
@@ -91,5 +93,7 @@ AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/a
 按钮只携带 `{t,message_id}`，不使用 task_id/issue_id 路由。宿主专用 daemon token 调用 `GET /api/daemon/messages/:id`、`POST /api/daemon/messages/:id/card`、`POST /api/daemon/messages/:id/answer`。GET 返回 `{message,request,decision}`；card 接受 `{recipient_open_id}`，用于轮内提问；Issue 裁决卡由话题 outbox 投递。answer 接受 `{token,operator_open_id,answer}` 或 `{token,operator_open_id,response}`。token 绑定实际收件人，答复必须映射为活跃工作区成员；answerMessageDecision 原子消费 token 并发送一条 reply。页面用普通 message 发送端点回答，无须也不能领取 daemon 卡片凭据。
 
 卡片 patch 的 outbox envelope 必须包含 canonical `message_id`，并另外指定外部飞书 `targetMessageId`。宿主先从 daemon messages 读取同一条 decision 的已解决/删除状态，再更新指定外部卡片；缺少任一 ID、ID 不符或非终态时拒绝。外部飞书消息 ID 只定位运输卡片，不能作为业务消息 ID，也不回退使用 replyToMessageId。
+
+飞书工作区隔离、恢复与一次答复回归见 [multiremi-issue-decision-card-workspace.test.ts](../../tests/unit/multiremi/multiremi-issue-decision-card-workspace.test.ts)。
 
 实现验证入口为 [unified-api.test.ts](../../tests/unit/multiremi/unified-api.test.ts)、[卡片 token 回归](../../tests/unit/multiremi/multiremi-question-card-token.test.ts) 和 [CLI 用例](../../tests/unit/remi/cli-unified.test.ts)。

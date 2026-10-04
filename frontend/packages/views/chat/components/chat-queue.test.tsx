@@ -5,9 +5,11 @@ import { renderWithI18n } from "../../test/i18n";
 import { messageFixture } from "../../test/messages";
 const mock = vi.hoisted(() => ({ listMessages: vi.fn(), editMessage: vi.fn(), deleteMessage: vi.fn() }));
 vi.mock("@multiremi/core/api", () => ({ api: mock }));
+vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: "user-1" } }) }));
+vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [{ id: "member-1", user_id: "user-1" }] }) }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 import { ChatQueue } from "./chat-queue";
-const message = messageFixture({ session_id: "chat_1", sender_type: "member", body_md: "Follow up" });
+const message = messageFixture({ session_id: "chat_1", sender_type: "member", sender_id: "member-1", body_md: "Follow up" });
 function mount() { return renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><ChatQueue sessionId="chat_1" agentId="agent_1" /></QueryClientProvider>); }
 beforeEach(() => { vi.clearAllMocks(); mock.listMessages.mockResolvedValue({ messages: [message], next_cursor: null }); mock.editMessage.mockResolvedValue(message); mock.deleteMessage.mockResolvedValue(message); });
 describe("unread Chat messages", () => {
@@ -27,6 +29,14 @@ describe("unread Chat messages", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
     expect(mock.editMessage).toHaveBeenLastCalledWith("msg_1", "Updated instruction");
+  });
+  it("shows other members' messages but only offers controls on the current member's own message", async () => {
+    mock.listMessages.mockResolvedValue({ messages: [message, messageFixture({ id: "msg_other", sender_type: "member", sender_id: "other-member", body_md: "Other member" })], next_cursor: null });
+    mount(); await screen.findByText("Other member");
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Edit queued message" })).toHaveLength(1));
+    expect(screen.getAllByRole("button", { name: "Remove queued message" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Follow up");
   });
   it("cancels a local edit without sending a mutation", async () => {
     mount(); await screen.findByText("Follow up"); fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));

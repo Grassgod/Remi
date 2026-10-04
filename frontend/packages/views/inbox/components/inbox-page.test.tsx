@@ -12,11 +12,35 @@ vi.mock("../../navigation", () => ({ useNavigation: () => ({ pathname: "/inbox",
 vi.mock("../../common/use-list-perf-marker", () => ({ useListPerfMarker: () => null }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <div>{children}</div> }));
 vi.mock("@multiremi/ui/components/ui/resizable", () => ({ ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, ResizableHandle: () => null }));
+import { onInboxInvalidate } from "@multiremi/core/inbox/ws-updaters";
 import { InboxPage } from "./inbox-page";
 const page = { items: [messageFixture()], unread_count: 200, attention_count: 3, next_cursor: null };
-const mount = () => renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><InboxPage /></QueryClientProvider>);
+const mount = (qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })) => renderWithI18n(<QueryClientProvider client={qc}><InboxPage /></QueryClientProvider>);
 beforeEach(() => { vi.clearAllMocks(); mock.ws = "ws-1"; mock.mobile = false; mock.searchParams = new URLSearchParams(); mock.getMessage.mockResolvedValue(messageFixture()); mock.listInboxPage.mockResolvedValue(page); mock.markInboxRead.mockResolvedValue({ session_id: "sess_1", cursor_seq: 8 }); mock.markAllInboxRead.mockResolvedValue({ conversations_read: 12 }); });
 describe("cursor inbox", () => {
+  for (const alreadyRead of [true, false]) {
+    it(`refreshes an external answer while ${alreadyRead ? "opening an already-read deep link" : "remaining in detail after marking read"}`, async () => {
+      const pending = messageFixture({ message_kind: "decision", options: [{ label: "Approve", value: "yes" }] });
+      mock.getMessage.mockResolvedValue(pending);
+      mock.listInboxPage.mockResolvedValue({ ...page, items: alreadyRead ? [] : [pending] });
+      if (alreadyRead) mock.searchParams.set("item", pending.id);
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      mount(qc);
+      if (!alreadyRead) {
+        fireEvent.click(await screen.findByRole("button", { name: /Follow up/ }));
+        mock.listInboxPage.mockResolvedValue({ ...page, items: [] });
+        fireEvent.click(screen.getByRole("button", { name: "Read through #5" }));
+        await waitFor(() => expect(mock.markInboxRead).toHaveBeenCalled());
+        await waitFor(() => expect(screen.queryByRole("button", { name: /Follow up/ })).toBeNull());
+      }
+      await screen.findByRole("button", { name: "Approve" });
+      mock.getMessage.mockResolvedValue({ ...pending, revision: 1, resolved_at: "2026-10-05T00:00:00Z" });
+      onInboxInvalidate(qc, "ws-1");
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Approve" })).toBeNull());
+      expect(mock.getMessage).toHaveBeenCalledWith(pending.id);
+      expect(screen.getByRole("button", { name: "Read through #5" })).toBeInTheDocument();
+    });
+  }
   it("keeps global counts and makes reads explicit, without per-message archive", async () => {
     mount(); const item = await screen.findByRole("button", { name: /Follow up/ });
     expect(screen.getByText("200")).toBeInTheDocument();

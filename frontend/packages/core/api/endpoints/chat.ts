@@ -70,7 +70,9 @@ export class ChatEndpoints {
       body_md: content, message_kind: "request", to: { type: "agent", ref: session.agent_id },
       attachment_ids: attachmentIds, dedupe_key: clientId,
     });
-    const detail = result.turn_id ? await new MessagesEndpoints(this.http).getTurn(result.turn_id) : null;
+    // The message is committed. A supplemental read must not turn it into a failed send.
+    // Pending-turn polling reconciles the optimistic identity if this read is unavailable.
+    const detail = result.turn_id ? await new MessagesEndpoints(this.http).getTurn(result.turn_id).catch(() => null) : null;
     return { message_id: result.message.id, task_id: detail?.turn.current_attempt_id ?? result.turn_id ?? "",
       turn_id: result.turn_id, created_at: detail?.turn.created_at ?? result.message.created_at,
       supports_queue: true, queued: detail?.turn.status === "running" || detail?.turn.status === "awaiting_human" };

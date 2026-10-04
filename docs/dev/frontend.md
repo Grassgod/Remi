@@ -72,6 +72,8 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 | 平铺会话日志（切片、行高缓存、副本端口） | [session-log-list.tsx](../../frontend/packages/views/common/session-log/session-log-list.tsx)、[entry-html.tsx](../../frontend/packages/views/common/session-log/entry-html.tsx)、[use-row-heights.ts](../../frontend/packages/views/common/session-log/use-row-heights.ts)、[core/replica/port.ts](../../frontend/packages/core/replica/port.ts) |
 | 执行过程弹窗 | [task-trace-dialog.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.tsx)、[build-timeline.ts](../../frontend/packages/views/common/task-transcript/build-timeline.ts)、[agent-transcript-dialog.tsx](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx)；点击后从 task trace API 分页读取，运行中由 trace socket 续传 |
 
+收件箱的 `inbox:new {index_only:true}` 由专用 handler 刷新；read/batch-read 由通用 prefix 合批刷新，二者均使同工作区的 inbox 和 message-detail 缓存失效。决定事件同样刷新详情，所以已读深链和读后仍停留详情会跟随外部答复重取。Chat 消息提交成功后，补充 turn 读取失败仍保留消息成功结果，由 pending 轮查询补齐状态。
+
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
 执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并不会跨越不同的 `meta.parent_tool_call_id`。Chat 在此结果上只额外过滤 compaction。弹窗事件数基于处理后的时间线，上下文标签独立读取 seq 最新的 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。

@@ -14,10 +14,19 @@ export function canAccessConversationTask(c: Context, store: MultiremiStore, tas
   return canUserViewTaskMessages(store, currentRequestUserId(c), task, memo);
 }
 
-/** Memo lives for one request and caches only this caller's source-task checks. */
+/** Memo lives for one request and caches only this caller's source visibility checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
   const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>();
-  return (entry: { kind: string; task_id: string | null; reply_to_id?: string | null; metadata: Record<string, any> }): boolean => {
+  const decisions = new Map<string, boolean>();
+  return (entry: { id?: string; message_kind?: string | null; kind: string; task_id: string | null; reply_to_id?: string | null; metadata: Record<string, any> }): boolean => {
+    // An Issue decision must retain the same source/target workspace relation
+    // on every message/log/inbox read, including a reply quoting that decision.
+    const decisionId = !entry.metadata.human_request && (entry.metadata.decision_record || entry.message_kind === "decision")
+      ? entry.id : entry.metadata.decision_answer ? entry.reply_to_id : null;
+    if (decisionId) {
+      if (!decisions.has(decisionId)) decisions.set(decisionId, !!store.getIssueDecisionAnywhere(decisionId));
+      if (!decisions.get(decisionId)) return false;
+    }
     if (entry.kind !== "turn" && !entry.metadata.human_request && !entry.metadata.human_response) return true;
     const sourceId = entry.task_id ?? (entry.reply_to_id ? store.getMessage(entry.reply_to_id)?.task_id : null);
     if (!sourceId) return false;
@@ -32,8 +41,12 @@ export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
 
 export function loadConversation(c: Context, store: MultiremiStore, id: string) {
   const session = store.getIssueSession(id);
-  if (session) return denyCurrentUserWorkspaceAccess(c, store, session.workspaceId)
-    ?? { id, workspaceId: session.workspaceId, issueId: session.issueId, chatId: null };
+  if (session) {
+    const issue = store.getIssue(session.issueId);
+    if (!issue || issue.workspaceId !== session.workspaceId) return c.json({ error: "conversation not found" }, 404);
+    return denyCurrentUserWorkspaceAccess(c, store, session.workspaceId)
+      ?? { id, workspaceId: session.workspaceId, issueId: session.issueId, chatId: null };
+  }
   if (id.startsWith("auto_orphan_inbox_")) {
     const workspaceId = id.slice("auto_orphan_inbox_".length);
     if (!store.getWorkspace(workspaceId) || !store.getConversationLogHead(id)) return c.json({ error: "conversation not found" }, 404);

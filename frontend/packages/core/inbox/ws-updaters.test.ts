@@ -18,6 +18,6 @@ describe("inbox refresh", () => {
     const qc = new QueryClient(); const invalidate = vi.spyOn(qc, "invalidateQueries");
     onInboxIssueStatusChanged(qc, "ws-1", "iss-1", "done");
     onInboxIssueDeleted(qc, "ws-1", "iss-1");
-    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate.mock.calls.filter(([filter]) => filter?.queryKey?.[0] === "inbox")).toHaveLength(2);
   });
 });

@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useAuthStore } from "@multiremi/core/auth";
+import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
 import {
   useRemoveChatQueuedTask,
@@ -22,6 +24,9 @@ export function ChatQueue({
   const { t } = useT("chat");
   const { t: tm } = useT("messages");
   const wsId = useWorkspaceId();
+  const userId = useAuthStore(s => s.user?.id);
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const memberId = userId ? members.find(member => member.user_id === userId)?.id : undefined;
   const query = useInfiniteQuery({
     queryKey: ["chat-unread", wsId, sessionId, agentId],
     queryFn: ({ pageParam }) => api.listMessages(sessionId, { unread_by: agentId, cursor: pageParam, limit: 100 }),
@@ -106,7 +111,7 @@ export function ChatQueue({
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words line-clamp-3">
                 {task.body_md}
               </p>
-              <div className="flex shrink-0 gap-0.5">
+              {memberId && task.sender_id === memberId && <div className="flex shrink-0 gap-0.5">
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -134,7 +139,7 @@ export function ChatQueue({
                 >
                   <Trash2 className="size-3.5" />
                 </Button>
-              </div>
+              </div>}
             </div>
           )}
         </div>

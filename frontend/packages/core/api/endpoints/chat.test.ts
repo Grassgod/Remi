@@ -78,6 +78,16 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ ...session, pinned: undefined }).updateChatSession("chat-1", { pinned: false })).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it("keeps an accepted message successful when the supplemental turn read fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response(session))
+      .mockResolvedValueOnce(response({ message: messageFixture({ dedupe_key: "send-1" }), wake_applied: "next_turn", wake_reason: "agent_pair_not_privileged", turn_id: "turn_1" }))
+      .mockRejectedValueOnce(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+    await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1")).resolves.toMatchObject({ message_id: "msg_1", turn_id: "turn_1", created_at: "2026-10-04T00:00:00Z" });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body).dedupe_key).toBe("send-1");
+  });
   it("sends a canonical message, preserving dedupe and the active attempt identity", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(session))

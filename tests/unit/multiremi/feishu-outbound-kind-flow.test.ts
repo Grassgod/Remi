@@ -10,7 +10,7 @@ import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { openRuntimeDownlinks } from "../../fixtures/runtime-downlinks.js";
 import { completed, nativeHarness, transcript } from "../connectors/feishu-native-harness.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./feishu-host-store-fixture.js";
 
 let key: string | undefined, jobs: string | undefined;
 let fetchBefore: typeof fetch;
@@ -113,7 +113,7 @@ describe("C5 full fake-channel delivery", () => {
     expect(JSON.stringify(f.h.cards())).toContain("Final answer");
     expect(JSON.stringify(f.h.cards())).toContain("82k/1M");
     expect(JSON.stringify(f.h.cards())).toContain("1 tools");
-    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_task_messages WHERE task_id = ?").get(taskId)).toEqual({ count: 0 });
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_task_messages WHERE task_id = ?").get(taskId)).toEqual({ count: 0 });
     expect(db!.query("SELECT kind, status FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? ORDER BY kind, unit_key").all(taskId))
       .toEqual([{ kind: "cot", status: "sent" }, { kind: "receipt", status: "failed" },
         { kind: "receipt", status: "sent" }, { kind: "result_card", status: "sent" }]);
@@ -181,13 +181,13 @@ describe("C5 full fake-channel delivery", () => {
     const cot = db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? AND kind = 'cot'").get(taskId) as { id: string };
     expect(delivery.id).not.toBe(cot.id);
     const cards: any[] = [], patches: any[] = [];
-    const handle = { appId: f.config.appId,
+    const handle = { appId: f.config.appId, resolveProactiveMention: async () => "ou_kind_owner",
       sendProactiveCard: async (input: any) => { cards.push(input); return { messageId: "om_question" }; },
       updateProactiveCard: async (id: string, card: any) => { patches.push({ id, card }); },
     } as unknown as FeishuChannelHandle;
     const daemon = { getFeishuBotHumanRequest: async () => f.store.getTaskHumanRequest(request.id),
       getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
-      prepareTaskHumanRequestCard: async (_taskId: string, requestId: string, recipientOpenId: string) =>
+      prepareTaskHumanRequestCard: async (requestId: string, recipientOpenId: string) =>
         f.store.prepareTaskStreamQuestionCard(requestId, recipientOpenId),
     } as unknown as MultiremiDaemon;
     await expect(sendInteractionCardLane(handle, delivery, { signal: new AbortController().signal,
@@ -230,7 +230,7 @@ describe("C5 full fake-channel delivery", () => {
       const daemon = {
         getFeishuBotHumanRequest: async () => { getCount += 1; return f.store.getTaskHumanRequest(request.id); },
         getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
-        prepareTaskHumanRequestCard: async (_taskId: string, requestId: string, recipientOpenId: string) =>
+        prepareTaskHumanRequestCard: async (requestId: string, recipientOpenId: string) =>
           f.store.prepareTaskStreamQuestionCard(requestId, recipientOpenId),
         waitFeishuBotHumanRequestSettled: async () => { if (!cached) await settled; return f.store.getTaskHumanRequest(request.id); },
       } as unknown as MultiremiDaemon;

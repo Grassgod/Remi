@@ -21,7 +21,7 @@ import {
   decisionReminderLeadMs,
   resolveDecisionRecipient,
 } from "@multiremi/store/repos/feishu-bot-repo.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./feishu-host-store-fixture.js";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
@@ -185,7 +185,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     // Idempotent: a repeated push for the same request adds nothing.
     expect(store.getTaskHumanRequest(request.id)!.id).toBe(request.id);
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND human_request_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND human_request_id = ?",
     ).get(request.id)).toEqual({ n: 1 });
   });
 
@@ -317,7 +317,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       expect(delivery.body).toContain(`https://remi.example.com/local/issues/${issue.id}`);
       const activity = store.listIssueActivity(issue.id).find((entry) => entry.type === "decision_card_degraded");
       expect((activity?.data as Record<string, unknown>).reason).toBe(scenario.reason);
-      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+      expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
         .get(request.id)).toEqual({ n: 0 });
     });
   }
@@ -337,7 +337,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
     const expiresAt = new Date(store.getTaskHumanRequest(request.id)!.expiresAt!).getTime();
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 60_000))).toBeNull();
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
       .get(request.id)).toEqual({ n: 0 });
   });
 
@@ -606,13 +606,13 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: patch.claimToken, status: "sent", externalMessageId: "om_single_card",
     });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_card'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_card'",
     ).get(request.id)).toEqual({ n: 1 });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_card_patch'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_card_patch'",
     ).get(request.id)).toEqual({ n: 1 });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
     ).get(request.id)).toEqual({ n: 1 });
   });
 
@@ -631,7 +631,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     // The second claimer, in the same window, finds nothing to materialize.
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 50_000))).toBeNull();
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_reminder'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_reminder'",
     ).get(request.id)).toEqual({ n: 1 });
   });
 
@@ -737,7 +737,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       })()).toThrow("rollback cancellation");
       expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
       expect(notifications).toEqual([]);
-      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+      expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
         .get(request.id)).toEqual({ n: 0 });
 
       store.cancelTask(taskId);
@@ -746,13 +746,13 @@ describe("Feishu decision cards for Issue human requests", () => {
       expect(cancelled.response).toBeNull();
       expect(cancelled.respondedAt).not.toBeNull();
       expect(notifications).toContain("daemon:task_input");
-      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+      expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
         .get(request.id)).toEqual({ n: 1 });
       expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {})
         .filter(entity => entity.type === "task.human_request.settled"))
         .toEqual([expect.objectContaining({ payload: { task_id: taskId, request: cancelled } })]);
       expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
-      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
+      expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
         .get(request.id)).toEqual({ n: 1 });
       expect(store.getTaskHumanRequest(request.id)).toEqual(cancelled);
     } finally {
@@ -1614,7 +1614,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(Date.parse(backedOff.available_at) - failedAt.getTime()).toBe(5_000);
     // No text twin: a retryable failure keeps its card, it does not degrade.
     expect(textFallbacks).toBe(0);
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").get())
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").get())
       .toEqual({ n: 0 });
 
     // Before the backoff elapses the row is invisible to the claim...
@@ -1628,7 +1628,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(db!.query("SELECT attempt_count FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
       .get(card.id)).toEqual({ attempt_count: 2 });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND human_request_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND human_request_id = ?",
     ).get(request.id)).toEqual({ n: 1 });
     expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
     void app; void issue;
@@ -1794,10 +1794,10 @@ describe("Feishu decision card heartbeat delivery", () => {
     const request = askQuestion(store, taskId);
 
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?",
     ).get(request.id)).toEqual({ n: 0 });
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
     ).get(request.id)).toEqual({ n: 0 });
     expect(store.listIssueActivity(otherIssue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(0);
     // Same-workspace requests are unaffected.
@@ -1983,7 +1983,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
     // No terminal patch either: there is no card on screen left to rewrite.
     expect(db!.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'",
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'",
     ).get()).toEqual({ n: 0 });
     expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
     void issue;
@@ -1992,13 +1992,11 @@ describe("Feishu decision card heartbeat delivery", () => {
 /** The two daemon calls the click handler makes, backed by the test store. */
 function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
   return {
-    getFeishuBotHumanRequest: async (taskId: string, requestId: string) => {
+    getFeishuDecisionMessage: async (messageId: string) => ({ message: store.getMessage(messageId)! }),
+    getMessageHumanRequest: async (requestId: string) => store.getTaskHumanRequest(requestId),
+    respondFeishuBotHumanRequest: async (requestId: string, response: Record<string, unknown>) => {
       const request = store.getTaskHumanRequest(requestId);
-      return request && request.taskId === taskId ? request : null;
-    },
-    respondFeishuBotHumanRequest: async (taskId: string, requestId: string, response: Record<string, unknown>) => {
-      const request = store.getTaskHumanRequest(requestId);
-      if (!request || request.taskId !== taskId) throw new Error("request not found");
+      if (!request) throw new Error("request not found");
       const settled = store.respondTaskHumanRequest(requestId, { response, respondedBy: "feishu" });
       if (!settled) throw new Error("request is no longer pending");
       return settled;

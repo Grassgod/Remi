@@ -6,6 +6,10 @@ export const inboxKeys = {
   pages: (wsId: string) => ["inbox", wsId, "pages"] as const,
   summary: (wsId: string) => ["inbox", wsId, "summary"] as const,
 };
+export const messageDetailKeys = {
+  all: (wsId: string) => ["message-detail", wsId] as const,
+  detail: (wsId: string, id: string | null) => ["message-detail", wsId, id] as const,
+};
 export function inboxPageOptions(wsId: string) {
   return infiniteQueryOptions({
     queryKey: inboxKeys.pages(wsId),

@@ -4,7 +4,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import { inboxPageOptions } from "@multiremi/core/inbox/queries";
+import { inboxPageOptions, messageDetailKeys } from "@multiremi/core/inbox/queries";
 import { useMarkAllInboxRead, useMarkInboxRead } from "@multiremi/core/inbox/mutations";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
@@ -36,7 +36,7 @@ export function InboxPage() {
   const items = useMemo(() => [...new Map((query.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()], [query.data]);
   const selectedId = selected?.wsId === wsId && selected.sourceItem === searchParams.get("item") ? selected.id : searchParams.get("item") !== dismissed ? searchParams.get("item") : null;
   const selectedItem = items.find(item => item.id === selectedId);
-  const message = useQuery({ queryKey: ["message-detail", wsId, selectedId], enabled: !!selectedId,
+  const message = useQuery({ queryKey: messageDetailKeys.detail(wsId, selectedId), enabled: !!selectedId,
     queryFn: () => api.getMessage(selectedId!), initialData: selectedItem, staleTime: 15_000 });
   const active = selectedItem && (!message.data || selectedItem.revision >= message.data.revision) ? selectedItem : message.data ?? null;
   const perfMarker = useListPerfMarker(query);

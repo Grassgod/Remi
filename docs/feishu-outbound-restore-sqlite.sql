@@ -1,3 +1,5 @@
+-- Restores only outbound delivery lanes. The unified message/turn model stays in place.
+-- task_id is a turn attempt ID. This is not a rollback to the retired task tables.
 -- Replace __C5_STAMP__ with a unique UTC YYYYMMDDHHMMSS value before running.
 -- The three queries below must return zero rows. Stop writers and back up first.
 SELECT task_id FROM multiremi_feishu_bot_outbound_deliveries
@@ -65,7 +67,7 @@ CREATE TABLE multiremi_feishu_bot_outbound_deliveries (
   human_request_id TEXT, human_request_task_id TEXT, expires_at TEXT,
   target_message_id TEXT, degraded TEXT, decision_id TEXT, decision_issue_id TEXT,
   FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
-  FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+  FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE SET NULL
 );
 INSERT INTO multiremi_feishu_bot_outbound_deliveries (
   id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id,

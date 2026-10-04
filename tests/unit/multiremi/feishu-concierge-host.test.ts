@@ -737,8 +737,8 @@ describe("control-plane Feishu concierge host", () => {
       response: null, respondedBy: null, createdAt: "2026-09-27T00:00:00.000Z", respondedAt: null };
     const submitted: Array<Record<string, unknown>> = [];
     Object.assign(fake.daemon, {
-      getFeishuBotHumanRequest: async () => pending,
-      respondFeishuBotHumanRequest: async (_taskId: string, _requestId: string, response: Record<string, unknown>, credential: { operatorOpenId: string; token: string }) => {
+      getMessageHumanRequest: async () => pending,
+      respondFeishuBotHumanRequest: async (_messageId: string, response: Record<string, unknown>, credential: { operatorOpenId: string; token: string }) => {
         if (credential.operatorOpenId !== "ou_group_owner") throw Object.assign(new Error("recipient_mismatch"), { code: "recipient_mismatch" });
         submitted.push(response);
         pending = { ...pending, status: "responded", response, respondedBy: "feishu", respondedAt: "2026-09-27T00:10:00.000Z" };
@@ -762,7 +762,7 @@ describe("control-plane Feishu concierge host", () => {
     const stranger = await handleTaskInteractionEvent("cli_a1b2c3d4e5f6g7h8", {
       operator: { open_id: "ou_someone_else" },
       context: { open_chat_id: "oc_decision", open_message_id: "om_clickable" },
-      action: { value: { t: "host-token-fixture", r: "hrq_1", task_id: "tsk_1" }, tag: "button", name: interactionMarker("tsk_1", "hrq_1"), form_value: { q0_option0: true } },
+      action: { value: { t: "host-token-fixture", message_id: "hrq_1" }, tag: "button", name: interactionMarker("tsk_1", "hrq_1"), form_value: { q0_option0: true } },
     });
     expect(stranger).toMatchObject({ toast: { content: "请由卡片中指定的处理人提交" } });
     expect(submitted).toHaveLength(0);
@@ -771,7 +771,7 @@ describe("control-plane Feishu concierge host", () => {
     const answer = await handleTaskInteractionEvent("cli_a1b2c3d4e5f6g7h8", {
       operator: { open_id: "ou_group_owner" },
       context: { open_chat_id: "oc_decision", open_message_id: "om_clickable" },
-      action: { value: { t: "host-token-fixture", r: "hrq_1", task_id: "tsk_1" }, tag: "button", name: interactionMarker("tsk_1", "hrq_1"), form_value: { q0_option0: "true" } },
+      action: { value: { t: "host-token-fixture", message_id: "hrq_1" }, tag: "button", name: interactionMarker("tsk_1", "hrq_1"), form_value: { q0_option0: "true" } },
     });
     expect(answer).toMatchObject({ toast: { type: "success", content: "已提交" } });
     expect(submitted).toEqual([{ answers: { "Continue?": "Yes" } }]);
@@ -789,8 +789,8 @@ describe("control-plane Feishu concierge host", () => {
     const submitted: Array<Record<string, unknown>> = [];
     Object.assign(fake.daemon, {
       listFeishuBotDecisionCards: async () => cards,
-      getFeishuBotHumanRequest: async () => pending,
-      respondFeishuBotHumanRequest: async (_taskId: string, _requestId: string, response: Record<string, unknown>) => {
+      getMessageHumanRequest: async () => pending,
+      respondFeishuBotHumanRequest: async (_messageId: string, response: Record<string, unknown>) => {
         submitted.push(response);
         pending = { ...pending, status: "responded", response, respondedBy: "feishu", respondedAt: "2026-09-27T00:10:00.000Z" };
         return pending;
@@ -803,7 +803,7 @@ describe("control-plane Feishu concierge host", () => {
     const answer = await handleTaskInteractionEvent("cli_a1b2c3d4e5f6g7h8", {
       operator: { open_id: "ou_group_owner" },
       context: { open_chat_id: "oc_decision", open_message_id: "om_before_restart" },
-      action: { value: { t: "host-token-fixture", r: "hrq_restart", task_id: "tsk_restart" }, tag: "button", name: interactionMarker("tsk_restart", "hrq_restart"), form_value: { q0_option0: "true" } },
+      action: { value: { t: "host-token-fixture", message_id: "hrq_restart" }, tag: "button", name: interactionMarker("tsk_restart", "hrq_restart"), form_value: { q0_option0: "true" } },
     });
     expect(answer).toMatchObject({ toast: { type: "success", content: "已提交" } });
     expect(submitted).toEqual([{ answers: { "Continue?": "Yes" } }]);
@@ -819,7 +819,7 @@ describe("control-plane Feishu concierge host", () => {
     Object.assign(fake.daemon, {
       listFeishuBotDecisionCards: async () => [{ requestId: "hrq_done", taskId: "tsk_done", chatId: "oc_decision",
         messageId: "om_already_answered", recipientOpenId: "ou_group_owner" }],
-      getFeishuBotHumanRequest: async () => answered,
+      getMessageHumanRequest: async () => answered,
       respondFeishuBotHumanRequest: async () => { submits += 1; return answered; },
     });
     const test = host({ daemon: fake.daemon });
@@ -828,7 +828,7 @@ describe("control-plane Feishu concierge host", () => {
     const click = await handleTaskInteractionEvent("cli_a1b2c3d4e5f6g7h8", {
       operator: { open_id: "ou_group_owner" },
       context: { open_chat_id: "oc_decision", open_message_id: "om_already_answered" },
-      action: { value: { t: "host-token-fixture", r: "hrq_done", task_id: "tsk_done" }, tag: "button", name: interactionMarker("tsk_done", "hrq_done"), form_value: { q0_option0: "true" } },
+      action: { value: { t: "host-token-fixture", message_id: "hrq_done" }, tag: "button", name: interactionMarker("tsk_done", "hrq_done"), form_value: { q0_option0: "true" } },
     });
     expect(click).toMatchObject({ toast: { type: "info", content: "请求已结束" } });
     // The web answer stands; the click must not write a second one.
