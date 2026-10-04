@@ -430,6 +430,7 @@ export interface DaemonTurnMessagePayload {
   turn_id: string;
   attempt_id: string;
   message: UnifiedMessage;
+  attachments?: import("./types.js").MultiremiAttachment[];
 }
 
 export interface DaemonTurnWrapUpPayload {

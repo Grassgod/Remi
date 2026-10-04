@@ -3,6 +3,7 @@ import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-
 import type { TaskSteerSource } from "./steer.js";
 import type { DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
+import { TRIGGER_MESSAGE_INLINE_CHARS, unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
 type Terminal = Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">;
 const MAX_SETTLED_REQUESTS = 1024;
@@ -17,6 +18,7 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   private readonly decisionCreates = new Set<string>();
   private readonly inputReplyTo = new Map<string, string>();
   private readonly confirmedDecisionInputs = new Map<string, Set<string>>();
+  private readonly decisionRangeHints = new Set<string>();
   private readonly decisionListeners = new Map<string, Set<(message: UnifiedMessage) => void>>();
   private readonly steers = new Map<string, Map<string, MultiremiTaskSteerMessage>>();
   private readonly steerListeners = new Map<string, Set<(message: MultiremiTaskSteerMessage) => void>>();
@@ -129,6 +131,11 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   }
 
   async consumeTaskSteerMessages(taskId: string, ids: string[]): Promise<void> {
+    // A callback consumes only its answer. Its projection may also be the only
+    // carrier of the range-read instruction for ordinary unread messages.
+    for (const pending of this.steers.get(taskId)?.values() ?? []) {
+      if (this.decisionRangeHints.has(pending.id) && !ids.includes(pending.id)) throw new Error("unconfirmed turn input gap");
+    }
     ids = [...new Set([...ids, ...(this.confirmedDecisionInputs.get(taskId) ?? [])])];
     if (!ids.length) return;
     const input = this.turnInput(taskId);
@@ -150,6 +157,7 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
     for (const id of ids) {
       this.steers.get(taskId)?.delete(id);
       this.confirmedDecisionInputs.get(taskId)?.delete(id);
+      this.decisionRangeHints.delete(id);
     }
   }
 
@@ -158,7 +166,7 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   finishDecision(attemptId: string): void {
     this.decisionCreates.delete(attemptId);
     for (const message of this.pendingTaskSteerMessages(attemptId)) {
-      if (this.inputReplyTo.has(`${attemptId}:${message.id}`)) {
+      if (this.inputReplyTo.has(`${attemptId}:${message.id}`) || this.decisionRangeHints.has(message.id)) {
         for (const listener of this.steerListeners.get(attemptId) ?? []) listener(message);
       }
     }
@@ -172,6 +180,29 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
     let ids = this.confirmedDecisionInputs.get(attemptId);
     if (!ids) this.confirmedDecisionInputs.set(attemptId, ids = new Set());
     ids.add(reply.id);
+    const turn = this.turns.get(attemptId)!;
+    const projection = this.steers.get(attemptId)?.get(reply.id)?.content;
+    let hint: Record<string, unknown> | null = null;
+    try {
+      const value = JSON.parse(projection?.split("\n")[0] ?? "null");
+      if (value?.type === "unread_range" && value.session_id === reply.session_id
+        && Number.isSafeInteger(value.to_seq)) hint = value;
+    } catch { /* Expiry races can return an original reply before its WS projection. */ }
+    const to = Math.max(reply.seq, Number(hint?.to_seq ?? reply.seq));
+    const known = [...this.inputSeqs.entries()].filter(([key, seq]) => key.startsWith(`${attemptId}:`)
+      && seq > turn.inputToSeq && seq <= to).map(([, seq]) => seq).sort((a, b) => a - b);
+    let next = turn.inputToSeq + 1;
+    for (const seq of new Set(known)) { if (seq !== next) break; next++; }
+    if (next <= to || reply.body_md.length > TRIGGER_MESSAGE_INLINE_CHARS) {
+      const id = `decision_range:${reply.id}`;
+      this.decisionRangeHints.add(id);
+      this.queueInput(attemptId, { id, taskId: attemptId, kind: "steer",
+        content: JSON.stringify(hint ?? { type: "unread_range", session_id: reply.session_id,
+          from_seq: turn.inputToSeq, to_seq: to,
+          instruction: unreadRangeHint(reply.session_id, turn.inputToSeq, to, to - turn.inputToSeq)
+            .replaceAll("remi session log get", "remi message list") }),
+        authorType: "system", authorId: null, createdAt: reply.created_at, consumedAt: null }, false);
+    }
   }
 
   registerDecision(message: UnifiedMessage, attemptId: string): void {

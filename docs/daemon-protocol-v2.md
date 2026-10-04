@@ -200,7 +200,8 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 `task.offer` 不再携带 `id`/`prompt`，而是 `turn_id`、`attempt_id`、`input_from_seq`、
 `input_to_seq` 和区间 `(input_from_seq, input_to_seq]` 的 `input_messages`。
 trace、usage、附件、Session Archive 与 outbox 分区仍以 attempt id（原 `tsk_` id）关联。
-`turn.message` 携带同一对 ID 和消息正文；`turn.wrap_up` 携带同一对 ID 与 `requested_at`，
+`turn.message` 携带同一对 ID、投影消息正文和该消息关联的 `attachments`；附件由当前 attempt
+凭证下载到其工作目录，再注入 provider。`turn.wrap_up` 携带同一对 ID 与 `requested_at`，
 后者是控制帧，不推进消息游标。elicitation 和 `kind=permission` 都使用 `turn.decision`：
 S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `reply_to_id` 匹配答复。
 权限选项保留原 option ID、名称、种类和工具上下文；没有旧 `human_request.*` 兼容通道。
@@ -370,8 +371,10 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 即关连接（4000），由重连后的快照重推兜底。
 
 decision 的答复通过 `turn.message` 投递，携带 `reply_to_id`。daemon 按 decision 消息 ID
-匹配等待中的 question 或 permission 回调，向 provider 返回答复，并在连续输入确认时推进游标；
-不把同一答复再注入为普通插话。断线重连由 S2 的消息快照重推。
+匹配等待中的 question 或 permission 回调，再调用一次 `turn.decision.get` 读取原始完整 reply，
+不解析提示词投影中的 unread_range 前缀或折叠正文。选项 value 和 answers 对象按原问题字段转换。
+连续输入确认时推进游标；同一答复不重复注入。若投影范围还有未读取的普通消息或折叠正文，
+范围读取提示继续进入输入队列，读完并消费前不能越过确认屏障。断线重连由 S2 的消息快照重推。
 daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答复一起按 seq 排序确认，
 仍须等待更早的插话消费完成；权限题目不作为已有最终回复复用。
 旧 `task.human_request.settled` 已退役；旧 bot request hooks 显式返回 `report_shape_retired`，

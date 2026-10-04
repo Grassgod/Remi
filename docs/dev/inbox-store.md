@@ -32,9 +32,9 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 | 卡片答复 | `issueMessageCardToken(id,recipient)`、`answerMessageDecision(id,input)` | hash/binding/consumed 在消息行，答复 CAS 与 reply 同事务；宿主负责把答复者映射到成员 |
 | Daemon | `getDaemonTurnBridge()` | 下述适配器与 S3 的结构接口一致 |
 
-[DaemonTurnBridge](../../packages/server/src/store/inbox/daemon-turn-bridge.ts) 提供 `offerInput`、`snapshot`、`rpc`、`complete`。所有 RPC 检查 workspace/runtime/daemon/current-attempt 绑定；旧 attempt 无法提交。offer 使用 lane 游标和 `taskSessionInput` 的 unread_range，触发消息正文最多内联 8,000 字，长正文通过 message list 范围读取。正文、HTML、任意 metadata 与卡片凭据不重复塞入输入帧。折叠正文或仅提供范围提示的上下文未完整读取时不能越过它确认输入；snapshot 只投递轮开始后当前 lane 的 now 插话与 wrap-up 标记。complete 在终态事务内确认输入、写 reply/final、补铃并推导 Issue 状态，重发返回已提交结果。
+[DaemonTurnBridge](../../packages/server/src/store/inbox/daemon-turn-bridge.ts) 提供 `offerInput`、`snapshot`、`rpc`、`complete`。所有 RPC 检查 workspace/runtime/daemon/current-attempt 绑定；旧 attempt 无法提交。offer 使用 lane 游标和 `taskSessionInput` 的 unread_range，触发消息正文最多内联 8,000 字，长正文通过 message list 范围读取。正文、HTML、任意 metadata 与卡片凭据不重复塞入输入帧。折叠正文或仅提供范围提示的上下文未完整读取时不能越过它确认输入；snapshot 只投递轮开始后当前 lane 的 now 插话与 wrap-up 标记。daemon 收到决策答复的投影通知后，用 `turn.decision.get` 一次读取原始完整 reply；创建时使用 `metadata.kind` 区分 permission/question，permission 的原始 options 保留在 human_request payload，消息 options 使用卡片 label/value 结构。complete 在终态事务内确认输入、写 reply/final、补铃并推导 Issue 状态，重发返回已提交结果。
 
-[server 启动](../../packages/server/src/api/server.ts) 默认调用 `Store.getDaemonTurnBridge()`，同一实例用于 offer、下行快照、RPC 和完成报告；测试可用 `daemonTurnBridge` 显式覆盖。传输接入已在此分支完成，生产切换和 212 真机验收另行执行。定向集成验证入口为 `tests/unit/daemon/task-downlinks.test.ts` 的 Store bridge 用例。
+[server 启动](../../packages/server/src/api/server.ts) 默认调用 `Store.getDaemonTurnBridge()`，同一实例用于 offer、下行快照、RPC 和完成报告；测试可用 `daemonTurnBridge` 显式覆盖。传输接入已在此分支完成，生产切换和 212 真机验收另行执行。定向集成验证入口为 `tests/unit/daemon/task-downlinks.test.ts` 的 Store bridge 用例，以及 `decision-callback-integration.test.ts` 的双后端真实 callback、未读范围和附件下载/注入用例。
 
 ## 状态与迁移
 

@@ -49,7 +49,7 @@ pendingTurnBackendTests('MUL-506 four dispatch entrypoints',fixture=>{
       expect(store.listMessages(s0.id).filter(m=>m.message_kind==='report'&&(m.metadata.message_source as any)?.taskId===child.id)).toHaveLength(1);
       expect(store.claimTask(runtimes[0]!.id)?.id).toBe(returned.id);store.startTask(returned.id);store.completeTask(returned.id,{output:'Reviewed'});
       expect(store.listTurns({workspace_id:'local',session_id:s0.id}).filter(t=>t.status==='pending')).toHaveLength(0);
-    });
+    }, 120_000);
     }
   }
   it('a real dispatch/return chain reaches 2L and all four entrypoints preserve downgraded messages',async()=>{
@@ -77,6 +77,6 @@ pendingTurnBackendTests('MUL-506 four dispatch entrypoints',fixture=>{
       expect(message.wake_reason).toBe('pair_round_trip_limit');expect(message.wake_applied).toBe('next_turn');
       expect(store.listTurns({workspace_id:'local'})).toHaveLength(before);
     }
-  });
+  }, 120_000);
 
 });

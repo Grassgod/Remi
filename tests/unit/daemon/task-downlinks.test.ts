@@ -203,7 +203,7 @@ describe("turn input push inbox over native WS", () => {
       h.inbox.beginDecision(task.id);
       const result = await h.inbox.rpc("turn.decision", { ...h.inbox.turnInput(task.id),
         dedupe_key: "permission_live", body_md: "Allow tool?", options: [{ label: "Allow", value: "allow" }],
-        metadata: { decision_kind: "permission" }, timeout_ms: 1000 });
+        metadata: { kind: "permission" }, timeout_ms: 1000 });
       const decision = result.message as UnifiedMessage;
       h.inbox.registerDecision(decision, task.id);
       const waiting = h.inbox.waitForDecisionReply(decision.id, new AbortController().signal, 1000);

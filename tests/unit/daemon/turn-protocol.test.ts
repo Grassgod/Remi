@@ -77,6 +77,20 @@ describe("unified turn input", () => {
     expect(h.inbox.turnInput("tsk_one").input_to_seq).toBe(3);
   });
 
+  it("keeps a canonical range hint when expiry returns the answer before its WS projection", async () => {
+    const h = downlinks();
+    h.inbox.beginDecision("tsk_one");
+    h.inbox.registerDecision(message(2, { id: "decision_one", message_kind: "decision", sender_type: "agent" }), "tsk_one");
+    h.inbox.confirmDecisionReply("tsk_one", message(4, { id: "reply_one", reply_to_id: "decision_one" }));
+    h.inbox.finishDecision("tsk_one");
+    const pending = h.inbox.pendingTaskSteerMessages("tsk_one");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.content).toContain("remi message list");
+    expect(pending[0]!.content).not.toContain("remi session log get");
+    await expect(h.inbox.consumeTaskSteerMessages("tsk_one", [])).rejects.toThrow("unconfirmed turn input gap");
+    expect(h.inbox.turnInput("tsk_one").input_to_seq).toBe(1);
+  });
+
   it("delivers wrap-up once as a control and keeps the message cursor unchanged", async () => {
     const h = downlinks(); let interrupted = 0;
     h.inbox.subscribeTaskSteerMessages("tsk_one", () => interrupted++);
@@ -248,9 +262,9 @@ describe("unified store transport boundary", () => {
     } });
     try {
       const payload = { turn_id: "turn_one", attempt_id: "tsk_one", body_md: "Allow tool?", dedupe_key: "permission:one",
-        options: [{ label: "Allow once", value: "allow", description: "allow_once" }], metadata: { decision_kind: "permission" } };
+        options: [{ label: "Allow once", value: "allow", description: "allow_once" }], metadata: { kind: "permission" } };
       expect(await reportFrame(store, "turn.decision", payload, { runtimeId: rt.id, turns })).toMatchObject({
-        ok: true, message: { message_kind: "decision", metadata: { decision_kind: "permission" } }, status: "awaiting_human",
+        ok: true, message: { message_kind: "decision", metadata: { kind: "permission" } }, status: "awaiting_human",
       });
       expect(calls).toEqual([{ type: "turn.decision", payload,
         scope: { runtimeId: rt.id, daemonId: "fixture-reports", workspaceId: "local" } }]);

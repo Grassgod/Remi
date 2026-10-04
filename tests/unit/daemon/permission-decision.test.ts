@@ -44,7 +44,7 @@ function fixture(input: { reply?: UnifiedMessage | null; expiredReply?: UnifiedM
       rpc: async (type: string, payload: Record<string, unknown>) => {
         calls.push({ type, payload });
         if (input.failure) throw input.failure;
-        return type === "turn.decision" ? { ok: true, message: decision } : { ok: true, reply: input.expiredReply };
+        return type === "turn.decision" ? { ok: true, message: decision } : { ok: true, reply: type === "turn.decision.get" ? input.reply : input.expiredReply };
       },
       registerDecision: (message: UnifiedMessage, attempt: string) => {
         expect(message).toBe(decision); expect(attempt).toBe("tsk_one");
@@ -67,13 +67,14 @@ describe("permission decision messages", () => {
   for (const optionId of ["allow", "deny"]) it(`returns the selected ${optionId} option and confirms its reply`, async () => {
     const reply = answer(optionId); const h = fixture({ reply });
     expect(await h.run()).toEqual({ outcome: "selected", optionId });
-    expect(h.calls).toHaveLength(1);
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls[1]!.type).toBe("turn.decision.get");
     expect(h.calls[0]).toMatchObject({ type: "turn.decision", payload: {
       turn_id: "turn_one", attempt_id: "tsk_one", timeout_ms: 1000,
       body_md: "Permission requested: Write file",
       options: [{ label: "Allow once", value: "allow", description: "allow_once" },
         { label: "Reject", value: "deny", description: "reject_once" }],
-      metadata: { decision_kind: "permission", session_id: params.sessionId, tool_call: params.toolCall, options: params.options },
+      metadata: { kind: "permission", session_id: params.sessionId, tool_call: params.toolCall, options: params.options },
     } });
     expect(h.calls[0]!.payload.dedupe_key).toMatch(/^permission:tsk_one:/);
     expect(h.calls[0]!.payload).not.toHaveProperty("task_id");
