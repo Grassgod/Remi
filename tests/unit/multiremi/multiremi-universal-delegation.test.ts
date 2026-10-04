@@ -163,7 +163,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
             expect(returned).toMatchObject({ agentId: f.qa.id, issueId: f.a.id, issueSessionId: f.s0.id,
               parentTaskId: child.id, delegatedByAgentId: f.qa.id });
             const body = inboxReportBody(store, returned, child.id);
-            expect(body).toContain(`Status: ${terminal}\nIssue: ${f.b.key} (${f.b.id})\n`);
+            expect(body).toContain(`Status: ${terminal}\n来源：${f.b.key}\n`);
             expect(body).toContain(f.atlas.name);
             expect(body).toContain(`结论评论：${conclusion.id}`);
             if (terminal === "completed") expect(body).toContain("摘要：验收不通过");
@@ -188,7 +188,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
             expect(daemonInput).toContain(conclusion.id);
             const messages = (offer.session_projection as { jsonl: string }).jsonl.split("\n")
               .map(line => JSON.parse(line) as { type: string; body?: string });
-            expect(messages.some(message => message.body?.includes(`Status: ${terminal}\nIssue: ${f.b.key} (${f.b.id})\n`)))
+            expect(messages.some(message => message.body?.includes(`Status: ${terminal}\n来源：${f.b.key}\n`)))
               .toBe(true);
             expect(inboxReportBody(store, returned, child.id)).toBe(body);
             store.completeTask(returned.id, { output: "Reviewed." });
@@ -216,7 +216,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           store.completeTask(child.id, { output: "验收不通过：测试阻塞项" });
           const returned = store.getTask(store.getTask(child.id)!.delegationReturnTaskId!)!;
           expect(returned).toMatchObject({ agentId: f.leader.id, issueId: f.a.id, issueSessionId: f.s0.id });
-          expect(inboxReportBody(store, returned, child.id)).toContain(`Status: completed\nIssue: ${f.b.key} (${f.b.id})\n`);
+          expect(inboxReportBody(store, returned, child.id)).toContain(`Status: completed\n来源：${f.b.key}\n`);
           expect(inboxReportBody(store, returned, child.id)).toContain(conclusion.id);
           expect(inboxReportBody(store, returned, child.id)).toContain("摘要：验收不通过");
           expect(store.listTasksForIssue(f.a.id).filter(t => t.issueSessionId === f.wrong.id)).toHaveLength(0);

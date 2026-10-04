@@ -60,8 +60,9 @@ The return machinery already supports any dispatcher with an Issue Session.
    notice and audit in a separate transaction. Mention refusal records them in
    the comment's dispatch transaction. No schema migration is required.
 7. ADR 0013's short doorbell and real result-comment reference remain the
-   delivery contract. Cross-Issue doorbells insert `Issue: <KEY> (<id>)`
-   immediately after `Status:`; same-Issue doorbells omit it. Return destination,
+   delivery contract. Cross-Issue doorbells name the delegate's Issue with the
+   ADR 0013 `来源：<KEY>` line immediately after `Status:` (the result-comment
+   line already carries the Issue id); same-Issue doorbells omit it. Return destination,
    once-only coverage, successor handling and cancelled-summary behavior remain
    owned by the existing terminal/return machinery. System envelopes do not
    parse their body as agent dispatch.

@@ -7111,7 +7111,6 @@ function delegationTerminalReportSection(report: DelegationTerminalReport, comme
         ? `${report.sourceAgentName} could not complete a task you delegated.`
         : `A task you delegated to ${report.sourceAgentName} was cancelled.`,
     `Status: ${report.terminalStatus}`,
-    ...(report.crossIssue ? [`Issue: ${report.sourceIssueKey} (${report.source.issueId})`] : []),
     ...(report.crossIssue && report.sourceIssueKey ? [`来源：${report.sourceIssueKey}`] : []),
     report.resultCommentId
       ? `结论评论：${report.resultCommentId}（remi comment list ${report.source.issueId} --thread ${report.resultCommentId}）`
