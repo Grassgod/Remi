@@ -253,7 +253,16 @@ for (const backend of ["SQLite", "Postgres"] as const) {
             const request = store.getTaskHumanRequest(requestId);
             return request?.taskId === taskId ? request : null;
           },
-          respond: (taskId, requestId, response, credential) => client.respondTaskHumanRequest(taskId, requestId, response, credential),
+          // Exercise the server's existing token route directly; the daemon's
+          // old human-request transport is retired, and S4 owns card migration.
+          respond: async (taskId, requestId, response, credential) => {
+            const result = await f.api.request(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/respond`, {
+              method: "POST", headers: { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" },
+              body: JSON.stringify({ response, token: credential?.token, operator_open_id: credential?.operatorOpenId }),
+            });
+            if (!result.ok) throw new Error(`Card response failed: ${result.status}`);
+            return (await result.json() as { request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest }).request;
+          },
           getDecision: (issueId, requestId) => client.getFeishuIssueDecision(issueId, requestId),
           answer: (issueId, requestId, answer, credential) => client.answerFeishuIssueDecision(issueId, requestId, { answer, ...credential }),
         });

@@ -1,6 +1,7 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { DaemonProtocolClient, type DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
-import { registerDaemonOfferHandler, type OfferRejection } from "@multiremi/worker/daemon-offers.js";
+import { normalizeDaemonTurnOffer, registerDaemonOfferHandler, type OfferRejection } from "@multiremi/worker/daemon-offers.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 
 class OfferSocket implements DaemonProtocolSocketLike {
@@ -29,7 +30,7 @@ function fixture() {
   const lane = { runtime: () => ({ runtime_id: "rt_unit", provider: "claude", max_concurrency: 1, active_task_ids: [] }),
     heartbeat: () => ({ active_task_count: 0 }), onHeartbeatAck: async () => {}, probeUpgrade: async () => {}, onTerminal: async () => {} };
   client.addLane(lane); client.startLane(lane);
-  socket.emit("open", {}); socket.frame({ t: "welcome", p: { protocol: 2, session_id: "unit" } });
+  socket.emit("open", {}); socket.frame({ t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "unit" } });
   const hb = socket.sent.find(frame => frame.t === "hb")!;
   socket.frame({ t: "res", re: hb.id, p: { ok: true, runtime_acks: [] } });
   let rejection: OfferRejection | null = null;
@@ -37,7 +38,9 @@ function fixture() {
   registerDaemonOfferHandler(client, { runtimeId: () => "rt_unit", rejection: () => rejection, run: task => { handled.push(task.id); } });
   let seq = 0;
   const offer = async (id: string, rt = "rt_unit") => {
-    socket.frame({ t: "task.offer", seq: ++seq, rt, p: { id, runtime_id: rt, agent_id: "agt_unit", prompt: "work", agent: { provider: "claude" } } });
+    socket.frame({ t: "task.offer", seq: ++seq, rt, p: { attempt_id: id, turn_id: "turn_unit",
+      input_from_seq: 0, input_to_seq: 1, input_messages: [{ id: "msg_unit", kind: "message", seq: 1, body_md: "work" }],
+      runtime_id: rt, agent_id: "agt_unit", agent: { provider: "claude" } } });
     await client.drain();
     return socket.sent.findLast(frame => frame.t === "res" && frame.re === String(seq));
   };
@@ -45,6 +48,15 @@ function fixture() {
 }
 
 describe("daemon task offers", () => {
+  it("constructs input only from the ordered message range and keeps attempts as local keys", () => {
+    const payload = { turn_id: "turn_distinct", attempt_id: "tsk_attempt", input_from_seq: 2, input_to_seq: 5,
+      input_messages: [{ id: "m3", kind: "message", seq: 3, body_md: "first" }, { id: "m5", kind: "message", seq: 5, body_md: "second" }] };
+    expect(normalizeDaemonTurnOffer(payload)).toMatchObject({ id: "tsk_attempt", turn_id: "turn_distinct", prompt: "first\n\nsecond" });
+    expect(() => normalizeDaemonTurnOffer({ ...payload, prompt: "legacy" })).toThrow("invalid turn offer");
+    expect(() => normalizeDaemonTurnOffer({ ...payload, turn_id: undefined })).toThrow("invalid turn offer");
+    expect(() => normalizeDaemonTurnOffer({ ...payload, input_to_seq: 4 })).toThrow("invalid turn offer input range");
+    expect(() => normalizeDaemonTurnOffer({ ...payload, input_messages: [...payload.input_messages].reverse() })).toThrow("invalid turn offer input range");
+  });
   it("accepts and executes an entity once, including a replay after capacity fills", async () => {
     const h = fixture();
     expect((await h.offer("tsk_one"))?.p).toEqual({ ok: true });

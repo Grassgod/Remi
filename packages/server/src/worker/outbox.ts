@@ -17,6 +17,7 @@ import {
 const log = createLogger("multiremi-outbox");
 
 export type MultiremiOutboxKind =
+  | "turn.complete"
   | "start"
   | "prompt"
   | "session_pin"
@@ -36,7 +37,7 @@ export type MultiremiOutboxKind =
   | "feishu.outbound_result"
   | "plugin.state";
 
-const TERMINAL_KINDS = new Set<MultiremiOutboxKind>(["complete", "fail"]);
+const TERMINAL_KINDS = new Set<MultiremiOutboxKind>(["complete", "turn.complete", "fail"]);
 
 export interface MultiremiOutboxRecord {
   id: number;
@@ -458,7 +459,7 @@ export class MultiremiTaskReportOutbox {
         this.recordWaiters.delete(id);
       }
     } catch (error) {
-      if (error instanceof DaemonProtocolRpcError && error.code === "steer_pending" && record.kind === "complete") {
+      if (error instanceof DaemonProtocolRpcError && error.code === "turn_input_pending" && record.kind === "turn.complete") {
         if (this.closed) return;
         const waiter = this.recordWaiters.get(record.id);
         this.deleteRecords(recordIds);

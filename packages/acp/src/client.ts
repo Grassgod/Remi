@@ -160,6 +160,8 @@ export class AcpClient {
     // A platform downgrade (macOS) hands back the environment it needs; the
     // caller's own `env` object is never mutated.
     if (launch.env) Object.assign(env, launch.env);
+    // Drop the retired identity after every overlay, including machine env.
+    delete env.MULTIREMI_TASK_ID;
     this._process = Bun.spawn([launch.executable, ...launch.args], {
       stdin: "pipe",
       stdout: "pipe",
