@@ -80,8 +80,11 @@ pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
         expect(claimed?.id).toBe(replacement.id);
         f.store.startTask(replacement.id);
         const coldOffer = bridge.offerInput(f.store.getTaskWithAgent(replacement.id)!);
-        expect(coldOffer.input_from_seq).toBe(offer.input_to_seq);
+        expect(coldOffer.input_from_seq).toBe(0);
         expect(coldOffer.input_messages.some(m => m.id === sent.message.id)).toBe(true);
+        expect(f.store.getSessionAgentReadProgress(s.id, a.id)).toEqual({ seq: offer.input_to_seq, offset: 0 });
+        f.store.recordSessionAgentInlineRead(s.id, a.id, [], coldOffer.input_to_seq, true, replacement.id);
+        expect(f.store.getSessionAgentReadProgress(s.id, a.id)).toEqual({ seq: 0, offset: 0 });
         expect(bridge.rpc('turn.input', { turn_id: sent.turn_id, attempt_id: replacement.id, input_to_seq: coldOffer.input_to_seq, message_ids: coldOffer.input_messages.map(m => m.id) }, scope).ok).toBe(true);
         expect(bridge.complete({ payload: { turn_id: sent.turn_id!, attempt_id: replacement.id, input_to_seq: coldOffer.input_to_seq, reply: { body_md: 'cold completed', message_kind: 'reply' } }, completionFields: null }, scope).ok).toBe(true);
         expect(f.store.getTurn(sent.turn_id!)?.status).toBe('completed');

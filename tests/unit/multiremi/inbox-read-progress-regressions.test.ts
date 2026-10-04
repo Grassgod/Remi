@@ -1,6 +1,8 @@
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { MultiremiStore } from '@multiremi/store.js';
+import { daemonTaskClaimResponse } from '@multiremi/api/wire/tasks.js';
+import { useTaskSessionInput } from '@multiremi/api/daemon-protocol/offer-budget.js';
 
 pendingTurnBackendTests('MUL-506 actual reader and provider checkpoints', fixture => {
   function setup(chat = false, body = 'original input') {
@@ -54,7 +56,7 @@ pendingTurnBackendTests('MUL-506 actual reader and provider checkpoints', fixtur
     expect(f.lane()).toMatchObject({ cursor_seq: 0, cursor_offset: before.offset, provider_cursor_seq: head });
   });
 
-  for (const accepted of [false, true]) it(`cold bootstrap ${accepted ? 'acceptance' : 'rejection'} never rewinds the actual reader`, () => {
+  for (const accepted of [false, true]) it(`cold bootstrap ${accepted ? 'acceptance resets' : 'rejection preserves'} actual reading`, () => {
     const f = setup();
     const head = f.store.getConversationLogHead(f.session.id)!.headSeq;
     f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: head + 1, offset: 0 }, f.attempt.id);
@@ -63,12 +65,33 @@ pendingTurnBackendTests('MUL-506 actual reader and provider checkpoints', fixtur
     expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(before);
     const retried = f.store.retryTurn(f.sent.turn_id!, true);
     expect(f.store.claimTask('rt_read')?.id).toBe(retried.current_attempt_id!);
-    if (accepted) f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], head, true, retried.current_attempt_id!);
+    const bridge = f.store.getDaemonTurnBridge();
+    const offered = bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
+    expect(offered.input_from_seq).toBe(0);
+    expect(offered.input_messages.some(message => message.id === f.sent.message.id)).toBe(true);
+    const claimed = f.store.getTaskWithAgent(retried.current_attempt_id!)!;
+    const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
+    useTaskSessionInput(f.store, claimed, response);
+    const sessionProjection = response.session_projection as { mode: string; jsonl: string };
+    expect(sessionProjection.mode).toBe('bootstrap');
+    const projection = sessionProjection.jsonl.split('\n').map(line => JSON.parse(line));
+    expect(projection[0].from_seq).toBe(0);
+    expect(projection[0].instruction).toContain(`--from 0 --to ${head}`);
+    expect(projection.some(entry => entry.type === 'triggering_message' && entry.body === 'original input')).toBe(true);
     expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(before);
-    expect(f.lane()).toMatchObject({ cursor_seq: before.seq, cursor_offset: before.offset });
-    const input = f.store.getDaemonTurnBridge().offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
-    expect(input.input_from_seq).toBe(before.seq);
+    if (accepted) f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], head, true, retried.current_attempt_id!);
+    const progress = accepted ? { seq: 0, offset: 0 } : before;
+    expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(progress);
+    expect(f.lane()).toMatchObject({ cursor_seq: progress.seq, cursor_offset: progress.offset });
+    const input = bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
+    expect(input.input_from_seq).toBe(0);
     expect(input.input_messages.some(message => message.id === f.sent.message.id)).toBe(true);
+    if (accepted) {
+      f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: 2, offset: 0 }, retried.current_attempt_id!);
+      expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: 1, offset: 0 });
+      f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: head + 1, offset: 0 }, retried.current_attempt_id!);
+      expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(before);
+    }
   });
 
   for (const retire of [false, true]) it(`${retire ? 'daemon retirement' : 'runtime deletion'} resets provider state and preserves actual partial reading`, async () => {

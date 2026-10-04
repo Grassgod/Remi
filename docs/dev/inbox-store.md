@@ -16,7 +16,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。
 
-[lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。取消或最终失败的轮会消费它的原触发消息，后续未读消息仍补铃；未读委派报告补铃时，其回程指针更新到承接消息的后继轮。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap。lane 的 `cursor_seq/cursor_offset` 只表示实际读取高水位；范围读和合法连续 `turn.input` 确认才推进它。完成、取消、补铃、扫描和冷恢复均不改写该游标；Runtime 删除和 daemon 退役也只重置 provider 位置。`provider_cursor_seq` 单独记录 provider 续接/完成位置，`turn.input_to_seq` 记录业务轮消费边界。
+[lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。取消或最终失败的轮会消费它的原触发消息，后续未读消息仍补铃；未读委派报告补铃时，其回程指针更新到承接消息的后继轮。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap。lane 的 `cursor_seq/cursor_offset` 表示当前 provider 会话的实际读取高水位；范围读和合法连续 `turn.input` 确认才推进它。完成、取消、补铃和扫描不改写该游标。新的 provider 会话接受冷 bootstrap 后清零，再按读取和完整 inline 连续确认抬高；准备和拒绝不清零。冷重试的输入范围从 0 开始，原始输入保留且折叠正文必须用新 attempt 重新读取。Runtime 删除和 daemon 退役只重置 provider 位置。`provider_cursor_seq` 单独记录 provider 续接/完成位置，`turn.input_to_seq` 记录业务轮消费边界。
 
 ## Store 消费接口
 

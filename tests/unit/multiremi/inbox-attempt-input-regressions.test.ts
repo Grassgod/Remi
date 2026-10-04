@@ -27,10 +27,13 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         expect(f.store.claimTask('rt_input')?.id).toBe(retried.current_attempt_id!);
         f.store.startTask(retried.current_attempt_id!);
         const input = f.bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
-        expect(input.input_from_seq).toBe(cursor);
+        expect(input.input_from_seq).toBe(0);
         expect(input.input_messages.find(m => m.id === f.sent.message.id)?.body_md).toContain('还有 12000 字没看');
         expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).code).toBe('input_gap');
         expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq).toBe(cursor);
+        f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], input.input_to_seq, true, retried.current_attempt_id!);
+        expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
+        expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).code).toBe('input_gap');
         expect(f.store.getTurn(f.sent.turn_id!)!.input_to_seq).toBe(f.offer.input_to_seq);
         f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: input.input_to_seq + 1, offset: 0 }, retried.current_attempt_id!);
         expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
@@ -46,8 +49,10 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         const retried = f.store.retryTurn(f.sent.turn_id!, true);
         expect(f.store.claimTask('rt_input')?.id).toBe(retried.current_attempt_id!);
         const input = f.bridge.offerInput(f.store.getTaskWithAgent(retried.current_attempt_id!)!);
-        expect(input.input_from_seq).toBe(offered.input_to_seq);
+        expect(input.input_from_seq).toBe(0);
         expect(input.input_messages.map(m => m.id)).toEqual([f.sent.message.id, second.message.id]);
+        f.store.recordSessionAgentInlineRead(f.session.id, f.agent.id, [], input.input_to_seq, true, retried.current_attempt_id!);
+        expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
         expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
     });
     it('resumed replacement keeps its provider receipt and receives only later input', () => {

@@ -90,7 +90,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId, task.id).seq;
   const coldStart = projection.mode === "bootstrap";
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
-    fromSeq: coldStart && task.attempt <= 1 ? 0 : Math.min(readSeq, projection.to_seq),
+    fromSeq: coldStart ? 0 : Math.min(readSeq, projection.to_seq),
     toSeq: projection.to_seq, entries, triggerSeqs: triggers, coldStart });
   if (triggers.size) response.prompt = "Respond to the triggering messages in Current Session Context. 动手前先读完未读的部分，了解上下文。";
   if (triggers.size) delete response.chat_message;

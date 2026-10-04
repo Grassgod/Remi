@@ -10,7 +10,7 @@
 - 编号：设计时暂定 0013，因 main 上已有 0013、0014，合入集成分支时改为 0015（MUL-493 方案修订 cmt_mnjqdgx7jwvr §3）。
 
 
-MUL-506 QA 修订（贺华杰，2026-10-05）：lane 的 `cursor_seq/cursor_offset` 只保存实际读取高水位，范围完整读取或连续输入确认才推进。轮完成和冷恢复不重置或推进它；provider 续接/完成位置另存 `provider_cursor_seq`，业务消费边界存 `turn.input_to_seq`。同轮换尝试使用 attempt 自己的确认和正文读取凭据，冷 replacement 从实际高水位开始并补回原始输入。此裁定取代 ADR 0013 中“接受 bootstrap 重置实际读高水位”的旧规则。
+MUL-506 QA 修订（贺华杰，2026-10-05）：lane 的 `cursor_seq/cursor_offset` 只保存当前 provider 会话的实际读取高水位，范围完整读取或连续输入确认才推进。轮完成不重置或推进它；provider 续接/完成位置另存 `provider_cursor_seq`，业务消费边界存 `turn.input_to_seq`。本 ADR 继承 ADR 0013 的冷 bootstrap 语义：新 provider 的输入从 0 开始，接受后实际读取高水位清零，再按连续读取或完整 inline 输入确认抬高；准备或拒绝不会清零。冷 replacement 同样从 0 重读并包含原轮的原始输入，使用新 attempt 自己的确认和正文读取凭据。Runtime 删除或 daemon 退役仅重置 provider 续接缓存，不在运行环境变化时清零实际读取。
 
 ## 背景
 

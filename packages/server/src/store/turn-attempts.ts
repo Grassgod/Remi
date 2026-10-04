@@ -40,7 +40,7 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
     plugin_snapshot:"[]",codex_profile:null,claude_profile:null});
   const lane=db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?").get(turn.session_id,turn.agent_id,turn.execution_scope);
   const cold=input.cold||!previous.session_id;
-  const from=cold?Number(lane?.cursor_seq??0):Number(previous.input_ack_seq??turn.input_to_seq??lane?.cursor_seq??0);
+  const from=cold?0:Number(previous.input_ack_seq??turn.input_to_seq??lane?.cursor_seq??0);
   Object.assign(value,{input_ack_seq:from,input_read_seq:cold?0:Number(previous.input_read_seq??from),
     input_read_offset:cold?0:Number(previous.input_read_offset??0),input_trigger_ack:cold?0:1});
   Object.assign(value,{id,turn_id:turnId,attempt_no:attemptNo,status:"offered" satisfies TurnAttemptStatus,created_at:now,updated_at:now});

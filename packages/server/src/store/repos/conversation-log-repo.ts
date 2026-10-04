@@ -149,7 +149,7 @@ export class ConversationLogRepo {
   }
 
   private updateAgentReadProgress(sessionId: string, agentId: string,
-    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress, attemptId?: string): SessionAgentReadProgress {
+    advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress, attemptId?: string, resetForBootstrap = false): SessionAgentReadProgress {
     return this.ctx.db.transaction(() => {
       const source=attemptId
         ?this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId)
@@ -167,13 +167,15 @@ export class ConversationLogRepo {
       const row=this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
         WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope)!;
       const receipt=turn?attemptInputState(this.ctx,turn):null;
-      const current=receipt?{seq:receipt.read,offset:receipt.offset}:{seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
+      const current=resetForBootstrap?{seq:0,offset:0}:receipt?{seq:receipt.read,offset:receipt.offset}:{seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
       const next=advance(current);
-      // A fresh provider may replay an older range; the lane never goes backwards.
-      if(next.seq>Number(row.cursor_seq)||next.seq===Number(row.cursor_seq)&&next.offset>Number(row.cursor_offset))
+      // Acceptance starts a new provider's reading history; reads within it stay monotonic.
+      if(resetForBootstrap||next.seq>Number(row.cursor_seq)||next.seq===Number(row.cursor_seq)&&next.offset>Number(row.cursor_offset))
         this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?,updated_at=?
           WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[next.seq,next.offset,at,sessionId,agentId,scope]);
-      if(turn&&(next.seq!==current.seq||next.offset!==current.offset))
+      if(turn&&resetForBootstrap)
+        this.ctx.db.run('UPDATE multiremi_turn_attempts SET input_ack_seq=0,input_read_seq=?,input_read_offset=?,input_trigger_ack=NULL WHERE id=?',[next.seq,next.offset,turn.current_attempt_id]);
+      else if(turn&&(next.seq!==current.seq||next.offset!==current.offset))
         this.ctx.db.run('UPDATE multiremi_turn_attempts SET input_read_seq=?,input_read_offset=? WHERE id=?',[next.seq,next.offset,turn.current_attempt_id]);
       return next;
     })();
@@ -203,8 +205,6 @@ export class ConversationLogRepo {
 
   recordSessionAgentInlineRead(sessionId: string, agentId: string, seqs: readonly number[], toSeq: number, coldStart = false, attemptId?: string): SessionAgentReadProgress {
     return this.updateAgentReadProgress(sessionId, agentId, current => {
-      // An accepted bootstrap has no provider memory, even if an earlier session read the log.
-      if (coldStart) current = { seq: 0, offset: 0 }; // Attempt replay only; lane remains monotonic.
       const inline = new Set(seqs);
       // Creating a turn now appends its pointer immediately. Accepting an
       // inline trigger acknowledges only through the last delivered input,
@@ -220,7 +220,7 @@ export class ConversationLogRepo {
         seq = entry.seq;
       }
       return seq > current.seq ? { seq, offset: 0 } : current;
-    }, attemptId);
+    }, attemptId, coldStart);
   }
 
   /**

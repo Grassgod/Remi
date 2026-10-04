@@ -1,7 +1,7 @@
 import type { SqlDatabase } from '../db/postgres.js';
 import type { StoreContext } from '../context.js';
 import { nowIso } from '@multiremi/ids.js';
-/** Business/lane high water stays monotonic; receipts belong to a provider attempt. */
+/** Business coverage stays monotonic; read receipts belong to a provider attempt. */
 export function migrateAttemptInput(db: SqlDatabase): void {
     const id = '20261005_attempt_input_receipts';
     if (db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(id))
@@ -24,7 +24,7 @@ export function migrateAttemptInput(db: SqlDatabase): void {
         db.run('INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?)', [id, nowIso()]);
     })();
 }
-/** Caller holds the lane mutex. A new provider replays context without rewinding the lane. */
+/** Caller holds the lane mutex. Preparing a new provider leaves actual reading unchanged. */
 export function attemptInputState(ctx: StoreContext, turn: any): {
     ack: number;
     read: number;
@@ -36,7 +36,7 @@ export function attemptInputState(ctx: StoreContext, turn: any): {
     if (attempt.input_ack_seq == null) {
         const lane = ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?")
             .get(turn.session_id, turn.agent_id, turn.execution_scope);
-        const from = Number(lane?.cursor_seq ?? 0);
+        const from = attempt.session_id ? Number(lane?.cursor_seq ?? 0) : 0;
         ctx.db.run('UPDATE multiremi_turn_attempts SET input_ack_seq=?,input_read_seq=?,input_read_offset=0 WHERE id=?', [from, from, attempt.id]);
         return { ack: from, read: from, offset: 0 };
     }
