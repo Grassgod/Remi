@@ -1577,6 +1577,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const conversation = loadConversation(c, store, sessionId);
     return conversation instanceof Response ? conversation : conversation.id;
   };
+  const denyLogRange = (c: Context) => c.req.query("from") != null || c.req.query("to") != null
+    ? c.json({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" }, 400)
+    : null;
   const recordLogRead = (message: string, data: Record<string, unknown>): void => {
     // Optional read telemetry cannot make an authorized read fail.
     try { log.info(message, data); } catch {}
@@ -1584,6 +1587,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log/locate", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const id = c.req.query("id");
     if (!id) return c.json({ error: "id is required" }, 400);
     const location = store.locateConversationLogEntry(sessionId, id);
@@ -1593,6 +1598,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log/entry", c => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const rawSeq = c.req.query("seq"), id = c.req.query("id");
     if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
     const seq = rawSeq == null ? store.locateConversationLogEntry(sessionId, id!)?.seq : /^(0|[1-9]\d*)$/.test(rawSeq) ? Number(rawSeq) : NaN;
@@ -1637,7 +1644,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
-    if (c.req.query("from") != null || c.req.query("to") != null) return c.json({ error: "log is display-only; use remi message list <conversation> --from <seq> --to <seq>" }, 400);
+    const deniedRange = denyLogRange(c);
+    if (deniedRange) return deniedRange;
     const readNumber = (name: string): number | null | undefined => {
       const raw = c.req.query(name);
       if (raw == null) return undefined;

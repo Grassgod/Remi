@@ -35,6 +35,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createReadPool, type ReadPool } from "@multiremi/store/db/read-pool.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import type { ApiRole } from "@multiremi/config/api-role.js";
+import { canUserViewTaskMessageFacts } from "../helpers/auth-guards.js";
 
 /** The codes a refused `stream.subscribe` can carry (see the C0 contract). */
 export type StreamSubscribeDenialCode = "invalid_payload" | "forbidden" | "wrong_endpoint" | "unavailable";
@@ -131,14 +132,7 @@ export function decideTraceSubscription(
 ): StreamSubscribeAuthorization {
   if (!facts) return { ok: false, code: "forbidden" };
   if (facts.workspaceId !== subject.workspaceId) return { ok: false, code: "forbidden" };
-  if (subject.userId == null) return { ok: true };
-  if (facts.chatSessionId) {
-    return facts.chatCreatorId === subject.userId ? { ok: true } : { ok: false, code: "forbidden" };
-  }
-  if (!facts.agentId) return { ok: true };
-  if (facts.agentVisibility !== "private") return { ok: true };
-  if (facts.agentOwnerId && facts.agentOwnerId === subject.userId) return { ok: true };
-  return facts.requesterIsWorkspaceAdmin ? { ok: true } : { ok: false, code: "forbidden" };
+  return canUserViewTaskMessageFacts(subject.userId, facts) ? { ok: true } : { ok: false, code: "forbidden" };
 }
 
 /**

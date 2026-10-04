@@ -16,6 +16,8 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用现有 `/api/attachments/:id/file`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
 
+网页 `/ws` 的 log 冷回放、补洞、entry 与 patch 使用同一来源规则与字段脱除；无权行仅发送序号和版本的隐藏标记，具体协议见[浏览器实时 v2](realtime-v2.md)。
+
 ## Message
 
 | HTTP | 输入 | 响应 |

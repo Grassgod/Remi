@@ -17,9 +17,11 @@ export function canAccessConversationTask(c: Context, store: MultiremiStore, tas
 /** Memo lives for one request and caches only this caller's source-task checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
   const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>();
-  return (entry: { kind: string; task_id: string | null; reply_to_id?: string | null; metadata: Record<string, any> }): boolean => {
-    if (entry.kind !== "turn" && !entry.metadata.human_request && !entry.metadata.human_response) return true;
-    const sourceId = entry.task_id ?? (entry.reply_to_id ? store.getMessage(entry.reply_to_id)?.task_id : null);
+  return (entry: ConversationVisibilityEntry): boolean => {
+    const sourceId = conversationEntrySource(entry,
+      id => store.getMessage(id),
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
+    if (sourceId === undefined) return true;
     if (!sourceId) return false;
     if (!allowed.has(sourceId)) {
       const turn = store.getTurn(sourceId) ?? store.getTurnForAttempt(sourceId);
@@ -28,6 +30,35 @@ export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
     }
     return allowed.get(sourceId)!;
   };
+}
+
+export interface ConversationVisibilityEntry {
+  kind: string;
+  task_id: string | null;
+  session_id?: string;
+  reply_to_id?: string | null;
+  parent_id?: string | null;
+  metadata: Record<string, any>;
+}
+
+/** undefined is unrestricted; null is a protected row with no resolvable source. */
+export function conversationEntrySource(
+  entry: ConversationVisibilityEntry,
+  reply: (id: string) => ConversationVisibilityEntry | null | undefined,
+  target: (seq: number) => ConversationVisibilityEntry | null | undefined,
+  depth = 0,
+): string | null | undefined {
+  if (depth > 4) return null;
+  if (entry.kind === "turn" || entry.metadata.human_request || entry.metadata.human_response) {
+    const replyId = entry.reply_to_id ?? entry.parent_id;
+    return entry.task_id ?? (replyId ? reply(replyId)?.task_id : null) ?? null;
+  }
+  // Edit/delete and lifecycle markers can contain the protected row's body.
+  if (Number.isSafeInteger(entry.metadata.target_seq)) {
+    const row = target(entry.metadata.target_seq);
+    return row ? conversationEntrySource(row, reply, target, depth + 1) : null;
+  }
+  return undefined;
 }
 
 export function loadConversation(c: Context, store: MultiremiStore, id: string) {
@@ -70,6 +101,12 @@ export function messageActor(c: Context, store: MultiremiStore, workspaceId: str
 }
 
 export function messageResponse<T extends object>(message: T) {
-  const { card_token_hash, card_token_recipient, card_token_consumed_at, ...publicMessage } = message as T & { card_token_hash?: unknown; card_token_recipient?: unknown; card_token_consumed_at?: unknown };
-  return publicMessage as Omit<T, "card_token_hash" | "card_token_recipient" | "card_token_consumed_at">;
+  return stripCardTokenFields(message) as Omit<T, "card_token_hash" | "card_token_recipient" | "card_token_consumed_at">;
+}
+
+export function stripCardTokenFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCardTokenFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("card_token_"))
+    .map(([key, nested]) => [key, stripCardTokenFields(nested)]));
 }

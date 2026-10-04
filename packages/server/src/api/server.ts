@@ -210,6 +210,7 @@ import {
 import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
 import { createConversationLogFillReader } from "./hub/conversation-log-fill-reader.js";
+import { createBrowserLogProjection } from "./hub/browser-log-projection.js";
 import { stopHubReadResources } from "./hub/hub-lifecycle.js";
 import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import {
@@ -1186,6 +1187,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     hub: liveHub,
     auth: streamAuth,
     endpoint: "log",
+    projectLogFrames: createBrowserLogProjection(store, readPool),
   });
   const traceStreams: BrowserStreamHandler = createBrowserStreamHandler({
     hub: liveHub,
