@@ -27,7 +27,7 @@ import {
 import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
-import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { ChatIssueTaskConflictError, DelegationRoundTripLimitError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
@@ -261,15 +261,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         return c.json({ error: "requested Issue Session does not match the continued task" }, 400);
       }
     }
-    const leaderDelegation = !continuedTask && taskToken && sourceTask && issue
-      ? store.isSquadLeaderDelegation({
-        issue,
-        sourceTask,
-        authorAgentId: taskToken.agentId,
-        targetAgentId: agent.id,
-        issueSessionId: inheritedIssueSessionId,
-      })
-      : null;
+    let delegation: ReturnType<typeof store.resolveAgentDelegation> | null = null;
+    try {
+      if (taskToken && sourceTask) delegation = store.resolveAgentDelegation({
+        targetIssue: continuedTask ? store.getIssue(continuedTask.issueId!) : issue,
+        sourceTask, authorAgentId: taskToken.agentId, targetAgentId: agent.id,
+      });
+    } catch (error) {
+      if (!(error instanceof DelegationRoundTripLimitError)) throw error;
+      store.recordDelegationRoundTripLimited(error);
+      return c.json({ error: error.message, code: error.code }, 409);
+    }
     // Keep continuation ancestry on the current Leader turn. A same-agent,
     // same-delegation successor of the previous child is reserved for retry /
     // self-continuation and intentionally suppresses that child's return in
@@ -305,15 +307,15 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
           delegationSkipReason: continuedTask.delegationSkipReason,
           wakeSource: continuedTask.wakeSource,
         }
-        : leaderDelegation?.ok
+        : delegation?.ok
         ? {
           ...(inheritedIssueSessionId ? { issueSessionId: inheritedIssueSessionId } : {}),
           delegationId: createId("dlg"),
           delegatedByAgentId: sourceTask!.agentId,
-          delegatedFromIssueSessionId: leaderDelegation.delegatedFromIssueSessionId,
+          delegatedFromIssueSessionId: delegation.delegatedFromIssueSessionId,
         }
-        : leaderDelegation?.reason
-          ? { delegationSkipReason: leaderDelegation.reason }
+        : delegation?.reason
+          ? { delegationSkipReason: delegation.reason }
           : {}),
     };
     assertRuntimeWorkspaceAccess(c, store, createInput.runtimeWorkspaceId ?? createInput.runtime_workspace_id, agent.workspaceId);

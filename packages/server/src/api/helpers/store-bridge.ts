@@ -6,6 +6,8 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { DelegationRoundTripLimitError } from "@multiremi/store/repos/tasks-repo.js";
+import { createId } from "@multiremi/ids.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import {
@@ -584,6 +586,7 @@ export function safeRerunIssue(
     agentId?: string;
     prompt?: string;
     parentTaskId?: string | null;
+    authorAgentId?: string | null;
     dependencyForce?: CreateTaskInput["dependencyForce"];
   },
 ): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
@@ -598,6 +601,10 @@ export function safeRerunIssue(
   // would reject the cross-workspace link, but fail loudly here first).
   if (agent.workspaceId !== issue.workspaceId) return { error: "agent not found", status: 404 };
   try {
+    const sourceTask = body.parentTaskId ? store.getTask(body.parentTaskId) : null;
+    const delegation = body.authorAgentId && sourceTask
+      ? store.resolveAgentDelegation({ sourceTask, authorAgentId: body.authorAgentId,
+        targetAgentId: agentId, targetIssue: issue }) : null;
     const task = store.createTask({
       agentId,
       issueId: issue.id,
@@ -605,9 +612,17 @@ export function safeRerunIssue(
       prompt: body.prompt ?? issue.title,
       parentTaskId: body.parentTaskId ?? null,
       dependencyForce: body.dependencyForce,
+      ...(delegation?.ok ? {
+        delegationId: createId("dlg"), delegatedByAgentId: sourceTask!.agentId,
+        delegatedFromIssueSessionId: delegation.delegatedFromIssueSessionId,
+      } : delegation?.reason ? { delegationSkipReason: delegation.reason } : {}),
     });
     return { task };
   } catch (error) {
+    if (error instanceof DelegationRoundTripLimitError) {
+      store.recordDelegationRoundTripLimited(error);
+      return { error: error.message, status: 409, code: error.code };
+    }
     // MUL-400 E3 gate 3: a rerun is a *new* round, so a waiting issue cannot
     // start one. The route answers 409 with the same code the status gate uses.
     if (error instanceof IssueDependencyError) {

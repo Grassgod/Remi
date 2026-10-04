@@ -100,42 +100,40 @@ for (const backend of ["sqlite", "postgres"] as const) {
   // These PG scenarios do several writes; CI runner jitter is outside the behavior asserted below.
   const pgScenarioTimeout = backend === "postgres" ? 15000 : 5000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
-    it("recognizes the child and sibling subtrees and explains rejected dispatches", async () => withStore(backend, async (store) => {
+    it("delegates inside and outside the subtree and retains audited exceptions", async () => withStore(backend, async (store) => {
       const f = fixture(store);
       const grandchild = store.createIssue({ title: "Grandchild", parentIssueId: f.child.id });
       const sibling = store.createIssue({ title: "Sibling", parentIssueId: f.parent.id });
       const siblingChild = store.createIssue({ title: "Sibling child", parentIssueId: sibling.id });
       for (const target of [f.child, grandchild, sibling, siblingChild]) {
-        const decision = store.isSquadLeaderDelegation({ issue: target, sourceTask: f.leaderTask,
-          authorAgentId: f.leader.id, targetAgentId: f.worker.id, issueSessionId: null });
+        const decision = store.resolveAgentDelegation({ targetIssue: target, sourceTask: f.leaderTask,
+          authorAgentId: f.leader.id, targetAgentId: f.worker.id });
         expect(decision).toEqual({ ok: true, delegatedFromIssueSessionId: f.leaderSession.id });
       }
       const unrelated = store.createIssue({ title: "Unrelated" });
-      const cases = [
-        [f.child, f.leaderTask, f.outsider.id, "target_not_squad_member"],
-        [unrelated, f.leaderTask, f.worker.id, "cross_issue_no_lineage"],
-        [f.child, f.leaderTask, f.leader.id, "self_dispatch"],
-      ] as const;
-      for (const [issue, sourceTask, targetAgentId, reason] of cases) {
-        expect(store.isSquadLeaderDelegation({ issue, sourceTask, authorAgentId: f.leader.id,
-          targetAgentId, issueSessionId: null })).toEqual({ ok: false, reason });
+      for (const [targetIssue, targetAgentId] of [[f.child, f.outsider.id], [unrelated, f.worker.id]] as const) {
+        expect(store.resolveAgentDelegation({ targetIssue, sourceTask: f.leaderTask,
+          authorAgentId: f.leader.id, targetAgentId }))
+          .toEqual({ ok: true, delegatedFromIssueSessionId: f.leaderSession.id });
       }
+      expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: f.leaderTask,
+        authorAgentId: f.leader.id, targetAgentId: f.leader.id })).toEqual({ ok: false, reason: "self_dispatch" });
       const chatSource = store.createTask({ agentId: f.leader.id, prompt: "Chat source" });
-      expect(store.isSquadLeaderDelegation({ issue: f.child, sourceTask: chatSource,
-        authorAgentId: f.leader.id, targetAgentId: f.worker.id, issueSessionId: null }))
+      expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: chatSource,
+        authorAgentId: f.leader.id, targetAgentId: f.worker.id }))
         .toEqual({ ok: false, reason: "source_not_issue_task" });
       const side = store.createIssueSession(f.parent.id, { parentSessionId: f.leaderSession.id });
       const sideTask = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
         issueSessionId: side.id, prompt: "Side source" });
-      expect(store.isSquadLeaderDelegation({ issue: f.child, sourceTask: sideTask,
-        authorAgentId: f.leader.id, targetAgentId: f.worker.id, issueSessionId: null }))
+      expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: sideTask,
+        authorAgentId: f.leader.id, targetAgentId: f.worker.id }))
         .toEqual({ ok: false, reason: "source_side_session" });
       const nonSquad = store.createIssue({ title: "Agent owner", parentIssueId: f.parent.id,
         assigneeType: "agent", assigneeId: f.leader.id });
       const nonSquadTask = store.createTask({ agentId: f.leader.id, issueId: nonSquad.id, prompt: "Lead" });
-      expect(store.isSquadLeaderDelegation({ issue: f.child, sourceTask: nonSquadTask,
-        authorAgentId: f.leader.id, targetAgentId: f.worker.id, issueSessionId: null }))
-        .toEqual({ ok: false, reason: "source_not_squad_leader" });
+      expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: nonSquadTask,
+        authorAgentId: f.leader.id, targetAgentId: f.worker.id }))
+        .toEqual({ ok: true, delegatedFromIssueSessionId: nonSquadTask.issueSessionId! });
     }));
 
     for (const terminal of ["completed", "failed", "cancelled"] as const) {
@@ -176,8 +174,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
 
     it("audits rejected cross-issue dispatch on both issues, but not a human dispatch", async () => withStore(backend, async (store) => {
       const f = fixture(store);
-      const rejected = await dispatch(store, f.leaderTask, f.child, f.outsider.id);
-      expect(rejected.delegationSkipReason).toBe("target_not_squad_member");
+      const rejected = await dispatch(store, f.leaderTask, f.child, f.leader.id);
+      expect(rejected.delegationSkipReason).toBe("self_dispatch");
       const human = store.createTask({ agentId: f.worker.id, issueId: f.child.id, prompt: "Human dispatch" });
       expect(human.delegationSkipReason).toBeNull();
       store.cancelTask(rejected.id);
@@ -250,16 +248,20 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(response.status).toBe(201);
       const manualId = ((await response.json()) as { task: { id: string } }).task.id;
       expect(store.getTask(manualId)?.wakeSource).toBeNull();
+      expect(store.getTask(manualId)?.triggerCommentId).toBeNull();
+      expect(store.getTask(manualId)?.delegatedByAgentId).toBe(f.worker.id);
       const leaderTasksBefore = store.listTasksForIssue(f.parent.id)
         .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort();
       store.cancelTask(childTask.id);
-      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manualId);
-      expect(activities(store, f.parent.id, "pending_turn_coalesced")
-        .some((activity) => (activity.data as Record<string, unknown>).task_id === manualId))
-        .toBe(true);
+      // Reverse task create is now independent delegated work in its own scope.
+      const returned = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+      expect(returned.id).not.toBe(manualId);
+      expect(returned).toMatchObject({ delegatedByAgentId: f.leader.id,
+        issueSessionId: f.leaderSession.id, wakeSource: "delegation_return" });
+      expect(inboxReportBody(store, returned, childTask.id)).toContain("Status: cancelled");
       expect(store.listTasksForIssue(f.parent.id)
         .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort())
-        .toEqual(leaderTasksBefore);
+        .toEqual([...leaderTasksBefore, returned.id].sort());
     }));
 
     it("keeps the wake source across a redispatch attempt", async () => withStore(backend, async (store) => {
