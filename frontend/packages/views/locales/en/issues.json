@@ -392,6 +392,21 @@
     "timeline_unavailable_hint": "Comments and activity live inside a session, so none of them can be shown until the session list loads.",
     "timeline_retry": "Try again"
   },
+  "log_event": {
+    "task_assigned": "{{author}} → {{assignee}} assigned a task: {{summary}}",
+    "task_received": "{{assignee}} received a task: {{summary}}",
+    "inbox_processed": "{{name}} processed new messages",
+    "delegation_completed": "{{reporter}} completed a task delegated by {{delegator}}",
+    "delegation_failed": "{{reporter}} could not complete a task delegated by {{delegator}}",
+    "delegation_cancelled": "A task delegated by {{delegator}} to {{reporter}} was cancelled",
+    "delegation_completed_generic": "The delegated task is complete",
+    "delegation_failed_generic": "The delegated task failed",
+    "delegation_cancelled_generic": "The delegated task was cancelled",
+    "delegation_updated": "The delegated task has an update",
+    "unknown_agent": "Agent",
+    "unknown_author": "Someone",
+    "generic": "Session update"
+  },
   "share": {
     "tooltip": "Share issue",
     "dialog_title": "Share issue",

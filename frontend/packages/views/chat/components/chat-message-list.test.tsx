@@ -13,6 +13,11 @@ vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
 
+vi.mock("@multiremi/core/paths", async importOriginal => {
+  const actual = await importOriginal<typeof import("@multiremi/core/paths")>();
+  return { ...actual, useWorkspacePaths: () => actual.paths.workspace("test") };
+});
+
 // The markdown pipeline and the attachment cards are exercised by their own
 // suites; here they only need to make their input assertable.
 vi.mock("../../common/markdown", () => ({
@@ -171,6 +176,25 @@ function renderList(
 }
 
 describe("ChatMessageList measurement contract", () => {
+  it("uses a plain event row for system messages and future log kinds", () => {
+    const client = new QueryClient();
+    const entries = ["message", "follow_frozen"].map((kind, index) => ({
+      session_id: "cs-1", seq: index + 1, id: `event-${index}`, revision: 1, kind,
+      author_type: "system", body_md: `# **Update ${index}** ises_123 tsk_123\nInternal second line`,
+      body_html: "<h1>Internal heading</h1>", render_version: "v",
+    }));
+    const replica = new MemorySessionReplica({ "cs-1": { entries } });
+    const view = render(<QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} />
+    </QueryClientProvider>);
+    expect(screen.getAllByRole("status", { hidden: true })).toHaveLength(2);
+    expect(view.container).toHaveTextContent("Update 0");
+    expect(view.container).toHaveTextContent("Update 1");
+    expect(view.container).not.toHaveTextContent(/ises_|tsk_|Internal/);
+    expect(view.container.querySelector("[data-entry-html]")).toBeNull();
+    view.unmount(); client.clear();
+  });
+
   it("marks exactly one terminal anchor on the last log row", () => {
     const { container } = renderList(
       [attachmentPush("msg-1", "first"), terminalReply("msg-2")],

@@ -110,6 +110,34 @@ describe("useStickToBottom", () => {
     expect(fixture.root.scrollTop).toBe(scrollTopAfterRelease);
   });
 
+  it("releases on a log disclosure click before expansion resizes the content", () => {
+    fixture.userScroll(600);
+    const { result } = renderStick(baseProps());
+    const button = document.createElement("button");
+    button.setAttribute("data-session-log-disclosure", "");
+    const icon = document.createElement("span");
+    button.appendChild(icon);
+    fixture.content.appendChild(button);
+    fire(() => icon.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(result.current.state).toBe("released");
+    fixture.setScrollHeight(1300);
+    fire(() => resize.trigger());
+    expect(fixture.root.scrollTop).toBe(600);
+    fixture.setScrollHeight(1000);
+    fire(() => resize.trigger());
+    expect(fixture.root.scrollTop).toBe(600);
+  });
+
+  it("keeps following after a regular content click", () => {
+    fixture.userScroll(600);
+    const { result } = renderStick(baseProps());
+    fire(() => fixture.content.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(result.current.state).toBe("pinned");
+    fixture.setScrollHeight(1300);
+    fire(() => resize.trigger());
+    expect(fixture.root.scrollTop).toBe(900);
+  });
+
   it.each([
     ["wheel up", (el: HTMLElement) => el.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))],
     ["touch drag", (el: HTMLElement) => el.dispatchEvent(new Event("touchmove", { bubbles: true }))],

@@ -15,6 +15,11 @@
     "send_failed": "Message was not sent. Your draft is saved; try again."
   },
   "message_list": {
+    "event_generic": "Session update",
+    "issue_update": "{{key}} has new progress",
+    "issue_update_completed": "{{key}} has new progress (completed)",
+    "issue_update_failed": "{{key}} has new progress (failed)",
+    "issue_update_cancelled": "{{key}} has new progress (cancelled)",
     "show_details": "Show details",
     "replied_in": "Replied in {{elapsed}}",
     "failed_after": "Failed after {{elapsed}}",

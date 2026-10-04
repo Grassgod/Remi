@@ -389,6 +389,21 @@
     "timeline_unavailable_hint": "コメントとアクティビティはセッションに属するため、セッション一覧を読み込めないと表示できません。",
     "timeline_retry": "再試行"
   },
+  "log_event": {
+    "task_assigned": "{{author}} → {{assignee}} タスクを委派：{{summary}}",
+    "task_received": "{{assignee}} がタスクを受け取りました：{{summary}}",
+    "inbox_processed": "{{name}} が新しいメッセージを処理しました",
+    "delegation_completed": "{{reporter}} が {{delegator}} から委派されたタスクを完了しました",
+    "delegation_failed": "{{reporter}} は {{delegator}} から委派されたタスクを完了できませんでした",
+    "delegation_cancelled": "{{delegator}} から {{reporter}} に委派されたタスクはキャンセルされました",
+    "delegation_completed_generic": "委派されたタスクが完了しました",
+    "delegation_failed_generic": "委派されたタスクが失敗しました",
+    "delegation_cancelled_generic": "委派されたタスクはキャンセルされました",
+    "delegation_updated": "委派されたタスクに進捗があります",
+    "unknown_agent": "エージェント",
+    "unknown_author": "担当者",
+    "generic": "セッションの更新"
+  },
   "share": {
     "tooltip": "Issue を共有",
     "dialog_title": "Issue を共有",

@@ -14,6 +14,11 @@
     "send_failed": "送信できませんでした。下書きは保存されています。再試行してください。"
   },
   "message_list": {
+    "event_generic": "セッションの更新",
+    "issue_update": "{{key}} に新しい進捗があります",
+    "issue_update_completed": "{{key}} に新しい進捗があります（完了）",
+    "issue_update_failed": "{{key}} に新しい進捗があります（失敗）",
+    "issue_update_cancelled": "{{key}} に新しい進捗があります（キャンセル）",
     "show_details": "詳細を表示",
     "replied_in": "{{elapsed}}で返信",
     "failed_after": "{{elapsed}}後に失敗",

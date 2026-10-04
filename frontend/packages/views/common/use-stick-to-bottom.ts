@@ -228,6 +228,12 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
       programmaticTopRef.current = null;
       release();
     };
+    const onDisclosureClick = (event: MouseEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-session-log-disclosure]")) return;
+      programmaticTopRef.current = null;
+      release();
+    };
     const onPointerDown = (event: PointerEvent): void => {
       // Grabbing the scrollbar: the pointer sits in the gutter to the right of
       // the client box, where no in-content element can be.
@@ -248,11 +254,13 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
 
     scrollEl.addEventListener("wheel", onWheel, { passive: true });
     scrollEl.addEventListener("touchmove", onTouchMove, { passive: true });
+    scrollEl.addEventListener("click", onDisclosureClick);
     scrollEl.addEventListener("pointerdown", onPointerDown);
     scrollEl.addEventListener("keydown", onKeyDown);
     return () => {
       scrollEl.removeEventListener("wheel", onWheel);
       scrollEl.removeEventListener("touchmove", onTouchMove);
+      scrollEl.removeEventListener("click", onDisclosureClick);
       scrollEl.removeEventListener("pointerdown", onPointerDown);
       scrollEl.removeEventListener("keydown", onKeyDown);
     };

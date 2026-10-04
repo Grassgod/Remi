@@ -19,7 +19,7 @@ import { AttachmentSchema } from "@multiremi/core/api/schemas";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
 import { SessionLogList } from "../../common/session-log/session-log-list";
-import { EntryHtml } from "../../common/session-log/entry-html";
+import { eventLayoutEntry } from "../../common/session-log/event-summary";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multiremi/core/agents";
@@ -34,6 +34,7 @@ import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
+import { ChatLogEventRow } from "./chat-log-event-row";
 
 // ─── Public component ────────────────────────────────────────────────────
 
@@ -101,7 +102,9 @@ export function ChatMessageList({
     if (visible) onLoadOlderMessages?.();
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
-    mergeOptimisticChatRows(entries.filter(entry => entry.seq > 0), optimisticRows), [optimisticRows]);
+    mergeOptimisticChatRows(entries.filter(entry => entry.seq > 0), optimisticRows).map(entry =>
+      entry.kind !== "turn" && (entry.kind !== "message" || (entry as SessionLogEntry & { author_type?: string }).author_type !== "member")
+        ? eventLayoutEntry(entry, "chat") : entry), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
   const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
@@ -133,11 +136,11 @@ export function ChatMessageList({
         metadata?: Record<string, unknown>;
       };
       if (row.kind !== "message" && row.kind !== "turn") {
-        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
+        return <ChatLogEventRow markdown={row.body_md} metadata={row.metadata} />;
       }
       const isUser = row.kind === "message" && row.author_type === "member";
       if (row.kind === "message" && !isUser) {
-        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
+        return <ChatLogEventRow markdown={row.body_md} metadata={row.metadata} />;
       }
       const message: ChatMessage = {
         id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",

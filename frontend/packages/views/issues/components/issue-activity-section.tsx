@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Agent, Attachment, IssueSession, MemberWithUser, TimelineEntry } from "@multiremi/core/types";
 import { useCreateComment, useUpdateComment, useDeleteComment, useResolveComment, useToggleCommentReaction } from "@multiremi/core/issues/comment-mutations";
@@ -10,8 +10,8 @@ import { AttachmentSchema, ReactionSchema } from "@multiremi/core/api/schemas";
 import { parseStrictResponse } from "@multiremi/core/api/schema";
 import { useWSEvent } from "@multiremi/core/realtime";
 import { SessionLogList } from "../../common/session-log/session-log-list";
-import { EntryHtml } from "../../common/session-log/entry-html";
-import { ReadonlyContent } from "../../editor";
+import type { SessionLogEntry } from "@multiremi/core/replica";
+import { eventLayoutEntry } from "../../common/session-log/event-summary";
 import { useT } from "../../i18n";
 import { useResolvedThreads } from "../hooks/use-resolved-threads";
 import { getSessionDisplayName } from "../utils/session-display";
@@ -26,7 +26,8 @@ import { TimelineSkeleton, TimelineUnavailable } from "./timeline-states";
 import { IssueSubscribersControl } from "./issue-subscribers-control";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
 import { AgentLiveCard } from "./agent-live-card";
-import { IssueResultActivityLines } from "./issue-key-results-section";
+import { IssueResultActivityLines, useVisibleResults } from "./issue-key-results-section";
+import { IssueLogEventRow } from "./issue-log-event-row";
 
 export const STICK_PIN_THRESHOLD_PX = 24;
 
@@ -67,6 +68,17 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
+  const results = useVisibleResults(issueId);
+  const resultsById = useMemo(() => new Map(results.map(result => [result.id, result])), [results]);
+  const actorNames = useMemo(() => new Map<string, string>([
+    ...agents.map(agent => [`agent:${agent.id}`, agent.name] as const),
+    ...members.flatMap(member => [[`member:${member.user_id}`, member.name], [`member:${member.id}`, member.name]] as const),
+  ]), [agents, members]);
+  const getActorName = (type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "";
+  const [expandedEvents, setExpandedEvents] = useState<ReadonlySet<string>>(new Set());
+  const transformEntries = useCallback((entries: readonly SessionLogEntry[]) => entries.map(entry =>
+    entry.seq > 0 && (entry.kind !== "message" || (entry as SessionLogEntry & { author_type?: string }).author_type === "system")
+      ? eventLayoutEntry(entry, "issue", expandedEvents.has(`${sessionId}:${entry.id}`)) : entry), [expandedEvents, sessionId]);
   const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   const [tasksReadySessionId, setTasksReadySessionId] = useState("");
   const onTasksReady = useCallback(() => setTasksReadySessionId(sessionId), [sessionId]);
@@ -119,6 +131,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
+    transformEntries={transformEntries}
     onRevealed={onContentReady}
     perfScroll="issue-detail" latestAnchor="latest-comment"
     contentReady={initialLog?.sessionId === sessionId || tasksReadySessionId === sessionId}
@@ -144,12 +157,20 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     renderEntry={({ entry }) => {
       const row = SessionLogEntrySchema.parse(entry);
       if (row.seq === 0) return <IssueLogHead issueId={issueId} title={issueTitle} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
-      if (row.kind !== "message" || row.author_type === "system") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
-        {row.metadata.type === "workspace_move_cleared"
-          ? formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
-            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)
-          : <EntryHtml html={row.body_html} markdown={row.body_md} fallback={<ReadonlyContent content={row.body_md} />} />}
-      </div>;
+      if (row.kind !== "message" || row.author_type === "system") {
+        if (row.metadata.type === "workspace_move_cleared") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
+          {formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
+            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)}
+        </div>;
+        const key = `${sessionId}:${row.id}`;
+        return <IssueLogEventRow row={row} expanded={expandedEvents.has(key)} getActorName={getActorName}
+          results={resultsById} onShowKeyResults={onShowKeyResults}
+          onToggle={() => setExpandedEvents(current => {
+            const next = new Set(current);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+          })} />;
+      }
       const comment = logRowToComment(row);
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
       const parent = snapshot.entries.find(e => e.id === row.parent_id);

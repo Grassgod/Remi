@@ -390,6 +390,21 @@
     "timeline_unavailable_hint": "评论和动态都属于某个会话，会话列表加载失败时无法显示。",
     "timeline_retry": "重试"
   },
+  "log_event": {
+    "task_assigned": "{{author}} → {{assignee}} 派活：{{summary}}",
+    "task_received": "{{assignee}} 接到任务：{{summary}}",
+    "inbox_processed": "{{name}} 处理了新消息",
+    "delegation_completed": "{{reporter}} 完成了 {{delegator}} 委派的任务",
+    "delegation_failed": "{{reporter}} 未能完成 {{delegator}} 委派的任务",
+    "delegation_cancelled": "{{delegator}} 委派给 {{reporter}} 的任务已取消",
+    "delegation_completed_generic": "委派的任务已完成",
+    "delegation_failed_generic": "委派的任务失败了",
+    "delegation_cancelled_generic": "委派的任务已取消",
+    "delegation_updated": "委派的任务有新进展",
+    "unknown_agent": "云友",
+    "unknown_author": "派活人",
+    "generic": "会话有新进展"
+  },
   "share": {
     "tooltip": "分享 Issue",
     "dialog_title": "分享 Issue",

@@ -72,6 +72,10 @@ Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/pack
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 
+Issue 活动区的非评论日志由 [IssueLogEventRow](../../frontend/packages/views/issues/components/issue-log-event-row.tsx) 显示为固定单行摘要。派活行只在点击后挂载完整正文；收件箱唤醒和委派回程只显示人可读状态，发布结果使用已加载的结果列表解析发布者并打开结果面板。Chat 的内部进展通知由 [ChatLogEventRow](../../frontend/packages/views/chat/components/chat-log-event-row.tsx) 摘要显示，信封带 Issue ID 时使用工作区路径链接到详情。摘要不运行 Markdown 渲染，不新增逐行查询，普通评论和聊天气泡沿用原路径。
+
+摘要与展开正文通过现有 `transformEntries` 在列表内区分行高缓存的 `render_version`，不更改副本中的服务端日志。`SessionLogList` 在渲染版本变化时重新扫描可见行；标记为 `data-session-log-disclosure` 的展开按钮会先释放贴底，防止正文展开把点击位置拖走。回归入口为 [摘要测试](../../frontend/packages/views/common/session-log/event-summary.test.ts)、[Issue 日志行测试](../../frontend/packages/views/issues/components/issue-log-event-row.test.tsx)、[Chat 日志行测试](../../frontend/packages/views/chat/components/chat-log-event-row.test.tsx) 和现有滚动 hook/list 测试；这些测试不代替真实浏览器首屏性能验收。
+
 ## 实时更新与性能定位
 
 Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../../frontend/packages/core/runtimes/provider-profile.ts) 与[共享表单](../../frontend/packages/views/runtimes/components/runtime-provider-profile-tab.tsx)读取和保存单个 Runtime 的 provider 配置；查询键包含 workspace/runtime ID，响应严格校验。表单支持 API Key（保存后清空，留空保留）和本机环境变量；Claude 还支持 Bearer / x-api-key 请求鉴权；未声明对应 `codex_profiles: 1` 或 `claude_profiles: 1` 的旧 daemon 只能查看更新提示。保存后失效 Runtime 和模型目录缓存；鉴权与隔离契约见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)和 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)。

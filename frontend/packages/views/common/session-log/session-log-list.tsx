@@ -285,7 +285,7 @@ export function SessionLogList({
   // The window's own identity: a seq list plus the revision of each row, so a
   // patch that changes a row's height re-scans without an array prop.
   const windowVersion = useMemo(
-    () => entries.map((entry) => `${entry.seq}.${entry.revision}`).join(","),
+    () => entries.map((entry) => `${entry.seq}.${entry.revision}.${entry.render_version ?? ""}`).join(","),
     [entries],
   );
 

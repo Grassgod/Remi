@@ -76,7 +76,7 @@ function useResultTitle(result: SessionResult): string {
   return result.title.trim() || t(($) => $.detail.result_untitled);
 }
 
-function useVisibleResults(issueId: string): SessionResult[] {
+export function useVisibleResults(issueId: string): SessionResult[] {
   const { data: results = [] } = useQuery(issueSessionResultsOptions(issueId));
   const { data: workspace, isPending: workspacePending } = useQuery(issueWorkspaceOptions(issueId));
   if (workspacePending) return [];
