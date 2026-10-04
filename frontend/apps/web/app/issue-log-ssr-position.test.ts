@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 
-it("keeps SSR comments hidden until local preferences and the final rows are ready", async () => {
+it.each([false, true])("positions the final SSR rows only after preferences are ready (deep link: %s)", async deepLink => {
   const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "layout.tsx"), "utf8");
   const script = source.match(/__html: `([\s\S]*?)` }}/)?.[1];
   expect(script).toBeTruthy();
@@ -12,6 +12,7 @@ it("keeps SSR comments hidden until local preferences and the final rows are rea
   root.dataset.ssrInitial = "";
   root.dataset.ssrExpected = "1";
   root.dataset.ssrDisplayReady = "0";
+  if (deepLink) root.dataset.ssrAnchorId = "comment-system-target";
   root.innerHTML = '<div style="visibility:hidden"><div data-perf-item="message">comment</div></div>';
   document.body.append(root);
   Object.defineProperties(root, {
@@ -31,7 +32,10 @@ it("keeps SSR comments hidden until local preferences and the final rows are rea
     await Promise.resolve();
     expect(root.dataset.ssrPositioning).toBeUndefined();
     expect(root.firstElementChild?.getAttribute("style")).toContain("visibility:hidden");
-    root.firstElementChild!.insertAdjacentHTML("beforeend", '<div data-perf-item="message">system detail</div>');
+    root.firstElementChild!.insertAdjacentHTML("beforeend", '<div id="comment-system-target" data-perf-item="message">system detail</div>');
+    const target = root.querySelector<HTMLElement>("#comment-system-target")!;
+    Object.defineProperty(target, "offsetHeight", { value: 32 });
+    target.getBoundingClientRect = () => ({ top: 680 - root.scrollTop, height: 32 } as DOMRect);
     root.dataset.ssrExpected = "2";
     await Promise.resolve();
     expect(root.dataset.ssrPositioning).toBeUndefined();
@@ -42,7 +46,7 @@ it("keeps SSR comments hidden until local preferences and the final rows are rea
     expect(root.dataset.ssrPositioned).toBe("1");
     expect(root.dataset.perfState).toBe("ready");
     expect((root.firstElementChild as HTMLElement).style.visibility).toBe("");
-    expect(root.scrollTop).toBe(1000);
+    expect(root.scrollTop).toBe(deepLink ? 496 : 1000);
   } finally {
     observers.forEach(observer => observer.disconnect());
     observe.mockRestore();

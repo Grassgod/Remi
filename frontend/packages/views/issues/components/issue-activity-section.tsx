@@ -72,7 +72,21 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
-  const { ready: preferencesReady, showSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
+  const { ready: preferencesReady, showSystemDetails: savedSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
+  const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
+  useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
+  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, activeCommentId ?? undefined);
+  const displayVisit = JSON.stringify([issueId, sessionId, currentUserId, activeCommentId]);
+  const [manualDetails, setManualDetails] = useState<{ visit: string; value: boolean } | null>(null);
+  const temporaryDetails = useRef({ visit: displayVisit, enabled: false });
+  if (temporaryDetails.current.visit !== displayVisit) temporaryDetails.current = { visit: displayVisit, enabled: false };
+  const targetEntry = activeCommentId ? snapshot.entries.find(entry => entry.id === activeCommentId) : undefined;
+  // Decide before rendering rows, including SSR; no persisted preference is
+  // changed. Keep the temporary display through paging until this visit ends.
+  if (targetEntry && isSystemDetail(targetEntry)) temporaryDetails.current.enabled = true;
+  const showSystemDetails = manualDetails?.visit === displayVisit
+    ? manualDetails.value : savedSystemDetails || temporaryDetails.current.enabled;
+  const displayReady = preferencesReady && (!activeCommentId || Boolean(targetEntry) || error);
   const scrollRoot = useRef<HTMLDivElement | null>(null);
   const toggleAnchor = useRef<{ pinned: true } | { id: string; top: number } | null>(null);
   const setScrollRoot = useCallback((el: HTMLDivElement | null) => { scrollRoot.current = el; onScrollRoot(el); }, [onScrollRoot]);
@@ -85,6 +99,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         .find(row => !row.querySelector("[data-system-detail]") && row.getBoundingClientRect().bottom > top);
       toggleAnchor.current = survivor ? { id: survivor.id, top: survivor.getBoundingClientRect().top } : null;
     }
+    setManualDetails({ visit: displayVisit, value });
     setShowSystemDetails(value);
   };
   useLayoutEffect(() => {
@@ -106,11 +121,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   ]), [agents, members]);
   const getActorName = (type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "";
   const [promptRow, setPromptRow] = useState<SessionLogRow | null>(null);
-  const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   const [tasksReadySessionId, setTasksReadySessionId] = useState("");
   const onTasksReady = useCallback(() => setTasksReadySessionId(sessionId), [sessionId]);
-  useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
-  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, activeCommentId ?? undefined);
   const responseDecisions = useRef(new Map<string, SessionLogRow | null>());
   const { responseTurns, taskAgents } = useMemo(() => {
     const rows = snapshot.entries.map(entry => SessionLogEntrySchema.parse(entry));
@@ -189,7 +201,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
     onReturnToLatest={activeCommentId ? () => void returnLatest() : undefined}
     initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
-    initialDisplayReady={preferencesReady}
+    initialDisplayReady={displayReady}
     onScrollRoot={setScrollRoot}
     afterEntry={entry => entry.seq === 0 ? <>
       {replica.window?.has_more_before && <button type="button" data-log-earlier disabled={paging} className="mt-3 h-8 text-xs text-muted-foreground hover:text-foreground" onClick={() => void earlier()}>

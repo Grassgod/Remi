@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useRef, useState, useImperativeHandle } from "react";
+import { renderToString } from "react-dom/server";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1816,16 +1817,18 @@ describe("IssueDetail (shared)", () => {
       return SessionLogEntrySchema.parse({ session_id: "session-main", seq, id: "row-" + seq, revision: 1, kind,
         author_type: "system", body_md: "Event " + seq, body_html: null, render_version: "test", metadata: {}, ...extra });
     }
-    function renderActivityRows(entries: SessionLogRow[], userId: string) {
+    function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; ssr?: boolean } = {}) {
       const queryClient = createTestQueryClient();
+      let target = options.target;
       const makeView = () => <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <QueryClientProvider client={queryClient}>
           <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null}
             members={[]} agents={[{ id: "agent-1", name: "QA" } as any]} currentUserId={userId}
             canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
             sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()} scrollContainerEl={null}
-            onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
-            initialLog={{ sessionId: "session-main", head: null, window: { entries: [], head_seq: 10, log_version: 1, has_more_before: false, has_more_after: false } }} />
+            onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()} highlightCommentId={target}
+            initialLog={{ sessionId: "session-main", head: null, targetCommentId: target,
+              window: { entries: [], head_seq: 10, log_version: 1, has_more_before: false, has_more_after: false } }} />
         </QueryClientProvider>
       </I18nProvider>;
       const install = (rows: SessionLogRow[]) => {
@@ -1833,9 +1836,93 @@ describe("IssueDetail (shared)", () => {
         issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
       };
       install(entries);
+      const serverHtml = options.ssr ? renderToString(makeView()) : undefined;
       const view = render(makeView());
-      return { ...view, replaceRows: (rows: SessionLogRow[]) => { install(rows); view.rerender(makeView()); } };
+      return { ...view, serverHtml,
+        replaceRows: (rows: SessionLogRow[]) => { install(rows); view.rerender(makeView()); },
+        changeTarget: (next?: string) => { target = next; view.rerender(makeView()); } };
     }
+
+    it.each([
+      ["envelope", "system", { envelope: { kind: "report", to: { role: "delegator" }, outcome: "done" } }, "Agent-only instruction"],
+      ["result", "result_published", { title: "Linked result" }, "Result body"],
+      ["inbox", "turn", { assignee_agent_id: "agent-1" }, "读收件箱 ises_hidden cmt_env_hidden"],
+      ["unknown", "follow_frozen", {}, "Frozen details"],
+    ] as const)("renders a hidden %s deep-link target before SSR reveal without persisting the temporary display", async (name, kind, metadata, body) => {
+      const user = "deep-link-" + name;
+      const preference = activityPreferencesStore(user, "ws-1");
+      const write = vi.spyOn(preference.getState(), "setShowSystemDetails");
+      const target = activityRow(1, kind as string, { id: "linked-" + name, metadata, body_md: body as string });
+      const view = renderActivityRows([activityRow(0, "head"), target], user, { target: target.id, ssr: true });
+      const server = document.createElement("div");
+      server.innerHTML = view.serverHtml!;
+      const anchor = view.container.querySelector('[data-perf-anchor="target-comment"]');
+      expect(anchor).toHaveAttribute("id", "comment-" + target.id);
+      expect(anchor).toHaveClass("bg-warning/10");
+      expect(server.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-" + target.id);
+      expect(server.querySelector('[role="switch"]')).toHaveAttribute("aria-checked", "true");
+      expect(server.querySelector("[data-session-log-scroll]")).toHaveAttribute("data-ssr-display-ready", "0");
+      expect(view.container.querySelector("[data-session-log-scroll]")).toHaveAttribute("data-ssr-display-ready", "1");
+      expect(screen.getByRole("switch", { hidden: true })).toHaveAttribute("aria-checked", "true");
+      expect(preference.getState().showSystemDetails).toBe(false);
+      expect(write).not.toHaveBeenCalled();
+      view.changeTarget();
+      expect(view.container.querySelector("[data-system-detail]")).toBeNull();
+      expect(screen.getByRole("switch", { hidden: true })).toHaveAttribute("aria-checked", "false");
+      expect(write).not.toHaveBeenCalled();
+      write.mockRestore();
+      await act(async () => {});
+    });
+
+    it("keeps ordinary comment deep links filtered and does not write their preference", () => {
+      const user = "deep-link-comment";
+      const preference = activityPreferencesStore(user, "ws-1");
+      const write = vi.spyOn(preference.getState(), "setShowSystemDetails");
+      const target = activityRow(1, "message", { author_type: "member", body_md: "Linked comment", body_html: "<p>Linked comment</p>" });
+      const view = renderActivityRows([activityRow(0, "head"), target, activityRow(2, "system")], user, { target: target.id });
+      expect(view.container.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-" + target.id);
+      expect(view.container.querySelector("[data-system-detail]")).toBeNull();
+      expect(screen.getByRole("switch", { hidden: true })).toHaveAttribute("aria-checked", "false");
+      expect(write).not.toHaveBeenCalled();
+      write.mockRestore();
+    });
+
+    it("waits for an unresolved deep-link target before enabling the display gate", async () => {
+      const head = activityRow(0, "head");
+      const target = activityRow(1, "system", { id: "late-system-target" });
+      const view = renderActivityRows([head], "deep-link-late", { target: target.id });
+      expect(view.container.querySelector("[data-session-log-scroll]")).toHaveAttribute("data-ssr-display-ready", "0");
+      expect(document.getElementById("comment-" + target.id)).toBeNull();
+      view.replaceRows([head, target]);
+      expect(view.container.querySelector("[data-session-log-scroll]")).toHaveAttribute("data-ssr-display-ready", "1");
+      expect(view.container.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-" + target.id);
+      expect(screen.getByRole("switch", { hidden: true })).toHaveAttribute("aria-checked", "true");
+      expect(activityPreferencesStore("deep-link-late", "ws-1").getState().showSystemDetails).toBe(false);
+      await act(async () => {});
+    });
+
+    it("lets a manual switch override temporary deep-link display and persist the user's choice", async () => {
+      const user = "deep-link-manual";
+      const preference = activityPreferencesStore(user, "ws-1");
+      const write = vi.spyOn(preference.getState(), "setShowSystemDetails");
+      const rows = [activityRow(0, "head"), activityRow(1, "system")];
+      const view = renderActivityRows(rows, user, { target: rows[1]!.id });
+      const toggle = screen.getByRole("switch", { hidden: true });
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      expect(view.container.querySelector("[data-system-detail]")).toBeNull();
+      expect(write).toHaveBeenLastCalledWith(false);
+      view.replaceRows([...rows]);
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      fireEvent.click(toggle);
+      expect(write).toHaveBeenLastCalledWith(true);
+      expect(preference.getState().showSystemDetails).toBe(true);
+      view.unmount();
+      const later = renderActivityRows(rows, user);
+      expect(later.container.querySelector("[data-system-detail]")).not.toBeNull();
+      write.mockRestore();
+      await act(async () => {});
+    });
 
     it("filters all system detail types before rendering and only inserts them after the user's toggle", async () => {
       const head = activityRow(0, "head", { body_md: "" });
