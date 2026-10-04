@@ -3,6 +3,7 @@
 // generation; an already-claimed task keeps running through a drain; a 10-30s
 // API outage mid-stream neither kills the provider session nor loses/reorders
 // messages; release restores claiming.
+import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -49,7 +50,7 @@ afterEach(async () => {
 });
 
 function newDaemon(options: ConstructorParameters<typeof MultiremiDaemon>[0]): MultiremiDaemon {
-  return new MultiremiDaemon(options);
+  return new MultiremiDaemon({ ...options, sshMeshManager: options.sshMeshManager ?? disabledSshMeshRuntime() });
 }
 
 function newServer(options: Parameters<typeof startMultiremiServer>[0]): ReturnType<typeof startMultiremiServer> {
@@ -586,6 +587,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     const providerStarted = gate();
     const providerFinished = gate();
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${proxy.port}`,
       token: daemonToken.token,
       daemonId: "daemon-transient-404",

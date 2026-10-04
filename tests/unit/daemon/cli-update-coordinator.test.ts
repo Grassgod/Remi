@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -199,6 +200,7 @@ describe("co-resident CLI update coordination", () => {
     roots.push(root);
     return instantiateCoResidentWorkerDaemons([
       {
+        sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: "http://127.0.0.1:1",
         provider: "claude",
         workspacesRoot: root,
@@ -206,6 +208,7 @@ describe("co-resident CLI update coordination", () => {
       },
       ...(count > 1
         ? [{
+          sshMeshManager: disabledSshMeshRuntime(),
           serverUrl: "http://127.0.0.1:1",
           provider: "codex",
           workspacesRoot: root,

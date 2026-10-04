@@ -1,3 +1,4 @@
+import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ describe("daemon gateway context declarations", () => {
     let received: AcpProviderOptions | undefined;
     const sentinel = new Error("provider captured");
     const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: "http://127.0.0.1:1", token: "fixture", runtimeId: "fixture", provider: "claude",
       daemonId: "fixture", workspaceId: "local", gcEnabled: false, workspacesRoot: root,
       providerFactory: options => { received = options; throw sentinel; },
