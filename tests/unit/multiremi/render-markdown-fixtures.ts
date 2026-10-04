@@ -117,4 +117,8 @@ export const FIXTURES: RenderFixture[] = [
     markdown: HUGE_CODE,
     skipStructureCompare: true,
   },
+  {
+    name: "21 authenticated TXT attachment card",
+    markdown: "!file[notes.txt](/api/attachments/att_123-ABC/content?workspace_slug=acme&download=1)",
+  },
 ];

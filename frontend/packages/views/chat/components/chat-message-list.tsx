@@ -27,7 +27,6 @@ import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
-import { chatMessageMarkdown } from "../lib/message-attachments";
 import { TaskStatusPill } from "./task-status-pill";
 import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
 import { formatElapsedMs } from "../../common/format";
@@ -185,7 +184,7 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
 
 function MessageBubble({ message, isPending, isPush, visible }: { message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean }) {
   if (message.role === "user") {
-    const markdown = chatMessageMarkdown(message);
+    const markdown = message.content;
     return (
       <div className="flex justify-end">
         <div className="rounded-2xl bg-muted px-3.5 py-2 text-sm max-w-[80%] break-words">

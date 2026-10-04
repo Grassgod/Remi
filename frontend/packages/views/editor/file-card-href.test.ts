@@ -90,3 +90,38 @@ describe("preprocessFileCards (integration)", () => {
     expect(out).not.toContain('data-type="fileCard"');
   });
 });
+
+describe("authenticated attachment content URLs (MUL-499)", () => {
+  it.each([
+    "/api/attachments/att-1/content",
+    "/api/attachments/Att_ABC-123/content?workspace_slug=acme&download=1",
+    "/api/attachments/att/content?",
+  ])("accepts and preprocesses exactly %s", href => {
+    expect(isAllowedFileCardHref(href)).toBe(true);
+    expect(preprocessFileCards(`!file[notes.txt](${href})`, "")).toContain('data-type="fileCard"');
+  });
+
+  it.each([
+    "/api/attachments//content",
+    "/api/attachments/att.1/content",
+    "/api/attachments/../content",
+    "/api/attachments/att/../content",
+    "/api/attachments/%2e%2e/content",
+    "/api/attachments/att/content/extra",
+    "/api/attachments/att/content#fragment",
+    "/api/attachments/att/content?next=..",
+    "/api/attachments/att/content?x=bad)value",
+    "/api/attachments/att/content?x=bad value",
+    "/api/attachments/att/content?x=bad\tvalue",
+    "/api/attachments/att/content\n",
+    "/api/attachments/att\\other/content",
+    "/api/internal/att/content",
+    "//host/api/attachments/att/content",
+    "javascript:alert(1)",
+    "data:text/plain,test",
+  ])("rejects %s in both the parser and renderer", href => {
+    expect(isAllowedFileCardHref(href)).toBe(false);
+    expect(new RegExp(`^(?:${FILE_CARD_URL_PATTERN.source})$`).exec(href)?.[0] === href).toBe(false);
+    expect(preprocessFileCards(`!file[notes.txt](${href})`, "")).not.toContain('data-type="fileCard"');
+  });
+});
