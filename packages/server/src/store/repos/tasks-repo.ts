@@ -623,7 +623,6 @@ interface TaskTerminalFollowUps {
   retry: MultiremiTask | null;
   delegationReturns: MultiremiTask[];
   roundPushTasks: MultiremiTask[];
-  replyCommentId?: string | null;
 }
 
 export interface CancelTaskResult {
@@ -4795,7 +4794,6 @@ ${placementAfter.sql}
       this.recordChatInboxDeliveryAfterReply(task);
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents(deferredEvents);
-      this.postAgentReplyComment(task, input.output, terminal.followUps.replyCommentId ?? undefined);
       for (const delegationReturn of terminal.followUps.delegationReturns) {
         this.ctx.notifyTaskEnqueued(delegationReturn);
       }
@@ -5786,6 +5784,28 @@ ${placementAfter.sql}
     }, deferredEvents);
   }
 
+  getTaskWakeSequences(taskId: string): number[] {
+    const task = this.getTask(taskId);
+    if (!task) return [];
+    const rows = task.issueId
+      ? this.ctx.db.query(`SELECT data AS payload FROM multiremi_issue_activity
+          WHERE issue_id = ? AND type IN ('pending_turn_created', 'pending_turn_coalesced') AND created_at >= ?`)
+        .all(task.issueId, task.createdAt) as { payload: string }[]
+      : this.ctx.db.query(`SELECT payload FROM multiremi_system_events WHERE resource_id = ?
+          AND event IN ('pending_turn_created', 'pending_turn_coalesced')`)
+        .all(task.id) as { payload: string }[];
+    const seqs = new Set<number>();
+    for (const row of rows) {
+      const data = parseJson<Record<string, unknown>>(row.payload, {});
+      if (data.task_id === taskId && Number.isSafeInteger(data.seq) && Number(data.seq) > 0) seqs.add(Number(data.seq));
+    }
+    if (task.triggerCommentId) {
+      const entry = this.ctx.conversationLog().getConversationLogEntryById(task.triggerCommentId);
+      if (entry?.session_id === (task.chatSessionId ?? task.issueSessionId)) seqs.add(entry.seq);
+    }
+    return [...seqs].sort((a, b) => a - b);
+  }
+
   private lastDelegationResultCommentId(source: MultiremiTask): string | null {
     if (!source.issueId) return null;
     const row = this.ctx.db.query(
@@ -5814,6 +5834,7 @@ ${placementAfter.sql}
       && body?.trim() && body.trim() !== "Task completed."
       && !this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)
       ? createId("cmt") : null;
+    let resultCommentId = existingResultCommentId;
     // Runtime recovery also invokes this hook directly. Reject stale transport
     // results before retry, Chat append, or provider promotion can occur.
     if (status !== "cancelled") {
@@ -5971,9 +5992,10 @@ ${placementAfter.sql}
       }, deferredEvents);
       // Issue turns keep the reply as a standalone threadable `message` row and
       // point the card at it; the card itself only carries the lifecycle state.
-      const replyComment = status === "completed" && !workspaceLockHeld
+      const replyComment = status === "completed"
         ? this.postAgentReplyComment(task, body, replyCommentId ?? undefined)
         : null;
+      resultCommentId ??= replyComment?.id ?? null;
       if (task.issueSessionId) {
         const event = {
           authorType: status === "completed" ? "agent" : "system",
@@ -6034,14 +6056,14 @@ ${placementAfter.sql}
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
-                resultCommentId: existingResultCommentId ?? replyCommentId,
+                resultCommentId,
               }, childStatusChanges, deferredEvents)
             : this.ensureDelegationWakeup({
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
-                resultCommentId: existingResultCommentId ?? replyCommentId,
+                resultCommentId,
               });
           // The unified writer put fresh returns on the owner's commit queue.
         }
@@ -6211,7 +6233,7 @@ ${placementAfter.sql}
         }
       }
     }
-    return { retry, delegationReturns, roundPushTasks, replyCommentId };
+    return { retry, delegationReturns, roundPushTasks };
   }
 
   /** Terminal task writers call this inside their task transaction. */
@@ -6616,8 +6638,10 @@ ${placementAfter.sql}
         return created;
       })();
       reply = { id: created.comment.id };
-      this.ctx.emitCommitEvents(deferredEvents);
-      this.ctx.issues().runIssueCommentPostCommit(created, input);
+      afterCommit(this.ctx.db, () => {
+        this.ctx.emitCommitEvents(deferredEvents);
+        this.ctx.issues().runIssueCommentPostCommit(created, input);
+      });
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
       log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);

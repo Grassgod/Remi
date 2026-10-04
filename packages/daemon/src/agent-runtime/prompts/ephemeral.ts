@@ -476,6 +476,18 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("", "## Side Conversation Boundary", SIDE_CONVERSATION_INSTRUCTIONS);
   }
   if (projection?.jsonl?.trim()) {
+    const inputLines = projection.jsonl.split("\n");
+    let unreadInput: Record<string, any> | null = null;
+    try { const first = JSON.parse(inputLines[0] ?? ""); if (first.type === "unread_range") unreadInput = first; } catch {}
+    if (unreadInput) {
+      sections.push("", "## Current Session Context", unreadInput.instruction);
+      for (const line of inputLines.slice(1)) {
+        const message = JSON.parse(line);
+        sections.push("", `### Triggering Message ${message.seq} (${message.id})`,
+          `${message.author_type}: ${message.author_id ?? ""}`, message.body,
+          ...(message.expand_hint ? [message.expand_hint] : []));
+      }
+    } else {
     const inbox = projection.jsonl.split("\n", 2)[1];
     if (inbox) {
       try {
@@ -512,6 +524,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("Treat event order and author labels as authoritative. Do not claim another participant's words as your own.");
     sections.push("");
     sections.push(`\`\`\`jsonl\n${projection.jsonl.trim()}\n\`\`\``);
+    }
   }
 
   const results = task.issueSessionResults ?? task.issue_session_results ?? [];
@@ -605,7 +618,9 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask, platfo
 
   if (projection?.jsonl?.trim()) {
     sections.push("");
-    sections.push("The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
+    sections.push(projection.jsonl.startsWith('{"type":"unread_range"')
+      ? "动手前先执行 Current Session Context 中的范围读取命令，读完未读部分。"
+      : "The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
   } else {
     const readHint = buildCommentReadHint(issueId, triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
     if (readHint) {

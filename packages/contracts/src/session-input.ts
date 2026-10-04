@@ -1,0 +1,10 @@
+export const TRIGGER_MESSAGE_INLINE_CHARS = 8_000;
+
+export function expandHint(omittedChars: number, command: string): string {
+  return `只看到了开头，还有 ${omittedChars} 字没看，和你有关时先展开：${command}`;
+}
+
+export function unreadRangeHint(sessionId: string, fromSeq: number, toSeq: number, unread: number): string {
+  return `你上次读到第 ${fromSeq} 条，现在最新是第 ${toSeq} 条，中间 ${unread} 条还没读。\n`
+    + `动手前先读完未读的部分，了解上下文：remi session log get ${sessionId} --from ${fromSeq} --to ${toSeq}`;
+}

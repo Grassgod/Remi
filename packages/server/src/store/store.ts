@@ -4628,6 +4628,10 @@ runMigrations(this.db);
     return this.conversationLog.listByTask(taskId);
   }
 
+  getTaskWakeSequences(taskId: string): number[] {
+    return this.tasks.getTaskWakeSequences(taskId);
+  }
+
   /** The write hook C's Live Hub implements; B1 leaves it empty. */
   setConversationLogListener(listener: ConversationLogListener | null): void {
     this.conversationLog.setConversationLogListener(listener);

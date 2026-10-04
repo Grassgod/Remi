@@ -230,6 +230,7 @@ export class DaemonProtocolSession {
   readonly sessionId: string;
   /** Set once `hello` is accepted; empty before that. */
   daemonId = "";
+  supportsWikiFetch = false;
 
   private readonly options: DaemonSessionOptions;
   private readonly registry: DaemonSessionRegistry;
@@ -715,6 +716,7 @@ export class DaemonProtocolSession {
     }
 
     this.daemonId = parsed.hello.daemon_id;
+    this.supportsWikiFetch = parsed.hello.caps.includes("wiki.fetch");
     this.advertisedRuntimeIdList = parsed.hello.runtimes.map((runtime) => runtime.runtime_id);
     this.runtimeIdList = serving;
     this.unavailableRuntimeIdList = unavailable;

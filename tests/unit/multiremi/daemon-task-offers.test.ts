@@ -43,11 +43,24 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
     await send("res", { ok: true }, { re: String(frame.seq), ack: frame.seq });
     await layer.drain();
   };
-  return { store, runtimeIds, clock, layer, offers, session, send, hello, task, offered, frames, accept,
+  return { store, runtimeIds, agentIds, clock, layer, offers, session, send, hello, task, offered, frames, accept,
     setSendStatus: (value: number | null) => { sendStatus = value; } };
 }
 
 describe("A-3 task offers", () => {
+  it("degrades an oversized offer and dispatches without failing or blocking the Issue", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: "触发".repeat(200_000),
+      issue: { id: task.issueId, description: "description".repeat(100_000) },
+      repository_wiki_contexts: [{ docs: [{ body: "wiki".repeat(200_000) }] }] }));
+    const issue = h.store.createIssue({ title: "Oversized offer" });
+    const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "work" });
+    await h.hello();
+    expect(h.offered()).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    expect(h.offered()[0]!.p.knowledge_warnings.join("\n")).toContain("Wiki bodies omitted");
+    expect(h.store.getTask(task.id)?.status).toBe("dispatched");
+    expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
+  });
   it("clears only capacity cooldown when the active count changes on heartbeat", async () => {
     const h = fixture(); const task = h.task(); await h.hello();
     const first = h.offered()[0]!;
@@ -274,12 +287,33 @@ describe("A-3 task offers", () => {
     expect(h.store.claimTask(h.runtimeIds[0]!)?.id).toBe(task.id);
   });
 
-  it("fails a >1MiB offer and offers the next task without blocking the runtime", async () => {
+  it("folds a >1MiB request without failing the task", async () => {
     const h = fixture(async task => ({ id: task.id, prompt: task.prompt }));
     const huge = h.task(0, "x".repeat(1_048_576)); const next = h.task(); await h.hello();
-    expect(h.store.getTask(huge.id)?.status).toBe("failed");
-    expect(h.store.getTask(huge.id)?.error).toContain("1 MiB");
-    expect(h.offered()).toHaveLength(1); expect(h.offered()[0]!.p.id).toBe(next.id);
+    expect(h.store.getTask(huge.id)?.status).toBe("dispatched");
+    expect(h.store.getTask(huge.id)?.error).toBeNull();
+    expect(h.offered()).toHaveLength(1);
+    expect(h.offered()[0]!.p.id).toBe(huge.id);
+    expect(h.offered()[0]!.p.prompt).toContain("还有");
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    await h.accept(); h.store.startTask(huge.id); h.store.completeTask(huge.id, { output: "done" });
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered()[1]!.p.id).toBe(next.id);
+  });
+
+  it("keeps an irreducible oversized offer queued with cooldown without blocking its Issue", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, required_context: "x".repeat(1_048_576) }));
+    const issue = h.store.createIssue({ title: "Irreducible input" });
+    const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "request" });
+    await h.hello();
+    expect(h.offered()).toHaveLength(0);
+    expect(h.store.getTask(task.id)?.status).toBe("queued");
+    expect(h.store.getTask(task.id)?.failureReason).toBeNull();
+    expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
+    h.offers.kick(); await h.layer.drain();
+    expect(h.offered()).toHaveLength(0);
+    h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
+    expect(h.store.getTask(task.id)?.status).toBe("queued");
   });
 
   it("does not reset an accepted Chat dispatch through the stale workspace recovery path", async () => {

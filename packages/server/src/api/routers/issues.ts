@@ -1,4 +1,5 @@
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
+import { readSessionLogRange } from "../session-log-range.js";
 import type { Context, Hono } from "hono";
 import { assertRuntimeWorkspaceAccess } from "../helpers/runtime-workspaces.js";
 import {
@@ -1685,6 +1686,27 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/sessions/:sessionId/log/entry", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
+    if (c.req.query("from") != null || c.req.query("to") != null) {
+      const rawFrom = c.req.query("from");
+      const rawTo = c.req.query("to");
+      const from = Number(rawFrom), to = Number(rawTo);
+      if (!rawFrom || !rawTo || !/^(0|[1-9]\d*)$/.test(rawFrom) || !/^(0|[1-9]\d*)$/.test(rawTo)
+        || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || to < from
+        || c.req.query("seq") != null || c.req.query("id") != null) return c.json({ error: "invalid log range" }, 400);
+      const token = currentTaskAccessToken(c);
+      try {
+        const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
+        if (token?.taskId) log.info("Session unread range read", { event: "session_log_range_read",
+          task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, from_seq: from, to_seq: to,
+          complete: page.next_cursor === null, entries: page.entries.length });
+        return c.json(page);
+      } catch (error) {
+        if (error instanceof SyntaxError || error instanceof Error && error.message.startsWith("Invalid range cursor")) {
+          return c.json({ error: "invalid range cursor" }, 400);
+        }
+        throw error;
+      }
+    }
     const rawSeq = c.req.query("seq");
     const id = c.req.query("id");
     if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
@@ -1694,6 +1716,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (seq == null) return c.json({ error: "entry not found" }, 404);
     const entry = store.getConversationLogEntry(sessionId, seq);
     if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
+    const token = currentTaskAccessToken(c);
+    if (token?.taskId) log.info("Session entry expanded", { event: "session_log_entry_expanded",
+      task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, seq: entry.seq,
+      folded_chars: Math.max(0, entry.body_md.length - 8_000) });
     const envelope = entry.metadata.envelope;
     const recipient = envelope?.to;
     const agentId = envelope?.recipient_agent_id
