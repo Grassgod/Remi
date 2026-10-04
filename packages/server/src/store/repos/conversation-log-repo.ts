@@ -76,6 +76,7 @@ export type AppendConversationLogInput = {
   kind: ConversationLogKind;
   authorType: string;
   messageKind?: import("@multiremi/contracts/unified-model.js").MessageKind;
+  messageHeader?: import("@multiremi/contracts/unified-model.js").MessageHeader;
   authorId?: string | null;
   taskId?: string | null;
   bodyMd?: string;
@@ -121,9 +122,9 @@ export class ConversationLogRepo {
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
 
   getSessionAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
-    const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-    const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-    return state[agentId] ?? this.updateAgentReadProgress(sessionId, agentId, current => current);
+    const row = this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+      WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId) as Row | null;
+    return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current);
   }
 
   private storedAgentReadProgress(sessionId: string, agentId: string): SessionAgentReadProgress {
@@ -139,15 +140,18 @@ export class ConversationLogRepo {
   private updateAgentReadProgress(sessionId: string, agentId: string,
     advance: (current: SessionAgentReadProgress) => SessionAgentReadProgress): SessionAgentReadProgress {
     return this.ctx.db.transaction(() => {
-      // Serialize the JSON read/modify/write across agents and server processes.
-      this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = agent_read_state WHERE session_id = ?", [sessionId]);
-      const row = this.ctx.db.query("SELECT agent_read_state FROM multiremi_conversation_heads WHERE session_id = ?").get(sessionId) as Row | null;
-      const state = parseJson<Record<string, SessionAgentReadProgress>>(row?.agent_read_state, {});
-      const current = state[agentId] ?? this.storedAgentReadProgress(sessionId, agentId);
+      const seed=this.storedAgentReadProgress(sessionId,agentId),at=nowIso();
+      this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,cursor_offset,created_at,updated_at)
+        VALUES(?,'agent',?,'',?,?,?,?) ON CONFLICT DO NOTHING`,[sessionId,agentId,seed.seq,seed.offset,at,at]);
+      this.ctx.db.run(`UPDATE multiremi_session_lanes SET updated_at=updated_at
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[sessionId,agentId]);
+      const row=this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
+        WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId,agentId)!;
+      const current={seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)};
       const next = advance(current);
-      if (row && (!state[agentId] || next.seq !== current.seq || next.offset !== current.offset)) {
-        state[agentId] = next;
-        this.ctx.db.run("UPDATE multiremi_conversation_heads SET agent_read_state = ? WHERE session_id = ?", [toJson(state), sessionId]);
+      if (next.seq !== current.seq || next.offset !== current.offset) {
+        this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=?,cursor_offset=?,updated_at=?
+          WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`,[next.seq,next.offset,at,sessionId,agentId]);
       }
       return next;
     })();
@@ -380,8 +384,9 @@ export class ConversationLogRepo {
          body_md, body_html, render_version, reply_to_id,
          resolved_at, resolved_by_type, resolved_by_id,
          metadata, revision, created_at, updated_at, deleted_at,
-         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,dedupe_key
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         to_type,to_ref,to_agent_id,to_member_id,message_kind,wake_requested,wake_applied,wake_reason,dedupe_key,
+         options,card_token_hash,card_token_recipient,card_token_consumed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.sessionId,
         seq,
@@ -403,7 +408,13 @@ export class ConversationLogRepo {
         now,
         updatedAt,
         input.deletedAt ?? null,
-        toType,toRef,toAgent,toMember,messageKind,envelope?.wake??"inbox_only",envelope?.wake??"inbox_only",envelope?"migration":"requested_inbox_only",envelope?.dedupeKey??null,
+        input.messageHeader?.to_type??toType,input.messageHeader?.to_ref??toRef,
+        input.messageHeader?.to_agent_id??toAgent,input.messageHeader?.to_member_id??toMember,
+        input.messageHeader?.message_kind??messageKind,input.messageHeader?.wake_requested??envelope?.wake??"inbox_only",
+        input.messageHeader?.wake_applied??envelope?.wake??"inbox_only",input.messageHeader?.wake_reason??(envelope?"migration":"requested_inbox_only"),
+        input.messageHeader?.dedupe_key??envelope?.dedupeKey??null,
+        input.messageHeader?.options?toJson(input.messageHeader.options):null,input.messageHeader?.card_token_hash??null,
+        input.messageHeader?.card_token_recipient??null,input.messageHeader?.card_token_consumed_at??null,
       ],
     );
     // One `log_version` bump per log mutation: the allocator already counted

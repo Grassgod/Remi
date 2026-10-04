@@ -572,6 +572,7 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  createTurnForMessageWithinWorkspaceLock: import("./repos/tasks-repo.js").TasksRepo["createTurnForMessageWithinWorkspaceLock"];
   countDelegationPairHops: import("./repos/tasks-repo.js").TasksRepo["countDelegationPairHops"];
   recordDelegationRoundTripLimitedWithinTransaction: import("./repos/tasks-repo.js").TasksRepo["recordDelegationRoundTripLimitedWithinTransaction"];
   ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
@@ -797,6 +798,7 @@ export interface ConversationLogSurface {
 }
 
 export interface InboxSurface {
+  getMessage: import("./repos/inbox-repo.js").InboxRepo["getMessage"];
   sendEnvelopeWithinTransaction(
     env: import("@multiremi/contracts/inbox.js").Envelope,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,

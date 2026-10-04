@@ -181,7 +181,7 @@ function insertExecution(db:SqlDatabase,sql:string,params:unknown[]):{changes:nu
   if(input.parent_task_id&&Number(input.attempt??1)>1&&!parent)throw new Error("Retry parent attempt does not exist");
   if(!parent){
     const auto=db.query('SELECT a.session_id,r.id AS run_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id);
-    const sessionId=input.issue_session_id??input.chat_session_id??auto?.session_id??`auto_orphan_${input.workspace_id}`;
+    const sessionId=input.conversation_session_id??input.issue_session_id??input.chat_session_id??auto?.session_id??`auto_orphan_${input.workspace_id}`;
     // Independent automation runs share a conversation but each has its own
     // execution lane. Existing entry points can queue more than one run.
     if (auto && !input.issue_session_id && !input.chat_session_id && !input.execution_scope) {

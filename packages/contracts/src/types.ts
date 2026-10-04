@@ -1809,6 +1809,8 @@ export interface TaskDependencyForceInput {
 }
 
 export interface CreateTaskInput {
+  /** Internal canonical conversation for automation/message producers. */
+  conversationSessionId?: string;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   id?: string;

@@ -1,3 +1,4 @@
+import { getMessage, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
 import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
@@ -159,6 +160,11 @@ export class InboxRepo {
       deliveries.push({ recipient, entry: stored.entry, deduplicated: stored.deduplicated, ...turn });
     }
     return deliveries;
+  }
+
+  getMessage(id:string) { return getMessage(this.ctx,id); }
+  sendMessageWithinTransaction(input:import("@multiremi/contracts/unified-model.js").SendMessageInput,events:CommitEventQueue) {
+    return sendMessageWithinTransaction(this.ctx,input,events);
   }
 
   private issueRecipient(issueId: string, agentId?: string, issueSessionId?: string, executionScope = ""): EnvelopeRecipient {

@@ -1,7 +1,7 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
-import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { invalidatingDatabase } from "@multiremi/store/request-read-cache.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
@@ -5486,6 +5486,17 @@ runMigrations(this.db);
 
   markBoundIssueLogDelivered(taskId: string, toSeq: number): boolean {
     return this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
+  }
+
+  getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
+  sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput) {
+    const events=createCommitEventQueue();
+    const result=this.db.transaction(()=>this.inbox.sendMessageWithinTransaction(input,events))();
+    afterCommit(this.db,()=>this.ctx.emitCommitEvents(events));
+    return result;
+  }
+  createTurnForMessageWithinWorkspaceLock(...args: Parameters<TasksRepo["createTurnForMessageWithinWorkspaceLock"]>) {
+    return this.tasks.createTurnForMessageWithinWorkspaceLock(...args);
   }
 
   sendEnvelopeWithinTransaction(

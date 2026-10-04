@@ -558,15 +558,17 @@ export function pairRoundTripLimit(): number {
   return Number.isSafeInteger(value) && value > 0 ? value : 5;
 }
 
+type DelegationHopNode = Pick<MultiremiTask, "id" | "agentId" | "workspaceId" | "createdAt" | "delegationId" | "delegatedByAgentId" | "parentTaskId">;
+
 /** Count the existing alternating pair segment, including delegated return turns. */
 export function countDelegationPairHops(
-  source: MultiremiTask,
+  source: DelegationHopNode,
   targetAgentId: string,
-  getParent: (id: string) => MultiremiTask | null,
+  getParent: (id: string) => DelegationHopNode | null,
   lastMemberMessageAt: string | null,
   maxHops: number,
 ): number {
-  let task: MultiremiTask | null = source;
+  let task: DelegationHopNode | null = source;
   let expectedAgentId = source.agentId;
   let hops = 0;
   const seen = new Set<string>();
@@ -1702,6 +1704,10 @@ export class TasksRepo {
     );
   }
 
+  createTurnForMessageWithinWorkspaceLock(...args: Parameters<TasksRepo["createTaskWithinWorkspaceLock"]>): MultiremiTask {
+    return this.createTaskWithinWorkspaceLock(...args);
+  }
+
   createTaskWithinWorkspaceLock(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
@@ -2048,11 +2054,11 @@ export class TasksRepo {
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at,
-        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at, execution_scope
+        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at, execution_scope, conversation_session_id
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?
       )`,
       [
         runtimeWorkspaceId,
@@ -2135,6 +2141,7 @@ export class TasksRepo {
         cleanOptionalString(input.switchReason ?? input.switch_reason),
         cleanOptionalString(input.nextRetryAt ?? input.next_retry_at),
         executionScope,
+        input.conversationSessionId ?? null,
       ],
     );
     if (chatSession) {
