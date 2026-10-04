@@ -59,7 +59,10 @@ CLI 自动读取全部页并拼回完整正文。使用任务 token 的成功读
 Issue/Chat 会话在 `multiremi_conversation_heads.agent_read_state` 可空 JSON 字段按 agent
 保存完整条目的高水位和下一条的已读字符偏移。完成任务只推进 provider 续跑检查点；
 下一轮未读范围从实际高水位开始。已接受 offer 中完整内联、紧邻高水位的触发消息也可推进，
-折叠消息和未接受的 offer 不推进。升级时空状态从 0 开始；旧镜像忽略此可空列，回滚无需删列。
+折叠消息和未接受的 offer 不推进。每个 agent 首次访问已读状态时，用旧 Issue lane 游标或
+已完成 Chat 任务的投影检查点初始化并保存；这些旧投影曾完整内联，不要求重读全部历史。
+没有旧检查点的冷启动仍从 0 开始。初始化只做一次，之后 provider 检查点变化不影响已读位置。
+内联记账每次最多检查 100 条元数据，不加载正文；旧镜像忽略此可空列，回滚无需删列。
 
 daemon 在 `hello.caps` 声明 `wiki.fetch` 时，服务端只查询 Wiki 元数据，不读取正文、不计算
 正文 hash。offer 携带 version，`content_sha256` 可选。新 daemon 用任务 token 调用既有 Project/Repository Wiki GET 接口，

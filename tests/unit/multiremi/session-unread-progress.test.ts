@@ -6,7 +6,7 @@ import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js"
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { log } from "@multiremi/api/helpers/common.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -30,6 +30,50 @@ function fixture() {
   };
   return { store, runtime, agent, issue, session, claim, finish };
 }
+
+test("first upgraded Issue wakeup initializes once from its legacy checkpoint; a new agent starts at zero", () => {
+  const f = fixture();
+  f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "LEGACY_HISTORY".repeat(1_000) });
+  const legacy = f.claim();
+  f.finish(legacy.task.id);
+  db!.run("UPDATE multiremi_conversation_heads SET agent_read_state = NULL WHERE session_id = ?", [f.session.id]);
+  f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "NEW_UNREAD" });
+  const upgraded = f.claim();
+  expect(upgraded.range.from_seq).toBe(legacy.range.to_seq);
+  expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: legacy.range.to_seq, offset: 0 });
+  f.finish(upgraded.task.id);
+  expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq).toBeGreaterThan(legacy.range.to_seq);
+  expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id).seq).toBe(legacy.range.to_seq);
+  const newcomer = f.store.createAgent({ name: "New reader", provider: "claude", runtimeId: f.runtime.id });
+  f.store.createTask({ agentId: newcomer.id, issueId: f.issue.id, prompt: "first visit" });
+  const task = f.store.claimTask(f.runtime.id)!;
+  const response = daemonTaskClaimResponse(f.store, task, f.store.getTaskTriggerMetadata(task));
+  useTaskSessionInput(f.store, task, response);
+  expect(JSON.parse((response.session_projection as any).jsonl.split("\n")[0]).from_seq).toBe(0);
+  expect(f.store.getSessionAgentReadProgress(f.session.id, newcomer.id)).toEqual({ seq: 0, offset: 0 });
+  f.finish(task.id);
+  expect(f.store.getSessionAgentReadProgress(f.session.id, newcomer.id)).toEqual({ seq: 0, offset: 0 });
+});
+
+test("first upgraded Chat wakeup retains its completed legacy projection without following later provider progress", () => {
+  const f = fixture();
+  const chat = f.store.createChatSession({ agentId: f.agent.id });
+  const claim = () => {
+    const task = f.store.claimTask(f.runtime.id)!;
+    const response = daemonTaskClaimResponse(f.store, task, f.store.getTaskTriggerMetadata(task));
+    useTaskSessionInput(f.store, task, response);
+    return { task, range: JSON.parse((response.session_projection as any).jsonl.split("\n")[0]) };
+  };
+  f.store.sendChatMessage(chat.id, { body: "LEGACY_CHAT" });
+  const legacy = claim();
+  f.finish(legacy.task.id);
+  db!.run("UPDATE multiremi_conversation_heads SET agent_read_state = NULL WHERE session_id = ?", [chat.id]);
+  f.store.sendChatMessage(chat.id, { body: "NEW_CHAT_UNREAD" });
+  const upgraded = claim();
+  expect(upgraded.range.from_seq).toBe(legacy.range.to_seq);
+  f.finish(upgraded.task.id);
+  expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: legacy.range.to_seq, offset: 0 });
+});
 
 for (const read of ["none", "partial", "all"] as const) test(`warm resume keeps actual unread progress after ${read} range reads`, async () => {
   const f = fixture();

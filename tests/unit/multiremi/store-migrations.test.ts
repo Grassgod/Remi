@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("store migrations", () => {
-  it("adds nullable unread state without acknowledging legacy provider checkpoints and preserves it on restart", () => {
+  it("adds nullable unread state for lazy initialization and preserves it on restart", () => {
     const database = freshDb(); migrate(database);
     database.exec(`ALTER TABLE multiremi_conversation_heads DROP COLUMN agent_read_state;
       DELETE FROM multiremi_schema_migrations WHERE id = '20261004_session_agent_read_progress';`);

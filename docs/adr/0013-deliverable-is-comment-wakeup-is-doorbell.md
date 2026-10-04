@@ -47,6 +47,12 @@ existing daemon versions as well as the updated worker.
   head's existing counter serializes updates without changing provider identity.
   Completion advances only the provider checkpoint. Actual high-water advances
   on contiguous range pages or accepted, fully inline contiguous triggers.
+  On first access, initialize and persist each agent's state from its legacy
+  Issue lane cursor or completed Chat projection checkpoint. Legacy projections
+  were inline; agents without an old checkpoint start at 0. Persist even 0 so
+  later provider completion cannot be mistaken for an initial checkpoint.
+  Inline acknowledgement reads at most 100 metadata rows without loading bodies;
+  range gap checks use an existence query rather than materializing the history.
   Folded triggers, rejected offers and out-of-order reads do not acknowledge gaps.
   Read logs include actual returned seqs, start/end offsets and persisted progress;
   `complete` means the final page, not proof that all preceding pages were read.
@@ -106,9 +112,10 @@ references, offers, range pagination/permissions and Wiki caching/failure.
 PPE testing with current and isolated 0.2.85 daemons and final-head CI remain
 separate acceptance gates. Revert the implementation commits to roll back;
 the nullable `agent_read_state` column may remain, as older images ignore it.
-Provider checkpoint columns are unchanged. Null state conservatively starts at
-0 rather than treating legacy provider progress as proof of reading; upgrading
-may reread older context. No existing data is rewritten.
+Provider checkpoint columns are unchanged. Missing per-agent state is initialized
+once from the legacy inline projection checkpoint; genuinely new agents start
+at 0. Saved read state is not reset or reseeded when provider checkpoints advance.
+The migration leaves existing data intact; initialization is lazy on first access.
 
 ## Implementation
 
