@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -7,6 +8,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import {
   HERMETIC_ENV_DEFAULTS,
+  HERMETIC_ENV_RUN_ROOT_PATHS,
   HERMETIC_ENV_SENTINEL,
   SCRUBBED_ENV_KEYS,
   SCRUBBED_ENV_PREFIXES,
@@ -57,7 +59,11 @@ describe("hermetic test environment", () => {
     // Variables the preload sets deliberately are exempt from the leak check, but
     // only at the exact value it set: anything else under the scrubbed prefixes
     // (a host value, a different default, a leftover from another test) fails.
-    const defaults = HERMETIC_ENV_DEFAULTS as Record<string, string>;
+    const defaults = {
+      ...HERMETIC_ENV_DEFAULTS,
+      ...Object.fromEntries(Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)
+        .map(([name, subpath]) => [name, join(process.env.MULTIREMI_TEST_RUN_ROOT!, subpath)])),
+    };
     const leaked = Object.keys(process.env)
       .filter((name) => isScrubbedEnvKey(name) && process.env[name] !== defaults[name])
       .sort();
@@ -76,6 +82,17 @@ describe("hermetic test environment", () => {
     expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_MAX_BYTES)
       .toBe(String(DEFAULT_DB_REPLY_MAX_BYTES));
     expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_ENFORCE).toBe("1");
+  });
+
+  test("product write paths use the fresh test run root", () => {
+    const root = process.env.MULTIREMI_TEST_RUN_ROOT;
+    expect(root).toBeDefined();
+    for (const [name, subpath] of Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)) {
+      expect(process.env[name], `${name} must use the test run root`).toBe(join(root!, subpath));
+    }
+    for (const directory of [".remi", ".multiremi"]) {
+      expect(root!.startsWith(join(homedir(), directory))).toBe(false);
+    }
   });
 
   test("the scrub list covers the auth-relevant variables", () => {

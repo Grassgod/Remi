@@ -21,6 +21,7 @@ async function startUiProcess(databasePath: string, runtimePort: number, secret:
   const child = Bun.spawn(["bun", join(import.meta.dir, "../../fixtures/daemon-protocol-v2/ui-process.ts"),
     databasePath, String(runtimePort), secret], {
     cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env },
   });
   const queued: UiReply[] = [];
   const waiting: Array<(reply: UiReply) => void> = [];
