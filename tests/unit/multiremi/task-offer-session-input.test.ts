@@ -8,6 +8,7 @@ import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { log } from "@multiremi/api/helpers/common.js";
 import { prepareTaskOffer } from "@multiremi/api/daemon-protocol/task-offers.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
+import type { OpenVikingClientContract } from "@multiremi/project-knowledge/types.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -74,10 +75,59 @@ test("new Wiki-fetch capability keeps complete metadata without any bodies", () 
     project_docs: { wiki: [{ body: "duplicate" }] } };
   fitTaskOfferToBudget(payload, "runtime", undefined, true);
   expect(payload.project_wiki_docs[0]!.body).toBe("");
-  expect((payload.project_wiki_docs[0] as any).content_sha256).toHaveLength(64);
+  expect((payload.project_wiki_docs[0] as any).content_sha256).toBeUndefined();
   expect(payload.repository_wiki_contexts[0]!.docs[0]!.status).toBe("healthy");
   expect(payload.project_docs).toBeUndefined();
+  expect((payload as any).knowledge_warnings).toEqual([]);
   expect(taskOfferBytes(payload, "runtime")).toBeLessThan(512 * 1024);
+});
+
+test("legacy Wiki bodies remain complete when they fit and only enough oversized pages are omitted", () => {
+  const small = { id: "task", prompt: "work", repository_wiki_contexts: [{ docs: [
+    { id: "repo_small", body: "small body", status: "healthy" },
+  ] }], project_wiki_docs: [{ id: "project_small", body: "project body" }] };
+  fitTaskOfferToBudget(small, "runtime");
+  expect(small.repository_wiki_contexts[0]!.docs[0]).toMatchObject({ body: "small body", status: "healthy" });
+  expect(small.project_wiki_docs[0]!.body).toBe("project body");
+  expect((small as any).knowledge_warnings).toEqual([]);
+  const large = { id: "task", prompt: "work", repository_wiki_contexts: [{ docs: [
+    { id: "large", body: "x".repeat(400_000), status: "healthy" },
+    { id: "medium", body: "y".repeat(200_000), status: "healthy" },
+    { id: "small", body: "完整页面", status: "healthy" },
+  ] }], project_wiki_docs: [{ id: "project", body: "z".repeat(100_000) }] };
+  fitTaskOfferToBudget(large, "runtime");
+  expect(large.repository_wiki_contexts[0]!.docs[0]).toMatchObject({ body: "", status: "unavailable" });
+  expect(large.repository_wiki_contexts[0]!.docs[1]).toMatchObject({ body: "y".repeat(200_000), status: "healthy" });
+  expect(large.repository_wiki_contexts[0]!.docs[2]!.body).toBe("完整页面");
+  expect(large.project_wiki_docs[0]!.body).toHaveLength(100_000);
+  expect((large as any).knowledge_warnings).toEqual([expect.stringContaining("1 页暂不可用")]);
+  expect(taskOfferBytes(large, "runtime")).toBeLessThan(512 * 1024);
+});
+
+test("cold start includes Issue title and description and reads the complete range from zero", () => {
+  const f = fixture();
+  f.store.updateIssue(f.issue.id, { title: "COLD_START_TITLE", description: "COLD_START_DESCRIPTION" });
+  f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "FIRST_UNREAD" });
+  const trigger = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "TRIGGER" });
+  f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, triggerCommentId: trigger.id, prompt: trigger.body });
+  const claimed = f.store.claimTask(f.runtime.id)!;
+  const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
+  useTaskSessionInput(f.store, claimed, response);
+  fitTaskOfferToBudget(response, f.runtime.id);
+  const projection = response.session_projection as any;
+  const range = JSON.parse(projection.jsonl.split("\n")[0]);
+  expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: f.store.getConversationLogHead(f.session.id)!.headSeq });
+  const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
+  expect(prompt).toContain("COLD_START_TITLE"); expect(prompt).toContain("COLD_START_DESCRIPTION");
+  expect(prompt).toContain(`remi session log get ${f.session.id} --from 0 --to ${range.to_seq}`);
+  expect(prompt).not.toContain("FIRST_UNREAD");
+});
+
+test("a long prompt without an explicit trigger points to its task instead of rereading the session", () => {
+  const response = { id: "manual_task", issue_session_id: "session", prompt: "正文".repeat(10_000) };
+  fitTaskOfferToBudget(response, "runtime");
+  expect(response.prompt).toContain("remi task get manual_task");
+  expect(response.prompt).not.toContain("--from 0");
 });
 
 test("Chat input includes only this task's user trigger without a duplicate chat_message body", () => {
@@ -152,7 +202,7 @@ test("task-token range reads are recorded without including bodies or credential
   } finally { info.mockRestore(); }
 });
 
-test("Wiki bodies are fetched after claim using task credentials and existing scoped read routes", async () => {
+for (const mode of ["sql", "openviking"] as const) test(`Wiki offers read metadata only in ${mode} mode; bodies use existing scoped read routes`, async () => {
   const f = fixture(); const project = f.store.createProject({ title: "Wiki" });
   f.store.updateWorkspaceRepositories("local", [{ id: "repo_wiki", name: "Wiki", url: "https://github.com/example/wiki.git", source: "github", default_branch: "main" }]);
   f.store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: "https://github.com/example/wiki.git" } });
@@ -161,12 +211,27 @@ test("Wiki bodies are fetched after claim using task credentials and existing sc
   const repoDoc = f.store.createRepositoryWikiDoc("local", "repo_wiki", { path: "guide.md", title: "Guide", body: "repository body" });
   f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: "read" });
   const claimed = f.store.claimTask(f.runtime.id)!;
-  const projectService = new ProjectKnowledgeService(f.store, null, "sql");
-  const repositoryService = new RepositoryWikiService(f.store, null, "sql");
+  const noBodyReads = new Proxy({} as OpenVikingClientContract, {
+    get(_, operation) { throw new Error(`Metadata offers must not access OpenViking: ${String(operation)}`); },
+  });
+  const projectService = new ProjectKnowledgeService(f.store, mode === "sql" ? null : noBodyReads, mode);
+  const repositoryService = new RepositoryWikiService(f.store, mode === "sql" ? null : noBodyReads, mode);
+  const projectBodies = spyOn(projectService, "listProjectDocs").mockImplementation(async () => { throw new Error("body hydration forbidden during offer"); });
+  const repositoryBodies = spyOn(repositoryService, "list").mockImplementation(async () => { throw new Error("body hydration forbidden during offer"); });
+  const projectMetadata = spyOn(f.store, "listProjectDocs");
+  const repositoryMetadata = spyOn(f.store, "listRepositoryWikiDocs");
   const offered = (await prepareTaskOffer(f.store, claimed, projectService, repositoryService, true))!;
+  expect(projectBodies).not.toHaveBeenCalled(); expect(repositoryBodies).not.toHaveBeenCalled();
+  expect(projectMetadata).toHaveBeenCalledWith(project.id, { kind: "wiki", includeBody: false });
+  expect(repositoryMetadata).toHaveBeenCalledWith("local", "repo_wiki", { includeBody: false });
+  projectBodies.mockRestore(); repositoryBodies.mockRestore(); projectMetadata.mockRestore(); repositoryMetadata.mockRestore();
+  expect((offered.project_wiki_docs as any[])[0]).toMatchObject({ id: projectDoc.id, version: projectDoc.version, body: "" });
+  expect((offered.repository_wiki_contexts as any[])[0].docs[0]).toMatchObject({ id: repoDoc.id, body: "" });
   fitTaskOfferToBudget(offered, f.runtime.id, undefined, true);
   expect((offered.project_wiki_docs as any[])[0]).toMatchObject({ id: projectDoc.id, body: "" });
-  const app = createMultiremiApp({ store: f.store, projectKnowledge: projectService, repositoryWiki: repositoryService });
+  const app = createMultiremiApp({ store: f.store,
+    projectKnowledge: new ProjectKnowledgeService(f.store, null, "sql"),
+    repositoryWiki: new RepositoryWikiService(f.store, null, "sql") });
   for (const [path, body] of [
     [`/api/projects/${project.id}/docs/${projectDoc.id}`, projectDoc.body],
     [`/api/workspaces/local/repos/repo_wiki/wiki/${repoDoc.id}`, repoDoc.body],

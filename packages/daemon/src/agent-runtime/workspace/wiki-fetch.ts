@@ -8,8 +8,11 @@ type ReadDoc = (path: string) => Promise<Record<string, any>>;
 /** Download complete pages before the existing materializer sees their bodies. */
 export async function fetchTaskWikiBodies(workDir: string, task: AgentTask, read: ReadDoc): Promise<void> {
   const cache = readWikiFetchCache(workDir);
-  const warnings = task.knowledgeWarnings ??= [];
+  const warnings = task.knowledgeWarnings = (task.knowledgeWarnings ?? [])
+    .filter(warning => !warning.startsWith("Wiki bodies omitted from task offer."));
+  const unavailable = new Set<string>();
   const fetchDoc = async <T extends Doc>(doc: T, path: string): Promise<T | null> => {
+    if (doc.body) return doc;
     const prior = cache.get(doc.id);
     if (prior && prior.version === doc.version && (!doc.content_sha256 || prior.contentSha256 === doc.content_sha256)) {
       return { ...doc, body: prior.body };
@@ -22,7 +25,7 @@ export async function fetchTaskWikiBodies(workDir: string, task: AgentTask, read
         content_sha256: fetched.content_sha256 ?? createHash("sha256").update(fetched.body).digest("hex"),
         ...(fetched.status ? { status: fetched.status } : {}) };
     } catch {
-      warnings.push(`Wiki page ${doc.id} could not be fetched; retaining the last successfully loaded local version. Fetch it with remi wiki.`);
+      unavailable.add(doc.id);
       return prior ? { ...doc, ...prior.doc, body: prior.body, version: prior.version, content_sha256: prior.contentSha256 } as T : null;
     }
   };
@@ -52,7 +55,10 @@ export async function fetchTaskWikiBodies(workDir: string, task: AgentTask, read
   for (const context of task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? []) {
     for (let index = 0; index < context.docs.length; index += 16) {
       const fetchedDocs = await Promise.all(context.docs.slice(index, index + 16).map(async doc => {
-        if (doc.status === "unavailable") return doc;
+        if ([doc.status, doc.syncStatus ?? doc.sync_status].some(status => status === "unavailable" || status === "failed")) {
+          unavailable.add(doc.id);
+          return doc;
+        }
         const fetched = await fetchDoc(doc, `/api/workspaces/${encodeURIComponent(task.workspaceId ?? "local")}`
           + `/repos/${encodeURIComponent(context.repository.id)}/wiki/${encodeURIComponent(doc.id)}`);
         return fetched ?? { ...doc, body: "", status: "unavailable" };
@@ -60,4 +66,5 @@ export async function fetchTaskWikiBodies(workDir: string, task: AgentTask, read
       context.docs.splice(index, fetchedDocs.length, ...fetchedDocs);
     }
   }
+  if (unavailable.size) warnings.push(`${unavailable.size} 页暂不可用，用 remi wiki 取；保留上次成功的本地版本。`);
 }

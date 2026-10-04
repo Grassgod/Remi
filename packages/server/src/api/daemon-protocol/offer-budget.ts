@@ -1,11 +1,78 @@
-import { DAEMON_FRAME_MAX_BYTES, DAEMON_OFFER_BUDGET_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_OFFER_BUDGET_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { expandHint, TRIGGER_MESSAGE_INLINE_CHARS } from "@multiremi/contracts/session-input.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import { taskSessionInput } from "@multiremi/store/task-session-input.js";
-import { createHash } from "node:crypto";
 
 type Payload = Record<string, any>;
+
+function prefix(body: string, limit: number): string {
+  if (limit > 0 && /[\uD800-\uDBFF]/.test(body[limit - 1] ?? "")) limit--;
+  return body.slice(0, limit);
+}
+
+/** Last resort for large instructions/metadata. Identity, credentials and executable paths stay intact. */
+function truncateOfferStrings(response: Payload, runtimeId: string, budget: number): void {
+  const protectedKey = /^(?:id|.*[Ii]d|.*_id|auth_token|.*[Tt]oken|.*_token|.*[Pp]ath|.*_path|.*[Uu]rl|.*_url|provider|model|status|type|kind|expand|expand_hint|command|version|created_at|updated_at)$/;
+  const candidates: { owner: Payload; key: string; body: string; command: string }[] = [];
+  const projections: { owner: Payload; key: string; entries: Payload[] }[] = [];
+  const taskCommand = `remi task get ${response.id}`;
+  const visit = (value: any, command: string) => {
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (typeof child === "string" && (key === "jsonl" || key === "content_jsonl")) {
+        const entries = child.split("\n").filter(Boolean).map(line => JSON.parse(line));
+        projections.push({ owner: value, key, entries });
+        for (const entry of entries) {
+          if (entry.type === "triggering_message") visit(entry, entry.expand ?? `remi session log get ${value.session_id} ${entry.seq}`);
+        }
+      } else if (typeof child === "string" && !protectedKey.test(key)) {
+        candidates.push({ owner: value, key, body: child, command });
+      } else if (child && typeof child === "object") {
+        const source = ["agent", "issue", "project"].includes(key) && (child as Payload).id
+          ? `remi ${key} get ${(child as Payload).id}` : command;
+        visit(child, source);
+      }
+    }
+  };
+  visit(response, taskCommand);
+  const sync = () => { for (const projection of projections) projection.owner[projection.key] = projection.entries.map(entry => JSON.stringify(entry)).join("\n"); };
+  candidates.sort((a, b) => Buffer.byteLength(JSON.stringify(b.body)) - Buffer.byteLength(JSON.stringify(a.body)));
+  for (const { owner, key, body, command } of candidates) {
+    sync();
+    const excess = taskOfferBytes(response, runtimeId) - budget;
+    if (excess <= 0) return;
+    const folded = (limit: number) => {
+      const start = prefix(body, limit);
+      return `${start}\n${expandHint(body.length - start.length, command)}`;
+    };
+    const target = Buffer.byteLength(JSON.stringify(body)) - excess;
+    if (Buffer.byteLength(JSON.stringify(folded(0))) >= Buffer.byteLength(JSON.stringify(body))) continue;
+    let low = 0, high = body.length - 1;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (Buffer.byteLength(JSON.stringify(folded(mid))) <= target) low = mid;
+      else high = mid - 1;
+    }
+    if (key === "body" && owner.type === "triggering_message") {
+      const start = prefix(body, low);
+      owner.body = start;
+      owner.body_omitted_chars = (owner.body_omitted_chars ?? 0) + body.length - start.length;
+      owner.body_folded = true;
+      owner.expand = command;
+      owner.expand_hint = expandHint(owner.body_omitted_chars, command);
+    } else owner[key] = folded(low);
+  }
+  sync();
+  // If collection overhead alone dominates, remove additional context rather than queueing the task.
+  const essential = new Set(["id", "agent", "runtime_id", "workspace_id", "auth_token", "prompt", "issue_id", "issue_session_id",
+    "chat_session_id", "session_projection", "session_id", "work_dir", "repos", "execution_scope", "holds_workspace", "knowledge_warnings"]);
+  for (const key of Object.keys(response).filter(key => !essential.has(key))
+    .sort((a, b) => Buffer.byteLength(JSON.stringify(response[b])) - Buffer.byteLength(JSON.stringify(response[a])))) {
+    if (taskOfferBytes(response, runtimeId) <= budget) break;
+    delete response[key];
+  }
+}
 
 export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Payload): void {
   const projection = response.session_projection;
@@ -55,33 +122,36 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
   const steps: string[] = [];
   const warnings = response.knowledge_warnings = [...(response.knowledge_warnings ?? [])];
   const fold = (body: string, command: string, limit: number): string => body.length <= limit ? body
-    : `${body.slice(0, limit)}\n${expandHint(body.length - limit, command)}`;
-  const sessionId = response.issue_session_id ?? response.chat_session_id;
+    : `${prefix(body, limit)}\n${expandHint(body.length - prefix(body, limit).length, command)}`;
+  const promptCommand = `remi task get ${response.id}`;
+  const originalPrompt = response.prompt;
   if (typeof response.prompt === "string") response.prompt = fold(response.prompt,
-    sessionId ? `remi session log get ${sessionId} --from 0 --to ${response.session_projection?.to_seq ?? 0}`
-      : `remi task get ${response.id}`, TRIGGER_MESSAGE_INLINE_CHARS);
-  // Knowledge bodies travel over HTTP after claim; legacy daemons get directories and fetch hints.
-  for (const context of response.repository_wiki_contexts ?? []) {
-    for (const doc of context.docs ?? []) {
-      if (supportsWikiFetch && typeof doc.body === "string") doc.content_sha256 = createHash("sha256").update(doc.body).digest("hex");
-      if (doc.body) {
+    promptCommand, TRIGGER_MESSAGE_INLINE_CHARS);
+  delete response.project_docs;
+  const projectLists: Payload[][] = [response.project_wiki_docs ?? [], ...(response.project_contexts ?? []).map((context: Payload) => context.docs ?? [])];
+  const repositoryDocs: Payload[] = (response.repository_wiki_contexts ?? []).flatMap((context: Payload) => context.docs ?? []);
+  if (supportsWikiFetch) {
+    for (const doc of [...projectLists.flat(), ...repositoryDocs]) doc.body = "";
+    steps.push("knowledge_metadata");
+  } else if (taskOfferBytes(response, runtimeId) > budget) {
+    const omitted = new Set<string>();
+    for (const doc of [...repositoryDocs, ...projectLists.flat()].sort((a, b) => Buffer.byteLength(b.body ?? "") - Buffer.byteLength(a.body ?? ""))) {
+      if (taskOfferBytes(response, runtimeId) <= budget) break;
+      if (!doc.body) continue;
+      if (repositoryDocs.includes(doc)) {
         doc.body = "";
-        if (!supportsWikiFetch) {
-          doc.status = "unavailable";
-          doc.status_message = "Wiki body omitted from task offer; Fetch it with remi wiki repository.";
+        doc.status = "unavailable";
+        doc.status_message = "Wiki body omitted from task offer budget; Fetch it with remi wiki repository.";
+      } else {
+        for (const docs of projectLists) {
+          for (let index = docs.length - 1; index >= 0; index--) if (docs[index]!.id === doc.id) docs.splice(index, 1);
         }
       }
+      omitted.add(doc.id);
     }
+    if (omitted.size) warnings.push(`${omitted.size} 页暂不可用，用 remi wiki 取；保留已有本地副本。`);
+    steps.push("knowledge");
   }
-  response.project_wiki_docs = supportsWikiFetch ? (response.project_wiki_docs ?? []).map((doc: Payload) => ({
-    ...doc, content_sha256: createHash("sha256").update(doc.body ?? "").digest("hex"), body: "",
-  })) : [];
-  delete response.project_docs;
-  for (const context of response.project_contexts ?? []) context.docs = supportsWikiFetch
-    ? (context.docs ?? []).map((doc: Payload) => ({ ...doc,
-      content_sha256: createHash("sha256").update(doc.body ?? "").digest("hex"), body: "" })) : [];
-  warnings.push("Wiki bodies omitted from task offer. The daemon fetches them separately; use remi wiki if unavailable.");
-  steps.push("knowledge");
   for (const limit of [4_000, 1_000, 200]) {
     if (taskOfferBytes(response, runtimeId) <= budget) break;
     for (const key of ["session_projection", "inherited_session_projection"]) {
@@ -90,16 +160,17 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
       projection.jsonl = projection.jsonl.split("\n").map((line: string) => {
         const entry = JSON.parse(line);
         if (entry.type !== "triggering_message" || typeof entry.body !== "string" || entry.body.length <= limit) return line;
-        entry.body_omitted_chars = (entry.body_omitted_chars ?? 0) + entry.body.length - limit;
-        entry.body = entry.body.slice(0, limit);
+        const start = prefix(entry.body, limit);
+        entry.body_omitted_chars = (entry.body_omitted_chars ?? 0) + entry.body.length - start.length;
+        entry.body = start;
         entry.body_folded = true;
         entry.expand = `remi session log get ${projection.session_id} ${entry.seq}`;
         entry.expand_hint = expandHint(entry.body_omitted_chars, entry.expand);
         return JSON.stringify(entry);
       }).join("\n");
     }
-    if (typeof response.prompt === "string") response.prompt = fold(response.prompt,
-      sessionId ? `remi session log get ${sessionId} --from 0 --to ${response.session_projection?.to_seq ?? 0}` : `remi task get ${response.id}`, limit);
+    if (typeof originalPrompt === "string") response.prompt = fold(originalPrompt,
+      promptCommand, limit);
     steps.push(`triggers:${limit}`);
   }
   if (taskOfferBytes(response, runtimeId) > budget) {
@@ -110,14 +181,18 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
   }
   if (taskOfferBytes(response, runtimeId) > budget) {
     warnings.push("Large optional execution context omitted; retrieve relevant context using remi CLI.");
+    if (response.agent) response.agent.skills = [];
     for (const key of ["plugin_snapshot", "skills", "project_contexts", "repository_wiki_contexts", "project_resources"]) {
       delete response[key];
     }
     steps.push("optional_context");
   }
+  if (taskOfferBytes(response, runtimeId) > budget) {
+    truncateOfferStrings(response, runtimeId, budget - 1_024);
+    steps.push("strings");
+  }
   const parts = Object.fromEntries(Object.entries(response).filter(([key]) => key !== "auth_token")
     .map(([key, value]) => [key, Buffer.byteLength(JSON.stringify(value) ?? "null")]));
   const bytes = taskOfferBytes(response, runtimeId);
-  if (bytes > DAEMON_FRAME_MAX_BYTES) warnings.push("Task offer still exceeds transport capacity; it will remain queued.");
   return { response, report: { bytes, parts, steps } };
 }

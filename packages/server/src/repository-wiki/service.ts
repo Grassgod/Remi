@@ -124,7 +124,7 @@ export interface RepositoryWikiServiceContract {
   revisions(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDocRevision[]>;
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
-  hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal, metadataOnly?: boolean): Promise<MultiremiTaskWithAgent>;
   /** Reads whose OpenViking calls all share one deadline; use one per API request. */
   withRequestDeadline(budgetMs?: number): RepositoryWikiRequestReader;
   startStorageWorker?(): void;
@@ -689,15 +689,18 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     return repositoryWikiBacklinks(target, documents);
   }
 
-  async hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent> {
-    if (signal && this.client?.withSignal) {
+  async hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal, metadataOnly = false): Promise<MultiremiTaskWithAgent> {
+    if (!metadataOnly && signal && this.client?.withSignal) {
       return new RepositoryWikiService(this.store, this.client.withSignal(signal), this.mode).hydrateTaskWiki(task);
     }
     const selected = resolveTaskRepositoryWikiRepositories(this.store, task);
     if (!selected.length) return task;
     const contexts = await Promise.all(selected.map(async (repository) => ({
       repository,
-      docs: await this.list(task.workspaceId, repository.id),
+      docs: metadataOnly
+        ? this.store.listRepositoryWikiDocs(task.workspaceId, repository.id, { includeBody: false })
+          .map(doc => ({ ...doc, contentSha256: null }))
+        : await this.list(task.workspaceId, repository.id),
     })));
     const repos = [...task.repos];
     const knownRemotes = new Set(repos.map((repo) => canonicalRepositoryRemote(repo.url)));

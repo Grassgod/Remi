@@ -40,15 +40,23 @@ existing daemon versions as well as the updated worker.
   all pages and rejoins long entries. Task-token reads emit structured diagnostics
   without contents or credentials; reading is encouraged, never enforced.
 - The `wiki.fetch` hello capability separates Wiki downloads from task offers.
+  Its server path lists metadata without reading SQL or OpenViking bodies or
+  calculating body hashes. Version is required; a body SHA is optional.
   Updated daemons use existing task-authorized HTTP read endpoints and verified
   baseline caches. Unchanged pages reuse their body; failed reads retain the last
-  successful version and warn. Old daemons receive unavailable markers and read
-  hints rather than large bodies.
+  successful version and warn. Wiki failures produce at most one aggregate line
+  in the prompt, without per-page diagnostics or a successful-fetch warning.
+  Old daemons retain complete bodies while the offer fits its soft budget;
+  only enough pages are omitted to meet that budget. Omitted repository pages
+  retain unavailable markers so existing local copies are preserved.
 - Offers are measured and reduced at the server send boundary against a 512 KiB
   soft budget. Knowledge bodies go first, followed by trigger allowances, long
-  descriptions and large optional context. A still-oversized transport frame
-  remains queued with cooldown and a per-field size diagnostic. Neither task
-  failure nor an Issue blocked transition follows from its size.
+  descriptions and large optional context. If necessary, remaining text fields
+  are truncated largest first with omitted-character counts and source read
+  commands. JSONL remains parseable, and credentials and routing identities
+  remain intact. Per-field byte diagnostics remain available. Oversized
+  instructions dispatch after truncation, without failure, requeue or runtime
+  cooldown, so subsequent tasks can run.
 
 No public route, command path or existing wire field is renamed. Additive range
 flags, a hello capability and metadata use existing compatibility patterns.
@@ -64,17 +72,19 @@ flags, a hello capability and metadata use existing compatibility patterns.
   offer already fails before delivery.
 - Put Wiki bodies in a second WebSocket frame or add a download API: unnecessary
   protocol/API surface; authenticated Wiki read endpoints already exist.
-- Fail irreducibly large offers: rejected by the latest user instruction. Retaining
-  queued work keeps the Issue recoverable, although an oversized mandatory field
-  may need intervention at its source.
+- Fail or repeatedly queue oversized offers: rejected by the latest user
+  instruction. Truncate remaining text before sending rather than indefinitely
+  starving that runtime's queue.
 
 ## Consequences and Rollback
 
 Agents spend an extra CLI read on unread context. Updated CLI flags are required
 for range reads; deployment and daemon/CLI upgrade remain separate operations.
-Large optional tool context may be omitted with a warning. Server hydration still
-loads Wiki bodies before producing metadata, so this change bounds the dispatch
-packet rather than eliminating server-side knowledge-read cost.
+Large optional tool context may be omitted with a warning. Metadata-only Wiki
+hydration avoids server body downloads for capable daemons. Legacy daemons
+still hydrate bodies within the existing cap and update pages that fit; their
+per-page unavailable-warning renderer remains a transitional limitation until
+they upgrade. Updated daemons aggregate Project and Repository Wiki failures.
 
 Local verification covers deterministic result boundaries, terminal comment
 references, offers, range pagination/permissions and Wiki caching/failure.

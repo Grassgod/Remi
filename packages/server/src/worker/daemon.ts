@@ -4135,8 +4135,7 @@ export class MultiremiDaemon {
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const chatRepoAutoCheckout = this.canAutoCheckoutChatRepos(task, resolvedWorkDir);
-    if (!task.runtimeWorkspaceId && !resolvedWorkDir.localDirectory
-      && task.knowledgeWarnings?.some(warning => warning.startsWith("Wiki bodies omitted from task offer."))) {
+    if (!task.runtimeWorkspaceId && !resolvedWorkDir.localDirectory) {
       await fetchTaskWikiBodies(codeWorkDir, task, path => this.client.readTaskWiki(path, task.authToken ?? "", signal));
     }
     const preparedWorkspace = await this.issueWorkspaceLifecycleLocks.runExclusive(`prepare:${codeWorkDir}`, () =>

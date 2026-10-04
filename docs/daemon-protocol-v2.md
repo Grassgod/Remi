@@ -55,20 +55,24 @@ CLI 自动读取全部页并拼回完整正文。使用任务 token 的成功读
 `session_log_range_read`；单条读取写 `session_log_entry_expanded`。
 记录 task/agent/session、范围或 seq、读取完成状态，不记录凭证或正文，不拦截任务。
 
-daemon 在 `hello.caps` 声明 `wiki.fetch` 时，offer 只携带 Wiki 元数据、version 和
-`content_sha256`。新 daemon 用任务 token 调用既有 Project/Repository Wiki GET 接口，
+daemon 在 `hello.caps` 声明 `wiki.fetch` 时，服务端只查询 Wiki 元数据，不读取正文、不计算
+正文 hash。offer 携带 version，`content_sha256` 可选。新 daemon 用任务 token 调用既有 Project/Repository Wiki GET 接口，
 在物化前下载正文。经过校验的本地 baseline 缓存 version/sha；未变页不重复拉取。
-下载失败保留上次成功版本、路径与本地编辑，并附 warning，首次失败不造空正文。
-没有该能力的旧 daemon 得到不可用标记/读取提示；服务端仍移除 Wiki 正文，防止超帧。
+下载失败保留上次成功版本、路径与本地编辑，首次失败不造空正文。prompt 中 Wiki 不可用信息
+最多一行汇总（页数和 `remi wiki` 读取提示），不逐页列出；成功下载没有固定省略 warning。
+没有该能力的旧 daemon 仍在软预算内接收完整正文；超预算时 Wiki 第一个被裁减，只去掉够用的页。
+Repository Wiki 被裁减的页保留不可用标记，旧 daemon 对未裁减的页继续更新本地副本。
+旧版逐页渲染不可用提示是过渡期限制，升级后才统一为一行。
 新范围命令需要包含这些 flags 的 CLI；平台更新不会自动证明所有 daemon/CLI 已升级。
 
 `task.offer` 在服务端发送前按完整 JSON 帧加预留开销计量，软预算为 512 KiB，硬限
 仍为 1 MiB。依次移除 Wiki/重复文档正文、收缩触发消息、折叠长描述、移除过大的
 可选执行上下文。按最新输入约定，旧投影正文在预算检查前已被范围指针替换。
-日志 `daemon_offer_budget` 记录各字段字节及降级阶段。合法帧超过软预算仍可下发；
-仍超过硬限的任务撤回派发、保持 queued，记录 `daemon_offer_transport_capacity`，
-按已有 cooldown 重试，不调用 `failTask`，不改变 Issue 为 blocked。
-不可缩减的必要字段仍可能持续排队，需要依据尺寸诊断修正来源。
+日志 `daemon_offer_budget` 记录各字段字节及降级阶段。移除可选上下文后仍超预算时，从最大的
+剩余文本字段开始截短，保留开头、未读字数和相应读取命令；agent instructions 指向
+`remi agent get <id>`，没有触发消息的长 prompt 指向 `remi task get <id>`。
+JSONL 按条目内文本截短，保留有效 JSON；凭证、标识和路由字段保持完整。
+size 不会触发失败、反复排队或 runtime 冷却，也不改变 Issue 为 blocked。
 具体决策见 [ADR 0013](adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)。
 
 ## 1. 连接与帧

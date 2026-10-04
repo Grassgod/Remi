@@ -25,11 +25,8 @@ export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTas
       remotes.add(canonicalRepositoryRemote(repo.url));
     }
   }
-  if (supportsWikiFetch && project.mode !== "openviking" && task.project) {
-    task.projectWikiDocs = store.listProjectDocs(task.project.id, { kind: "wiki" });
-  }
   const hydrated = await hydrateClaimKnowledge(task, project, repository, 5_000,
-    supportsWikiFetch ? Number.MAX_SAFE_INTEGER : undefined);
+    undefined, supportsWikiFetch);
   invalidateRequestReadCache();
   const current = store.getTaskIdentity(task.id);
   if (current?.status !== "dispatched" || current.runtimeId !== task.runtimeId) return null;
@@ -227,12 +224,14 @@ export class DaemonTaskOffers {
       if (this.session(runtimeId) !== session) { this.rescind(runtimeId, pump, task.id); return; }
       const budgeted = fitTaskOfferToBudget(payload, runtimeId, undefined, session.supportsWikiFetch);
       console.info(JSON.stringify({ event: "daemon_offer_budget", task_id: task.id, runtime_id: runtimeId, ...budgeted.report }));
-      const sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: payload }, { pausable: true });
+      let sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: payload }, { pausable: true });
+      if (!sent.ok && sent.reason === "too_large") {
+        const compact = fitTaskOfferToBudget(payload, runtimeId, 16 * 1024, session.supportsWikiFetch);
+        console.warn(JSON.stringify({ event: "daemon_offer_transport_capacity", task_id: task.id, ...compact.report }));
+        sent = session.sendEvent({ t: "task.offer", rt: runtimeId, p: compact.response }, { pausable: true });
+      }
       if (!sent.ok) {
-        if (sent.reason === "too_large") {
-          console.warn(JSON.stringify({ event: "daemon_offer_transport_capacity", task_id: task.id, ...budgeted.report }));
-          this.rescind(runtimeId, pump, task.id, "transport_capacity");
-        } else if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
+        if (sent.reason === "closed") this.rescind(runtimeId, pump, task.id);
         else {
           pump.waiting = true;
           store.requeueTaskOffer(task.id, runtimeId);

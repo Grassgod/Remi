@@ -4799,7 +4799,7 @@ runMigrations(this.db);
     return this.projects.deleteProjectResource(projectId, resourceId);
   }
 
-  listProjectDocs(projectId: string, input: { kind?: string | null } = {}): MultiremiProjectDoc[] {
+  listProjectDocs(projectId: string, input: { kind?: string | null; includeBody?: boolean } = {}): MultiremiProjectDoc[] {
     return this.projects.listProjectDocs(projectId, input);
   }
 
@@ -4887,8 +4887,8 @@ runMigrations(this.db);
     return this.projects.getProjectDocsIndex(projectId);
   }
 
-  listRepositoryWikiDocs(workspaceId: string, repositoryId: string): MultiremiRepositoryWikiDoc[] {
-    return this.repositoryWiki.list(workspaceId, repositoryId);
+  listRepositoryWikiDocs(workspaceId: string, repositoryId: string, input: { includeBody?: boolean } = {}): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.list(workspaceId, repositoryId, input);
   }
 
   listWorkspaceRepositoryWikiDocs(workspaceId: string): MultiremiRepositoryWikiDoc[] {

@@ -34,12 +34,17 @@ test("fetches Wiki via existing endpoints, caches unchanged pages and refreshes 
     return { doc: { id: path.endsWith("project_doc") ? "project_doc" : "repo_doc",
       version: 1, body: path.endsWith("project_doc") ? "project body" : "repo body" } };
   };
-  const first = task(); await fetchTaskWikiBodies(dir, first, read);
+  const first = task(); first.knowledgeWarnings = ["Wiki bodies omitted from task offer. Fetch them separately."];
+  await fetchTaskWikiBodies(dir, first, read);
   expect(calls).toEqual(["/api/projects/project/docs/project_doc", "/api/workspaces/local/repos/repo/wiki/repo_doc"]);
+  expect(first.knowledgeWarnings).toEqual([]);
   await prepareIssueWikiWorkspace(dir, first);
   expect(readFileSync(join(dir, "wiki", "guide.md"), "utf8")).toBe("project body\n");
   calls.length = 0;
-  await fetchTaskWikiBodies(dir, task(), read);
+  const metadataOnly = task();
+  delete metadataOnly.projectWikiDocs![0]!.content_sha256;
+  delete metadataOnly.repositoryWikiContexts![0]!.docs[0]!.content_sha256;
+  await fetchTaskWikiBodies(dir, metadataOnly, read);
   expect(calls).toEqual([]);
   const changed = task(); changed.projectWikiDocs![0]!.version = 2;
   await fetchTaskWikiBodies(dir, changed, async path => { calls.push(path); return { doc: { id: "project_doc", version: 2, body: "changed" } }; });
@@ -60,7 +65,7 @@ test("failed downloads preserve the last successful path, version, baseline and 
   await fetchTaskWikiBodies(dir, changed, async () => { throw new Error("offline"); });
   expect(changed.projectWikiDocs![0]).toMatchObject({ path: "guide.md", version: 1 });
   expect(changed.repositoryWikiContexts![0]!.docs[0]).toMatchObject({ path: "concepts/guide.md", version: 1 });
-  expect(changed.knowledgeWarnings).toHaveLength(2);
+  expect(changed.knowledgeWarnings).toEqual([expect.stringContaining("2 页暂不可用")]);
   await prepareIssueWikiWorkspace(dir, changed);
   expect(readFileSync(join(dir, "wiki", "guide.md"), "utf8")).toBe("local edit\n");
   expect(readFileSync(join(dir, ".multiremi", "wiki-base", "files", "guide.md"), "utf8")).toBe("project body\n");

@@ -57,7 +57,7 @@ describe("A-3 task offers", () => {
     await h.hello();
     expect(h.offered()).toHaveLength(1);
     expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
-    expect(h.offered()[0]!.p.knowledge_warnings.join("\n")).toContain("Wiki bodies omitted");
+    expect(h.offered()[0]!.p.knowledge_warnings.join("\n")).toContain("1 页暂不可用");
     expect(h.store.getTask(task.id)?.status).toBe("dispatched");
     expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
   });
@@ -301,19 +301,27 @@ describe("A-3 task offers", () => {
     expect(h.offered()[1]!.p.id).toBe(next.id);
   });
 
-  it("keeps an irreducible oversized offer queued with cooldown without blocking its Issue", async () => {
-    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, required_context: "x".repeat(1_048_576) }));
+  it("dispatches huge agent instructions and then the next task on the same runtime", async () => {
+    const h = fixture(async task => ({ id: task.id, prompt: task.prompt, auth_token: "fixture-capability",
+      agent: { id: task.agentId, provider: "claude", instructions: "😀中文\\\n\"".repeat(200_000) } }));
     const issue = h.store.createIssue({ title: "Irreducible input" });
     const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "request" });
+    const next = h.task();
     await h.hello();
-    expect(h.offered()).toHaveLength(0);
-    expect(h.store.getTask(task.id)?.status).toBe("queued");
+    expect(h.offered()).toHaveLength(1);
+    expect(h.store.getTask(task.id)?.status).toBe("dispatched");
     expect(h.store.getTask(task.id)?.failureReason).toBeNull();
     expect(h.store.getIssue(issue.id)?.status).not.toBe("blocked");
+    const payload = h.offered()[0]!.p;
+    expect(payload.agent.instructions).toContain("还有");
+    expect(payload.agent.instructions).toContain(`remi agent get ${task.agentId}`);
+    const prefixLength = payload.agent.instructions.lastIndexOf("\n只看到了开头");
+    expect(Number(payload.agent.instructions.match(/还有 (\d+) 字/)![1])).toBe("😀中文\\\n\"".repeat(200_000).length - prefixLength);
+    expect(payload.auth_token).toBe("fixture-capability");
+    expect(Buffer.byteLength(JSON.stringify(h.offered()[0]))).toBeLessThan(512 * 1024);
+    await h.accept(); h.store.startTask(task.id); h.store.completeTask(task.id, { output: "done" });
     h.offers.kick(); await h.layer.drain();
-    expect(h.offered()).toHaveLength(0);
-    h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
-    expect(h.store.getTask(task.id)?.status).toBe("queued");
+    expect(h.offered()[1]!.p.id).toBe(next.id);
   });
 
   it("does not reset an accepted Chat dispatch through the stale workspace recovery path", async () => {
