@@ -207,3 +207,46 @@ describe("enhanceEntryHtml", () => {
     enhanced.dispose();
   });
 });
+
+
+describe("file-card slots (MUL-518)", () => {
+  it("collects cards and rejects a forged href without removing the slot", () => {
+    const { container } = makeContainer('<div data-type="fileCard" data-href="/api/attachments/att_1/content" data-filename="notes.txt"></div><div data-type="fileCard" data-href="javascript:alert(1)" data-filename="bad.txt"></div>');
+    const enhanced = enhanceEntryHtml(container, { ...COPY, markdown: "" });
+    expect(enhanced.slots).toMatchObject([
+      { kind: "fileCard", href: "/api/attachments/att_1/content", filename: "notes.txt", allowed: true },
+      { kind: "fileCard", filename: "bad.txt", allowed: false },
+    ]);
+    expect(container.querySelectorAll(`[${PREVIEW_SLOT_ATTR}="fileCard"]`)).toHaveLength(2);
+    // Static CSS owns height; enhancement does not change the server node's styles.
+    expect(container.querySelector('[data-type="fileCard"]')?.getAttribute("style")).toBeNull();
+    enhanced.dispose();
+  });
+
+  it("restores every original child, attribute and style after portals and repeated runs", () => {
+    const { container } = makeContainer('<div data-type="fileCard" data-href="/uploads/x.pdf" data-filename="x.pdf" style="color:red"><span>original</span></div><pre><code>graph TD;</code></pre>', [100]);
+    const before = container.innerHTML;
+    const options = { ...COPY, markdown: "```mermaid\ngraph TD;\n```" };
+    const first = enhanceEntryHtml(container, options);
+    first.slots[0]!.element.appendChild(document.createElement("button"));
+    const second = enhanceEntryHtml(container, options);
+    // Disposing the old call cannot discard a newer enhancement.
+    first.dispose();
+    expect(second.slots.map(slot => slot.kind)).toEqual(["fileCard", "mermaid"]);
+    expect(container.querySelectorAll(`[${PREVIEW_SLOT_ATTR}]`)).toHaveLength(2);
+    second.dispose();
+    second.dispose();
+    expect(container.innerHTML).toBe(before);
+  });
+
+  it("treats raw card children as untrusted content, including nested cards", () => {
+    const { container } = makeContainer('<div data-type="fileCard" data-filename="bad"><div data-type="fileCard"><pre><code>bad</code></pre></div></div>');
+    const before = container.innerHTML;
+    const enhanced = enhanceEntryHtml(container, { ...COPY, markdown: "" });
+    expect(enhanced.slots).toHaveLength(1);
+    expect(enhanced.slots[0]).toMatchObject({ kind: "fileCard", allowed: false });
+    expect(container.querySelector("pre")).toBeNull();
+    enhanced.dispose();
+    expect(container.innerHTML).toBe(before);
+  });
+});

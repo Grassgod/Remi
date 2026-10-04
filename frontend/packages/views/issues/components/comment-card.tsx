@@ -523,6 +523,7 @@ function CommentCardImpl({
           <>
             <div className="text-sm leading-relaxed text-foreground/85">
               <EntryHtml html={bodyHtml ?? null} markdown={entry.content ?? ""}
+                attachments={entry.attachments}
                 fallback={<ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />} />
             </div>
             <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5" />

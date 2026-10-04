@@ -25,10 +25,17 @@
 
 import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { Attachment as AttachmentRecord } from "@multiremi/core/types";
+import { Attachment } from "../../editor/attachment";
+import { AttachmentDownloadProvider } from "../../editor/attachment-download-context";
+// Static import: the server's empty fileCard slots must reserve height at SSR.
+import "./entry-html.css";
 import { useT } from "../../i18n";
 import {
   enhanceEntryHtml,
   type EntryPreviewSlot,
+  type EntryFileCardSlot,
+  type EntryEnhancementSlot,
   type EnhancedEntryHtml,
 } from "./enhance";
 
@@ -37,6 +44,8 @@ export interface EntryHtmlProps {
   html: string | null;
   /** The markdown `html` was rendered from; the enhancement matches fences against it. */
   markdown: string;
+  /** Resolves inline card URLs to records for re-signed previews/downloads. */
+  attachments?: AttachmentRecord[];
   /**
    * Called once per mount when `html` is empty, so the consumer can count
    * `degraded_render` against the replica. Never called when HTML is present.
@@ -86,9 +95,18 @@ function HtmlSlot({ slot }: { slot: EntryPreviewSlot }): React.ReactElement {
   );
 }
 
+function FileCardSlot({ slot }: { slot: EntryFileCardSlot }): React.ReactElement {
+  return createPortal(
+    <Attachment presentation="card" className="entry-file-card"
+      attachment={{ kind: "url", url: slot.allowed ? slot.href : "", filename: slot.filename }} />,
+    slot.element,
+  );
+}
+
 export function EntryHtml({
   html,
   markdown,
+  attachments,
   onDegradedRender,
   fallback = null,
   className,
@@ -96,7 +114,7 @@ export function EntryHtml({
   const { t } = useT("chat");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const enhancedHtml = useRef<string | null | undefined>(undefined);
-  const [slots, setSlots] = useState<readonly EntryPreviewSlot[]>([]);
+  const [slots, setSlots] = useState<readonly EntryEnhancementSlot[]>([]);
   const degraded = !html;
 
   const copyLabel = t(($) => $.session_log.copy_code);
@@ -143,7 +161,9 @@ export function EntryHtml({
 
   const portals = useMemo(
     () => slots.map((slot, index) => (
-      slot.kind === "mermaid"
+      slot.kind === "fileCard"
+        ? <FileCardSlot key={`fileCard:${index}`} slot={slot} />
+        : slot.kind === "mermaid"
         ? <MermaidSlot key={`mermaid:${index}`} slot={slot} />
         : <HtmlSlot key={`html:${index}`} slot={slot} />
     )),
@@ -165,7 +185,7 @@ export function EntryHtml({
           effect above, which is what keeps the enhancement from being discarded
           on the re-render that mounting the portals causes. */}
       {host}
-      {portals}
+      <AttachmentDownloadProvider attachments={attachments}>{portals}</AttachmentDownloadProvider>
     </>
   );
 }

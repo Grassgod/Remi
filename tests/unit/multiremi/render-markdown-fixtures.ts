@@ -20,6 +20,8 @@
  * cover byte-for-byte is pinned separately, byte for byte, by the dedicated
  * "fenced block is byte-identical" case in the parity test.
  */
+import FILE_CARD_CASES from "./file-card-fixtures.json";
+
 export interface RenderFixture {
   name: string;
   markdown: string;
@@ -117,4 +119,7 @@ export const FIXTURES: RenderFixture[] = [
     markdown: HUGE_CODE,
     skipStructureCompare: true,
   },
+  ...FILE_CARD_CASES.map(({ href, markdown }) => ({
+    name: `MUL-518 file card ${JSON.stringify(href)}`, markdown,
+  })),
 ];

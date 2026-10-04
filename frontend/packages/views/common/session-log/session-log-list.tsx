@@ -31,6 +31,7 @@ import { useAnchoredReveal, type RevealAnchor } from "../use-anchored-reveal";
 import { useStickToBottom } from "../use-stick-to-bottom";
 import { useT } from "../../i18n";
 import { EntryHtml } from "./entry-html";
+import { entryAttachments } from "./entry-attachments";
 import { reservedRowHeight, useRowHeights, type MeasurableRow } from "./use-row-heights";
 
 /** DOM ceiling from plan 5/6 §1: the newest end is kept, the oldest is dropped. */
@@ -392,6 +393,7 @@ export function SessionLogList({
                     <EntryHtml
                       html={entry.body_html}
                       markdown={entry.body_md}
+                      attachments={entryAttachments(entry)}
                       onDegradedRender={() => reportDegraded(entry)}
                       fallback={renderFallback ? renderFallback(entry) : null}
                     />

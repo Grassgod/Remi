@@ -2,6 +2,7 @@
 
 import { createContext, use, useMemo, type ReactNode } from "react";
 import type { Attachment } from "@multiremi/core/types";
+import { isAllowedFileCardHref } from "@multiremi/ui/markdown";
 import { openExternal } from "../platform";
 import { useDownloadAttachment } from "./use-download-attachment";
 
@@ -35,26 +36,31 @@ interface ProviderProps {
 export function AttachmentDownloadProvider({ attachments, children }: ProviderProps) {
   const download = useDownloadAttachment();
   const value = useMemo<ResolvedDownload>(
-    () => ({
-      resolveAttachmentId: (url) => {
+    () => {
+      const resolveAttachment = (url: string): Attachment | undefined => {
         if (!url || !attachments?.length) return undefined;
-        return attachments.find((a) => a.url === url)?.id;
-      },
-      resolveAttachment: (url) => {
-        if (!url || !attachments?.length) return undefined;
-        return attachments.find((a) => a.url === url);
-      },
-      openByUrl: (url) => {
-        const att = url && attachments?.length
-          ? attachments.find((a) => a.url === url)
+        const exact = attachments.find(a => a.url === url);
+        if (exact) return exact;
+        // An optional query must not lose the record's ID-based download/preview.
+        // Only strict authenticated attachment paths may resolve by ID.
+        const id = isAllowedFileCardHref(url)
+          ? /^\/api\/attachments\/([A-Za-z0-9_-]+)\/content(?:\?|$)/.exec(url)?.[1]
           : undefined;
-        if (att) {
-          download(att.id);
-          return;
-        }
-        if (url) openExternal(url);
-      },
-    }),
+        return id ? attachments.find(a => a.id === id) : undefined;
+      };
+      return {
+        resolveAttachmentId: (url) => resolveAttachment(url)?.id,
+        resolveAttachment,
+        openByUrl: (url) => {
+          const att = resolveAttachment(url);
+          if (att) {
+            download(att.id);
+            return;
+          }
+          if (url) openExternal(url);
+        },
+      };
+    },
     [attachments, download],
   );
   return (
