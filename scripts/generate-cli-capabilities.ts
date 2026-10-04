@@ -132,6 +132,7 @@ export function classifyRoute(route: string): CliManifestRoute {
     cli_exempt: true, category: "retired_route", reason: `已移除：改用 ${RETIRED_CLI_ROUTES[route]}`,
   };
   if (route === "GET /api/inbox") return { command: "inbox" };
+  if (route === "GET /api/sessions/:sessionId/messages") return { command: "message.list" };
   const mapped = mappedResourceCommand(route);
   if (mapped) return { command: mapped };
   const exempt = exemptRoute(route);

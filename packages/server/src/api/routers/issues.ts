@@ -1594,62 +1594,36 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const location = store.locateConversationLogEntry(sessionId, id);
     return location ? c.json(location) : c.json({ error: "entry not found" }, 404);
   });
-  app.get("/api/sessions/:sessionId/log/entry", (c) => {
+  app.get("/api/sessions/:sessionId/messages", (c) => {
     const sessionId = logSessionAccess(c);
     if (sessionId instanceof Response) return sessionId;
-    if (c.req.query("from") != null || c.req.query("to") != null) {
-      const rawFrom = c.req.query("from");
-      const rawTo = c.req.query("to");
-      const from = Number(rawFrom), to = Number(rawTo);
-      if (!rawFrom || !rawTo || !/^(0|[1-9]\d*)$/.test(rawFrom) || !/^(0|[1-9]\d*)$/.test(rawTo)
-        || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || to < from
-        || c.req.query("seq") != null || c.req.query("id") != null) return c.json({ error: "invalid log range" }, 400);
-      const token = currentTaskAccessToken(c);
-      try {
-        const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
-        let progress;
-        if (token?.taskId && token.agentId) {
-          try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
-          catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
-        }
-        if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
-          task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, from_seq: from, to_seq: to,
-          complete: page.next_cursor === null, entries: page.entries.length,
-          returned_from_seq: page.entries[0]?.seq ?? null, returned_to_seq: page.entries.at(-1)?.seq ?? null,
-          read_start: page.read_start, read_end: page.read_end, next_cursor: page.next_cursor,
-          read_high_water: progress?.seq ?? null, read_offset: progress?.offset ?? null });
-        return c.json(page);
-      } catch (error) {
-        if (error instanceof SyntaxError || error instanceof Error && error.message.startsWith("Invalid range cursor")) {
-          return c.json({ error: "invalid range cursor" }, 400);
-        }
-        throw error;
-      }
-    }
-    const rawSeq = c.req.query("seq");
-    const id = c.req.query("id");
-    if ((rawSeq == null) === (id == null)) return c.json({ error: "exactly one of seq or id is required" }, 400);
-    const seq = rawSeq == null ? store.locateConversationLogEntry(sessionId, id!)?.seq
-      : /^(0|[1-9]\d*)$/.test(rawSeq) ? Number(rawSeq) : NaN;
-    if (rawSeq != null && (!Number.isSafeInteger(seq) || seq! < 0)) return c.json({ error: "invalid seq" }, 400);
-    if (seq == null) return c.json({ error: "entry not found" }, 404);
-    const entry = store.getConversationLogEntry(sessionId, seq);
-    if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
+    const rawFrom = c.req.query("from");
+    const rawTo = c.req.query("to");
+    const from = Number(rawFrom), to = Number(rawTo);
+    if (!rawFrom || !rawTo || !/^(0|[1-9]\d*)$/.test(rawFrom) || !/^(0|[1-9]\d*)$/.test(rawTo)
+      || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || to < from
+      || ["seq", "id", "after_seq", "limit", "thread", "message_kind", "unread_by", "query"].some(key => c.req.query(key) != null)) return c.json({ error: "invalid message range" }, 400);
     const token = currentTaskAccessToken(c);
-    if (token?.taskId) recordLogRead("Session entry expanded", { event: "session_log_entry_expanded",
-      task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, seq: entry.seq,
-      folded_chars: Math.max(0, entry.body_md.length - 8_000) });
-    const envelope = entry.metadata.envelope;
-    const recipient = envelope?.to;
-    const agentId = envelope?.recipient_agent_id
-      ?? (recipient?.role === "agent" && recipient.issueSessionId === sessionId
-        ? recipient.agentId
-        : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null);
-    const delivered: boolean | null = agentId === null ? null : (
-      store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
-      || store.hasInboxReceiptCovering(sessionId, agentId, entry.seq)
-    );
-    return c.json({ ...entry, delivered });
+    try {
+      const page = readSessionLogRange(store, sessionId, from, to, c.req.query("cursor"), token?.agentId);
+      let progress;
+      if (token?.taskId && token.agentId) {
+        try { progress = store.recordSessionAgentRangeRead(sessionId, token.agentId, page.read_start, page.read_end); }
+        catch { recordLogRead("Session unread progress unavailable", { event: "session_log_read_progress_failed", task_id: token.taskId, session_id: sessionId }); }
+      }
+      if (token?.taskId) recordLogRead("Session unread range read", { event: "session_log_range_read",
+        task_id: token.taskId, agent_id: token.agentId, session_id: sessionId, from_seq: from, to_seq: to,
+        complete: page.next_cursor === null, entries: page.entries.length,
+        returned_from_seq: page.entries[0]?.seq ?? null, returned_to_seq: page.entries.at(-1)?.seq ?? null,
+        read_start: page.read_start, read_end: page.read_end, next_cursor: page.next_cursor,
+        read_high_water: progress?.seq ?? null, read_offset: progress?.offset ?? null });
+      return c.json(page);
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof Error && error.message.startsWith("Invalid range cursor")) {
+        return c.json({ error: "invalid range cursor" }, 400);
+      }
+      throw error;
+    }
   });
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);

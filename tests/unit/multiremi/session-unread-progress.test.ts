@@ -86,7 +86,7 @@ for (const read of ["none", "partial", "all"] as const) test(`warm resume keeps 
   if (read !== "none") do {
     const params = new URLSearchParams({ from: "0", to: String(initial.range.to_seq) });
     if (cursor) params.set("cursor", cursor);
-    const response = await app.request(`/api/sessions/${f.session.id}/log/entry?${params}`,
+    const response = await app.request(`/api/sessions/${f.session.id}/messages?${params}`,
       { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(response.status).toBe(200);
     cursor = ((await response.json()) as any).next_cursor;
@@ -125,7 +125,7 @@ test("out-of-order pages cannot acknowledge unread gaps; partial pages persist a
   const page = async (cursor?: string, to = initial.range.to_seq) => {
     const params = new URLSearchParams({ from: "0", to: String(to) });
     if (cursor) params.set("cursor", cursor);
-    const response = await app.request(`/api/sessions/${f.session.id}/log/entry?${params}`,
+    const response = await app.request(`/api/sessions/${f.session.id}/messages?${params}`,
       { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(response.status).toBe(200);
     return await response.json() as any;
@@ -235,7 +235,7 @@ for (const accepted of [false, true]) test(`a recovery bootstrap resets old read
       const credential = await f.store.createTaskAccessToken(claimed, "local");
       const oldSeq = f.store.locateConversationLogEntry(f.session.id, old.id)!.seq;
       const app = createMultiremiApp({ store: f.store });
-      const read = await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=${oldSeq}`,
+      const read = await app.request(`/api/sessions/${f.session.id}/messages?from=0&to=${oldSeq}`,
         { headers: { Authorization: `Bearer ${credential.token}` } });
       expect(read.status).toBe(200);
       expect((await read.json() as any).entries[0].body_md).toBe("OLD_CONTEXT");
@@ -257,7 +257,7 @@ test("Chat range reads use the same persistent high-water independent of provide
   const credential = await f.store.createTaskAccessToken(claimed, "local");
   const to = f.store.getConversationLogHead(chat.id)!.headSeq;
   const app = createMultiremiApp({ store: f.store });
-  const response = await app.request(`/api/sessions/${chat.id}/log/entry?from=0&to=${to}`,
+  const response = await app.request(`/api/sessions/${chat.id}/messages?from=0&to=${to}`,
     { headers: { Authorization: `Bearer ${credential.token}` } });
   expect(response.status).toBe(200);
   expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: to, offset: 0 });

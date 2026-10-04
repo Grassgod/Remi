@@ -541,10 +541,25 @@ is a report, and decisions use `--kind decision --option ...`; an answer uses
 execution evidence. Session result publishing and project knowledge commands retain
 their separate responsibilities.
 
-- `remi comment list|add`
-- `remi session result publish`
-- `remi session log get <session> <seq|entry-id>` reads one complete entry. `remi session log get <session> --from X --to Y` reads the complete unread range `X < seq ≤ Y`, automatically follows pages and rejoins long bodies; task credentials omit the requesting agent's own history. These use the existing log-entry endpoint. `remi session event list` forwards `--since-seq` and `--to-seq` to the server.
-- `remi memory search|get|create|update`
+`remi message list <conversation> --from X --to Y` reads the complete range
+`X < seq ≤ Y`, automatically follows every page and rejoins long bodies without
+truncating table output. Task credentials omit the requesting agent's own history.
+Only contiguous range reads advance the agent's persistent high water; skipped
+pages cannot mark an unread gap as read. Range flags cannot be combined with list
+filters, limits or an explicit cursor.
+
+`message send` treats a pair round-trip limit as a successful send (HTTP 200),
+with `wake_applied=next_turn` and `wake_reason=pair_round_trip_limit`.
+It reports the applied wake result, including six downgrade explanations:
+`agent_pair_not_privileged`, `pair_round_trip_limit`, `dependencies_unmet`,
+`self`, `recipient_unavailable` and `source_side_session`.
+The general message write API and its lane policy remain pending S2 integration;
+the CLI response contract does not imply that those writes are implemented.
+
+`scripts/migrations/rewrite-retired-cli-commands.ts --dry-run` reports platform
+instruction changes. Execute only after reviewing its entity / field / original /
+replacement output; optimistic locking protects concurrent edits and successful
+writes record an activity. This operator script never runs at startup.
 
 ## Retired in the unified model release (MUL-493)
 

@@ -11212,6 +11212,9 @@
       "category": "retired_route",
       "reason": "已移除：改用 remi message get <message>"
     },
+    "GET /api/sessions/:sessionId/messages": {
+      "command": "message.list"
+    },
     "GET /api/shares/:token": {
       "command": "share.view"
     },

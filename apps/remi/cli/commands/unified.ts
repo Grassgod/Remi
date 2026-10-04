@@ -39,9 +39,42 @@ export function unifiedCommandSpecs(): CommandSpec[] {
       ...textOptions, option("to"), option("to-type"), option("kind"), option("wake"), option("reply-to"),
       { ...option("option"), repeatable: true }, { ...option("attachment"), repeatable: true }, option("dedupe-key"),
     ], send),
-    spec(["message", "list"], "read", [ref("conversation", false)], [option("unread-by"), option("thread"), option("kind"), option("after", "integer"), option("limit", "integer"), option("cursor")], async (i) => {
+    spec(["message", "list"], "read", [ref("conversation", false)], [
+      option("unread-by"), option("thread"), option("kind"), option("after", "integer"), option("limit", "integer"), option("cursor"),
+      { ...option("from", "integer"), description: "Read entries after this sequence", conflictsWith: ["unread-by", "thread", "kind", "after", "limit", "cursor", "query"] },
+      { ...option("to", "integer"), description: "Last sequence to include; automatically reads every page", conflictsWith: ["unread-by", "thread", "kind", "after", "limit", "cursor", "query"] },
+    ], async (i) => {
+      const from = integerOption(i, "from"), to = integerOption(i, "to");
+      const range = from !== null || to !== null;
+      if (range && (from === null || to === null || from < 0 || to < from
+        || !Number.isSafeInteger(from) || !Number.isSafeInteger(to))) {
+        throw new CliError("usage", "Use --from <seq> --to <seq> with 0 <= from <= to");
+      }
       const client = await clientFor(i);
       const conversation = await conversationRef(i, client);
+      if (range) {
+        const entries: Array<Record<string, any>> = [];
+        let cursor: string | null = null;
+        do {
+          const page: { entries: Array<Record<string, any>>; next_cursor: string | null } = (await client.request<typeof page>({
+            method: "GET", path: `/api/sessions/${encodePath(conversation)}/messages`,
+            query: { from, to, ...(cursor ? { cursor } : {}) },
+          })).data;
+          for (const entry of page.entries) {
+            const previous = entries.at(-1);
+            if (entry.body_offset > 0 && previous && previous.seq === entry.seq) {
+              previous.body_md += entry.body_md;
+              previous.body_omitted_chars = entry.body_omitted_chars;
+            } else entries.push({ ...entry });
+          }
+          if (page.next_cursor && page.next_cursor === cursor) throw new CliError("conflict", "Message range cursor did not advance");
+          cursor = page.next_cursor;
+        } while (cursor);
+        const mode = outputMode(i);
+        if (mode !== "table") new CliRenderer().render(entries, { mode });
+        else for (const entry of entries) console.log(`${entry.seq} · ${entry.author_type} ${entry.author_id ?? ""}\n${entry.body_md}\n`);
+        return;
+      }
       const result = await client.request({ method: "GET", path: `/api/sessions/${encodePath(conversation)}/messages`, query: {
         unread_by: stringOption(i, "unread-by"), thread: stringOption(i, "thread"), message_kind: stringOption(i, "kind"),
         after_seq: integerOption(i, "after"), limit: integerOption(i, "limit"), cursor: stringOption(i, "cursor"),
@@ -148,14 +181,19 @@ async function send(i: CommandInvocation): Promise<void> {
   if (warning) console.error(warning);
 }
 
-export function wakeExplanation(result: Pick<SendMessageResult, "wake_applied" | "wake_reason">, agent: string): string | null {
+export function wakeExplanation(result: {
+  wake_applied: SendMessageResult["wake_applied"];
+  wake_reason: SendMessageResult["wake_reason"] | "dependencies_unmet" | "source_side_session";
+}, agent: string): string | null {
   if (result.wake_applied === "next_turn") {
     if (result.wake_reason === "agent_pair_not_privileged") return "已降为下一轮：对方不是你的组长或父单负责人";
     if (result.wake_reason === "pair_round_trip_limit") return `已降为下一轮：和 ${agent} 的来回已达 5 次上限，等人介入`;
+    if (result.wake_reason === "dependencies_unmet") return "已降为下一轮：目标单的依赖还没满足";
   }
   if (result.wake_applied === "inbox_only") {
     if (result.wake_reason === "self") return "只留言：不能叫醒自己";
     if (result.wake_reason === "recipient_unavailable") return "只留言：收件人已归档";
+    if (result.wake_reason === "source_side_session") return "只留言：旁支会话不能派活";
   }
   return null;
 }

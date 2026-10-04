@@ -99,6 +99,40 @@ describe("unified CLI wire contracts", () => {
     setup(response); await registry.execute(["message", "list", "ises_1", "--output", "jsonl"]);
     expect(JSON.parse(output[0]!)).toEqual(response.messages[0]);
   });
+  for (const mode of ["table", "json", "jsonl"]) it(`reads every range page and rejoins Unicode bodies in ${mode}`, async () => {
+    setup();
+    const body = "😀正文".repeat(10_000);
+    const cursor = '{"seq":1,"offset":32000}';
+    const fetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init), url = new URL(request.url);
+      if (url.pathname === "/api/cli/capabilities") return fetch(input, init);
+      requests.push(request);
+      expect(url.pathname).toBe("/api/sessions/ises_1/messages");
+      expect(url.searchParams.get("from")).toBe("0");
+      expect(url.searchParams.get("to")).toBe("50");
+      const continuation = url.searchParams.get("cursor");
+      expect(continuation).toBe(requests.length === 2 ? null : cursor);
+      return Response.json(continuation
+        ? { entries: [{ seq: 1, id: "msg_1", body_md: body.slice(32_000), body_offset: 32_000, body_omitted_chars: 0 },
+          { seq: 50, id: "msg_50", body_md: "LAST_ENTRY", body_offset: 0 }], next_cursor: null }
+        : { entries: [{ seq: 1, id: "msg_1", body_md: body.slice(0, 32_000), body_offset: 0, body_omitted_chars: body.length - 32_000 }], next_cursor: cursor });
+    }) as typeof fetch;
+    await registry.execute(["message", "list", "ises_1", "--from", "0", "--to", "50", "--output", mode]);
+    expect(requests).toHaveLength(3);
+    if (mode === "table") {
+      expect(output.join("\n")).toContain(body);
+      expect(output.join("\n")).toContain("LAST_ENTRY");
+    } else {
+      const entries = mode === "json" ? JSON.parse(output.join("\n")) : output.map(line => JSON.parse(line));
+      expect(entries).toMatchObject([{ seq: 1, body_md: body, body_omitted_chars: 0 }, { seq: 50, body_md: "LAST_ENTRY" }]);
+    }
+  });
+  it("rejects a range cursor that does not advance", async () => {
+    setup({ entries: [], next_cursor: '{"seq":1,"offset":1}' });
+    await expect(registry.execute(["message", "list", "ises_1", "--from", "0", "--to", "2"])).rejects.toThrow("cursor did not advance");
+    expect(requests).toHaveLength(3);
+  });
   it("validates content, choices, wake, confirmations and legacy inbox ids before requests", async () => {
     for (const args of [
       ["message", "send", "ises_1"], ["message", "send", "ises_1", "--content", "Hi", "--kind", "bad"],
@@ -108,6 +142,11 @@ describe("unified CLI wire contracts", () => {
       ["message", "send", "ises_1", "--kind", "decision", "--option", "{}"],
       ["message", "delete", "msg_1"], ["turn", "cancel", "tsk_1"], ["turn", "retry", "tsk_1"],
       ["inbox", "read", "inb_old"], ["inbox", "read", "ises_1", "--to", "-1"],
+      ...[
+        ["--from", "0"], ["--to", "2"], ["--from", "-1", "--to", "2"], ["--from", "2", "--to", "1"],
+        ["--from", "0", "--to", "9007199254740992"],
+        ...["unread-by", "thread", "kind", "after", "limit", "cursor", "query"].map(flag => ["--from", "0", "--to", "2", `--${flag}`, "1"]),
+      ].map(flags => ["message", "list", "ises_1", ...flags]),
     ]) {
       setup(); await expect(registry.execute(args)).rejects.toThrow(); expect(requests).toEqual([]);
     }
@@ -134,12 +173,23 @@ describe("unified CLI wire contracts", () => {
       ["next_turn", "pair_round_trip_limit", "已降为下一轮：和 agt_1 的来回已达 5 次上限，等人介入"],
       ["inbox_only", "self", "只留言：不能叫醒自己"],
       ["inbox_only", "recipient_unavailable", "只留言：收件人已归档"],
+      ["next_turn", "dependencies_unmet", "已降为下一轮：目标单的依赖还没满足"],
+      ["inbox_only", "source_side_session", "只留言：旁支会话不能派活"],
     ] as const) {
       setup({ message: { id: "msg_1", to_agent_id: "agt_1" }, wake_applied: applied, wake_reason: reason });
       await registry.execute(["message", "send", "ises_1", "--content", "Hi", "--wake", "now", "--output", "json"]);
-      expect(warnings).toEqual([expected]); expect(JSON.parse(output[0]!).message.id).toBe("msg_1");
+      expect(warnings).toEqual([expected]);
+      expect(JSON.parse(output[0]!)).toMatchObject({ message: { id: "msg_1" }, wake_applied: applied, wake_reason: reason });
     }
     expect(wakeExplanation({ wake_applied: "now", wake_reason: "human_sender" }, "mem_1")).toBeNull();
+  });
+  it("keeps a 200 pair-limit send successful without retrying or losing its wake fields", async () => {
+    const response = { message: { id: "msg_limited", to_agent_id: "agt_1" }, wake_applied: "next_turn", wake_reason: "pair_round_trip_limit" };
+    setup(response);
+    await registry.execute(["message", "send", "ises_1", "--to", "agt_1", "--content", "Dispatch", "--output", "json"]);
+    expect(requests.filter(request => request.method === "POST")).toHaveLength(1);
+    expect(JSON.parse(output[0]!)).toEqual(response);
+    expect(warnings).toEqual(["已降为下一轮：和 agt_1 的来回已达 5 次上限，等人介入"]);
   });
 });
 

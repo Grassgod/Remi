@@ -176,7 +176,8 @@ describe("CLI capabilities manifest", () => {
     expect(cliCoverageReport(manifest)).toEqual({
       // MUL-479's context-window PUT maps to `remi workspace relay context-window
       // update`, so it raises the mapped count with the total.
-      mapped: 604,
+      // MUL-508 maps the complete Session message range to message.list.
+      mapped: 605,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -190,8 +191,9 @@ describe("CLI capabilities manifest", () => {
       // The three retired human-request HTTP routes now use daemon RPC.
       exempt: 165,
       missing: 0,
-      total: 769,
+      total: 770,
     });
+    expect(manifest.routes["GET /api/sessions/:sessionId/messages"]).toEqual({ command: "message.list" });
     for (const path of ["chat message list", "issue run-messages", "task message list"]) {
       expect(manifest.aliases[`remi ${path}`]).toBeUndefined();
       expect(manifest.retired[`remi ${path}`]?.replacement).toBe(RETIRED_CLI_COMMANDS[path]);

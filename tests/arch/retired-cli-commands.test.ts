@@ -7,6 +7,7 @@ const root = resolve(import.meta.dir, "../..");
 const paths = [
   "packages/contracts/src/artifact-delivery.ts", "packages/server/src/prompts/workspace-settings.ts",
   "packages/server/src/store/session-projection.ts", "packages/server/src/store/task-wait-reason.ts", "AGENTS.md",
+  "packages/contracts/src/session-input.ts", "packages/server/src/store/task-session-input.ts",
   ...["chats-and-tasks", "issues-and-sessions", "automation-and-tasks", "workbench"].map((f) => `.agents/skills/remi/references/${f}.md`),
   ...["cli-command-migration", "chat", "feishu-topic-replies", "parallel-agent-execution", "task-progress-summary", "scheduled-targets", "issue-key-results", "dev/runtime-workspaces", "dev/performance"].map((f) => `docs/${f}.md`),
   ...readdirSync(resolve(root, "packages/server/src/api/agent-templates")).filter((f) => f.endsWith(".json")).map((f) => `packages/server/src/api/agent-templates/${f}`),
