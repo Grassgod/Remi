@@ -7,7 +7,7 @@ import { useCreateComment, useUpdateComment, useDeleteComment, useResolveComment
 import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
 import { useActivityPreferences } from "@multiremi/core/issues/stores";
 import { Switch } from "@multiremi/ui/components/ui/switch";
-import { SessionLogEntrySchema, type IssueLogBootstrap, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import { IssueActivityEntrySchema, SessionLogEntrySchema, type IssueLogBootstrap, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { AttachmentSchema, ReactionSchema } from "@multiremi/core/api/schemas";
 import { parseStrictResponse } from "@multiremi/core/api/schema";
 import { useWSEvent } from "@multiremi/core/realtime";
@@ -32,6 +32,8 @@ import { useVisibleResults } from "./issue-key-results-section";
 import { IssueLogEventRow } from "./issue-log-event-row";
 import { firstTaskResponses, isSystemDetail } from "./issue-log-presentation";
 import { IssueTaskPromptDialog } from "./issue-task-prompt-dialog";
+import { activityTrails, groupEvents, placeActivities } from "../utils/issue-activity-presentation";
+import { IssueActivityTrail } from "./issue-activity-trail";
 
 export const STICK_PIN_THRESHOLD_PX = 24;
 
@@ -75,7 +77,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   const { ready: preferencesReady, showSystemDetails: savedSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
   const [requestedCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
-  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, requestedCommentId ?? undefined);
+  const withActivity = activeIssueSession?.is_default === true;
+  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, requestedCommentId ?? undefined, false, true, withActivity);
   const activeCommentId = replica.missingCommentId === requestedCommentId ? null : requestedCommentId;
   const displayVisit = JSON.stringify([issueId, sessionId, currentUserId, activeCommentId]);
   const [manualDetails, setManualDetails] = useState<{ visit: string; value: boolean } | null>(null);
@@ -97,7 +100,10 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     else if (root) {
       const top = root.getBoundingClientRect().top;
       const survivor = [...root.querySelectorAll<HTMLElement>('[data-perf-item="message"]')]
-        .find(row => !row.querySelector("[data-system-detail]") && row.getBoundingClientRect().bottom > top);
+        .find(row => {
+          const entry = snapshot.entries.find(entry => entry.id === row.dataset.perfKey);
+          return entry && !isSystemDetail(entry) && row.getBoundingClientRect().bottom > top;
+        });
       toggleAnchor.current = survivor ? { id: survivor.id, top: survivor.getBoundingClientRect().top } : null;
     }
     setManualDetails({ visit: displayVisit, value });
@@ -143,11 +149,33 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     }
     return { responseTurns, taskAgents };
   }, [snapshot.entries, sessionId]);
-  const transformEntries = useCallback((entries: readonly SessionLogEntry[]) => entries
-    .filter(entry => showSystemDetails || !isSystemDetail(entry)).map(entry => {
+  const groupChoices = useRef(new Map<string, { expanded: boolean; showOlder: boolean; truncateOlder: boolean }>());
+  const revealedGroups = useRef(new Set<string>());
+  const [groupVersion, setGroupVersion] = useState(0);
+  const presentation = useMemo(() => {
+    const rows = snapshot.entries.map(entry => SessionLogEntrySchema.parse(entry));
+    const view = activityTrails(groupEvents(placeActivities(rows, withActivity ? replica.window?.activities ?? [] : [], showSystemDetails)));
+    for (const groups of view.trailers.values()) for (const group of groups) {
+      const key = `${sessionId}:${group.id}`;
+      if (!groupChoices.current.has(key)) groupChoices.current.set(key, { expanded: group.id === view.latestGroupId, showOlder: false, truncateOlder: group.id === view.latestGroupId });
+      const revealKey = `${displayVisit}:${group.id}`;
+      if (activeCommentId && !revealedGroups.current.has(revealKey) && group.events.some(event => event.kind === "log" && event.entry.id === activeCommentId)) {
+        const choice = groupChoices.current.get(key)!;
+        choice.expanded = true; choice.showOlder = true;
+        revealedGroups.current.add(revealKey);
+      }
+    }
+    return view;
+  }, [snapshot.entries, replica, withActivity, showSystemDetails, sessionId, activeCommentId, displayVisit, groupVersion]);
+  const transformEntries = useCallback((_entries: readonly SessionLogEntry[]) => presentation.entries.map(entry => {
+      const trails = presentation.trailers.get(entry.id) ?? [];
+      const signature = trails.length ? `:trail:${JSON.stringify(trails.map(group => [group.id, groupChoices.current.get(`${sessionId}:${group.id}`), group.events.map(event =>
+        [event.entry.id, event.entry.created_at, event.kind === "log" ? event.entry.revision : [event.entry.details, event.entry.coalesced_count]])]))}` : "";
+      const capSignature = entry.seq === 0 ? `:activity-cap:${Boolean(replica.window?.activities_truncated)}` : "";
+      entry = { ...entry, render_version: `${entry.render_version ?? ""}${signature}${capSignature}` };
       if (entry.seq > 0 && (entry.kind !== "message" || isSystemDetail(entry))) return eventLayoutEntry(entry);
       return responseTurns.has(entry.id) ? { ...entry, render_version: `${entry.render_version ?? ""}:issue-response-v1` } : entry;
-    }), [showSystemDetails, responseTurns]);
+    }), [presentation, responseTurns, sessionId, replica]);
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const [paging, setPaging] = useState(false);
   const resolved = useResolvedThreads();
@@ -172,6 +200,14 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   useWSEvent("comment:unresolved", onLegacyUpdate);
   useWSEvent("reaction:added", onLegacyUpdate);
   useWSEvent("reaction:removed", onLegacyUpdate);
+  const onActivity = useCallback((payload: unknown) => {
+    if (!withActivity || !payload || typeof payload !== "object") return;
+    const p = payload as { issue_id?: string; entry?: unknown };
+    if (p.issue_id !== issueId) return;
+    const parsed = IssueActivityEntrySchema.safeParse(p.entry);
+    if (parsed.success) replica.appendActivity(parsed.data);
+  }, [withActivity, issueId, replica]);
+  useWSEvent("activity:created", onActivity);
   const run = async (action: () => Promise<unknown>) => {
     try { await action(); await replica.refreshVisible(); }
     catch (error) { toast.error(error instanceof Error ? error.message : t($ => $.comment.update_failed)); throw error; }
@@ -204,7 +240,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
     initialDisplayReady={displayReady}
     onScrollRoot={setScrollRoot}
-    afterEntry={entry => entry.seq === 0 ? <>
+    afterEntry={(entry, { highlightedId }) => <>{entry.seq === 0 && <>
       {replica.window?.has_more_before && <button type="button" data-log-earlier disabled={paging} className="mt-3 h-8 text-xs text-muted-foreground hover:text-foreground" onClick={() => void earlier()}>
         {replica.window.before_visible_count === undefined
           ? t($ => $.activity.expand_earlier, { count: 30 })
@@ -221,7 +257,17 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       <LocalDirectoryHint projectId={projectId} />
       <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
         onInitialReconcile={onTasksReady} />
-    </> : null}
+      {replica.window?.activities_truncated && <div className="flex h-8 items-center text-xs text-muted-foreground">{t($ => $.activity.recent_limit)}</div>}
+    </>}
+    {presentation.trailers.get(entry.id)?.map(group => {
+      const choice = groupChoices.current.get(`${sessionId}:${group.id}`)!;
+      return <IssueActivityTrail key={group.id} group={group} expanded={choice.expanded} showOlder={choice.showOlder}
+        truncateOlder={choice.truncateOlder} getActorName={getActorName} onOpenTask={setPromptRow}
+        targetCommentId={activeCommentId} highlightedId={highlightedId}
+        taskAgents={taskAgents} results={resultsById} onShowKeyResults={onShowKeyResults}
+        onToggle={() => { choice.expanded = !choice.expanded; setGroupVersion(version => version + 1); }}
+        onShowOlder={() => { choice.showOlder = true; setGroupVersion(version => version + 1); }} />;
+    })}</>}
     renderEntry={({ entry }) => {
       const row = SessionLogEntrySchema.parse(entry);
       if (row.seq === 0) return <IssueLogHead issueId={issueId} title={issueTitle} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;

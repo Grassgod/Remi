@@ -9,8 +9,8 @@ import { useWS } from "../realtime";
 import { useReplicaEnv } from "../platform/replica-env";
 import { IssueLogReplica } from "./issue-log";
 
-export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string, preferCached = false, enabled = true) {
-  const replica = useMemo(() => new IssueLogReplica(sessionId, initial, preferCached), [sessionId, initial, preferCached]);
+export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string, preferCached = false, enabled = true, withActivity = false) {
+  const replica = useMemo(() => new IssueLogReplica(sessionId, initial, preferCached, withActivity), [sessionId, initial, preferCached, withActivity]);
   const snapshot = useSyncExternalStore(
     listener => replica.subscribe(sessionId, listener),
     () => replica.getSnapshot(sessionId), () => replica.getSnapshot(sessionId),

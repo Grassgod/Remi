@@ -7,6 +7,7 @@ import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { MemorySessionReplica } from "@multiremi/core/replica";
 import { useWSEvent } from "@multiremi/core/realtime";
 import { SessionLogEntrySchema, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import type { IssueActivityEntry } from "@multiremi/contracts";
 import { ApiError } from "@multiremi/core/api";
 import { activityPreferencesStore } from "@multiremi/core/issues/stores/activity-preferences-store";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -1012,7 +1013,7 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail("issue-1", "session-main");
 
     await waitFor(() => {
-      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
+      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30, with_activity: 1 });
     });
     expect(mockApiObj.getSessionLog.mock.calls.some(([sessionId]) => sessionId === "@default")).toBe(false);
   });
@@ -1417,7 +1418,7 @@ describe("IssueDetail (shared)", () => {
     expect(view.container.querySelector(".bg-warning\\/10")).toBeNull();
     expect(screen.getByRole("switch", { name: "Show system details" })).toHaveAttribute("aria-checked", "false");
     expect(activityPreferencesStore("user-1", "ws-1").getState().showSystemDetails).toBe(false);
-    expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
+    expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30, with_activity: 1 });
   });
 
   it.each(["session-main", undefined])("keeps a failed locate retryable (session: %s)", async sessionId => {
@@ -1470,7 +1471,7 @@ describe("IssueDetail (shared)", () => {
     } else {
       await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
         .toHaveAttribute("data-perf-state", "ready"));
-      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
+      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30, with_activity: 1 });
       expect(mockApiObj.getSessionLog).not.toHaveBeenCalledWith("session-side", { before: 30 });
     }
   });
@@ -1950,14 +1951,19 @@ describe("IssueDetail (shared)", () => {
       return SessionLogEntrySchema.parse({ session_id: "session-main", seq, id: "row-" + seq, revision: 1, kind,
         author_type: "system", body_md: "Event " + seq, body_html: null, render_version: "test", metadata: {}, ...extra });
     }
-    function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; missing?: string; ssr?: boolean } = {}) {
+    function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; missing?: string; ssr?: boolean;
+      activities?: IssueActivityEntry[]; truncated?: boolean; side?: boolean } = {}) {
       const queryClient = createTestQueryClient();
       let target = options.target;
+      let activities = options.activities;
+      let currentRows = entries;
+      const heightKeys: string[] = [];
       const makeView = () => <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <QueryClientProvider client={queryClient}>
           <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null}
             members={[]} agents={[{ id: "agent-1", name: "QA" } as any]} currentUserId={userId}
-            canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
+            canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={options.activities
+              ? { id: "session-main", is_default: !options.side } as any : null}
             sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()} scrollContainerEl={null}
             onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()} highlightCommentId={target}
             initialLog={{ sessionId: "session-main", head: null, targetCommentId: options.missing ? undefined : target,
@@ -1967,16 +1973,110 @@ describe("IssueDetail (shared)", () => {
       </I18nProvider>;
       const install = (rows: SessionLogRow[]) => {
         const replica = new MemorySessionReplica({ "session-main": { entries: rows, ready: true, fresh: true } });
-        Object.assign(replica, { missingCommentId: options.missing ?? null });
+        const readHeight = replica.readRowHeight.bind(replica);
+        replica.readRowHeight = (session, seq, key) => { heightKeys.push(key); return readHeight(session, seq, key); };
+        Object.assign(replica, { missingCommentId: options.missing ?? null, window: { entries: rows, activities,
+          activities_truncated: options.truncated, has_more_before: false, has_more_after: false } });
         issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
       };
       install(entries);
       const serverHtml = options.ssr ? renderToString(makeView()) : undefined;
       const view = render(makeView());
-      return { ...view, serverHtml,
-        replaceRows: (rows: SessionLogRow[]) => { install(rows); view.rerender(makeView()); },
+      return { ...view, serverHtml, heightKeys,
+        replaceRows: (rows: SessionLogRow[]) => { currentRows = rows; install(rows); view.rerender(makeView()); },
+        replaceActivities: (next: IssueActivityEntry[]) => { activities = next; install(currentRows); view.rerender(makeView()); },
         changeTarget: (next?: string) => { target = next; view.rerender(makeView()); } };
     }
+
+    const audit = (id: string, second: number, action: string, details: Record<string, unknown> = {}): IssueActivityEntry => ({
+      type: "activity", id, actor_type: "system", actor_id: null, action, details,
+      created_at: new Date(Date.UTC(2026, 0, 1) + second * 1000).toISOString(),
+    });
+    it("keeps group choices and eight-row truncation after comments and new groups arrive", async () => {
+      const head = activityRow(0, "head", { created_at: audit("", 0, "").created_at });
+      const fields = ["status", "priority", "title", "description", "start_date", "due_date", "project_id", "parent_issue_id"];
+      const activities = Array.from({ length: 10 }, (_, n) => audit(`act_${n}`, n + 1, "issue_updated", { [fields[n % fields.length]!]: "todo" }));
+      const view = renderActivityRows([head], "activity-groups", { activities, ssr: true });
+      await act(async () => {});
+      const group = view.container.querySelector("[data-activity-group]")!;
+      const header = group.querySelector("button[aria-expanded]")!;
+      expect(header).toHaveTextContent("10 activities");
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(8);
+      expect(view.serverHtml).toContain("data-activity-group");
+      const root = view.container.querySelector("[data-tab-scroll-root]")!;
+      expect(root).toHaveAttribute("data-ssr-display-ready", "1");
+      expect(root).toHaveAttribute("data-perf-fresh", "1");
+      const beforeSignature = view.heightKeys.at(-1);
+      fireEvent.click(within(group as HTMLElement).getByText("Show 2 more activities"));
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(10);
+      fireEvent.click(header);
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      expect(view.heightKeys.at(-1)).not.toBe(beforeSignature);
+      view.replaceRows([head, activityRow(1, "message", { author_type: "member", created_at: audit("", 30, "").created_at })]);
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(0);
+      view.replaceActivities([...activities, audit("later", 31, "issue_created")]);
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(1);
+      await act(async () => {});
+    });
+
+    it("groups the A4 assignment and two field changes, preserving the task entry point", async () => {
+      const head = activityRow(0, "head", { created_at: audit("", 0, "").created_at });
+      const turn = activityRow(1, "turn", { created_at: audit("", 1, "").created_at, task_id: "task",
+        body_md: "# Long assignment", metadata: { assignee_agent_id: "agent-1", status: "queued" } });
+      const view = renderActivityRows([head, turn], "activity-assignment", { activities: [
+        audit("assigned", 1, "issue_assigned", { to_type: "agent", to_id: "agent-1" }),
+        audit("status", 2, "issue_updated", { status: "todo" }), audit("priority", 3, "issue_updated", { priority: "high" }),
+      ] });
+      await act(async () => {});
+      const header = view.container.querySelector("[data-activity-group] > button[aria-expanded]")!;
+      expect(header).toHaveTextContent("3 activities");
+      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(2);
+      expect(document.getElementById("comment-row-1")).toHaveTextContent("Long assignment");
+      expect(view.container.textContent).not.toMatch(/act_|agt_|mem_/);
+      await act(async () => {});
+    });
+
+    it("reveals a grouped delegation deep link before SSR paint with its existing highlight", async () => {
+      const head = activityRow(0, "head", { created_at: audit("", 0, "").created_at });
+      const target = activityRow(1, "turn", { created_at: audit("", 2, "").created_at,
+        task_id: "task", body_md: "# Linked assignment", metadata: { assignee_agent_id: "agent-1", status: "queued" } });
+      const view = renderActivityRows([head, target, activityRow(2, "message", { created_at: audit("", 10, "").created_at })],
+        "grouped-deep-link", { target: target.id, ssr: true, activities: [
+          audit("before", 1, "issue_updated", { status: "todo" }), audit("after", 3, "issue_updated", { priority: "high" }),
+          audit("latest", 11, "issue_created"),
+        ] });
+      const anchor = view.container.querySelector('[data-perf-anchor="target-comment"]')!;
+      expect(anchor).toHaveAttribute("id", "comment-" + target.id);
+      expect(anchor).toHaveClass("bg-warning/10");
+      expect(view.container.querySelector("[data-activity-group] > button[aria-expanded]")).toHaveAttribute("aria-expanded", "true");
+      const server = document.createElement("div");
+      server.innerHTML = view.serverHtml!;
+      expect(server.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-" + target.id);
+      expect(server.querySelector('[data-perf-anchor="target-comment"]')).toHaveClass("bg-warning/10");
+      expect(server.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-ssr-display-ready", "0");
+      await act(async () => {});
+      expect(view.container.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-ssr-display-ready", "1");
+    });
+
+    it("filters side-session activities and toggles third-layer audits while showing the cap hint", async () => {
+      const activities = [audit("second", 1, "issue_created"), audit("system", 2, "decision_requested"),
+        audit("comment", 3, "comment_created"), audit("mention", 4, "comment_mention_skipped"), audit("duplicate", 5, "workspace_move_cleared")];
+      const head = activityRow(0, "head");
+      const side = renderActivityRows([head], "side-activity", { activities, side: true });
+      expect(side.container.querySelector("[data-issue-activity]")).toBeNull();
+      side.unmount();
+      const view = renderActivityRows([head], "main-activity", { activities, truncated: true });
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(1);
+      expect(view.container).toHaveTextContent("Showing the latest 200 activities");
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(3);
+      expect(view.container.querySelectorAll("[data-activity-group][data-system-detail]")).toHaveLength(2);
+      await act(async () => {});
+    });
 
     it("opens an SSR missing-target tail's gate after preferences, without temporary details", async () => {
       const user = "missing-ssr";
@@ -2133,6 +2233,25 @@ describe("IssueDetail (shared)", () => {
       Object.defineProperty(root, "scrollHeight", { configurable: true, value: 800 });
       fireEvent.click(toggle);
       expect(root.scrollTop).toBe(800);
+      await act(async () => {});
+    });
+
+    it("retains a comment reading anchor when its trailer contains system activities", async () => {
+      const user = "activity-toggle-anchor";
+      activityPreferencesStore(user, "ws-1").getState().setShowSystemDetails(true);
+      const view = renderActivityRows([activityRow(0, "head", { created_at: audit("", 0, "").created_at }),
+        activityRow(1, "message", { author_type: "member", created_at: audit("", 1, "").created_at })], user,
+        { activities: [audit("decision", 2, "decision_requested")] });
+      await act(async () => {});
+      const root = view.container.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
+      const comment = document.getElementById("comment-row-1")!;
+      expect(comment.querySelector("[data-system-detail]")).not.toBeNull();
+      root.dataset.stickState = "released";
+      root.scrollTop = 200;
+      root.getBoundingClientRect = () => ({ top: 50, bottom: 500 } as DOMRect);
+      comment.getBoundingClientRect = () => ({ top: comment.querySelector("[data-system-detail]") ? 100 : 60, bottom: 300 } as DOMRect);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(root.scrollTop).toBe(160);
       await act(async () => {});
     });
 

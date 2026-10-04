@@ -40,7 +40,7 @@ import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
-import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
+import { INBOX_LEDGER_TYPES, isInboxLedgerType, issueActivityDetails, type IssueActivityEntry } from "@multiremi/contracts";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
@@ -2916,12 +2916,19 @@ export class IssuesRepo {
     // MUL-400 S1c (QA round 1): every audit row below commits with the status
     // write above. The events go on the caller's queue, so a rollback leaves
     // neither rows nor listeners behind.
+    const previous: Record<string, unknown> = {};
+    for (const [field, before, after] of [
+      ["status", current.status, next.status], ["priority", current.priority, next.priority],
+      ["title", current.title, next.title], ["description", current.description, next.description],
+      ["start_date", current.startDate, next.startDate], ["due_date", current.dueDate, next.dueDate],
+      ["project_id", current.projectId, next.projectId], ["parent_issue_id", current.parentIssueId, next.parentIssueId],
+    ] as const) if (before !== after) previous[field] = before;
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
       type: "issue_updated",
       body: null,
-      data: input,
+      data: { ...input, previous },
     }, deferredEvents);
     if (dispatchOutcome?.skipped) {
       this.recordForcedStartSkipped(next, dispatchOutcome.skipped, input, deferredEvents);
@@ -5487,6 +5494,27 @@ export class IssuesRepo {
     return rows.map(toIssueActivity);
   }
 
+  listIssueActivityBetween(issueId: string, input: {
+    fromInclusive?: string | null; toExclusive?: string | null; types: readonly string[]; limit?: number;
+  }): { activities: IssueActivityEntry[]; activities_truncated: boolean } {
+    if (!input.types.length) return { activities: [], activities_truncated: false };
+    const limit = Math.max(1, Math.min(200, input.limit ?? 200));
+    const where = ["issue_id = ?", `type IN (${input.types.map(() => "?").join(",")})`];
+    const params: (string | number)[] = [issueId, ...input.types];
+    if (input.fromInclusive != null) { where.push("created_at >= ?"); params.push(input.fromInclusive); }
+    if (input.toExclusive != null) { where.push("created_at < ?"); params.push(input.toExclusive); }
+    const rows = this.ctx.db.query(`SELECT * FROM multiremi_issue_activity WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id DESC LIMIT ?`).all(...params, limit + 1) as Row[];
+    return {
+      activities: rows.slice(0, limit).reverse().map(row => {
+        const a = toIssueActivity(row);
+        return { type: "activity", id: a.id, actor_type: a.actorType, actor_id: a.actorId,
+          created_at: a.createdAt, action: a.type, details: issueActivityDetails(a.data, a.body) };
+      }),
+      activities_truncated: rows.length > limit,
+    };
+  }
+
   // Assign-on-create could not queue a task. Persist the reason as a visible
   // activity so the issue page can explain why nothing is running, instead of
   // the outcome living only in server logs.
@@ -7917,7 +7945,7 @@ function activityToTimelineEntry(activity: MultiremiIssueActivity): MultiremiTim
     createdAt: activity.createdAt,
     created_at: activity.createdAt,
     action: activity.type,
-    details: activity.data ?? (activity.body == null ? null : { body: activity.body }),
+    details: issueActivityDetails(activity.data, activity.body),
   };
 }
 
