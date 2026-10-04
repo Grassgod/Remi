@@ -15,6 +15,7 @@ export const SSR_LOG_TIMEOUT_MS = 800;
 export async function readWithSessionCookie<T>(input: {
   cookie: string | undefined; slug: string; path: string; schema: ZodType;
   signal?: AbortSignal; fetcher?: typeof fetch; apiUrl?: string;
+  onNotFound?: () => void;
 }): Promise<T | null> {
   if (!input.cookie) return null;
   try {
@@ -22,7 +23,10 @@ export async function readWithSessionCookie<T>(input: {
       headers: { Cookie: `multimira_auth=${encodeURIComponent(input.cookie)}`, "X-Workspace-Slug": input.slug },
       signal: input.signal ?? AbortSignal.timeout(SSR_LOG_TIMEOUT_MS), cache: "no-store", redirect: "error",
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (response.status === 404) input.onNotFound?.();
+      return null;
+    }
     const parsed = input.schema.safeParse(await response.json());
     return parsed.success ? parsed.data as T : null;
   } catch {
@@ -68,15 +72,18 @@ export async function readIssueLogBootstrap(slug: string, issueId: string, selec
   let targetSeq: number | undefined;
   if (commentId) {
     const candidates = selectedSessionId ? [session] : sessions;
-    const located = await Promise.all(candidates.map(async candidate => ({ candidate,
-      location: await readWithSessionCookie<{ id: string; seq: number; head_seq: number }>({ cookie, slug, signal,
+    const located = await Promise.all(candidates.map(async candidate => {
+      let missing = false;
+      const location = await readWithSessionCookie<{ id: string; seq: number; head_seq: number }>({ cookie, slug, signal,
         path: `/api/sessions/${encodeURIComponent(candidate.id)}/log/locate?id=${encodeURIComponent(commentId)}`,
-        schema: SessionLogLocationSchema }),
-    })));
+        schema: SessionLogLocationSchema, onNotFound: () => { missing = true; } });
+      return { candidate, location, missing };
+    }));
     const found = located.find(result => result.location?.id === commentId);
-    if (!found) return null;
-    session = found.candidate;
-    targetSeq = found.location!.seq;
+    if (found) {
+      session = found.candidate;
+      targetSeq = found.location!.seq;
+    } else if (!located.every(result => result.missing)) return null;
   }
   const logPath = `/api/sessions/${encodeURIComponent(session.id)}/log`;
   const [window, headWindow, parentIssue, members, children, tasks] = await Promise.all([
@@ -92,6 +99,7 @@ export async function readIssueLogBootstrap(slug: string, issueId: string, selec
   return window && headWindow && members && children && tasks
     ? { issue, parentIssue, sessions, members, children: children.issues, tasks,
         log: { sessionId: session.id, window, head: headWindow.entries.find(e => e.seq === 0) ?? null,
-          targetCommentId: commentId } }
+          targetCommentId: targetSeq === undefined ? undefined : commentId,
+          missingCommentId: targetSeq === undefined ? commentId : undefined } }
     : null;
 }

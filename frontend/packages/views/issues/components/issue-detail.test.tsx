@@ -7,6 +7,7 @@ import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { MemorySessionReplica } from "@multiremi/core/replica";
 import { useWSEvent } from "@multiremi/core/realtime";
 import { SessionLogEntrySchema, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import { ApiError } from "@multiremi/core/api";
 import { activityPreferencesStore } from "@multiremi/core/issues/stores/activity-preferences-store";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -307,7 +308,8 @@ const mockApiObj = vi.hoisted(() => ({
   listProjects: vi.fn().mockResolvedValue({ projects: [] }),
 }));
 
-vi.mock("@multiremi/core/api", () => ({
+vi.mock("@multiremi/core/api", async importOriginal => ({
+  ApiError: (await importOriginal<typeof import("@multiremi/core/api")>()).ApiError,
   api: mockApiObj,
   getApi: () => mockApiObj,
   setApiInstance: vi.fn(),
@@ -651,6 +653,12 @@ describe("IssueDetail (shared)", () => {
       return { entries: params.anchor === 0 ? [head] : rows,
         head_seq: rows.length, log_version: 1, has_more_before: timelinePageControl.hasMore,
         has_more_after: false };
+    });
+    mockApiObj.locateSessionLogEntry.mockReset().mockImplementation(async (sessionId: string, id: string) => {
+      const window = await mockApiObj.getSessionLog(sessionId);
+      const entry = window.entries.find((row: SessionLogRow) => row.id === id);
+      if (!entry) throw new ApiError("entry not found", 404, "Not Found");
+      return { id, seq: entry.seq, head_seq: window.head_seq };
     });
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
@@ -1359,6 +1367,101 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
+  it.each([
+    ["deleted-comment", "session-main"], ["missing-comment", "session-main"],
+    ["deleted-comment", undefined], ["missing-comment", undefined],
+  ])("reveals a normal ready tail for unavailable %s (session: %s)", async (target, sessionId) => {
+    mockApiObj.locateSessionLogEntry.mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    const view = render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={createTestQueryClient()}>
+        <IssueDetail issueId="issue-1" initialIssueSessionId={sessionId} highlightCommentId={target} />
+      </QueryClientProvider>
+    </I18nProvider>);
+    await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+      .toHaveAttribute("data-perf-state", "ready"));
+    const root = view.container.querySelector("[data-tab-scroll-root]")!;
+    expect(root).toHaveAttribute("data-perf-fresh", "1");
+    expect(root).toHaveAttribute("data-stick-state", "pinned");
+    expect(screen.getByText("Started working on this")).toBeVisible();
+    expect(view.container.querySelector('[data-perf-anchor="target-comment"]')).toBeNull();
+    expect(view.container.querySelector(".bg-warning\\/10")).toBeNull();
+    expect(screen.getByRole("switch", { name: "Show system details" })).toHaveAttribute("aria-checked", "false");
+    expect(activityPreferencesStore("user-1", "ws-1").getState().showSystemDetails).toBe(false);
+    expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
+  });
+
+  it.each(["session-main", undefined])("keeps a failed locate retryable (session: %s)", async sessionId => {
+    mockApiObj.locateSessionLogEntry.mockRejectedValue(new TypeError("Failed to fetch"));
+    const view = render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={createTestQueryClient()}>
+        <IssueDetail issueId="issue-1" initialIssueSessionId={sessionId} highlightCommentId="target" />
+      </QueryClientProvider>
+    </I18nProvider>);
+    await screen.findByRole("button", { name: "Try again" });
+    expect(view.container.querySelector("[data-tab-scroll-root]")).toBeNull();
+    expect(mockApiObj.getSessionLog).not.toHaveBeenCalled();
+    mockApiObj.locateSessionLogEntry.mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+      .toHaveAttribute("data-perf-state", "ready"));
+    expect(screen.getByText("Started working on this")).toBeVisible();
+  });
+
+  it("keeps a valid deep link positioned and highlighted", async () => {
+    const view = render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={createTestQueryClient()}>
+        <IssueDetail issueId="issue-1" highlightCommentId="comment-2" />
+      </QueryClientProvider>
+    </I18nProvider>);
+    await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+      .toHaveAttribute("data-perf-state", "ready"));
+    expect(view.container.querySelector('[data-perf-anchor="target-comment"]'))
+      .toHaveAttribute("id", "comment-comment-2");
+    expect(document.getElementById("comment-comment-2")).toHaveClass("bg-warning/10");
+    expect(view.container.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-stick-state", "released");
+  });
+
+  it.each([404, 503, 200])("uses the default session only when every candidate returns not-found (side: %s)", async status => {
+    const [main] = await mockApiObj.listIssueSessions("issue-1");
+    mockApiObj.listIssueSessions.mockResolvedValue([{ ...main, id: "session-side", is_default: false }, main]);
+    mockApiObj.locateSessionLogEntry.mockImplementation(async (sessionId: string) => {
+      const code = sessionId === "session-side" ? status : 404;
+      if (code === 200) return { id: "another-comment", seq: 1, head_seq: 1 };
+      throw new ApiError("unavailable", code, "Unavailable");
+    });
+    const view = render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={createTestQueryClient()}>
+        <IssueDetail issueId="issue-1" highlightCommentId="missing" />
+      </QueryClientProvider>
+    </I18nProvider>);
+    if (status !== 404) {
+      await screen.findByRole("button", { name: "Try again" });
+      expect(mockApiObj.getSessionLog).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+        .toHaveAttribute("data-perf-state", "ready"));
+      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
+      expect(mockApiObj.getSessionLog).not.toHaveBeenCalledWith("session-side", { before: 30 });
+    }
+  });
+
+  it("replaces a stale SSR anchor with a ready bottom window", async () => {
+    const window = await mockApiObj.getSessionLog("session-main");
+    mockApiObj.locateSessionLogEntry.mockRejectedValue(new ApiError("entry not found", 404, "Not Found"));
+    const view = render(<I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={createTestQueryClient()}>
+        <IssueDetail issueId="issue-1" initialIssueSessionId="session-main" highlightCommentId="deleted"
+          initialLog={{ sessionId: "session-main", head: null, window, targetCommentId: "deleted" }} />
+      </QueryClientProvider>
+    </I18nProvider>);
+    await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+      .toHaveAttribute("data-perf-state", "ready"));
+    expect(view.container.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-stick-state", "pinned");
+    expect(view.container.querySelector('[data-perf-anchor="target-comment"]')).toBeNull();
+    expect(screen.getByText("Started working on this")).toBeVisible();
+    expect(mockApiObj.locateSessionLogEntry).toHaveBeenCalledWith("session-main", "deleted");
+  });
+
   it("locates an inbox comment after the Issue resolves behind a ready log window", async () => {
     let resolveIssue!: (issue: Issue) => void;
     mockApiObj.getIssue.mockReturnValue(new Promise<Issue>((resolve) => { resolveIssue = resolve; }));
@@ -1817,7 +1920,7 @@ describe("IssueDetail (shared)", () => {
       return SessionLogEntrySchema.parse({ session_id: "session-main", seq, id: "row-" + seq, revision: 1, kind,
         author_type: "system", body_md: "Event " + seq, body_html: null, render_version: "test", metadata: {}, ...extra });
     }
-    function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; ssr?: boolean } = {}) {
+    function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; missing?: string; ssr?: boolean } = {}) {
       const queryClient = createTestQueryClient();
       let target = options.target;
       const makeView = () => <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -1827,12 +1930,14 @@ describe("IssueDetail (shared)", () => {
             canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={null}
             sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()} scrollContainerEl={null}
             onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()} highlightCommentId={target}
-            initialLog={{ sessionId: "session-main", head: null, targetCommentId: target,
+            initialLog={{ sessionId: "session-main", head: null, targetCommentId: options.missing ? undefined : target,
+              missingCommentId: options.missing,
               window: { entries: [], head_seq: 10, log_version: 1, has_more_before: false, has_more_after: false } }} />
         </QueryClientProvider>
       </I18nProvider>;
       const install = (rows: SessionLogRow[]) => {
         const replica = new MemorySessionReplica({ "session-main": { entries: rows, ready: true, fresh: true } });
+        Object.assign(replica, { missingCommentId: options.missing ?? null });
         issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
       };
       install(entries);
@@ -1842,6 +1947,21 @@ describe("IssueDetail (shared)", () => {
         replaceRows: (rows: SessionLogRow[]) => { install(rows); view.rerender(makeView()); },
         changeTarget: (next?: string) => { target = next; view.rerender(makeView()); } };
     }
+
+    it("opens an SSR missing-target tail's gate after preferences, without temporary details", async () => {
+      const user = "missing-ssr";
+      const rows = [activityRow(0, "head"), activityRow(1, "message", { author_type: "member", body_md: "retained" }),
+        activityRow(2, "system")];
+      const view = renderActivityRows(rows, user, { target: "missing", missing: "missing", ssr: true });
+      expect(view.serverHtml).toContain('data-ssr-display-ready="0"');
+      expect(view.serverHtml).not.toContain('data-ssr-anchor-id=');
+      expect(view.serverHtml).toContain("retained");
+      expect(view.serverHtml).not.toContain('data-system-detail');
+      await waitFor(() => expect(view.container.querySelector("[data-tab-scroll-root]"))
+        .toHaveAttribute("data-ssr-display-ready", "1"));
+      expect(activityPreferencesStore(user, "ws-1").getState().showSystemDetails).toBe(false);
+      expect(view.container.querySelector('[role="switch"]')).toHaveAttribute("aria-checked", "false");
+    });
 
     it.each([
       ["envelope", "system", { envelope: { kind: "report", to: { role: "delegator" }, outcome: "done" } }, "Agent-only instruction"],

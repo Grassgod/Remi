@@ -29,4 +29,6 @@ export interface IssueLogBootstrap {
   window: SessionLogWindow;
   head: SessionLogRow | null;
   targetCommentId?: string;
+  /** locate returned 404; this bootstrap already contains the fallback tail. */
+  missingCommentId?: string;
 }

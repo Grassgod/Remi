@@ -73,9 +73,10 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
   const { ready: preferencesReady, showSystemDetails: savedSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
-  const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
+  const [requestedCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
-  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, activeCommentId ?? undefined);
+  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, requestedCommentId ?? undefined);
+  const activeCommentId = replica.missingCommentId === requestedCommentId ? null : requestedCommentId;
   const displayVisit = JSON.stringify([issueId, sessionId, currentUserId, activeCommentId]);
   const [manualDetails, setManualDetails] = useState<{ visit: string; value: boolean } | null>(null);
   const temporaryDetails = useRef({ visit: displayVisit, enabled: false });

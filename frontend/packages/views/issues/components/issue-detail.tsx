@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { api } from "@multiremi/core/api";
+import { api, ApiError } from "@multiremi/core/api";
 import { defaultStorage } from "@multiremi/core/platform";
 import { ChevronLeft } from "lucide-react";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
@@ -97,6 +97,7 @@ export function IssueDetail({
   const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
   const resolveDeepLinkSession = Boolean(highlightCommentId && !initialIssueSessionId
+    && initialLog?.missingCommentId !== highlightCommentId
     && initialLog?.targetCommentId !== highlightCommentId);
   const sessions = useIssueSessionSelection(
     id,
@@ -104,28 +105,38 @@ export function IssueDetail({
     onIssueSessionChange,
     resolveDeepLinkSession,
   );
-  const [locatedSession, setLocatedSession] = useState<{ issueId: string; commentId: string; sessionId: string } | null>(null);
-  const matchedSession = resolveDeepLinkSession && locatedSession?.issueId === id
-    && locatedSession.commentId === highlightCommentId ? locatedSession.sessionId : null;
+  const [locatedSession, setLocatedSession] = useState<{ issueId: string; commentId: string; sessionId: string; missing: boolean } | null>(null);
+  const resolution = locatedSession?.issueId === id
+    && locatedSession.commentId === highlightCommentId ? locatedSession : null;
+  const matchedSession = resolution?.sessionId ?? null;
   useEffect(() => {
     if (!resolveDeepLinkSession || !highlightCommentId || sessions.list.length === 0 || matchedSession !== null) return;
     let active = true;
-    void Promise.all(sessions.list.map(async session => {
+    void Promise.allSettled(sessions.list.map(async session => {
       try {
         const location = await api.locateSessionLogEntry(session.id, highlightCommentId);
-        return location.id === highlightCommentId ? session.id : null;
-      } catch { return null; }
-    })).then(ids => {
+        if (location.id !== highlightCommentId) throw new Error("Located entry does not match the requested comment");
+        return session.id;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    })).then(results => {
       if (!active) return;
-      const sessionId = ids.find((value): value is string => value !== null) ?? "";
-      setLocatedSession({ issueId: id, commentId: highlightCommentId, sessionId });
+      const found = results.find(result => result.status === "fulfilled" && result.value !== null);
+      const failed = !found && results.some(result => result.status === "rejected");
+      const missing = !found && !failed;
+      const sessionId = found?.status === "fulfilled" ? found.value! : failed ? ""
+        : sessions.list.find(session => session.is_default)?.id ?? sessions.list[0]!.id;
+      setLocatedSession({ issueId: id, commentId: highlightCommentId, sessionId, missing });
       if (sessionId) sessions.select(sessionId);
     });
     return () => { active = false; };
   }, [id, highlightCommentId, matchedSession, resolveDeepLinkSession, sessions.list, sessions.select]);
   const activitySessions = resolveDeepLinkSession
     ? { ...sessions, activeId: matchedSession ?? "", active: sessions.list.find(s => s.id === matchedSession) ?? null,
-        pending: matchedSession === null || sessions.pending }
+        pending: matchedSession === null || sessions.pending,
+        refetch: () => { setLocatedSession(null); sessions.refetch(); } }
     : sessions;
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
@@ -365,7 +376,7 @@ export function IssueDetail({
       currentUserId={user?.id}
       canModerateComments={canModerateComments}
       getActorName={getActorName}
-      highlightCommentId={highlightCommentId}
+      highlightCommentId={resolution?.missing || initialLog?.missingCommentId === highlightCommentId ? undefined : highlightCommentId}
       initialLog={initialLog}
       onShowKeyResults={handleShowKeyResults}
       onScrollContainerRef={setScrollContainerEl}
