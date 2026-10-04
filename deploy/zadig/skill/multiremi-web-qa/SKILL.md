@@ -60,6 +60,22 @@ if (!ppe && !token) throw new Error("缺少 MULTIREMI_QA_WEB_TOKEN");
 if (!token) throw new Error("缺少可用的浏览器登录凭证");
 ```
 
+## 连接诊断
+
+- `scripts/qa-browser-ssh.sh check` 报 `SSH Mesh cannot reach the QA browser host`，
+  而 212 实际可用时，先确认 OpenSSH 有没有加载 Mesh 配置。OpenSSH 找用户配置用的是
+  passwd 里的 home，不看 `$HOME`：Agent 以 root 运行而 `HOME` 指向别处时，它读的是
+  `/root/.ssh/config`，`$HOME/.ssh/config` 里的 Mesh `Include` 不生效（MUL-497）。
+- 诊断：`ssh -G <别名> | grep -E '^(hostname|userknownhostsfile) '` 里 `hostname`
+  等于别名本身，就是没加载；换成 `ssh -F <该别名所在的 workspace config> -G <别名>`
+  应解析到 `10.36.0.212`，`userknownhostsfile` 指向 Mesh 自己的 `known_hosts`。
+  workspace config 位于 `$HOME/.multiremi/ssh/workspaces/*/config`。
+- 脚本的探针和最终执行都已显式 `-F` 加载别名所在的 workspace config，不依赖默认路径。
+  手工 ssh 到 212 时同样带 `-F`。不要靠改 `~/.ssh/config`、复制密钥或关闭
+  `StrictHostKeyChecking` 绕过。
+- Mesh 重新协调期间 workspace config 会短暂消失，此时报
+  `SSH Mesh configuration is missing`，稍等片刻重试即可。
+
 ## 安全与报告
 
 - 生产环境默认只做只读冒烟；不得直接运行会写数据库的完整 `frontend/e2e`。
