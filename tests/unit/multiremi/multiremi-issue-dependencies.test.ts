@@ -1439,7 +1439,6 @@ describe("MUL-400 E3 — task-creation gate", () => {
       agentId: agent.id,
       issueId: parkedParent.id,
       prompt: "child reported",
-      preserveIssueStatus: true,
     });
     expect(wakeup.id).toBeDefined();
     expect(store.getIssue(parkedParent.id)!.status).toBe("backlog");
@@ -1471,7 +1470,7 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     ["camelCase attempt", { attempt: 2 }],
     ["camelCase attempt with maxAttempts", { attempt: 2, maxAttempts: 3 }],
     ["snake_case attempt", { attempt: 2, max_attempts: 3 }],
-    ["camelCase preserveIssueStatus", { preserveIssueStatus: true }],
+    ["camelCase preserveIssueStatus", {  }],
     ["snake_case preserve_issue_status", { preserve_issue_status: true }],
   ])("ignores a body-supplied exemption on the task route (%s)", async (_label, extra) => {
     const { store, agent, dependent } = parkedWithOwner();
@@ -1832,7 +1831,6 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
       issueId: dependent.id,
       prompt: "exempt round",
       attempt: 2,
-      preserveIssueStatus: true,
     });
     expect(task.status).toBe("queued");
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
@@ -1970,7 +1968,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
         ...(source === "delegation_return" ? {
           delegationId: "dlg_exemption", delegatedByAgentId: agent.id, parentTaskId: previous.id,
         } : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+        ...(source === "parent_wakeup" ? { parentTaskId: previous.id } : {}),
       });
       stop();
       expect(store.getTask(task.id)?.status).toBe("queued");
@@ -2056,7 +2054,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
         ...(source === "delegation_return"
           ? { delegationId: `dlg_${source}`, delegatedByAgentId: agent.id, parentTaskId: previous.id }
           : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+        ...(source === "parent_wakeup" ? { parentTaskId: previous.id } : {}),
       });
 
       const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");

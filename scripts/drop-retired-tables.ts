@@ -10,14 +10,16 @@ export const RETIRED_TABLE_SETS = {
   mul493: ["multiremi_task_steer_messages","multiremi_task_human_requests","multiremi_issue_decisions",
     "multiremi_inbox_items","multiremi_agent_issue_update_state","multiremi_task_prompts"],
 } as const;
+export const RETIRED_COLUMN_SETS={mul432:[],mul493:[{table:"multiremi_conversation_heads",column:"agent_read_state"}]} as const;
 export type RetiredTableSet = keyof typeof RETIRED_TABLE_SETS;
 
 /** Does not guess DB URLs and never falls back to the live Store or migrations. */
 export function dropRetiredTables(db: SqlDatabase, input: {
   set: RetiredTableSet; execute?: boolean; confirmDrop?: boolean;
   reconciliation: UnifiedModelReport; backup?: string; now?: Date;
-}): { dry_run: boolean; tables: string[]; minimum_age_days: number } {
+}): { dry_run: boolean; tables: string[]; columns: readonly {table:string;column:string}[]; minimum_age_days: number } {
   const tables = [...RETIRED_TABLE_SETS[input.set]];
+  const columns = RETIRED_COLUMN_SETS[input.set];
   if (!tables.length) throw new Error("Unknown retired table set");
   const report = input.reconciliation;
   if (report.migration !== UNIFIED_MODEL_MIGRATION || report.phase !== "after" || report.mismatches.length
@@ -31,17 +33,21 @@ export function dropRetiredTables(db: SqlDatabase, input: {
   const current = reconcileUnifiedModel(db);
   if (current.mismatches.length || current.attempt_ids_digest !== report.attempt_ids_digest
       || JSON.stringify(current.counts) !== JSON.stringify(report.counts)) throw new Error("Reconciliation no longer matches this database; generate a fresh report");
-  if (!input.execute) return { dry_run: true, tables, minimum_age_days: 7 };
+  if (!input.execute) return { dry_run: true, tables, columns, minimum_age_days: 7 };
   if (!input.confirmDrop) throw new Error("Execution requires --execute and --confirm-drop");
   if (!input.backup || !statSync(input.backup).isFile() || statSync(input.backup).size === 0) throw new Error("Execution requires a non-empty backup file");
   // No CASCADE. Surviving foreign keys deliberately stop deletion, rather than
   // dropping live constraints or data along with retired tables.
   db.transaction(() => {
     for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
+    for(const {table,column} of RETIRED_COLUMN_SETS[input.set]){
+      if(!db.query("SELECT id FROM multiremi_schema_migrations WHERE id='20261005_fold_agent_read_state'").get())throw new Error('Read-state fold must complete before retiring agent_read_state');
+      if(db.query(`PRAGMA table_info(${table})`).all().some(row=>row.name===column))db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    }
     const verified = reconcileUnifiedModel(db);
     if (verified.mismatches.length || verified.attempt_ids_digest !== current.attempt_ids_digest) throw new Error("Retired-table drop changed live model integrity");
   })();
-  return { dry_run: false, tables, minimum_age_days: 7 };
+  return { dry_run: false, tables, columns, minimum_age_days: 7 };
 }
 
 if (import.meta.main) {

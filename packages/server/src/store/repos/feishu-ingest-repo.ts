@@ -1272,7 +1272,7 @@ export class FeishuIngestRepo {
   private markProposalInboxHandled(inboxItemId: string | null): void {
     if (!inboxItemId) return;
     this.ctx.db.run(
-      "UPDATE multiremi_inbox_items SET read = 1, archived = 1 WHERE id = ?",
+      "UPDATE multiremi_conversation_log SET resolved_at=COALESCE(resolved_at,updated_at) WHERE id = ?",
       [inboxItemId],
     );
   }

@@ -3,7 +3,6 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
 import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 
 const FEISHU_APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -575,10 +574,10 @@ describe("task-level agent delegation return", () => {
     });
 
     expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id))
-      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 2);
+      .toHaveLength(true ? 1 : 2);
     expect(store.listIssueActivity(issue.id)
       .filter((activity) => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 0);
+      .toHaveLength(true ? 1 : 0);
   });
 
   it("coalesces a later delegation report into the leader's unfrozen queued return", () => {

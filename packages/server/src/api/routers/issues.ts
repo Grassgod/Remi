@@ -89,7 +89,6 @@ import {
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
-import { DelegationRoundTripLimitError } from "@multiremi/store/repos/tasks-repo.js";
 import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
@@ -1141,8 +1140,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(issueUsageResponse(store, issue));
   });
   app.post("/api/issues/:id/rerun", async (c) => {
-    const dispatchDenied = denySideSessionAgentDispatch(c, store);
-    if (dispatchDenied) return dispatchDenied;
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
@@ -1164,6 +1161,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         ? c.json({ error: result.error, code: result.code, unmet: result.unmet ?? [] }, result.status)
         : c.json({ error: result.error }, result.status);
     }
+    if(!result.task)return c.json(result,200);
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
   app.post("/api/issues/:id/tasks/:taskId/cancel", async (c) => {
@@ -1828,8 +1826,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const dispatchDenied = denySideSessionAgentDispatch(c, store);
-    if (dispatchDenied) return dispatchDenied;
     const body = await readJson<CreateSessionTaskInput>(c);
     const agentId = cleanString(body.agentId ?? body.agent_id);
     const agent = agentId ? store.getAgent(agentId) : null;
@@ -1850,10 +1846,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {
-      if (error instanceof DelegationRoundTripLimitError) {
-        store.recordDelegationRoundTripLimited(error);
-        return c.json({ error: error.message, code: error.code }, 409);
-      }
+      if((error as any)?.message_result)return c.json({task:null,...(error as any).message_result},200);
       const dependencyResponse = issueDependencyErrorResponse(c, error);
       if (dependencyResponse) return dependencyResponse;
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);

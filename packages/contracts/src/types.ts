@@ -1809,6 +1809,8 @@ export interface TaskDependencyForceInput {
 }
 
 export interface CreateTaskInput {
+  /** Internal canonical conversation for automation/message producers. */
+  conversationSessionId?: string;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   id?: string;
@@ -1847,13 +1849,6 @@ export interface CreateTaskInput {
   /** Server-internal lane generation. Public task creation strips this field. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
-  /**
-   * Server-internal: do not let this task's creation park its Issue at `todo`.
-   * MUL-400 E2 uses it for the round that wakes a parent owner after a child
-   * ends, so a manual child edit cannot knock the parent out of `in_review`.
-   */
-  preserveIssueStatus?: boolean;
-  preserve_issue_status?: boolean;
   /**
    * Server-internal: a credential-verified member explicitly started an Issue
    * that is still waiting on prerequisites. Public task creation strips both

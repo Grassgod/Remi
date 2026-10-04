@@ -87,8 +87,8 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 [启动迁移](../packages/server/src/store/unified-model-migration.ts)预检后一次切换；运行路径不再读写三张退役对话表。
 执行消费者使用 [只读投影](../packages/server/src/store/turn-execution-records.ts)，写入口更新规范表；轮卡由 [轮和当前尝试](../packages/server/src/store/turn-attempts.ts)投影，统计及最终回复不再镜像到日志 turn 行。
 重试、redispatch 与孤儿恢复只替换尝试，不写 Issue 状态。自动化账本引用轮，在 `auto_*` 对话保留 timer 输入与运行消息。
-现有 [InboxRepo](../packages/server/src/store/repos/inbox-repo.ts) producer 继续使用原领域入口；共享 [sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)已固定签名，状态机和 producer 改接由下一阶段接入。
-完整边界见 [ADR 0013](adr/0013-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
+[sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)是唯一消息写入口，领域 producer 与执行投影均经它落库；[lane 状态机](../packages/server/src/store/inbox/lane-machine.ts)负责 pending 合并、运行中插话、补铃和兜底扫描。人的收件箱使用 member lane；提问与决定及其一次性令牌保存在消息。Issue 只由轮和未答 decision 推导，子单变化发送父单 status。Daemon 适配器与用户接口所需 Store facade 已提供，传输/CLI/页面由消费者集成；接口和事务边界见[统一收件箱 Store](dev/inbox-store.md)。
+完整边界见 [ADR 0015](adr/0015-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

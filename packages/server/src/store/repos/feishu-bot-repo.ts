@@ -1,3 +1,4 @@
+import { patchDecisionRecord } from "../inbox/decision-records.js";
 /**
  * Workspace Feishu concierge bot configuration (MUL-206).
  *
@@ -1477,7 +1478,7 @@ export class FeishuBotRepo {
     // the only side that can find out whether a recipient exists, and it sends
     // the text twin itself when the lookup comes back empty.
     const degraded = recipient.kind === "degraded" ? recipient.reason : null;
-    const token = this.rotateQuestionCardToken("multiremi_task_human_requests", request.id,
+    const token = this.rotateQuestionCardToken("multiremi_message_question_records", request.id,
       recipient.kind === "resolved" ? recipient.openId : null);
     let body: string;
     if (degraded) {
@@ -1565,15 +1566,15 @@ export class FeishuBotRepo {
   }
 
   private rotateQuestionCardToken(
-    table: "multiremi_task_human_requests" | "multiremi_issue_decisions",
+    table: "multiremi_message_question_records" | "multiremi_message_decision_records",
     id: string,
     recipient: string | null,
   ): string {
     const token = mintQuestionCardToken();
-    const status = table === "multiremi_issue_decisions" ? "escalated" : "pending";
+    const status = table === "multiremi_message_decision_records" ? "escalated" : "pending";
     const updated = this.ctx.db.run(
-      `UPDATE ${table} SET token_hash = ?, token_recipient = ?, token_consumed_at = NULL
-       WHERE id = ? AND status = ? AND token_consumed_at IS NULL`,
+      `UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL
+       WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL AND id IN(SELECT id FROM ${table} WHERE status=?)`,
       [hashQuestionCardToken(token), recipient, id, status],
     );
     if (updated.changes !== 1) throw new Error("question card is no longer pending");
@@ -1587,7 +1588,7 @@ export class FeishuBotRepo {
       const decision = this.ctx.issues().getIssueDecisionAnywhere(decisionId);
       if (!decision || decision.status !== "escalated") return null;
       return buildIssueDecisionCard(decision, { header,
-        token: this.rotateQuestionCardToken("multiremi_issue_decisions", decisionId, recipientOpenId),
+        token: this.rotateQuestionCardToken("multiremi_message_decision_records", decisionId, recipientOpenId),
         ...(recipientOpenId ? { recipientOpenId } : { recipientPending: true }),
       });
     }
@@ -1595,7 +1596,7 @@ export class FeishuBotRepo {
     const request = requestId ? this.ctx.tasks().getTaskHumanRequest(requestId) : null;
     if (!request || request.status !== "pending") return null;
     return buildTaskInteractionCard(request, { header,
-      token: this.rotateQuestionCardToken("multiremi_task_human_requests", request.id, recipientOpenId),
+      token: this.rotateQuestionCardToken("multiremi_message_question_records", request.id, recipientOpenId),
       ...(recipientOpenId ? { recipientOpenId } : { recipientPending: true }),
     });
   }
@@ -1691,7 +1692,7 @@ export class FeishuBotRepo {
       decision,
     });
     const degraded = recipient.kind === "degraded" ? recipient.reason : null;
-    const token = this.rotateQuestionCardToken("multiremi_issue_decisions", decision.id,
+    const token = this.rotateQuestionCardToken("multiremi_message_decision_records", decision.id,
       recipient.kind === "resolved" ? recipient.openId : null);
     let body: string;
     if (degraded) {
@@ -1829,7 +1830,7 @@ export class FeishuBotRepo {
     const threshold = new Date(now.getTime() - ISSUE_DECISION_CARD_REMINDER_DELAY_MS).toISOString();
     return this.ctx.db.query(
       `SELECT decision.id, decision.issue_id
-       FROM multiremi_issue_decisions decision
+       FROM multiremi_message_decision_records decision
        JOIN multiremi_issues issue ON issue.id = decision.issue_id
        WHERE decision.status = 'escalated' AND decision.reminder_sent_at IS NULL
          AND issue.workspace_id = ?
@@ -1870,12 +1871,8 @@ export class FeishuBotRepo {
       // Every check that could skip this row has passed, so the one-shot slot
       // is spent last: running the CAS earlier would burn the nudge on a row
       // this workspace never sends.
-      const claimed = this.ctx.db.run(
-        `UPDATE multiremi_issue_decisions SET reminder_sent_at = ?
-         WHERE id = ? AND status = 'escalated' AND reminder_sent_at IS NULL`,
-        [now.toISOString(), decision.id],
-      );
-      if (claimed.changes !== 1) continue;
+      const claimed = patchDecisionRecord(this.ctx,String(decision.id),'decision_record',{reminder_sent_at:now.toISOString()});
+      if (!claimed) continue;
       const recipientOpenId = cleanOptionalString(card.interaction_open_id);
       const mention = recipientOpenId
         ? { mode: "person" as const, openId: recipientOpenId, resolvedOpenId: recipientOpenId }
@@ -1933,7 +1930,7 @@ export class FeishuBotRepo {
       `SELECT o.decision_id, o.chat_id, o.external_message_id, o.interaction_open_id,
               decision.issue_id
        FROM multiremi_feishu_bot_outbound_deliveries o
-       JOIN multiremi_issue_decisions decision ON decision.id = o.decision_id
+       JOIN multiremi_message_decision_records decision ON decision.id = o.decision_id
          AND decision.workspace_id = o.workspace_id AND decision.issue_id = o.decision_issue_id
        JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
        JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
@@ -2182,7 +2179,7 @@ export class FeishuBotRepo {
   ): void {
     const due = this.ctx.db.query(
       `SELECT request.id, request.task_id, request.expires_at, request.created_at
-       FROM multiremi_task_human_requests request
+       FROM multiremi_message_question_records request
        JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
          AND request.expires_at IS NOT NULL
@@ -2239,14 +2236,8 @@ export class FeishuBotRepo {
       // Every check that can reject the reminder has passed, so now spend the
       // one-shot slot. Running the CAS before them would burn it on a row that
       // is skipped: a cross-workspace Task would lose its reminder forever.
-      const claimed = this.ctx.db.run(
-        `UPDATE multiremi_task_human_requests SET reminder_sent_at = ?
-         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL
-           AND expires_at IS NOT NULL AND expires_at >= ?`,
-        [now.toISOString(), String(row.id),
-          new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString()],
-      );
-      if (claimed.changes !== 1) continue;
+      const claimed = patchDecisionRecord(this.ctx,String(String(row.id)),'human_request',{reminder_sent_at:now.toISOString()});
+      if (!claimed) continue;
       // @ the person who was asked. The checkpoint on the card is what the
       // host actually used, so a `group_owner` lookup that succeeded once is
       // reused instead of being re-resolved (and possibly failing) here.
@@ -2310,7 +2301,7 @@ export class FeishuBotRepo {
       `SELECT o.human_request_id, o.human_request_task_id, o.chat_id,
               o.external_message_id, o.interaction_open_id
        FROM multiremi_feishu_bot_outbound_deliveries o
-       JOIN multiremi_task_human_requests request
+       JOIN multiremi_message_question_records request
          ON request.id = o.human_request_id AND request.status = 'pending'
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.status = 'sent'
          AND o.human_request_id IS NOT NULL AND o.human_request_task_id IS NOT NULL
@@ -2352,7 +2343,7 @@ export class FeishuBotRepo {
         task.chat_session_id AS task_chat_session_id, task.issue_id AS task_issue_id,
         task.agent_id AS task_agent_id, c.workspace_id AS bot_workspace_id,
         c.app_id AS bot_app_id, host.daemon_id AS bot_daemon_id
-      FROM multiremi_task_human_requests request
+      FROM multiremi_message_question_records request
       JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       JOIN multiremi_feishu_bot_configs c ON c.workspace_id = task.workspace_id
       JOIN multiremi_runtimes host ON host.id = c.runtime_id AND host.workspace_id = c.workspace_id
@@ -2935,7 +2926,7 @@ export class FeishuBotRepo {
            ${decisionFilter}
            AND (? = 1 OR o.delivery_mode IS NULL OR o.delivery_mode = 'legacy')
            AND (o.decision_id IS NULL OR EXISTS (
-             SELECT 1 FROM multiremi_issue_decisions decision
+             SELECT 1 FROM multiremi_message_decision_records decision
              JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
              JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
              WHERE decision.id = o.decision_id AND decision.workspace_id = o.workspace_id
@@ -3109,7 +3100,7 @@ export class FeishuBotRepo {
     ) deadlines`).get(workspaceId, new Date(now).toISOString(), workspaceId, new Date(now).toISOString()) as Row | null;
     let next = row?.wake_at ? Date.parse(String(row.wake_at)) : Number.POSITIVE_INFINITY;
     const requests = this.ctx.db.query(`SELECT request.created_at, request.expires_at
-      FROM multiremi_task_human_requests request JOIN multiremi_turn_execution_records task ON task.id = request.task_id
+      FROM multiremi_message_question_records request JOIN multiremi_turn_execution_records task ON task.id = request.task_id
       WHERE task.workspace_id = ? AND task.issue_id IS NOT NULL AND request.status = 'pending'
         AND request.reminder_sent_at IS NULL AND request.expires_at IS NOT NULL
         AND EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries delivery
@@ -3281,10 +3272,10 @@ export class FeishuBotRepo {
         const action = card ? questionCardAction(card) : null;
         const recipient = cleanOptionalString(input.interactionOpenId);
         if (action && recipient && !input.degraded) {
-          const table = row.decision_id ? "multiremi_issue_decisions" : "multiremi_task_human_requests";
+          const table = row.decision_id ? "multiremi_message_decision_records" : "multiremi_message_question_records";
           this.ctx.db.run(
-            `UPDATE ${table} SET token_recipient = COALESCE(token_recipient, ?)
-             WHERE id = ? AND token_hash = ? AND token_consumed_at IS NULL`,
+            `UPDATE multiremi_conversation_log SET card_token_recipient=COALESCE(card_token_recipient,?)
+             WHERE id=? AND card_token_hash=? AND card_token_consumed_at IS NULL`,
             [recipient, String(action.r), hashQuestionCardToken(String(action.t))],
           );
         }

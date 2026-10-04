@@ -1,3 +1,5 @@
+import { afterCommit } from '../db/postgres.js';
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import { autopilotSessionId } from "@multiremi/contracts/unified-model.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 // Autopilots domain (autopilots, schedule/webhook triggers, runs and webhook deliveries),
@@ -211,19 +213,14 @@ export class AutopilotsRepo {
   }
 
   private appendAutomationRequestWithinTransaction(autopilotId:string,agentId:string,prompt:string,issueSessionId:string|null,turnId:string):number {
-    const autoSession=autopilotSessionId(autopilotId);
-    const request = this.ctx.conversationLog().appendWithinTransaction({sessionId:issueSessionId??autoSession,kind:'message',authorType:'timer',authorId:autopilotId,bodyMd:prompt,
-      metadata:{envelope:{to:{role:'agent',agentId,issueSessionId:issueSessionId??autoSession},kind:'request',wake:'now',source:{},priority:4}}});
-    if(issueSessionId)this.ctx.conversationLog().appendWithinTransaction({sessionId:autoSession,kind:'message',authorType:'timer',authorId:autopilotId,
-      messageKind:'status',bodyMd:'Execution in Issue conversation',metadata:{turn_id:turnId,session_id:issueSessionId}});
-    return request.seq;
+    const autoSession=autopilotSessionId(autopilotId),events=createCommitEventQueue();
+    const request=sendMessageWithinTransaction(this.ctx,{session_id:issueSessionId??autoSession,sender:{type:'timer',id:autopilotId},to:{type:'agent',ref:agentId},
+      message_kind:'request',wake_requested:'next_turn',body_md:prompt,execution_scope:issueSessionId?'':`auto:${this.ctx.db.query('SELECT id FROM multiremi_autopilot_runs WHERE turn_id=?').get(turnId)?.id??turnId}`},events);
+    if(issueSessionId)sendMessageWithinTransaction(this.ctx,{session_id:autoSession,sender:{type:'timer',id:autopilotId},to:{type:'none'},message_kind:'status',wake_requested:'inbox_only',body_md:'Execution in Issue conversation',metadata:{turn_id:turnId,session_id:issueSessionId}},events);
+    afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return request.message.seq;
   }
-
-  private bindAutomationInputWithinTransaction(attemptId: string, requestSeq: number): void {
-    // The timer request is the input this existing dispatch path executes.
-    // Bound it now so completion cannot re-ring the same request as unread.
-    this.ctx.db.run(`UPDATE multiremi_turns SET wake_seq = ?, input_from_seq = ?, input_to_seq = ?
-      WHERE current_attempt_id = ?`, [requestSeq, requestSeq - 1, requestSeq, attemptId]);
+  private bindAutomationInputWithinTransaction(attemptId:string,requestSeq:number):void {
+    this.ctx.db.run('UPDATE multiremi_turns SET wake_seq=? WHERE current_attempt_id=?',[requestSeq,attemptId]);
   }
 
   getAutopilot(id: string): MultiremiAutopilot | null {
@@ -527,7 +524,8 @@ export class AutopilotsRepo {
             const requestBody=`${String(row.schedule_prompt)}\n\n## Scheduled Target\n${JSON.stringify(target)}\nThis task is bound to this single target. Do not process other projects or repositories.`;
             const requestSeq = this.appendAutomationRequestWithinTransaction(autopilot.id,agent.id,requestBody,null,attemptId);
             const created = this.ctx.tasks().createTaskWithinTransaction({
-              id:attemptId,agentId: agent.id, workspaceId: autopilot.workspaceId,
+              id:attemptId,agentId: agent.id, workspaceId: autopilot.workspaceId,conversationSessionId:autopilotSessionId(autopilot.id),
+              triggerCommentId:this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq=?').get(autopilotSessionId(autopilot.id),requestSeq)?.id,
               prompt:requestBody,
               parentTaskId: parent?.id ?? null,
               issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
@@ -1600,7 +1598,8 @@ export class AutopilotsRepo {
         // failing, mirroring the "no runnable agent" skip above, so the operator
         // sees why nothing ran.
         task = this.ctx.tasks().createTaskWithinTransaction({
-          id:attemptId,agentId: agent.id,
+          id:attemptId,agentId: agent.id,conversationSessionId:issueSessionId??autopilotSessionId(autopilot.id),
+          triggerCommentId:this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq=?').get(issueSessionId??autopilotSessionId(autopilot.id),requestSeq)?.id,
           issueId: issue?.id ?? null,
           issueSessionId,
           workspaceId: autopilot.workspaceId,
@@ -1613,7 +1612,7 @@ export class AutopilotsRepo {
         }, autopilotChanges, autopilotEvents);
         this.bindAutomationInputWithinTransaction(task.id, requestSeq);
       } catch (err) {
-        if (!(err instanceof IssueDependencyError) || err.code !== "dependencies_unmet") throw err;
+        if((err as any)?.message_result?.wake_reason!=="dependencies_unmet" && (!(err instanceof IssueDependencyError)||err.code!=="dependencies_unmet"))throw err;
         this.ctx.db.run('UPDATE multiremi_autopilot_runs SET turn_id=NULL WHERE id=?',[runId]);
         runAutopilotRunMutation(this.ctx.db, `UPDATE multiremi_autopilot_run_records
            SET status = 'skipped', completed_at = ?, failure_reason = ?
