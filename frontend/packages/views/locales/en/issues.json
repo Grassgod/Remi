@@ -401,6 +401,8 @@
     "assignment_response": "Responding to assignment: {{title}}",
     "task_author": "Assigned by: {{name}}",
     "task_prompt": "Input Prompt",
+    "task_prompt_pending": "This task has not started yet. The assignment instructions are shown below.",
+    "task_prompt_unrecorded": "The execution input was not recorded. The assignment instructions are shown below.",
     "task_loading": "Loading task",
     "task_unavailable": "This task could not be loaded.",
     "task_retry": "Retry",

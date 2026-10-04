@@ -9,6 +9,8 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { eventSummary } from "../../common/session-log/event-summary";
+import { EntryHtml } from "../../common/session-log/entry-html";
+import { ReadonlyContent } from "../../editor/readonly-content";
 import { useT } from "../../i18n";
 import { assignmentAuthor } from "./issue-log-presentation";
 
@@ -21,8 +23,14 @@ export function IssueTaskPromptDialog({ issueId, row, getActorName, onClose }: {
   const task = query.data?.find(task => task.id === row.task_id);
   const author = assignmentAuthor(row);
   const authorName = author ? eventSummary(getActorName(author.type, author.id)) || t($ => $.log_event.unknown_author) : "";
+  const notStarted = row.metadata.status === "queued" || row.metadata.status === "dispatched" || row.metadata.status === "waiting_local_directory";
   if (task) return <TaskTraceDialog task={task} agentName={eventSummary(getActorName("agent", task.agent_id))} initialView="prompt"
     headerSlot={authorName ? <span className="inline-flex rounded border border-border px-2 py-0.5 text-xs text-muted-foreground">{t($ => $.log_event.task_author, { name: authorName })}</span> : undefined}
+    promptFallback={<div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{notStarted ? t($ => $.log_event.task_prompt_pending) : t($ => $.log_event.task_prompt_unrecorded)}</p>
+      <EntryHtml html={row.body_html} markdown={row.body_md} className="rich-text-editor--compact"
+        fallback={<ReadonlyContent content={row.body_md} density="compact" copyCodeBlocks />} />
+    </div>}
     onOpenChange={open => { if (!open) onClose(); }} />;
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent className="max-w-md">

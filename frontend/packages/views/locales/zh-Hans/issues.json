@@ -399,6 +399,8 @@
     "assignment_response": "回应派活：{{title}}",
     "task_author": "派活人：{{name}}",
     "task_prompt": "输入 Prompt",
+    "task_prompt_pending": "任务尚未开始执行，以下是派活说明",
+    "task_prompt_unrecorded": "未记录执行输入，以下是派活说明",
     "task_loading": "正在加载任务",
     "task_unavailable": "暂时无法加载这个任务。",
     "task_retry": "重试",

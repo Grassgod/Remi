@@ -401,6 +401,8 @@
     "assignment_response": "작업 할당에 대한 응답: {{title}}",
     "task_author": "할당자: {{name}}",
     "task_prompt": "입력 Prompt",
+    "task_prompt_pending": "이 작업은 아직 실행되지 않았습니다. 아래는 할당 시 전달된 지시입니다.",
+    "task_prompt_unrecorded": "실행 입력이 기록되지 않았습니다. 아래는 할당 시 전달된 지시입니다.",
     "task_loading": "작업 불러오는 중",
     "task_unavailable": "이 작업을 불러올 수 없습니다.",
     "task_retry": "다시 시도",

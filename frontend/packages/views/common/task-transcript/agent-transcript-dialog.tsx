@@ -72,6 +72,8 @@ interface AgentTranscriptDialogProps {
    * The dialog stays generic — slot content is the caller's concern.
    */
   headerSlot?: React.ReactNode;
+  /** Assignment content supplied by callers that own a turn, used only on prompt 404. */
+  promptFallback?: React.ReactNode;
   initialView?: "execution" | "prompt";
   traceResult?: TaskTraceRead | null;
   traceLoading?: boolean;
@@ -94,6 +96,7 @@ export function AgentTranscriptDialog({
   agentName,
   isLive = false,
   headerSlot,
+  promptFallback,
   initialView = "execution",
   traceResult,
   traceLoading = false,
@@ -671,6 +674,10 @@ export function AgentTranscriptDialog({
                   </pre>
                 </div>
               </>
+            ) : promptNotRecorded && promptFallback ? (
+              <div className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4">
+                {promptFallback}
+              </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
                 <FileInput className="h-5 w-5" />
