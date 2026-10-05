@@ -5351,7 +5351,7 @@ runMigrations(this.db);
     return this.chat.createChatSession(input);
   }
 
-  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
+  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean; excludeTransportSessions?: boolean } = {}): MultiremiChatSession[] {
     return this.chat.listChatSessions(workspaceId, options);
   }
 

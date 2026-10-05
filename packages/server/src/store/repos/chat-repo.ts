@@ -58,7 +58,10 @@ export interface PendingChatTaskCandidate {
   sessionWorkspaceId: string;
 }
 
-const CHAT_SESSION_SELECT = `SELECT chat.*,
+const CHAT_SESSION_SELECT = `SELECT chat.id, chat.workspace_id, chat.creator_id, chat.agent_id,
+  chat.runtime_workspace_id, chat.project_id, chat.title, chat.status, chat.session_id,
+  chat.work_dir, chat.session_runtime_id, chat.session_provider, chat.session_execution_fingerprint,
+  chat.latest_task_id, chat.unread_since, chat.pinned, chat.created_at, chat.updated_at,
   (SELECT COUNT(*) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id
     AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count,
   (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id
@@ -139,7 +142,7 @@ export class ChatRepo {
     return project.id;
   }
 
-  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
+  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean; excludeTransportSessions?: boolean } = {}): MultiremiChatSession[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (workspaceId) {
@@ -152,6 +155,10 @@ export class ChatRepo {
     }
     if (!options.includeArchived) {
       clauses.push("status != 'archived'");
+    }
+    if (options.excludeTransportSessions) {
+      clauses.push(`NOT EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding
+        WHERE binding.chat_session_id = chat.id)`);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.ctx.db.query(`${CHAT_SESSION_SELECT} ${where} ORDER BY pinned DESC, updated_at DESC`).all(...params) as Row[];
