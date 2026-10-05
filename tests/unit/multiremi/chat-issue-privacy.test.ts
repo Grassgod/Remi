@@ -1,6 +1,7 @@
+import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -12,13 +13,13 @@ async function setup() {
   }
   const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
   const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
-  const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local", visibility: "workspace" });
   const issue = store.createIssue({ title: "Team issue", workspaceId: "local", createdBy: "alice" });
   const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
   const privateTask = store.sendChatMessage(chat.id, { content: "PRIVATE_CHAT_PROMPT" }).task;
   // Historical tasks can still reference an Issue after their Chat binding is
   // removed. Keep their privacy checks meaningful against retained data.
-  db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, privateTask.id]);
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [issue.id, privateTask.id]);
   store.appendTaskMessages(privateTask.id, [{ type: "text", content: "PRIVATE_CHAT_TRANSCRIPT" }]);
   const publicTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Public issue work" });
   const app = createMultiremiApp({ store, authToken: "test-root", shareSecret: "test-share-secret" });
@@ -30,8 +31,8 @@ describe("Chat privacy for historical Issue-linked tasks", () => {
     const { store, app, issue, privateTask, publicTask, alice, bob } = await setup();
     for (const path of [
       `/api/multiremi/issues/${issue.id}`,
-      `/api/issues/${issue.id}/active-task`,
-      `/api/issues/${issue.id}/task-runs`,
+      `/api/turns?issue=${issue.id}`,
+      `/api/turns?issue=${issue.id}`,
     ]) {
       const response = await app.request(path, { headers: bob });
       expect(response.status, path).toBe(200);
@@ -42,7 +43,7 @@ describe("Chat privacy for historical Issue-linked tasks", () => {
       const own = await app.request(path, { headers: alice });
       expect(await own.text(), path).toContain(privateTask.id);
     }
-    const cancelPath = `/api/issues/${issue.id}/tasks/${privateTask.id}/cancel`;
+    const cancelPath = turnApiPath(store, privateTask.id, "/cancel");
     expect((await app.request(cancelPath, { method: "POST", headers: bob })).status).toBe(403);
     expect(store.getTask(privateTask.id)?.status).toBe("queued");
     expect((await app.request(cancelPath, { method: "POST", headers: alice })).status).toBe(200);

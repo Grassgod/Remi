@@ -1,7 +1,7 @@
 # 任务 LLM 进度摘要（MUL-67）
 
 运行中的任务由 daemon 持续生成一句人话进度，写入 `progress_summary / progress_step / progress_total`，
-前端 agent-live-card、`remi issue runs` CLI 及任何读取任务 wire 字段的消费端可直接展示。
+前端 agent-live-card、`remi turn list --issue <issue>` CLI 及任何读取任务 wire 字段的消费端可直接展示。
 
 ## 工作方式
 
@@ -60,8 +60,8 @@ OpenAI 兼容模型和 Claude 兜底模型。设置保存在 workspace `settings
 ## 消费端
 
 - 前端：Issue 页 agent-live-card 在运行行下方展示一行摘要（`progress_summary`）。
-- CLI：`remi issue runs <issue-id> --output table` 的 `PROGRESS` 列（含 `[step/total]` 前缀）。
-- API：`/api/issues/:id/task-runs`、daemon 任务 wire 均已携带 `progress_summary/step/total`。
+- CLI：`remi turn get <turn> --attempts --output json` 的尝试进度字段。
+- API：`/api/turns/:id`、daemon attempt wire 均已携带 `progress_summary/step/total`。
 
 ## 测试
 

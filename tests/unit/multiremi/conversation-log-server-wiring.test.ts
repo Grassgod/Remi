@@ -34,7 +34,7 @@ function waitForMessage(socket: WebSocket, match: (message: any) => boolean): Pr
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.removeEventListener("message", onMessage);
-      reject(new Error("Timed out waiting for matching websocket message"));
+      reject(new Error(`Timed out waiting for websocket message: ${match.toString()}`));
     }, 2_000);
     const onMessage = (event: MessageEvent) => {
       const message = JSON.parse(String(event.data));
@@ -76,7 +76,8 @@ describe("conversation log server Hub wiring", () => {
   it("warms a cold SQLite log with the same entries as the store read", async () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
-    const sessionId = "ises_cold_fill";
+    store.ensureLocalWorkspace();
+    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Cold fill",workspaceId:"local"}).id).id;
     for (let i = 1; i <= 3; i++) {
       store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: `row ${i}` });
     }
@@ -101,7 +102,8 @@ describe("conversation log server Hub wiring", () => {
       const runtimeDb = new PostgresSyncDatabase(url);
       const runtimeStore = new MultiremiStore(runtimeDb);
       const readPool = createReadPool({ databaseUrl: url, role: "ui" });
-      const sessionId = "ises_peer_fill";
+      runtimeStore.ensureLocalWorkspace();
+      const sessionId = runtimeStore.getOrCreateDefaultIssueSession(runtimeStore.createIssue({title:"Peer fill",workspaceId:"local"}).id).id;
       const cold = runtimeStore.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "cold row" });
       let receiver!: PeerChannel;
       const sender = createPeerChannel({
@@ -160,35 +162,43 @@ describe("conversation log server Hub wiring", () => {
         expect(await subscribe(socket, chat.id, store.getConversationLogHead(chat.id)!.headSeq + 1))
           .toMatchObject({ type: "stream.ack", payload: { stream: "log", id: chat.id } });
         const chatFrame = waitForMessage(socket, message => message.type === "stream.data" && message.payload?.id === chat.id);
-        const sent = await fetch(`${base}/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "live chat" }) });
-        expect(sent.status).toBe(201);
+        const sent = await fetch(`${base}/api/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body_md: "live chat", to: { type: "agent", ref: agent.id } }) });
+        expect(sent.status).toBe(200);
+        const sentMessage = (await sent.json() as { message: { id: string; seq: number } }).message;
         const chatData = await chatFrame;
         const chatHead = await (await fetch(`${base}/api/sessions/${chat.id}/log?before=30`, { headers })).json() as { head_seq: number };
-        expect(chatData).toMatchObject({ type: "stream.data", payload: { stream: "log", id: chat.id, frames: [{ seq: chatHead.head_seq, kind: "entry" }] } });
+        // #7/#9: the log head also includes a hidden Turn card. Verify the
+        // actual posted message arrives, rather than mistaking that card for it.
+        expect(chatData).toMatchObject({ type: "stream.data", payload: { stream: "log", id: chat.id } });
+        expect(chatData.payload.frames.find((frame: any) => frame.payload?.id === sentMessage.id)).toMatchObject({
+          seq: sentMessage.seq, kind: "entry", payload: { body_md: "live chat", sender_type: "member" },
+        });
 
         expect(await subscribe(socket, issueSession.id, store.getConversationLogHead(issueSession.id)!.headSeq + 1))
           .toMatchObject({ type: "stream.ack", payload: { stream: "log", id: issueSession.id } });
         const issueFrame = waitForMessage(socket, message => message.type === "stream.data" && message.payload?.id === issueSession.id);
-        const posted = await fetch(`${base}/api/issues/${issue.id}/comments`, { method: "POST", headers,
-          body: JSON.stringify({ content: "live issue", issue_session_id: issueSession.id }) });
-        expect(posted.status).toBe(201);
+        const posted = await fetch(`${base}/api/sessions/${issueSession.id}/messages`, { method: "POST", headers,
+          body: JSON.stringify({ body_md: "live issue", to: { type: "none" } }) });
+        expect(posted.status).toBe(200);
         const issueData = await issueFrame;
         const issueHead = await (await fetch(`${base}/api/sessions/${issueSession.id}/log?before=30`, { headers })).json() as { head_seq: number };
         expect(issueData).toMatchObject({ type: "stream.data", payload: { stream: "log", id: issueSession.id, frames: [{ seq: issueHead.head_seq, kind: "entry" }] } });
 
         const patchFrame = waitForMessage(socket, message => message.type === "stream.data"
           && message.payload?.id === issueSession.id && message.payload.frames?.some((frame: { kind: string }) => frame.kind === "patch"));
-        const comment = await posted.json() as { id: string };
-        const edited = await fetch(`${base}/api/comments/${comment.id}`, { method: "PUT", headers, body: JSON.stringify({ body: "edited issue" }) });
+        const { message: comment } = await posted.json() as { message: { id: string } };
+        const edited = await fetch(`${base}/api/messages/${comment.id}`, { method: "PATCH", headers, body: JSON.stringify({ body_md: "edited issue" }) });
         expect(edited.status).toBe(200);
         expect(await patchFrame).toMatchObject({ payload: { frames: [{ seq: issueHead.head_seq, kind: "patch", payload: { session_id: issueSession.id } }] } });
 
         socket.close();
-        await fetch(`${base}/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "missed chat" }) });
+        const missed=await fetch(`${base}/api/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body_md: "missed chat", to: { type: "agent", ref: agent.id } }) });
+        expect(missed.status).toBe(200);
         resumed = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
         await authenticateBrowserWebSocket(resumed, token.token);
         const replay = waitForMessage(resumed, message => ["stream.data", "stream.gap"].includes(message.type) && message.payload?.id === chat.id);
-        expect(await subscribe(resumed, chat.id, chatHead.head_seq + 1)).toMatchObject({ type: "stream.ack", payload: { stream: "log", id: chat.id } });
+        const replayAck = await subscribe(resumed, chat.id, chatData.payload.frames.at(-1).seq + 1);
+        expect(replayAck).toMatchObject({ type: "stream.ack", payload: { stream: "log", id: chat.id } });
         const replayData = await replay;
         expect(["stream.data", "stream.gap"]).toContain(replayData.type);
         expect(replayData.payload.id).toBe(chat.id);
@@ -203,6 +213,8 @@ describe("conversation log server Hub wiring", () => {
   it("leaves a caller's listener alone when the Hub is injected", () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Injected",workspaceId:"local"}).id).id;
     const hub = createHub({ transport: createLocalHubTransport(), role: "all" });
     const received: string[] = [];
     store.setConversationLogListener({ onEntry: (_sessionId, row) => received.push("seq" in row ? String(row.seq) : "patch") });
@@ -210,11 +222,11 @@ describe("conversation log server Hub wiring", () => {
     const server = startMultiremiServer({ store, hub, backgroundJobs: false, port: 0, hostname: "127.0.0.1", authToken: null });
     try {
       expect(app).toBeDefined();
-      store.appendConversationLog({ sessionId: "ises_injected", kind: "message", authorType: "system", bodyMd: "first" });
+      store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "first" });
       expect(received).toEqual(["1"]);
       server.stop(true);
-      store.appendConversationLog({ sessionId: "ises_injected", kind: "message", authorType: "system", bodyMd: "second" });
-      expect(received).toEqual(["1", "2"]);
+      store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "second" });
+      expect(received).toEqual(["1","2"]);
     } finally {
       server.stop(true);
       hub.shutdown();
@@ -225,6 +237,8 @@ describe("conversation log server Hub wiring", () => {
   it("registers an app-owned Hub and detaches only the server-owned Hub", async () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Owned",workspaceId:"local"}).id).id;
     const received: number[] = [];
     store.subscribeConversationLog({ onEntry: (_sessionId, row) => {
       if ("seq" in row) received.push(row.seq);
@@ -232,11 +246,11 @@ describe("conversation log server Hub wiring", () => {
     const app = createMultiremiApp({ store, backgroundJobs: false });
     const server = startMultiremiServer({ store, backgroundJobs: false, port: 0, hostname: "127.0.0.1", authToken: null });
     try {
-      store.appendConversationLog({ sessionId: "ises_owned", kind: "message", authorType: "system", bodyMd: "first" });
+      store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "first" });
       expect(received).toEqual([1]);
       expect(await (await app.request("/health")).json()).toMatchObject({ hub: { frames: 1 } });
       server.stop(true);
-      store.appendConversationLog({ sessionId: "ises_owned", kind: "message", authorType: "system", bodyMd: "second" });
+      store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "second" });
       expect(received).toEqual([1, 2]);
       expect(await (await app.request("/health")).json()).toMatchObject({ hub: { frames: 2 } });
     } finally {

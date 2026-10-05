@@ -3,7 +3,7 @@
 This document describes the current routing rules, stored-event boundaries, paginated
 reading model, and badge counts. Implementation entry points are the
 [routing registry](../packages/server/src/store/inbox-routing.ts),
-[inbox API](../packages/server/src/api/routers/inbox.ts), and
+[inbox API](../packages/server/src/api/routers/unified.ts), and
 [frontend grouping](../frontend/packages/core/inbox/grouping.ts).
 
 ## The two surfaces
@@ -11,9 +11,9 @@ reading model, and badge counts. Implementation entry points are the
 | | Workbench (工作台) | Inbox (收件箱) |
 |---|---|---|
 | Question it answers | *What is waiting on me right now?* | *What happened while I wasn't looking?* |
-| Storage | none — live query over `GET /api/issues?status=…` | `multiremi_inbox_items`, durable rows |
-| Read state | none | read / archived per row |
-| Freshness | real-time, self-clearing when the issue moves on | durable events, with read/archive state changed by the human |
+| Storage | none — live query over `GET /api/issues?status=…` | canonical conversation messages |
+| Read state | none | a monotonic cursor per member and conversation |
+| Freshness | real-time, self-clearing when the issue moves on | durable messages, read through the conversation cursor |
 | Grain | one row per **issue** | one row per **event** |
 | Attention cost | primary badge, meant to be checked continuously | secondary, meant to be checked periodically |
 
@@ -21,6 +21,9 @@ The workbench sections are `in_review` (split into *awaiting reply* / *awaiting 
 via the `awaiting_human` agent-task snapshot), `blocked`, and `in_progress`
 (`frontend/packages/core/issues/workbench.ts`). Call these the
 **workbench-visible statuses**.
+
+The wire contract is [message / inbox / turn API](dev/message-api.md).
+`GET /api/inbox` returns messages and counts together; old per-item routes return 410.
 
 ## The rule
 

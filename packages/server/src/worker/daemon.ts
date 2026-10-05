@@ -1248,34 +1248,49 @@ export class MultiremiDaemon {
     return this.client.listFeishuIssueDecisionCards(this.options.runtimeId!);
   }
 
-  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
-    return this.client.getFeishuIssueDecision(issueId, decisionId);
+  getFeishuIssueDecision(decisionId: string): Promise<MultiremiIssueDecision | null> {
+    return this.client.getFeishuIssueDecision(decisionId);
   }
 
   answerFeishuIssueDecision(
-    issueId: string,
     decisionId: string,
     input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
-    return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
+    return this.client.answerFeishuIssueDecision(decisionId, input);
   }
 
-  /** Retired bot hooks fail closed until S4 replaces callers with decision-message routing. */
-  getFeishuBotHumanRequest(_taskId: string, _requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
+  getMessageHumanRequest(requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return this.client.getMessageHumanRequest(requestId);
   }
 
-  waitFeishuBotHumanRequestSettled(_requestId: string, _signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
-    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
+  async getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    const request = await this.getMessageHumanRequest(requestId);
+    return request?.taskId === taskId ? request : null;
   }
 
-  prepareTaskHumanRequestCard(_taskId: string, _requestId: string, _recipientOpenId: string): Promise<Record<string, unknown>> {
-    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
+  async waitFeishuBotHumanRequestSettled(requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
+    // The card host is not the executing turn's subscriber. Read its authorized
+    // decision message while provider replies stay on S3's turn downlink.
+    const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
+    const deadline = Date.now() + 24 * 60 * 60 * 1000;
+    while (!waitSignal.aborted && Date.now() < deadline) {
+      const request = await this.getMessageHumanRequest(requestId);
+      if (!request || request.status !== "pending") return request;
+      await sleep(1000);
+    }
+    return null;
   }
 
-  respondFeishuBotHumanRequest(_taskId: string, _requestId: string, _response: Record<string, unknown>,
-    _credential?: { token: string; operatorOpenId: string }): Promise<MultiremiTaskHumanRequest> {
-    return Promise.reject(new DaemonProtocolRpcError("report_shape_retired", false));
+  prepareTaskHumanRequestCard(requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+    return this.client.prepareTaskHumanRequestCard(requestId, recipientOpenId);
+  }
+
+  respondFeishuBotHumanRequest(
+    requestId: string,
+    response: Record<string, unknown>,
+    credential?: { token: string; operatorOpenId: string },
+  ): Promise<MultiremiTaskHumanRequest> {
+    return this.client.respondTaskHumanRequest(requestId, response, credential);
   }
 
   resetFeishuBotSession(revision: number, externalSessionKey: string): Promise<boolean> {

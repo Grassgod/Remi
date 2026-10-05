@@ -100,8 +100,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const token = action(delivery).t as string;
       const access = await store.createAccessToken({ name: daemonId, type: "daemon", workspaceId, daemonId });
       const api = createMultiremiApp({ store, authToken: "MASTER" });
-      const path = lane === "fr" ? `/api/daemon/tasks/${task.id}/human-requests/${request.id}/respond`
-        : `/api/daemon/issues/${issue.id}/decisions/${request.id}/answer`;
+      const path = `/api/daemon/messages/${request.id}/answer`;
       const respond = (suppliedToken: unknown = token, operator: unknown = recipient) => api.request(path, {
         method: "POST", headers: { Authorization: `Bearer ${access.token}`, "content-type": "application/json" },
         body: JSON.stringify({ token: suppliedToken, operator_open_id: operator,
@@ -249,22 +248,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => f.api.fetch(request) });
         const client = new MultiremiDaemonClient(server.url.origin, f.access.token);
         const stop = registerQuestionCardClient("cli_mul487_restart", {
-          getRequest: async (taskId, requestId) => {
-            const request = store.getTaskHumanRequest(requestId);
-            return request?.taskId === taskId ? request : null;
-          },
-          // Exercise the server's existing token route directly; the daemon's
-          // old human-request transport is retired, and S4 owns card migration.
-          respond: async (taskId, requestId, response, credential) => {
-            const result = await f.api.request(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/respond`, {
-              method: "POST", headers: { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" },
-              body: JSON.stringify({ response, token: credential?.token, operator_open_id: credential?.operatorOpenId }),
-            });
-            if (!result.ok) throw new Error(`Card response failed: ${result.status}`);
-            return (await result.json() as { request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest }).request;
-          },
-          getDecision: (issueId, requestId) => client.getFeishuIssueDecision(issueId, requestId),
-          answer: (issueId, requestId, answer, credential) => client.answerFeishuIssueDecision(issueId, requestId, { answer, ...credential }),
+          getRequest: requestId => client.getMessageHumanRequest(requestId),
+          respond: (requestId, response, credential) => client.respondTaskHumanRequest(requestId, response, credential),
+          getDecision: requestId => client.getFeishuIssueDecision(requestId),
+          answer: (requestId, answer, credential) => client.answerFeishuIssueDecision(requestId, { answer, ...credential }),
         });
         try {
           const marker = lane === "fd" ? decisionInteractionMarker(f.issue.id, f.request.id) : interactionMarker(f.task.id, f.request.id);
@@ -307,7 +294,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
 
     it("fr: native stream issuance and retarget rotate tokens and bind the new person", async () => {
       const f = await setup("fr");
-      const path = `/api/daemon/tasks/${f.task.id}/human-requests/${f.request.id}/card`;
+      const path = `/api/daemon/messages/${f.request.id}/card`;
       const mint = (recipient: string) => f.api.request(path, { method: "POST",
         headers: { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" },
         body: JSON.stringify({ recipient_open_id: recipient }) });
@@ -316,6 +303,8 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const nativeToken = questionCardAction((await native.json()).card)!.t as string;
       expect(nativeToken === f.token).toBe(false);
       const changedRecipient = "ou_new_addressee";
+      const changedUser = store.getOrCreateUser({ externalId: changedRecipient, name: "New addressee" });
+      store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
       const retargeted = await mint(changedRecipient);
       expect(retargeted.status).toBe(200);
       const newToken = questionCardAction((await retargeted.json()).card)!.t as string;
@@ -341,7 +330,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
       const request = store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
         payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
-      const path = `/api/daemon/tasks/${submitted.taskId}/human-requests/${request.id}`;
+      const path = `/api/daemon/messages/${request.id}`;
       const cardInput = JSON.stringify({ recipient_open_id: f.recipient });
       const headers = { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" };
       const minted = await f.api.request(`${path}/card`, { method: "POST", headers, body: cardInput });
@@ -351,7 +340,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const other = await store.createAccessToken({ name: "Not the bot host", type: "daemon", workspaceId: f.workspaceId,
         daemonId: `daemon_other_${f.n}` });
       const answer = JSON.stringify({ token: credential!.t, operator_open_id: f.recipient, response: { answers: { "Continue?": "Yes" } } });
-      for (const [suffix, body] of [["card", cardInput], ["respond", answer]]) {
+      for (const [suffix, body] of [["card", cardInput], ["answer", answer]]) {
         expect((await f.api.request(`${path}/${suffix}`, { method: "POST",
           headers: { ...headers, Authorization: `Bearer ${other.token}` }, body })).status).toBe(403);
       }
@@ -359,10 +348,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const privateTask = store.createTask({ agentId: f.task.agentId, workspaceId: f.workspaceId, chatSessionId: privateChat.id, prompt: "Private" });
       db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
       const privateRequest = store.createTaskHumanRequest({ taskId: privateTask.id, kind: "question", payload: {} });
-      expect((await f.api.request(`/api/daemon/tasks/${privateTask.id}/human-requests/${privateRequest.id}/card`, {
+      expect((await f.api.request(`/api/daemon/messages/${privateRequest.id}/card`, {
         method: "POST", headers, body: cardInput,
       })).status).toBe(403);
-      expect((await f.api.request(`${path}/respond`, { method: "POST", headers, body: answer })).status).toBe(200);
+      expect((await f.api.request(`${path}/answer`, { method: "POST", headers, body: answer })).status).toBe(200);
     });
 
     it("fr: native send retries mint a new credential and delivery key without persisting plaintext in checkpoints", async () => {
@@ -422,7 +411,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const stop = registerQuestionCardClient("cli_mul487_checker", {
           getRequest: async () => null, respond: async () => { throw new Error("not a task card"); },
           getDecision: async () => store.getIssueDecision(f.issue.id, f.request.id),
-          answer: async (_issueId, _requestId, answer, credential) => store.answerIssueDecision(f.issue.id, f.request.id,
+          answer: async (_requestId, answer, credential) => store.answerIssueDecision(f.issue.id, f.request.id,
             { answer, reason: "", overturn: "" }, { type: "member", id: f.member.id, taskId: null }, { cardCredential: credential }),
         });
         try {
@@ -459,16 +448,17 @@ for (const backend of ["SQLite", "Postgres"] as const) {
 
     it("fr and fd: member web answers still work without a card credential", async () => {
       const fr = await setup("fr");
-      const frResponse = await fr.api.request(`/api/multiremi/tasks/${fr.task.id}/human-requests/${fr.request.id}/respond`, {
-        method: "POST", headers: { Authorization: "Bearer MASTER", "content-type": "application/json" },
-        body: JSON.stringify({ response: { answers: { "Continue?": "No" } } }),
+      const frToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fr.workspaceId, userId: fr.user.id });
+      const frResponse = await fr.api.request(`/api/sessions/${store.getMessage(fr.request.id)!.session_id}/messages`, {
+        method: "POST", headers: { Authorization: `Bearer ${frToken.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ reply_to_id: fr.request.id, body_md: "No", response: { answers: { "Continue?": "No" } } }),
       });
       expect(frResponse.status).toBe(200);
       const fd = await setup("fd");
       const memberToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fd.workspaceId, userId: fd.user.id });
-      const fdResponse = await fd.api.request(`/api/issues/${fd.issue.id}/decisions/${fd.request.id}/answer`, {
+      const fdResponse = await fd.api.request(`/api/sessions/${store.getMessage(fd.request.id)!.session_id}/messages`, {
         method: "POST", headers: { Authorization: `Bearer ${memberToken.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "No" }),
+        body: JSON.stringify({ reply_to_id: fd.request.id, body_md: "No" }),
       });
       expect(fdResponse.status).toBe(200);
       expect(fd.row().status).toBe("answered");

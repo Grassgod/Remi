@@ -1,8 +1,9 @@
+import { issueMessagesPath, requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Comment threads and reactions over HTTP, the local attachment file lifecycle,
 // and the Go-style attachment access/delete authz boundaries.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -153,32 +154,32 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     });
     const chatBody = await chat.json();
     expect(chatBody.agent_id).toBe(agent.id);
-    const sent = await app.request(`/api/chat/sessions/${chatBody.id}/messages`, {
+    const sent = await app.request(`/api/sessions/${chatBody.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "Hello original" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Hello original" }, { type: "agent", ref: store.getChatSession(chatBody.id)!.agentId })),
     });
     const sentBody = await sent.json();
-    expect(Object.keys(sentBody).sort()).toEqual(["created_at", "message_id", "queued", "supports_queue", "task_id"]);
-    expect(store.getTask(sentBody.task_id)?.chatSessionId).toBe(chatBody.id);
-    const pending = await app.request(`/api/chat/sessions/${chatBody.id}/pending-task`);
-    expect((await pending.json()).task_id).toBe(sentBody.task_id);
-    const pendingAll = await app.request("/api/chat/pending-tasks");
-    expect((await pendingAll.json()).tasks[0].chat_session_id).toBe(chatBody.id);
-    expect((await app.request(`/api/chat/sessions/${chatBody.id}/read`, { method: "POST" })).status).toBe(204);
+    expect(Object.keys(sentBody).sort()).toEqual(["message", "turn_id", "wake_applied", "wake_reason"]);
+    expect(store.getTask(sentTask(store, sentBody).id)?.chatSessionId).toBe(chatBody.id);
+    const pending = await app.request(`/api/sessions/${chatBody.id}/messages?unread_by=${store.getChatSession(chatBody.id)!.agentId}`);
+    expect((await pending.json()).messages.map((message: any) => message.id)).toContain(sentBody.message.id);
+    const pendingAll = await app.request("/api/turns?status=pending");
+    expect((await pendingAll.json()).turns[0].session_id).toBe(chatBody.id);
+    expect((await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: chatBody.id }) })).status).toBe(200);
 
     const issue = store.createIssue({ title: "Original inbox", createdBy: alice.id });
     store.addIssueSubscriber(issue.id, bob.id);
     store.createIssueComment(issue.id, { authorType: "member", authorId: alice.id, body: "Ping Bob" });
     const camelInbox = await app.request(`/api/inbox?memberId=${encodeURIComponent(bob.id)}`);
-    expect(await camelInbox.json()).toEqual([]);
-    expect((await (await app.request(`/api/inbox/unread-count?memberId=${encodeURIComponent(bob.id)}`)).json()).count).toBe(0);
+    expect((await camelInbox.json()).items).toEqual([]);
+    expect((await (await app.request("/api/inbox"+`?member_id=local`)).json()).unread_count).toBe(0);
     const inbox = await app.request(`/api/inbox?member_id=${encodeURIComponent(bob.id)}`);
     const inboxBody = await inbox.json();
-    expect(inboxBody[0].member_id).toBe(bob.id);
-    expect((await (await app.request(`/api/inbox/unread-count?member_id=${encodeURIComponent(bob.id)}`)).json()).count).toBe(1);
-    expect((await (await app.request(`/api/inbox/mark-all-read?member_id=${encodeURIComponent(bob.id)}`, { method: "POST" })).json()).count).toBe(1);
-    expect((await (await app.request(`/api/inbox/archive-all-read?member_id=${encodeURIComponent(bob.id)}`, { method: "POST" })).json()).count).toBe(1);
+    expect(inboxBody.items[0].to_member_id).toBe(bob.id);
+    expect((await (await app.request("/api/inbox"+`?member_id=${encodeURIComponent(bob.id)}`)).json()).unread_count).toBe(1);
+    expect((await (await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
+    expect((await (await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
     expect((await app.request(`/api/chat/sessions/${chatBody.id}`, { method: "DELETE" })).status).toBe(204);
 
     expect((await app.request(`/api/skills/${skill.id}/files/${fileBody.id}`, { method: "DELETE" })).status).toBe(204);
@@ -206,21 +207,21 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const issueAttachmentBody = await issueAttachment.json();
     expect(issueAttachmentBody.attachment.issueId).toBe(issue.id);
 
-    const root = await app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+    const root = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "Root API comment" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Root API comment" }, { type: "role", ref: "issue_owner" })),
     });
     const rootBody = await root.json();
-    const originalComment = await app.request(`/api/issues/${issue.id}/comments`, {
+    const originalComment = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "Original API comment" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Original API comment" }, { type: "role", ref: "issue_owner" })),
     });
     const originalCommentBody = await originalComment.json();
-    expect(originalComment.status).toBe(201);
-    expect(originalCommentBody.content).toBe("Original API comment");
-    expect(originalCommentBody.issue_id).toBe(issue.id);
+    expect(originalComment.status).toBe(200);
+    expect(originalCommentBody.message.body_md).toBe("Original API comment");
+    expect(originalCommentBody.message.session_id).toBe(store.getOrCreateDefaultIssueSession(issue.id).id);
     expect(originalCommentBody.body).toBeUndefined();
     expect(originalCommentBody.issueId).toBeUndefined();
     expect(originalCommentBody.comment).toBeUndefined();
@@ -231,69 +232,70 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
       uploaderType: "member",
       uploaderId: "local",
     });
-    const reply = await app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+    const reply = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "Reply API comment", parentId: rootBody.comment.id, attachmentIds: [pendingAttachment.id] }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Reply API comment", parentId: rootBody.message.id, attachmentIds: [pendingAttachment.id] }, { type: "role", ref: "issue_owner" })),
     });
     const replyBody = await reply.json();
-    expect(replyBody.comment.parentId).toBe(rootBody.comment.id);
-    expect(replyBody.comment.attachments[0].id).toBe(pendingAttachment.id);
+    expect(replyBody.message.reply_to_id).toBe(rootBody.message.id);
+    expect(replyBody.message.attachments[0].id).toBe(pendingAttachment.id);
 
-    const edited = await app.request(`/api/comments/${replyBody.comment.id}`, {
-      method: "PUT",
+    const edited = await app.request(`/api/messages/${replyBody.message.id}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Edited API reply" }),
+      body: JSON.stringify({ body_md: requestMessageBody(store, { content: "Edited API reply" }).body_md }),
     });
     const editedBody = await edited.json();
-    expect(editedBody.content).toBe("Edited API reply");
+    expect(editedBody.message.body_md).toBe("Edited API reply");
     expect(editedBody.comment).toBeUndefined();
     expect(editedBody.body).toBeUndefined();
-    expect(editedBody.parent_id).toBe(rootBody.comment.id);
+    expect(editedBody.message.reply_to_id).toBe(rootBody.message.id);
     expect(editedBody.parentId).toBeUndefined();
 
-    const invalidCommentCreate = await app.request(`/api/issues/${issue.id}/comments`, {
+    const invalidCommentCreate = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
     expect(invalidCommentCreate.status).toBe(400);
-    expect(await invalidCommentCreate.json()).toEqual({ error: "invalid request body" });
+    expect(await invalidCommentCreate.json()).toEqual({ error: "invalid JSON body" });
 
-    const emptyCommentCreate = await app.request(`/api/issues/${issue.id}/comments`, {
+    const emptyCommentCreate = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "" }),
+      body: JSON.stringify(requestMessageBody(store, { content: "" }, { type: "role", ref: "issue_owner" })),
     });
     expect(emptyCommentCreate.status).toBe(400);
-    expect(await emptyCommentCreate.json()).toEqual({ error: "content is required" });
+    expect(await emptyCommentCreate.json()).toEqual({ error: "message content is required" });
 
-    const resolved = await app.request(`/api/multiremi/comments/${rootBody.comment.id}/resolve`, {
+    const resolved = await app.request(`/api/messages/${rootBody.message.id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actorType: "member", actorId: "local" }),
     });
-    expect((await resolved.json()).comment.resolvedAt).toBeString();
+    expect((await resolved.json()).message.resolved_at).toBeString();
 
-    const unresolved = await app.request(`/api/comments/${rootBody.comment.id}/resolve`, { method: "DELETE" });
+    const unresolved = await app.request(`/api/messages/${rootBody.message.id}/resolve`, { method: "POST" , body: JSON.stringify({ resolved: false }) });
     const unresolvedBody = await unresolved.json();
-    expect(unresolvedBody.resolved_at).toBeNull();
+    expect(unresolvedBody.message.resolved_at).toBeNull();
     expect(unresolvedBody.comment).toBeUndefined();
     expect(unresolvedBody.resolvedAt).toBeUndefined();
 
-    const compatibilityResolved = await app.request(`/api/comments/${rootBody.comment.id}/resolve`, {
+    const compatibilityResolved = await app.request(`/api/messages/${rootBody.message.id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actor_type: "member", actor_id: "local" }),
     });
     const compatibilityResolvedBody = await compatibilityResolved.json();
-    expect(compatibilityResolvedBody.resolved_at).toBeString();
-    expect(compatibilityResolvedBody.resolved_by_type).toBe("member");
+    expect(compatibilityResolvedBody.message.resolved_at).toBeString();
+    expect(compatibilityResolvedBody.message.resolved_by_type).toBe("member");
     expect(compatibilityResolvedBody.resolvedByType).toBeUndefined();
 
-    const invalidReplyResolve = await app.request(`/api/comments/${replyBody.comment.id}/resolve`, { method: "POST" });
-    expect(invalidReplyResolve.status).toBe(400);
-    expect(await invalidReplyResolve.json()).toEqual({ error: "only root comments can be resolved" });
+    const invalidReplyResolve = await app.request(`/api/messages/${replyBody.message.id}/resolve`, { method: "POST" });
+    // #9: resolve applies to a canonical ordinary message, including replies.
+    expect(invalidReplyResolve.status).toBe(200);
+    expect((await invalidReplyResolve.json()).message.resolved_at).toBeString();
 
     const issueReaction = await app.request(`/api/multiremi/issues/${issue.id}/reactions`, {
       method: "POST",
@@ -343,32 +345,32 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     expect(issueAttachments[0].id).toBe(issueAttachmentBody.attachment.id);
     expect(issueAttachments[0].download_url).toBe(`/api/attachments/${issueAttachmentBody.attachment.id}/download`);
 
-    const commentReaction = await app.request(`/api/multiremi/comments/${replyBody.comment.id}/reactions`, {
+    const commentReaction = await app.request(`/api/messages/${replyBody.message.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ emoji: "👀", actorType: "agent", actorId: "agt-api" }),
     });
-    expect((await commentReaction.json()).reaction.emoji).toBe("👀");
-    const originalCommentReaction = await app.request(`/api/comments/${replyBody.comment.id}/reactions`, {
+    expect((await commentReaction.json()).reactions.find((r: any) => r.emoji === "👀").emoji).toBe("👀");
+    const originalCommentReaction = await app.request(`/api/messages/${replyBody.message.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ emoji: "✅", actorType: "member", actorId: "local" }),
     });
     const originalCommentReactionBody = await originalCommentReaction.json();
-    expect(originalCommentReactionBody.emoji).toBe("✅");
+    expect(originalCommentReactionBody.reactions.find((r: any) => r.emoji === "✅").emoji).toBe("✅");
     expect(originalCommentReactionBody.commentId).toBeUndefined();
-    expect(originalCommentReactionBody.comment_id).toBe(replyBody.comment.id);
+    expect(originalCommentReactionBody.reactions.find((r: any) => r.emoji === "✅").commentId).toBe(replyBody.message.id);
     expect(originalCommentReactionBody.workspace_id).toBeUndefined();
     expect(originalCommentReactionBody.actorType).toBeUndefined();
-    expect(originalCommentReactionBody.actor_type).toBe("member");
-    const invalidCommentReaction = await app.request(`/api/comments/${replyBody.comment.id}/reactions`, {
+    expect(originalCommentReactionBody.reactions.find((r: any) => r.emoji === "✅").actorType).toBe("member");
+    const invalidCommentReaction = await app.request(`/api/messages/${replyBody.message.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
     expect(invalidCommentReaction.status).toBe(400);
-    expect(await invalidCommentReaction.json()).toEqual({ error: "invalid request body" });
-    const missingCommentEmoji = await app.request(`/api/comments/${replyBody.comment.id}/reactions`, {
+    expect(await invalidCommentReaction.json()).toEqual({ error: "invalid JSON body" });
+    const missingCommentEmoji = await app.request(`/api/messages/${replyBody.message.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actor_type: "member", actor_id: "local" }),
@@ -380,63 +382,64 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const detailBody = await detail.json();
     expect(detailBody.issue.reactions).toHaveLength(2);
     expect(detailBody.issue.attachments).toHaveLength(1);
-    expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(2);
+    expect(detailBody.comments.find((comment: any) => comment.id === replyBody.message.id).reactions).toHaveLength(2);
 
     const timeline = await app.request(`/api/issues/${issue.id}/timeline`);
     const timelineBody = await timeline.json();
     const timelineIds = timelineBody.map((entry: any) => entry.id);
-    expect(timelineIds).toContain(rootBody.comment.id);
-    expect(timelineIds).toContain(replyBody.comment.id);
-    const replyEntry = timelineBody.find((entry: any) => entry.id === replyBody.comment.id);
+    expect(timelineIds).toContain(rootBody.message.id);
+    expect(timelineIds).toContain(replyBody.message.id);
+    const replyEntry = timelineBody.find((entry: any) => entry.id === replyBody.message.id);
     expect(replyEntry.actorType).toBeUndefined();
     expect(replyEntry.actor_type).toBe("member");
     expect(replyEntry.parentId).toBeUndefined();
-    expect(replyEntry.parent_id).toBe(rootBody.comment.id);
+    expect(replyEntry.parent_id).toBe(rootBody.message.id);
     expect(replyEntry.commentType).toBeUndefined();
     expect(replyEntry.comment_type).toBe("comment");
     expect(replyEntry.attachments[0].id).toBe(pendingAttachment.id);
     expect(replyEntry.attachments[0].commentId).toBeUndefined();
-    expect(replyEntry.attachments[0].comment_id).toBe(replyBody.comment.id);
+    expect(replyEntry.attachments[0].comment_id).toBe(replyBody.message.id);
     expect(replyEntry.attachments[0].downloadUrl).toBeUndefined();
     expect(replyEntry.attachments[0].download_url).toBe(`/api/attachments/${pendingAttachment.id}/download`);
     expect(replyEntry.reactions).toHaveLength(2);
     expect(replyEntry.reactions[0].actorType).toBeUndefined();
     expect(replyEntry.reactions[0].actor_type).toBeDefined();
-    expect(replyEntry.reactions[0].comment_id).toBe(replyBody.comment.id);
+    expect(replyEntry.reactions[0].comment_id).toBe(replyBody.message.id);
     expect(replyEntry.reactions[0].workspace_id).toBeUndefined();
     for (let index = 1; index < timelineBody.length; index++) {
       expect(timelineBody[index - 1].created_at <= timelineBody[index].created_at).toBe(true);
     }
 
-    const compatibilityWrappedTimeline = await app.request(`/api/issues/${issue.id}/timeline?limit=50&around=${encodeURIComponent(rootBody.comment.id)}`);
+    const compatibilityWrappedTimeline = await app.request(`/api/issues/${issue.id}/timeline?limit=50&around=${encodeURIComponent(rootBody.message.id)}`);
     const compatibilityWrappedTimelineBody = await compatibilityWrappedTimeline.json();
     expect(compatibilityWrappedTimelineBody.entries[0].actorType).toBeUndefined();
     expect(compatibilityWrappedTimelineBody.entries[0].actor_type).toBeDefined();
-    expect(compatibilityWrappedTimelineBody.entries[compatibilityWrappedTimelineBody.target_index].id).toBe(rootBody.comment.id);
+    expect(compatibilityWrappedTimelineBody.entries[compatibilityWrappedTimelineBody.target_index].id).toBe(rootBody.message.id);
 
-    const wrappedTimeline = await app.request(`/api/multiremi/issues/${issue.id}/timeline?limit=50&around=${encodeURIComponent(rootBody.comment.id)}`);
+    const wrappedTimeline = await app.request(`/api/multiremi/issues/${issue.id}/timeline?limit=50&around=${encodeURIComponent(rootBody.message.id)}`);
     const wrappedTimelineBody = await wrappedTimeline.json();
     expect(wrappedTimelineBody.next_cursor).toBeNull();
     expect(wrappedTimelineBody.prev_cursor).toBeNull();
     expect(wrappedTimelineBody.has_more_before).toBe(false);
     expect(wrappedTimelineBody.has_more_after).toBe(false);
     expect(wrappedTimelineBody.entries[0].createdAt).toBeDefined();
-    expect(wrappedTimelineBody.entries[wrappedTimelineBody.target_index].id).toBe(rootBody.comment.id);
+    expect(wrappedTimelineBody.entries[wrappedTimelineBody.target_index].id).toBe(rootBody.message.id);
     for (let index = 1; index < wrappedTimelineBody.entries.length; index++) {
       expect(wrappedTimelineBody.entries[index - 1].created_at <= wrappedTimelineBody.entries[index].created_at).toBe(true);
     }
 
     const deleteTarget = store.createIssueComment(issue.id, { body: "Compatibility delete target" });
-    const compatibilityDeleted = await app.request(`/api/comments/${deleteTarget.id}`, { method: "DELETE" });
-    expect(compatibilityDeleted.status).toBe(204);
-    expect(await compatibilityDeleted.text()).toBe("");
-    const missingDelete = await app.request(`/api/comments/${deleteTarget.id}`, { method: "DELETE" });
-    expect(missingDelete.status).toBe(404);
-    expect(await missingDelete.json()).toEqual({ error: "comment not found" });
+    const compatibilityDeleted = await app.request(`/api/messages/${deleteTarget.id}`, { method: "DELETE" });
+    expect(compatibilityDeleted.status).toBe(200);
+    // #7: unified deletion returns the soft-deleted canonical message.
+    expect((await compatibilityDeleted.json()).message.deleted_at).toBeString();
+    const missingDelete = await app.request(`/api/messages/${deleteTarget.id}`, { method: "DELETE" });
+    expect(missingDelete.status).toBe(200); // #7: canonical soft deletion is idempotent.
+    expect((await missingDelete.json()).message.id).toBe(deleteTarget.id);
 
-    const deleted = await app.request(`/api/multiremi/comments/${replyBody.comment.id}`, { method: "DELETE" });
+    const deleted = await app.request(`/api/messages/${replyBody.message.id}`, { method: "DELETE" });
     expect(deleted.status).toBe(200);
-    expect(store.getIssueComment(replyBody.comment.id)).toBeNull();
+    expect(store.getIssueComment(replyBody.message.id)).toBeNull();
   });
 
   it("uploads, downloads, and deletes local attachment files", async () => {
@@ -581,7 +584,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     });
     expect((await app.request(`/api/issues/${issue.id}/attachments?workspace_id=local`, auth(remoteToken.token))).status).toBe(404);
     expect((await app.request(`/api/multiremi/issues/${issue.id}/attachments`, auth(remoteToken.token))).status).toBe(404);
-    expect((await app.request(`/api/multiremi/comments/${comment.id}/attachments`, auth(remoteToken.token))).status).toBe(404);
+    expect((await app.request(`/api/messages/${comment.id}`, auth(remoteToken.token))).status).toBe(404);
     expect((await app.request(`/api/issues/${issue.id}?workspace_id=local`, auth(remoteToken.token))).status).toBe(404);
     // The same-workspace owner still sees them.
     expect((await app.request(`/api/issues/${issue.id}/attachments`, auth(carolToken.token))).status).toBe(200);

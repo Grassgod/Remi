@@ -1,9 +1,10 @@
+import { turnApiPath } from "./unified-test-paths.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -30,7 +31,7 @@ describe("assembled task prompt audit", () => {
     })).toThrow("immutable");
   });
 
-  it("accepts daemon reporting and exposes the exact artifact to authorized UI clients", async () => {
+  it("accepts daemon reporting and exposes canonical input separately from the daemon prompt audit", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({
@@ -50,19 +51,25 @@ describe("assembled task prompt audit", () => {
     expect(reported.ok).toBe(true);
     expect(store.getTaskPrompt(task.id)).toMatchObject({ taskId: task.id, mode: "delta", sha256 });
 
-    const fetched = await app.request(`/api/tasks/${task.id}/prompt`);
+    const fetched = await app.request(turnApiPath(store, task.id, "?input=true"));
     expect(fetched.status).toBe(200);
-    expect(await fetched.json()).toMatchObject({ task_id: task.id, mode: "delta", prompt, sha256 });
+    const input = await fetched.json();
+    expect(input.turn.id).toBe(task.id);
+    expect(input.input.messages[0].body_md).toBe("Do it");
+    expect(store.getTaskPrompt(task.id)).toMatchObject({ taskId: task.id, mode: "delta", prompt, sha256 });
   });
 
-  it("returns 404 before the daemon records a prompt", async () => {
+  it("exposes pending canonical input before a daemon assembles its prompt", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const agent = store.createAgent({ name: "Queued worker", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "Wait" });
-    const response = await app.request(`/api/tasks/${task.id}/prompt`);
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "prompt not recorded" });
+    const response = await app.request(turnApiPath(store, task.id, "?input=true"));
+    expect(response.status).toBe(200);
+    const input = await response.json();
+    expect(input.turn.status).toBe("pending");
+    expect(input.input.messages.map((m: any) => m.body_md)).toEqual(["Wait"]);
+    expect(store.getTaskPrompt(task.id)).toBeNull();
   });
 
   it("keeps sibling results out of bootstrap and delta offers while preserving authorized result reads", async () => {
@@ -120,7 +127,7 @@ describe("assembled task prompt audit", () => {
     const secondClaim = await taskOfferResponse(store, runtime.id);
     expect(secondClaim.status).toBe(200);
     const claimed = (await secondClaim.json()).task;
-    expect(claimed.id).toBe(second.id);
+    expect(claimed.attempt_id).toBe(second.id);
     expect(claimed.session_projection.mode).toBe("delta");
     expect(claimed.issue_session_results).toEqual([]);
     expect(JSON.stringify(claimed)).not.toContain(oldResult.body);

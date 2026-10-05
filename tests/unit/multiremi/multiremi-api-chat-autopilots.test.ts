@@ -1,9 +1,10 @@
+import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Chat session/message routes, autopilot API + public webhook triggering,
 // webhook rate limiting, and scheduler state sync.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -22,24 +23,24 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     expect(created.status).toBe(201);
     const createdBody = await created.json();
 
-    const sent = await app.request(`/api/multiremi/chats/${createdBody.session.id}/messages`, {
+    const sent = await app.request(`/api/sessions/${createdBody.session.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "Hello" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Hello" }, { type: "agent", ref: store.getChatSession(createdBody.session.id)!.agentId })),
     });
-    expect(sent.status).toBe(201);
+    expect(sent.status).toBe(200);
     const sentBody = await sent.json();
-    expect(sentBody.task.chatSessionId).toBe(createdBody.session.id);
+    expect(sentTask(store, sentBody).chatSessionId).toBe(createdBody.session.id);
 
     const detail = await app.request(`/api/multiremi/chats/${createdBody.session.id}`);
     const detailBody = await detail.json();
     expect(detailBody.messages[0].body).toBe("Hello");
 
-    expect(store.claimTask(runtime.id)?.id).toBe(sentBody.task.id);
-    store.startTask(sentBody.task.id);
-    store.completeTask(sentBody.task.id, { output: "Hi there", sessionId: "sess-chat" });
-    const messages = await app.request(`/api/multiremi/chats/${createdBody.session.id}/messages`);
-    expect((await messages.json()).messages.map((message: any) => message.role)).toEqual(["user", "assistant"]);
+    expect(store.claimTask(runtime.id)?.id).toBe(sentTask(store, sentBody).id);
+    store.startTask(sentTask(store, sentBody).id);
+    store.completeTask(sentTask(store, sentBody).id, { output: "Hi there", sessionId: "sess-chat" });
+    const messages = await app.request(`/api/sessions/${createdBody.session.id}/messages`);
+    expect((await messages.json()).messages.map((message: any) => message.sender_type)).toEqual(["member", "agent"]);
   });
 
   it("triggers autopilots through API and webhook endpoints", async () => {

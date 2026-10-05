@@ -370,7 +370,7 @@ function eventLine(
     line.body_summary = [prefix, ...outline].join("\n");
     line.body_folded = true;
     line.body_omitted_chars = event.body.length - prefix.length;
-    line.expand = `remi session log get ${event.sessionId} ${event.seq}`;
+    line.expand = `remi message get ${event.id}`;
   } else {
     line.body = body;
   }

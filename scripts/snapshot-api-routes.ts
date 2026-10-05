@@ -38,7 +38,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { openSqliteDatabase, deserializeSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
@@ -477,6 +477,7 @@ export interface SeedRefs {
   chatSessionId: string;
   chatMessageId: string;
   taskId: string;
+  turnId: string;
   autopilotId: string;
   triggerId: string;
   webhookToken: string;
@@ -907,6 +908,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     chatSessionId: chatSession.id,
     chatMessageId: (chatMessage as any)?.message?.id ?? (chatMessage as any)?.id ?? "msg_snapshot",
     taskId: task.id,
+    turnId: store.getTurnForAttempt(task.id)!.id,
     autopilotId: autopilot.id,
     triggerId: trigger.id,
     webhookToken: (trigger as any).webhookToken ?? (trigger as any).webhook_token ?? "wht_snapshot",
@@ -956,6 +958,8 @@ const ID_BY_COLLECTION: Record<string, keyof SeedRefs> = {
   skills: "skillId",
   squads: "squadId",
   tasks: "taskId",
+  messages: "humanRequestId",
+  turns: "turnId",
   tokens: "tokenId",
   workspaces: "workspaceId",
 };
@@ -1204,6 +1208,27 @@ const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 function flow(name: string, run: Flow): void {
   MUTATION_FLOWS.push({ name, run });
 }
+
+flow("unified-messages-inbox-turns", async (rec, refs) => {
+  const base = `/api/sessions/${refs.issueSessionId}/messages`;
+  const sent = await rec.json("POST", base, { body_md: "Unified snapshot", to: { type: "none" } });
+  const id = sent.body.message.id;
+  await rec.call("GET", `${base}?limit=1`);
+  await rec.call("GET", `/api/messages/${id}`);
+  await rec.json("PATCH", `/api/messages/${id}`, { body_md: "Edited snapshot" });
+  await rec.json("POST", `/api/messages/${id}/resolve`, { resolved: true });
+  await rec.json("POST", `/api/messages/${id}/reactions`, { emoji: "+1" });
+  await rec.call("DELETE", `/api/messages/${id}`);
+  await rec.call("GET", "/api/inbox");
+  await rec.json("POST", "/api/inbox/read", { session_id: refs.issueSessionId });
+  await rec.json("POST", "/api/inbox/read", { all: true });
+  await rec.call("GET", `/api/turns?issue=${refs.issueId}`);
+  await rec.call("GET", `/api/turns/${refs.turnId}?input=true&attempts=true`);
+  await rec.json("POST", `/api/turns/${refs.turnId}/wrap-up`, {});
+  await rec.json("POST", `/api/turns/${refs.turnId}/cancel`, {});
+  await rec.json("POST", `/api/turns/${refs.turnId}/retry`, { cold: true });
+  await rec.call("GET", `/api/turns/${refs.turnId}/trace`);
+});
 
 // -- agents -----------------------------------------------------------------
 flow("agents-compat", async (rec, refs) => {
@@ -1607,12 +1632,13 @@ flow("daemon", async (rec, refs, store) => {
 });
 
 flow("daemon-task-lifecycle", async (rec, refs, store) => {
-  const task = await rec.json("POST", "/api/multiremi/tasks", {
+  await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
     issueId: refs.issueId,
     prompt: "Snapshot lifecycle task",
   });
-  const id = task.body?.id ?? task.body?.task?.id ?? refs.taskId;
+  const id = store.createTask({ agentId: refs.agentId, issueId: refs.issueId,
+    prompt: "Snapshot lifecycle task" }).id;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
     const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
@@ -1638,7 +1664,10 @@ flow("daemon-task-lifecycle", async (rec, refs, store) => {
   await rec.json("POST", `/api/tasks/${id}/human-requests/${secondId}/respond`, { outcome: "approved" });
   const thirdId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Write" } }).id;
   store.expireTaskHumanRequest(thirdId, "timeout");
-  await rec.report("task.complete", { task_id: id, result: "done", summary: "complete" });
+  const turn = store.getTaskWithAgent(id)!;
+  const input = store.getDaemonTurnBridge().offerInput(turn);
+  await rec.report("turn.complete", { turn_id: turn.turn_id, attempt_id: id,
+    input_to_seq: input.input_to_seq, reply: { body_md: "done", message_kind: "final" } });
   await rec.report("task.fail", { task_id: refs.taskId, error: "boom" });
 });
 
@@ -1885,9 +1914,26 @@ export interface SnapshotFile {
 export async function captureApiSnapshot(): Promise<SnapshotFile> {
   const restore = installDeterminism();
   try {
+    let schema: Buffer | undefined;
+    let seedState: { clock: number; uuid: number; prng: number };
+    // Each family gets a fresh seed and still runs idempotent migrations.
+    // Reuse only the empty migrated schema, avoiding repeated full bootstraps.
+    const bootFixture = async () => {
+      resetDeterministicState();
+      const db = schema ? deserializeSqliteDatabase(schema) : openSqliteDatabase(":memory:");
+      const store = new MultiremiStore(db);
+      if (!schema) {
+        schema = db.serialize();
+        seedState = { clock, uuid: uuidCounter, prng: prngState };
+      } else {
+        clock = seedState.clock; uuidCounter = seedState.uuid; prngState = seedState.prng;
+      }
+      const refs = await seedStore(store, db);
+      return { db, store, refs, app: createMultiremiApp({ store, realtimeState: { enabled: true, connections: 0 } }) };
+    };
     // --- route inventory (mechanically enumerated from the Hono route table)
     resetDeterministicState();
-    const inventoryBoot = await buildApp();
+    const inventoryBoot = await bootFixture();
     const routes = snapshotRouteTable(inventoryBoot.app);
     inventoryBoot.db.close();
 
@@ -1904,7 +1950,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
 
     // --- GET sweep: every registered GET route, one shared seeded app -------
     resetDeterministicState();
-    const sweep = await buildApp();
+    const sweep = await bootFixture();
     const sweepRefs = sweep.refs;
     const templates = await sweep.app.request("/api/agent-templates");
     const templateList = (await templates.json()) as Array<{ slug?: string }>;
@@ -1942,7 +1988,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
     // --- mutation flows: fresh seeded store per family ---------------------
     for (const { name, run } of [...MUTATION_FLOWS].sort((a, b) => a.name.localeCompare(b.name))) {
       resetDeterministicState();
-      const boot = await buildApp();
+      const boot = await bootFixture();
       const recorder = new Recorder(boot.app, routes, name, boot.store);
       await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);

@@ -1,48 +1,62 @@
+import { inboxVisibilitySql, type InboxAccess } from './inbox-visibility.js';
 import type { SendMessageInput, UnifiedMessage, MultiremiTurn, MultiremiTurnAttempt } from '@multiremi/contracts/unified-model.js';
+import type { MultiremiWorkspaceMember } from '@multiremi/contracts/types.js';
 import type { StoreContext } from '../context.js';
 import { createCommitEventQueue } from '../context.js';
 import { afterCommit } from '../db/postgres.js';
 import { createId,nowIso } from '@multiremi/ids.js';
-import { getMessage,sendMessageWithinTransaction } from './send-message.js';
+import { getMessage,messageFromRow,sendMessageWithinTransaction } from './send-message.js';
+import { normalizeHumanResponse } from './human-response.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { createReplacementAttemptWithinTransaction } from '../turn-attempts.js';
 import { notifyTurnChanged } from '../turn-execution-records.js';
-import { envelopePriority } from '@multiremi/contracts/inbox.js';
 import { mintQuestionCardToken,hashQuestionCardToken,type QuestionCardCredential } from '../question-card-token.js';
 import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
+import { IssueDecisionError } from '../repos/issues-repo.js';
+
+type InboxQuery = {access?:InboxAccess;limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
+  visibleMessage?:(message:Pick<UnifiedMessage,'id'|'session_id'|'reply_to_id'|'kind'|'task_id'|'metadata'>)=>boolean};
+type MessageVisibility = InboxQuery['visibleMessage'];
 
 export class InboxOperations {
   constructor(private ctx:StoreContext){}
   private transaction<T>(fn:(events:ReturnType<typeof createCommitEventQueue>)=>T):T {
-    const events=createCommitEventQueue();const result=this.ctx.db.transaction(()=>fn(events))();
+    const events=createCommitEventQueue();
+    const write=()=>fn(events);
+    const result=this.ctx.db.inTransaction?write():this.ctx.db.transaction(write)();
     afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return result;
   }
-  listMessages(sessionId:string,input:{from?:number;to?:number;limit?:number;thread?:string;unread_by?:string}={}):UnifiedMessage[]{
+  listMessages(sessionId:string,input:{from?:number;to?:number;limit?:number;thread?:string;unread_by?:string;message_kind?:string}={}):UnifiedMessage[]{
     const params:unknown[]=[sessionId,input.from??0,input.to??Number.MAX_SAFE_INTEGER];
     const extra=input.thread?' AND (id=? OR reply_to_id=?)':'';if(input.thread)params.push(input.thread,input.thread);
-    if(input.unread_by)params.push(input.unread_by);
-    const unread=input.unread_by?` AND seq>COALESCE((SELECT MAX(cursor_seq) FROM multiremi_session_lanes WHERE session_id=m.session_id AND reader_type='agent' AND reader_id=?),0)`:'';
+    if(input.message_kind)params.push(input.message_kind);
+    if(input.unread_by)params.push(input.unread_by,input.unread_by);
+    const scope=this.ctx.db.dialect==='postgres'?"m.metadata::jsonb ->> 'execution_scope'":"json_extract(m.metadata,'$.execution_scope')";
+    const unread=input.unread_by?` AND m.to_agent_id=? AND seq>COALESCE((SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=m.session_id AND reader_type='agent' AND reader_id=? AND execution_scope=COALESCE(${scope},'')),0)`:'';
     params.push(Math.min(Math.max(input.limit??100,1),1000));
-    return this.ctx.db.query(`SELECT id FROM multiremi_conversation_log m WHERE session_id=? AND seq>? AND seq<=?
-      AND kind='message' AND deleted_at IS NULL${extra}${unread} ORDER BY seq LIMIT ?`).all(...params).map(row=>getMessage(this.ctx,row.id)!);
+    return this.ctx.db.query(`SELECT m.* FROM multiremi_conversation_log m WHERE session_id=? AND seq>? AND seq<=?
+      AND kind='message' AND visibility='shown' AND deleted_at IS NULL${extra}${input.message_kind?' AND message_kind=?':''}${unread} ORDER BY seq LIMIT ?`).all(...params).map(messageFromRow);
   }
   editMessage(id:string,input:{body_md:string}):UnifiedMessage {
     return this.transaction(()=>{
       const message=getMessage(this.ctx,id);if(!message||message.deleted_at)throw new Error('Message not found');
       this.lockMessage(message);
-      if(this.ctx.db.query(`SELECT 1 FROM multiremi_turns WHERE session_id=? AND input_to_seq>=? LIMIT 1`).get(message.session_id,message.seq)
-        ||this.ctx.db.query(`SELECT 1 FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent'
-          AND (cursor_seq>=? OR cursor_seq=? AND cursor_offset>0) LIMIT 1`).get(message.session_id,message.seq,message.seq-1))throw new Error('A consumed message cannot be edited');
+      this.assertUnread(message);
       this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id,message.seq,{fields:{body_md:input.body_md}});
       this.ctx.conversationLog().appendWithinTransaction({sessionId:message.session_id,kind:'message_edited',authorType:message.sender_type,authorId:message.sender_id,metadata:{message_id:id}});
       return getMessage(this.ctx,id)!;
     });
   }
+  private assertUnread(message:UnifiedMessage):void {
+      if(this.ctx.db.query(`SELECT 1 FROM multiremi_turns WHERE session_id=? AND input_to_seq>=? LIMIT 1`).get(message.session_id,message.seq)
+        ||this.ctx.db.query(`SELECT 1 FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent'
+          AND (cursor_seq>=? OR cursor_seq=? AND cursor_offset>0) LIMIT 1`).get(message.session_id,message.seq,message.seq-1))throw new Error('A consumed message cannot be edited or deleted');
+  }
   deleteMessage(id:string):UnifiedMessage {
     return this.transaction(events=>{
       const message=getMessage(this.ctx,id);if(!message)throw new Error('Message not found');this.lockMessage(message);
-      if(!message.deleted_at){this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id,message.seq,{fields:{deleted_at:nowIso()}});
+      if(!message.deleted_at){this.assertUnread(message);this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id,message.seq,{fields:{deleted_at:nowIso()}});
         this.ctx.conversationLog().appendWithinTransaction({sessionId:message.session_id,kind:'message_deleted',authorType:message.sender_type,authorId:message.sender_id,metadata:{message_id:id}});}
       const issue=this.ctx.issueSessions().getIssueSession(message.session_id);if(issue)deriveIssueStatusWithinTransaction(this.ctx,issue.issueId,events);
       return getMessage(this.ctx,id)!;
@@ -51,6 +65,8 @@ export class InboxOperations {
   resolveMessage(id:string,actor:{type:string;id:string|null},resolved=true):UnifiedMessage {
     return this.transaction(events=>{
       const message=getMessage(this.ctx,id);if(!message)throw new Error('Message not found');this.lockMessage(message);
+      if(message.message_kind==='decision'||message.metadata.human_request||message.metadata.human_response)
+        throw new IssueDecisionError(409,'Decision and human request messages require an answer through the response state machine');
       this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id,message.seq,{fields:{resolved_at:resolved?nowIso():null,resolved_by_type:resolved?actor.type:null,resolved_by_id:resolved?actor.id:null}});
       const session=this.ctx.issueSessions().getIssueSession(message.session_id);if(session)deriveIssueStatusWithinTransaction(this.ctx,session.issueId,events);
       return getMessage(this.ctx,id)!;
@@ -70,54 +86,169 @@ export class InboxOperations {
     if(!workspace)throw new Error('Conversation not found');this.ctx.lockWorkspaceRuntimeLifecycle(workspace);
     this.ctx.db.run('UPDATE multiremi_conversation_log SET revision=revision WHERE id=?',[message.id]);
   }
-  listMessageInbox(memberId:string,workspaceId:string,input:{limit?:number}={}) {
+  listMessageInbox(memberId:string,workspaceId:string,input:InboxQuery={}) {
     const member=this.ctx.workspaces().getWorkspaceMember(memberId);if(!member||member.workspaceId!==workspaceId||member.archivedAt)throw new Error('Member belongs to another workspace');
-    const rows=this.ctx.db.query(`SELECT m.id FROM multiremi_conversation_log m
+    return this.listReaderMessageInbox('member',memberId,workspaceId,input);
+  }
+  listReaderMessageInbox(type:'member'|'agent',readerId:string,workspaceId:string,input:InboxQuery={}) {
+    const scope=type==='member'?"''":this.ctx.db.dialect==='postgres'?"COALESCE(m.metadata::jsonb ->> 'execution_scope','')":"COALESCE(json_extract(m.metadata,'$.execution_scope'),'')";
+    const json=(key:string)=>this.ctx.db.dialect==='postgres'?`m.metadata::jsonb #>> '{${key.replaceAll('.',',')}}'`:`json_extract(m.metadata,'$.${key}')`;
+    const from=`FROM multiremi_conversation_log m
       JOIN multiremi_conversation_heads h ON h.session_id=m.session_id
-      LEFT JOIN multiremi_session_lanes l ON l.session_id=m.session_id AND l.reader_type='member' AND l.reader_id=? AND l.execution_scope=''
+      LEFT JOIN multiremi_session_lanes l ON l.session_id=m.session_id AND l.reader_type=? AND l.reader_id=? AND l.execution_scope=${scope}
       LEFT JOIN multiremi_issue_sessions s ON s.id=m.session_id LEFT JOIN multiremi_chat_sessions c ON c.id=m.session_id
       LEFT JOIN multiremi_autopilots a ON a.session_id=m.session_id
-      WHERE m.to_member_id=? AND COALESCE(s.workspace_id,c.workspace_id,a.workspace_id,h.workspace_id)=? AND m.kind='message'
-        AND m.seq>COALESCE(l.cursor_seq,0) AND m.deleted_at IS NULL ORDER BY m.created_at DESC,m.id DESC`)
-      .all(memberId,memberId,workspaceId);
-    const items=rows.map(row=>getMessage(this.ctx,row.id)!);
-    const priority=(message:UnifiedMessage)=>envelopePriority({kind:message.message_kind==='decision'?'decision_needed':message.message_kind==='status'?'lifecycle':message.message_kind,
-      wake:message.wake_applied,senderType:message.sender_type,outcome:message.metadata.message_outcome as any,lifecycleEvent:message.metadata.lifecycle_event as string|undefined});
-    return {items:items.slice(0,Math.min(input.limit??100,1000)),unread_count:items.length,attention_count:items.filter(m=>!m.resolved_at&&priority(m)<=2).length};
+      WHERE m.${type==='member'?'to_member_id':'to_agent_id'}=? AND COALESCE(s.workspace_id,c.workspace_id,a.workspace_id,h.workspace_id)=? AND m.kind='message'
+        AND m.seq>COALESCE(l.cursor_seq,0) AND m.visibility='shown' AND m.deleted_at IS NULL`;
+    const params=[type,readerId,readerId,workspaceId];
+    const attention=`CASE WHEN m.resolved_at IS NULL AND m.wake_applied<>'inbox_only' AND (
+      m.message_kind='decision' OR m.message_kind='request' AND m.sender_type='member'
+      OR m.message_kind='status' AND ${json('lifecycle_event')} IN ('task_failed','task_cancelled')
+      OR m.message_kind IN ('report','final') AND ${json('message_outcome')} IN ('failed','blocked','cancelled')) THEN 1 ELSE 0 END`;
+    if (input.access) {
+      const guard=inboxVisibilitySql(this.ctx.db,input.access);
+      const filtered=from+' AND '+guard.where;
+      const binds=[...params,...guard.params];
+      const counts=this.ctx.db.query(`${guard.cte} SELECT COUNT(*) AS unread_count,COALESCE(SUM(${attention}),0) AS attention_count ${filtered}`).get(...binds);
+      const n=Math.min(input.limit??100,1000),cursor=input.cursor;
+      const extra=cursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';
+      const rows=this.ctx.db.query(`${guard.cte} SELECT m.* ${filtered}${extra} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`)
+        .all(...binds,...(cursor?[cursor.created_at,cursor.created_at,cursor.id]:[]),n+1);
+      const page=rows.slice(0,n).map(messageFromRow);
+      return {items:page,unread_count:Number(counts.unread_count),attention_count:Number(counts.attention_count),
+        next_cursor:rows.length>n?{created_at:page.at(-1)!.created_at,id:page.at(-1)!.id}:null};
+    }
+    let unread_count=0,attention_count=0;
+    let countCursor:InboxQuery['cursor'];
+    for(;;){
+      const extra=countCursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';
+      const rows=this.ctx.db.query(`SELECT m.id,m.session_id,m.kind,m.task_id,m.reply_to_id,m.metadata,m.created_at,${attention} AS attention ${from}${extra}
+        ORDER BY m.created_at DESC,m.id DESC LIMIT 1000`).all(...params,...(countCursor?[countCursor.created_at,countCursor.created_at,countCursor.id]:[]));
+      for(const row of rows){
+        if(input.visible&&!input.visible(row.session_id))continue;
+        if(input.visibleMessage&&!input.visibleMessage({...row,metadata:JSON.parse(row.metadata??'{}')}))continue;
+        unread_count++;attention_count+=Number(row.attention);
+      }
+      if(rows.length<1000)break;
+      countCursor=rows.at(-1) as {created_at:string;id:string};
+    }
+    const n=Math.min(input.limit??100,1000),items:UnifiedMessage[]=[];
+    let cursor=input.cursor;
+    for(;;){
+      const extra=cursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';
+      const rows=this.ctx.db.query(`SELECT m.* ${from}${extra} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`)
+        .all(...params,...(cursor?[cursor.created_at,cursor.created_at,cursor.id]:[]),n+1);
+      for(const row of rows){if(input.visible&&!input.visible(row.session_id))continue;const message=messageFromRow(row);
+        if(!input.visibleMessage||input.visibleMessage(message))items.push(message);}
+      if(rows.length<n+1||items.length>n)break;
+      cursor=rows.at(-1) as {created_at:string;id:string};
+    }
+    const page=items.slice(0,n);
+    return {items:page,unread_count,attention_count,next_cursor:items.length>n?{created_at:page.at(-1)!.created_at,id:page.at(-1)!.id}:null};
   }
-  readMessageInbox(memberId:string,sessionId:string,toSeq?:number):number {
+  private visibleReadSeq(type:'member'|'agent',readerId:string,sessionId:string,toSeq:number,visibleMessage:NonNullable<MessageVisibility>,scope?:string,allMessages=false):number {
+    const scopeSql=this.ctx.db.dialect==='postgres'?"COALESCE(metadata::jsonb ->> 'execution_scope','')":"COALESCE(json_extract(metadata,'$.execution_scope'),'')";
+    let upper=toSeq;
+    for(;;){
+      const rows=this.ctx.db.query(`SELECT id,seq,session_id,kind,task_id,reply_to_id,metadata FROM multiremi_conversation_log WHERE session_id=?${allMessages?'':` AND ${type==='member'?'to_member_id':'to_agent_id'}=?`}
+        AND kind='message' AND visibility='shown' AND deleted_at IS NULL AND seq<=?${scope===undefined?'':` AND ${scopeSql}=?`} ORDER BY seq DESC LIMIT 1000`)
+        .all(sessionId,...(allMessages?[]:[readerId]),upper,...(scope===undefined?[]:[scope]));
+      const visible=rows.find(row=>visibleMessage({...row,metadata:JSON.parse(row.metadata??'{}')}));
+      if(visible)return Number(visible.seq);
+      if(rows.length<1000)return 0;
+      upper=Number(rows.at(-1)!.seq)-1;
+    }
+  }
+  readAgentMessageInbox(agentId:string,workspaceId:string,sessionId?:string,toSeq?:number,visible?:(sessionId:string)=>boolean,visibleMessage?:MessageVisibility):number {
+    return this.transaction(()=>{
+      const agent=this.ctx.agents().getAgent(agentId);if(!agent||agent.workspaceId!==workspaceId||agent.archivedAt)throw new Error('Agent belongs to another workspace');
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const json=this.ctx.db.dialect==='postgres'?"m.metadata::jsonb ->> 'execution_scope'":"json_extract(m.metadata,'$.execution_scope')";
+      const sessions=this.ctx.db.query(`SELECT DISTINCT m.session_id,COALESCE(${json},'') AS scope FROM multiremi_conversation_log m
+        JOIN multiremi_conversation_heads h ON h.session_id=m.session_id WHERE m.to_agent_id=? AND h.workspace_id=?${sessionId?' AND m.session_id=?':''}`)
+        .all(agentId,workspaceId,...(sessionId?[sessionId]:[])).filter(row=>!visible||visible(row.session_id));
+      if(sessionId){const head=this.ctx.conversationLog().getConversationLogHead(sessionId)?.headSeq??0;
+        if(toSeq!==undefined&&(!Number.isSafeInteger(toSeq)||toSeq<0||toSeq>head))throw new Error('Inbox read cursor must be within the log');}
+      const readSessions=new Set<string>();
+      for(const row of sessions){const head=this.ctx.conversationLog().getConversationLogHead(row.session_id)?.headSeq??0;
+        const seq=visibleMessage?this.visibleReadSeq('agent',agentId,row.session_id,toSeq??head,visibleMessage,row.scope):toSeq??head,at=nowIso();
+        if(visibleMessage&&!seq)continue;
+        readSessions.add(row.session_id);
+        lockLane(this.ctx,row.session_id,agentId,row.scope);
+        this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,created_at,updated_at)
+          VALUES(?,'agent',?,?,?,?,?) ON CONFLICT(session_id,reader_type,reader_id,execution_scope) DO UPDATE SET
+          cursor_seq=CASE WHEN multiremi_session_lanes.cursor_seq<excluded.cursor_seq THEN excluded.cursor_seq ELSE multiremi_session_lanes.cursor_seq END,
+          cursor_offset=CASE WHEN multiremi_session_lanes.cursor_seq<=excluded.cursor_seq THEN 0 ELSE multiremi_session_lanes.cursor_offset END,updated_at=excluded.updated_at`,[row.session_id,agentId,row.scope,seq,at,at]);}
+      this.ctx.emitWorkspaceEvent({type:sessionId?'inbox:read':'inbox:batch-read',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
+      return sessionId?Number(this.ctx.db.query("SELECT MIN(cursor_seq) AS seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent' AND reader_id=?").get(sessionId,agentId)?.seq??0):readSessions.size;
+    });
+  }
+  readMessageInbox(memberId:string,sessionId:string,toSeq?:number,visibleMessage?:MessageVisibility):number {
     return this.transaction(()=>{
       const member=this.ctx.workspaces().getWorkspaceMember(memberId);if(!member||member.archivedAt)throw new Error('Member not found');
       this.ctx.lockWorkspaceRuntimeLifecycle(member.workspaceId);
-      const session=this.ctx.issueSessions().getIssueSession(sessionId),chat=this.ctx.chat().getChatSession(sessionId),auto=this.ctx.db.query('SELECT workspace_id FROM multiremi_autopilots WHERE session_id=?').get(sessionId);
-      if((session?.workspaceId??chat?.workspaceId??auto?.workspace_id??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id)!==member.workspaceId)throw new Error('Inbox conversation belongs to another workspace');
-      const head=this.ctx.conversationLog().getConversationLogHead(sessionId)?.headSeq??0;
-      if(toSeq!==undefined&&(!Number.isSafeInteger(toSeq)||toSeq<0||toSeq>head))throw new Error('Inbox read cursor must be within the log');
-      const seq=toSeq??head,at=nowIso();
-      this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,created_at,updated_at)
-        VALUES(?,'member',?,'',?,?,?) ON CONFLICT(session_id,reader_type,reader_id,execution_scope)
-        DO UPDATE SET cursor_seq=CASE WHEN multiremi_session_lanes.cursor_seq<excluded.cursor_seq THEN excluded.cursor_seq ELSE multiremi_session_lanes.cursor_seq END,updated_at=excluded.updated_at`,[sessionId,memberId,seq,at,at]);
-      return Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,memberId).cursor_seq);
+      const cursor=this.readMemberConversation(member,sessionId,toSeq,visibleMessage);
+      this.ctx.emitWorkspaceEvent({type:'inbox:read',workspaceId:member.workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
+      return cursor;
     });
   }
-  readAllMessageInbox(memberId:string,workspaceId:string):number {
+  private readMemberConversation(member:MultiremiWorkspaceMember,sessionId:string,toSeq?:number,visibleMessage?:MessageVisibility):number {
+    const session=this.ctx.issueSessions().getIssueSession(sessionId),chat=this.ctx.chat().getChatSession(sessionId),auto=this.ctx.db.query('SELECT workspace_id FROM multiremi_autopilots WHERE session_id=?').get(sessionId);
+    if((session?.workspaceId??chat?.workspaceId??auto?.workspace_id??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id)!==member.workspaceId)throw new Error('Inbox conversation belongs to another workspace');
+    const head=this.ctx.conversationLog().getConversationLogHead(sessionId)?.headSeq??0;
+    if(toSeq!==undefined&&(!Number.isSafeInteger(toSeq)||toSeq<0||toSeq>head))throw new Error('Inbox read cursor must be within the log');
+    const seq=visibleMessage?this.visibleReadSeq('member',member.id,sessionId,toSeq??head,visibleMessage,undefined,!!chat):toSeq??head,at=nowIso();
+    if(visibleMessage&&!seq)return Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,member.id)?.cursor_seq??0);
+    this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,created_at,updated_at)
+      VALUES(?,'member',?,'',?,?,?) ON CONFLICT(session_id,reader_type,reader_id,execution_scope)
+      DO UPDATE SET cursor_seq=CASE WHEN multiremi_session_lanes.cursor_seq<excluded.cursor_seq THEN excluded.cursor_seq ELSE multiremi_session_lanes.cursor_seq END,updated_at=excluded.updated_at`,[sessionId,member.id,seq,at,at]);
+    const cursor=Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,member.id).cursor_seq);
+    if(chat&&(chat.creatorId??'local')===(member.userId??member.id))this.ctx.db.run(`UPDATE multiremi_chat_sessions SET unread_since=NULL WHERE id=? AND NOT EXISTS (
+      SELECT 1 FROM multiremi_conversation_log WHERE session_id=? AND kind='message' AND sender_type<>'member'
+        AND visibility='shown' AND deleted_at IS NULL AND seq>?)`,[sessionId,sessionId,cursor]);
+    return cursor;
+  }
+  readAllMessageInbox(memberId:string,workspaceId:string,visible?:(sessionId:string)=>boolean,visibleMessage?:MessageVisibility):number {
     return this.transaction(()=>{
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       const member=this.ctx.workspaces().getWorkspaceMember(memberId);
       if(!member||member.workspaceId!==workspaceId||member.archivedAt)throw new Error('Member belongs to another workspace');
       const sessions=this.ctx.db.query(`SELECT DISTINCT m.session_id FROM multiremi_conversation_log m
         JOIN multiremi_conversation_heads h ON h.session_id=m.session_id LEFT JOIN multiremi_issue_sessions s ON s.id=m.session_id LEFT JOIN multiremi_chat_sessions c ON c.id=m.session_id
-        LEFT JOIN multiremi_autopilots a ON a.session_id=m.session_id WHERE m.to_member_id=? AND COALESCE(s.workspace_id,c.workspace_id,a.workspace_id,h.workspace_id)=?`).all(memberId,workspaceId);
-      for(const row of sessions)this.readMessageInbox(memberId,row.session_id);return sessions.length;
+        LEFT JOIN multiremi_autopilots a ON a.session_id=m.session_id WHERE m.to_member_id=? AND COALESCE(s.workspace_id,c.workspace_id,a.workspace_id,h.workspace_id)=?`).all(memberId,workspaceId).filter(row=>!visible||visible(row.session_id));
+      let conversationsRead=0;
+      for(const row of sessions){
+        const head=this.ctx.conversationLog().getConversationLogHead(row.session_id)?.headSeq??0;
+        const seq=visibleMessage?this.visibleReadSeq('member',memberId,row.session_id,head,visibleMessage):head;
+        if(visibleMessage&&!seq)continue;
+        this.readMemberConversation(member,row.session_id,seq);conversationsRead++;
+      }
+      this.ctx.emitWorkspaceEvent({type:'inbox:batch-read',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
+      return conversationsRead;
     });
   }
   getTurn(id:string):MultiremiTurn|null {
     const row=this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(id);return row?{...row,holds_workspace:!!row.holds_workspace} as MultiremiTurn:null;
   }
-  listTurns(input:{workspace_id:string;issue_id?:string;session_id?:string;agent_id?:string;limit?:number}):MultiremiTurn[]{
+  listTurns(input:{workspace_id:string;issue_id?:string;session_id?:string;agent_id?:string;status?:string;limit?:number;cursor?:{created_at:string;id:string};visibility?:{userId:string|null;admin:boolean;attemptId?:string}}):MultiremiTurn[]{
     const params:unknown[]=[input.workspace_id],conditions=['workspace_id=?'];
-    for(const key of ['issue_id','session_id','agent_id'] as const)if(input[key]){conditions.push(`${key}=?`);params.push(input[key]);}
-    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT id FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>this.getTurn(row.id)!);
+    for(const key of ['issue_id','session_id','agent_id','status'] as const)if(input[key]){conditions.push(`${key}=?`);params.push(input[key]);}
+    if(input.cursor){conditions.push('(created_at<? OR created_at=? AND id<?)');params.push(input.cursor.created_at,input.cursor.created_at,input.cursor.id);}
+    if (input.visibility) {
+      const { userId, admin, attemptId } = input.visibility;
+      // Authorization belongs before LIMIT. Correlated guard reads stay in SQL
+      // rather than hydrating one Chat and Agent per candidate across PgBridge.
+      conditions.push(`(session_id NOT LIKE 'chat_%' OR EXISTS (SELECT 1 FROM multiremi_chat_sessions c WHERE c.id=multiremi_turns.session_id${attemptId?' AND multiremi_turns.current_attempt_id=?':userId?' AND c.creator_id=?':''}))`);
+      if (attemptId || userId) params.push(attemptId ?? userId);
+      if (userId && !admin) {
+        conditions.push(`(session_id NOT LIKE 'chat_%' OR EXISTS (SELECT 1 FROM multiremi_agents a WHERE a.id=multiremi_turns.agent_id AND (a.visibility<>'private' OR a.owner_id=?)))`);
+        params.push(userId);
+      }
+    }
+    // Lists never transfer historical input bodies through the synchronous PG
+    // bridge. Turn get --input remains the explicit full-input read.
+    const fields = 'id,session_id,seq,agent_id,execution_scope,status,wake_source,wake_seq,trigger_message_id,input_from_seq,input_to_seq,waiting_on_message_id,reply_message_id,wrap_up_requested_at,current_attempt_id,delegation_id,delegated_by_agent_id,delegation_return_turn_id,delegated_from_issue_session_id,delegation_skip_reason,continued_from_turn_id,holds_workspace,priority,requesting_user_name,requesting_user_profile_description,issue_id,workspace_id,created_at,started_at,ended_at,ended_reason';
+    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace} as MultiremiTurn));
   }
   listTurnAttempts(id:string):MultiremiTurnAttempt[]{
     return this.ctx.db.query('SELECT * FROM multiremi_turn_attempts WHERE turn_id=? ORDER BY attempt_no').all(id).map(row=>({...row,
@@ -130,8 +261,20 @@ export class InboxOperations {
   getTurnTrace(id:string){const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
     return {turn_id:id,attempt_id:turn.current_attempt_id,trace:this.ctx.taskTraces().getTaskTrace(turn.current_attempt_id)};}
   getTurnInput(id:string){const turn=this.getTurn(id);if(!turn)throw new Error('Turn not found');
-    return {from_seq:turn.input_from_seq??0,to_seq:turn.input_to_seq??turn.wake_seq,messages:this.listMessages(turn.session_id,{from:turn.input_from_seq??0,to:turn.input_to_seq??turn.wake_seq,limit:1000}),legacy_prompt:turn.legacy_prompt};}
-  cancelTurn(id:string):MultiremiTurn {const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');this.ctx.tasks().cancelTask(turn.current_attempt_id);return this.getTurn(id)!;}
+    const from=turn.input_from_seq??0,to=turn.input_to_seq??turn.wake_seq,messages:UnifiedMessage[]=[];
+    let after=from;
+    for(;;){const page=this.listMessages(turn.session_id,{from:after,to,limit:1000});messages.push(...page);if(page.length<1000)break;after=page.at(-1)!.seq;}
+    return {from_seq:from,to_seq:to,messages,legacy_prompt:turn.legacy_prompt};}
+  cancelTurn(id:string):MultiremiTurn {
+    return this.transaction(()=>{const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
+      if(['completed','failed','cancelled'].includes(turn.status))return turn;
+      this.ctx.lockWorkspaceRuntimeLifecycle(turn.workspace_id);lockLane(this.ctx,turn.session_id,turn.agent_id,turn.execution_scope);
+      const to=turn.input_to_seq??turn.wake_seq;
+      // Cancelling discards this turn's input; it must not ring itself again.
+      this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=CASE WHEN cursor_seq<? THEN ? ELSE cursor_seq END,
+        cursor_offset=CASE WHEN cursor_seq<=? THEN 0 ELSE cursor_offset END WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`,[to,to,to,turn.session_id,turn.agent_id,turn.execution_scope]);
+      this.ctx.tasks().cancelTask(turn.current_attempt_id);return this.getTurn(id)!;});
+  }
   wrapUpTurn(id:string):MultiremiTurn {
     return this.transaction(()=>{const turn=this.getTurn(id);if(!turn)throw new Error('Turn not found');this.ctx.lockWorkspaceRuntimeLifecycle(turn.workspace_id);
       lockLane(this.ctx,turn.session_id,turn.agent_id,turn.execution_scope);
@@ -152,13 +295,45 @@ export class InboxOperations {
       const token=mintQuestionCardToken();const changed=this.ctx.db.run(`UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL`,[hashQuestionCardToken(token),recipient,id]);
       if(!changed.changes)throw new Error('Decision is settled');return token;});
   }
-  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential}) {
+  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string}) {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
       const key=message.metadata.human_request?'human_request':'decision_record';
       const record=(message.metadata[key]??{}) as Record<string,unknown>;
-      if(message.resolved_at||message.deleted_at||!['pending','escalated'].includes(String(record.status??'pending')))throw new Error('Decision is settled');
-      if(!patchDecisionRecord(this.ctx,id,key,{status:key==='human_request'?'responded':'answered',responded_at:nowIso()},String(record.status??'pending'),input.credential))throw new Error('Decision is settled');
+      const status=String(record.status??'pending');
+      const issueDecision=!message.metadata.human_request && (typeof record.source_issue_id==='string' || typeof message.metadata.source_issue_id==='string');
+      // Explicit Issue decisions retain the domain's deliberate member revision
+      // behavior. Card callbacks and other settled requests remain single-shot.
+      const memberRevision=issueDecision && status==='answered' && input.sender.type==='member' && !input.credential;
+      if(message.deleted_at || (!memberRevision && (message.resolved_at || !['pending','escalated'].includes(status))))throw new Error('Decision is settled');
+      // Domain decisions keep their response projections and lifecycle hooks,
+      // while their sole authority and reply still live on message rows.
+      if(message.metadata.human_request || issueDecision) {
+        const before=this.ctx.conversationLog().getConversationLogHead(message.session_id)?.headSeq??0;
+        if(message.metadata.human_request) {
+          if(input.sender.type!=='member')throw new Error('Decision requires a member answer');
+          const request=this.ctx.tasks().getTaskHumanRequest(id);
+          const task=request?this.ctx.tasks().getTask(request.taskId):null;
+          if(!task || ['completed','failed','cancelled'].includes(task.status))throw new Error('Decision source turn is settled');
+          const response=normalizeHumanResponse(request!,input.response??{answer:input.body_md});
+          this.ctx.tasks().respondTaskHumanRequest(id,{response,respondedBy:input.sender.id,cardCredential:input.credential});
+        } else {
+          const session=this.ctx.issueSessions().getIssueSession(message.session_id)!;
+          if(input.credential&&!this.ctx.feishuBot().getFeishuIssueDecisionCardContext(session.workspaceId,id)) throw new Error('Decision card context not found');
+          if(input.sender.type!=='member'&&input.sender.type!=='agent')throw new Error('Decision requires its recipient');
+          const source=input.source_turn_id?this.getTurn(input.source_turn_id):null;
+          this.ctx.issues().answerIssueDecision(session.issueId,id,{answer:input.body_md,
+            reason:String(input.response?.reason??'Answered through the message API'),overturn:String(input.response?.overturn??'')},
+            {type:input.sender.type,id:input.sender.id!,taskId:source?.current_attempt_id??null},{cardCredential:input.credential});
+        }
+        const reply=this.listMessages(message.session_id,{from:before,limit:1000}).find(m=>m.reply_to_id===id&&m.sender_id===input.sender.id);
+        if(!reply)throw new Error('Decision reply was not recorded');
+        return {message:reply,wake_applied:reply.wake_applied,wake_reason:reply.wake_reason,
+          ...(typeof reply.metadata.delivery_turn_id==='string'?{turn_id:reply.metadata.delivery_turn_id}:{})};
+      }
+      if(input.sender.type==='member'?message.to_member_id!==input.sender.id:input.sender.type!=='agent'||message.to_agent_id!==input.sender.id)throw new Error('Decision requires its recipient');
+      if(!patchDecisionRecord(this.ctx,id,key,{status:'answered',answer:input.body_md,responded_at:nowIso()},undefined,input.credential))throw new Error('Decision is settled');
       return sendMessageWithinTransaction(this.ctx,{session_id:message.session_id,sender:input.sender,to:message.sender_type==='agent'&&message.sender_id?{type:'agent',ref:message.sender_id}:{type:'none'},
-        body_md:input.body_md,message_kind:'reply',wake_requested:'now',reply_to_id:id},events);});
+        body_md:input.body_md,message_kind:'reply',wake_requested:'now',reply_to_id:id,source_turn_id:input.source_turn_id,
+        metadata:input.response?{human_response:input.response}:undefined},events);});
   }
 }

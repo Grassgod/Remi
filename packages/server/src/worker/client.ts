@@ -39,6 +39,7 @@ import type {
   MultiremiFeishuBotDaemonPayload,
   MultiremiFeishuBotOutboundDelivery,
   MultiremiTaskMessage,
+  MultiremiTaskHumanRequest,
   FeishuBotTaskSnapshot,
   FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
@@ -647,9 +648,9 @@ export class MultiremiDaemonClient {
     });
   }
 
-  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
+  getFeishuIssueDecision(decisionId: string): Promise<MultiremiIssueDecision | null> {
     return this.get<{ decision?: MultiremiIssueDecision | null }>(
-      `/api/daemon/issues/${encodeURIComponent(issueId)}/decisions/${encodeURIComponent(decisionId)}`,
+      `/api/daemon/messages/${encodeURIComponent(decisionId)}`,
     ).then(resp => resp.decision ?? null);
   }
 
@@ -659,12 +660,11 @@ export class MultiremiDaemonClient {
    * anyone it cannot resolve, so a request body can never name its own answerer.
    */
   answerFeishuIssueDecision(
-    issueId: string,
     decisionId: string,
     input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
     return this.post<{ decision: MultiremiIssueDecision }>(
-      `/api/daemon/issues/${encodeURIComponent(issueId)}/decisions/${encodeURIComponent(decisionId)}/answer`,
+      `/api/daemon/messages/${encodeURIComponent(decisionId)}/answer`,
       { answer: input.answer, operator_open_id: input.operatorOpenId, token: input.token },
     ).then(resp => resp.decision);
   }
@@ -1098,6 +1098,30 @@ export class MultiremiDaemonClient {
       startedAt: response.started_at ?? null,
       completedAt: response.completed_at ?? null,
     };
+  }
+
+  async respondTaskHumanRequest(
+    requestId: string,
+    response: Record<string, unknown>,
+    credential?: { token: string; operatorOpenId: string },
+  ): Promise<MultiremiTaskHumanRequest> {
+    const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
+      `/api/daemon/messages/${encodeURIComponent(requestId)}/answer`,
+      { response, token: credential?.token, operator_open_id: credential?.operatorOpenId },
+    );
+    return result.request;
+  }
+
+  getMessageHumanRequest(messageId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return this.get<{ request?: MultiremiTaskHumanRequest | null }>(`/api/daemon/messages/${encodeURIComponent(messageId)}`)
+      .then(result => result.request ?? null);
+  }
+
+  prepareTaskHumanRequestCard(requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+    return this.post<{ card: Record<string, unknown> }>(
+      `/api/daemon/messages/${encodeURIComponent(requestId)}/card`,
+      { recipient_open_id: recipientOpenId },
+    ).then(result => result.card);
   }
 
   async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {

@@ -27,6 +27,7 @@ export interface MultiremiRequestAuth {
 declare module "hono" {
   interface ContextVariableMap {
     multiremiAuth: MultiremiRequestAuth;
+    multiremiMemberMemo: Map<string, MultiremiWorkspaceMember | null>;
   }
 }
 
@@ -196,7 +197,10 @@ export function currentWorkspaceMember(
   store: MultiremiStore,
   workspaceId: string,
 ): MultiremiWorkspaceMember | null {
-  return store.findWorkspaceMemberForUser(currentRequestUserId(c), workspaceId);
+  let memo=c.get("multiremiMemberMemo");
+  if(!memo){memo=new Map();c.set("multiremiMemberMemo",memo);}
+  if(!memo.has(workspaceId)) memo.set(workspaceId,store.findWorkspaceMemberForUser(currentRequestUserId(c),workspaceId));
+  return memo.get(workspaceId)!;
 }
 
 export function parseOptionalInt(value: string | undefined): number | undefined {

@@ -32,6 +32,8 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
   const attemptNo=Number(db.query("SELECT COALESCE(MAX(attempt_no),0)+1 AS next_no FROM multiremi_turn_attempts WHERE turn_id=?").get(turnId).next_no);
   db.run(`UPDATE multiremi_turn_attempts SET status=?,failure_reason=?,ended_at=COALESCE(ended_at,?),updated_at=? WHERE id=?`,
     [input.previousStatus,input.reason,now,now,previous.id]);
+  db.run("UPDATE multiremi_access_tokens SET revoked_at=? WHERE type='task' AND task_id=? AND revoked_at IS NULL",
+    [now,previous.id]);
   const carry=["runtime_id","provider","session_id","work_dir","plugin_snapshot","codex_profile","claude_profile",
     "execution_fingerprint","execution_model","execution_thinking_level","fallback_switched","switch_reason",
     "projection_degrade_level"];
@@ -76,6 +78,9 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
     delegation_id:row.delegation_id??null,delegated_by_agent_id:row.delegated_by_agent_id??null,
     turn_id:row.id,current_attempt_id:row.current_attempt_id,legacy_prompt:row.legacy_prompt,
   };
-  const body=String(row.legacy_prompt??'');const rendered=renderMarkdown(body);
+  // A Chat card represents the assistant outcome. Its old request text is
+  // already a separate human message and must not become assistant history.
+  const body = entry.session_id.startsWith('chat_') ? String(reply?.body_md ?? '') : String(row.legacy_prompt ?? '');
+  const rendered=renderMarkdown(body);
   return {...entry,visibility:entry.session_id.startsWith("chat_") && !["completed","failed","cancelled"].includes(row.status) ? "hidden" : entry.visibility,task_id:row.current_attempt_id,body_md:body,body_html:rendered.html,render_version:rendered.render_version,metadata};
 }

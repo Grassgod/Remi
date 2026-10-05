@@ -81,6 +81,8 @@ export type AppendConversationLogInput = {
   authorType: string;
   messageKind?: import("@multiremi/contracts/unified-model.js").MessageKind;
   messageHeader?: import("@multiremi/contracts/unified-model.js").MessageHeader;
+  /** The canonical writer publishes once after routing and sidecars are complete. */
+  deferEmit?: boolean;
   /** Atomic completion stages a message before its product metadata is published. */
   visibility?: ConversationLogVisibility;
   authorId?: string | null;
@@ -107,6 +109,7 @@ export type AppendConversationLogInput = {
 };
 
 export type UpdateConversationLogInput = {
+  deferEmit?: boolean;
   /** Patch fields to write. Metadata, when present, replaces the stored value. */
   fields: ConversationLogPatch["fields"];
   /** Stored `updated_at`; defaults to now. */
@@ -252,6 +255,22 @@ export class ConversationLogRepo {
     });
   }
 
+  /** Reserve insertion order, then publish the final committed row once. */
+  publishMessageWithinTransaction(sessionId: string, seq: number, existing: boolean): void {
+    afterCommit(this.ctx.db, () => {
+      const entry = this.getEntryWithinTransaction(sessionId, seq);
+      if (!entry) return;
+      const payload = existing ? toPatch(seq, entry.revision, {
+        metadata: entry.metadata, body_md: entry.body_md, body_html: entry.body_html,
+        render_version: entry.render_version,
+      }, entry.updated_at) : entry;
+      for (const listener of [...this.listeners]) {
+        try { listener.onEntry(sessionId, payload); }
+        catch { /* Observers cannot roll back an already committed write. */ }
+      }
+    });
+  }
+
   /** The seq `head` row occupies; also the anchor when no anchor is requested. */
   static readonly HEAD_SEQ = 0;
 
@@ -363,7 +382,7 @@ export class ConversationLogRepo {
       const result=sendMessageWithinTransaction(this.ctx,{id:input.id,session_id:input.sessionId,
         sender:{type:type as 'agent'|'member'|'platform'|'timer',id:member?.id??input.authorId??null},source_turn_id:source?.turn_id??null,
         to:{type:'none'},message_kind:input.messageKind??(input.kind==='delegation_report'?'report':input.parentId?'reply':type==='member'?'request':'status'),
-        wake_requested:'inbox_only',body_md:input.bodyMd??'',reply_to_id:input.parentId,metadata:input.metadata},events);
+        wake_requested:'inbox_only',body_md:input.bodyMd??'',reply_to_id:input.parentId,metadata:input.metadata,visibility:input.visibility},events);
       afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return this.getEntryById(result.message.id)!;
     }
     if (input.kind==='turn' && input.taskId) {
@@ -455,7 +474,7 @@ export class ConversationLogRepo {
     // this append, so only the explicit-seq path (mirror, backfill) bumps here.
     if (input.seq != null && input.kind !== "head") this.touchSessionWithinTransaction(input.sessionId, now);
     const entry = this.getEntryWithinTransaction(input.sessionId, seq)!;
-    this.emit(input.sessionId, entry);
+    if (!input.deferEmit) this.emit(input.sessionId, entry);
     return entry;
   }
 
@@ -599,7 +618,7 @@ export class ConversationLogRepo {
     );
     const entry = this.getEntryWithinTransaction(sessionId, seq);
     if (!entry) return null;
-    this.emit(sessionId, toPatch(seq, revision, fields, now));
+    if (!input.deferEmit) this.emit(sessionId, toPatch(seq, revision, fields, now));
     return entry;
   }
 

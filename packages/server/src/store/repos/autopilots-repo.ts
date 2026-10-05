@@ -216,7 +216,7 @@ export class AutopilotsRepo {
     const autoSession=autopilotSessionId(autopilotId),events=createCommitEventQueue();
     const request=sendMessageWithinTransaction(this.ctx,{session_id:issueSessionId??autoSession,sender:{type:'timer',id:autopilotId},to:{type:'agent',ref:agentId},
       message_kind:'request',wake_requested:'next_turn',body_md:prompt,execution_scope:issueSessionId?'':`auto:${this.ctx.db.query('SELECT id FROM multiremi_autopilot_runs WHERE turn_id=?').get(turnId)?.id??turnId}`},events);
-    if(issueSessionId)sendMessageWithinTransaction(this.ctx,{session_id:autoSession,sender:{type:'timer',id:autopilotId},to:{type:'none'},message_kind:'status',wake_requested:'inbox_only',body_md:'Execution in Issue conversation',metadata:{turn_id:turnId,session_id:issueSessionId}},events);
+    if(issueSessionId)sendMessageWithinTransaction(this.ctx,{session_id:autoSession,sender:{type:'timer',id:autopilotId},to:{type:'none'},message_kind:'request',wake_requested:'inbox_only',body_md:prompt,metadata:{turn_id:turnId,session_id:issueSessionId}},events);
     afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return request.message.seq;
   }
   private bindAutomationInputWithinTransaction(attemptId:string,requestSeq:number):void {

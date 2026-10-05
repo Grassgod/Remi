@@ -27,7 +27,7 @@ export function resolveRequestWorkspaceId(
     return workspace?.id ?? c.json({ error: "workspace not found" }, 404);
   }
   const token = currentAccessToken(c);
-  if (token && store.getUserRoleInWorkspace(token.userId, token.workspaceId) !== null) {
+  if (token && (token.type === "task" && token.workspaceId || store.getUserRoleInWorkspace(token.userId, token.workspaceId) !== null)) {
     return token.workspaceId;
   }
   const userId = token?.userId ?? authenticatedRequestUserId(c);

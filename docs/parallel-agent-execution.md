@@ -7,24 +7,11 @@
 - Each independent delegation has its own execution scope, derived from the
   existing delegation ID. Different delegations can run together, including
   multiple delegations to the same Agent. Retries keep their delegation scope.
-- A rich mention continues the delegation that teammate already owns in the
-  Session. It reuses that delegation's scope, provider session, cursor and
-  runtime affinity, so an established teammate receives a delta instead of a
-  cold bootstrap; a teammate that has never been delegated to, or whose lane
-  was reset, still starts cold. The server resolves the target from the
-  delegator, Agent, Issue and Session — never from prose.
-- Continued Tasks in one execution scope are serialized, so mentioning a
-  teammate that is still working queues behind it instead of running beside it.
-  Queued rich mentions may coalesce only with ordinary mention-created work; an
-  explicit continuation is marked by `continued_from_task_id` and is never a
-  coalescing candidate for an independent mention.
-- Independent work needs an independent lane. `remi task create` starts a new
-  scope that can run in parallel with the teammate's current conversation, and
-  `remi task continue <task-id> --prompt <request>` reaches a specific earlier
-  lane instead of the most recent one. If the prior provider session or
-  execution fingerprint is no longer resumable, the existing lane reset path
-  cold-bootstraps only that scope and records a `session_agent_lane_reset` Issue
-  activity with the recovery reason.
+- Directed messages use `remi message send <conversation> --to <agent> --kind request`.
+  The running turn receives immediate messages; pending messages merge into one
+  pending turn per lane. Provider context, cursor and scope belong to that lane.
+  Use a separate conversation for independent work and `remi turn get <turn> --input`
+  to inspect the input range. Retries create attempts inside the same turn.
 - Issue-free one-shot tasks (including Wiki builds) are independent. Private
   Chat turns remain serialized. Existing Agent and Runtime capacity limits,
   project device routing, permissions and workspace affinity still apply.

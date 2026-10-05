@@ -47,7 +47,7 @@ import { createLogger } from "@shared/logger.js";
 import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/config/background-jobs.js";
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
-import { hashQuestionCardToken, mintQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
@@ -331,17 +331,20 @@ export class FeishuBotRepo {
   isTaskIssueCreationRestricted(taskId: string): boolean {
     return Boolean(this.ctx.db.query(
       `WITH RECURSIVE lineage AS (
-         SELECT id, parent_task_id, chat_session_id FROM multiremi_turn_execution_records WHERE id = ?
+         SELECT t.id, t.workspace_id, t.session_id AS chat_session_id FROM multiremi_turns t
+         JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id = ?
          UNION
-         SELECT p.id, p.parent_task_id, p.chat_session_id FROM multiremi_turn_execution_records p
-         JOIN lineage child ON p.id = child.parent_task_id
+         SELECT p.id, p.workspace_id, p.session_id AS chat_session_id FROM multiremi_turns p
+         JOIN multiremi_conversation_log request ON request.task_id=p.id
+         JOIN lineage child ON child.workspace_id=p.workspace_id
+           AND (${this.ctx.db.dialect === 'postgres' ? "request.metadata::jsonb->>'delivery_turn_id'" : "json_extract(request.metadata,'$.delivery_turn_id')"})=child.id
        )
        SELECT 1 AS restricted FROM multiremi_feishu_bot_deliveries d
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
        JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id
        LEFT JOIN multiremi_feishu_bot_senders s ON s.id = d.sender_id
        WHERE c.sender_access_policy = 'allowlist' AND d.sender_recorded = 1
-         AND (d.task_id IN (SELECT id FROM lineage)
+         AND (d.task_id IN (SELECT a.id FROM multiremi_turn_attempts a JOIN lineage l ON l.id=a.turn_id)
            OR b.chat_session_id IN (SELECT chat_session_id FROM lineage))
          AND (s.id IS NULL OR s.allowed = 0)
        LIMIT 1`,
@@ -766,13 +769,6 @@ export class FeishuBotRepo {
         const error = chatAttachmentValidationError(input.filename, Number(input.sizeBytes));
         if (error) throw new Error(error);
       }
-      const config = this.getConfig(task.workspaceId);
-      const binding = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_chat_bindings
-        WHERE chat_session_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 1`)
-        .get(session.id, session.workspaceId) as Row | null;
-      if (binding && (!config?.enabled || binding.app_id !== config.appId)) {
-        throw new Error("Feishu bot is unavailable for this Chat");
-      }
       // Policy extension point: evaluate future workspace Chat delivery policy
       // before creating either the assistant message or outbound rows.
       const message = this.ctx.chat().appendChatMessageWithinTransaction({ chatSessionId: session.id,
@@ -780,6 +776,26 @@ export class FeishuBotRepo {
       const attachments = inputs.map(input => this.ctx.issues().createAttachment({ ...input,
         workspaceId: session.workspaceId, chatSessionId: session.id, chatMessageId: message.id,
         uploaderType: "agent", uploaderId: task.agentId }));
+      const deliveryIds = this.registerChatAttachmentDeliveriesWithinTransaction(taskId, message.id, attachments, body);
+      return { message, attachments, delivery_ids: deliveryIds };
+    })();
+    return result;
+  }
+
+  /** Register files on the already committed-to-write canonical message. */
+  registerChatAttachmentDeliveriesWithinTransaction(taskId: string, messageId: string,
+    attachments: MultiremiAttachment[], body: string): string[] {
+    if (!this.ctx.db.inTransaction) throw new Error('Chat attachment outbox requires a transaction');
+    const task = this.ctx.tasks().getTask(taskId);
+    const session = task?.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
+    if (!task || !session || task.workspaceId !== session.workspaceId) throw new Error('current task is not a Chat task');
+      const config = this.getConfig(task.workspaceId);
+      const binding = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_chat_bindings
+        WHERE chat_session_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(session.id, session.workspaceId) as Row | null;
+      if (binding && (!config?.enabled || binding.app_id !== config.appId)) {
+        throw new Error("Feishu bot is unavailable for this Chat");
+      }
       const deliveryIds: string[] = [];
       if (binding) {
         if (!binding.chat_id) throw new Error("Feishu Chat has no destination");
@@ -799,11 +815,9 @@ export class FeishuBotRepo {
           bindingId: String(binding.id), chatId: String(binding.chat_id), threadId: cleanOptionalString(binding.thread_id),
           replyToMessageId: cleanOptionalString(binding.reply_to_message_id), deliveries };
         if (this.canWriteOutbound()) this.writeAttachmentDeliveriesWithinTransaction(task.workspaceId, operation);
-        else this.deferOutboundOperation(task.workspaceId, message.id, operation);
+        else this.deferOutboundOperation(task.workspaceId, messageId, operation);
       }
-      return { message, attachments, delivery_ids: deliveryIds };
-    })();
-    return result;
+      return deliveryIds;
   }
 
   /**
@@ -1004,14 +1018,12 @@ export class FeishuBotRepo {
       }
 
       const now = nowIso();
-      const messageId = createId("msg");
-      this.ctx.chat().appendChatMessageWithinTransaction({
-        id: messageId,
-        chatSessionId,
-        taskId: task.id,
-        role: "user",
-        body: text,
-        createdAt: now,
+      // Creating a canonical turn already writes its incoming request. Reuse
+      // that message for transport and sidecars instead of duplicating it.
+      const trigger = !steered ? this.ctx.db.query('SELECT t.trigger_message_id FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?').get(task.id)?.trigger_message_id : null;
+      const messageId = trigger ?? createId("msg");
+      if(!trigger) this.ctx.chat().appendChatMessageWithinTransaction({
+        id: messageId, chatSessionId, taskId: task.id, role: "user", body: text, createdAt: now,
       });
       for (const attachmentId of attachmentIds) {
         this.ctx.db.run(`UPDATE multiremi_attachments SET chat_session_id = ?, chat_message_id = ?
@@ -1570,15 +1582,9 @@ export class FeishuBotRepo {
     id: string,
     recipient: string | null,
   ): string {
-    const token = mintQuestionCardToken();
     const status = table === "multiremi_message_decision_records" ? "escalated" : "pending";
-    const updated = this.ctx.db.run(
-      `UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL
-       WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL AND id IN(SELECT id FROM ${table} WHERE status=?)`,
-      [hashQuestionCardToken(token), recipient, id, status],
-    );
-    if (updated.changes !== 1) throw new Error("question card is no longer pending");
-    return token;
+    if (!this.ctx.db.query(`SELECT id FROM ${table} WHERE id=? AND status=?`).get(id, status)) throw new Error("question card is no longer pending");
+    return this.ctx.inbox().issueMessageCardToken(id, recipient);
   }
 
   private rotatedQuestionCard(row: Row, recipientOpenId: string | null): Record<string, unknown> | null {
@@ -1757,9 +1763,9 @@ export class FeishuBotRepo {
    * Rewrite a decision's card in place once it leaves `escalated` (MUL-412).
    *
    * Called from inside the answer/withdraw transaction, so the patch row and
-   * the answer commit together. One patch per decision: the card only needs the
-   * first terminal state, and a card click that races a web answer must not
-   * produce two rewrites.
+   * the answer commit together. Each answer revision gets one patch; a replay
+   * of the same state cannot enqueue another. Chain revisions so an older
+   * in-flight patch cannot overwrite a newer member answer.
    */
   enqueueIssueDecisionCardPatchWithinTransaction(
     decision: MultiremiIssueDecision,
@@ -1769,10 +1775,16 @@ export class FeishuBotRepo {
     if (!current) return;
     decision = current;
     if (decision.status !== "answered" && decision.status !== "withdrawn") return;
-    if (this.ctx.db.query(
-      `SELECT 1 AS present FROM multiremi_feishu_bot_outbound_deliveries
-       WHERE kind = 'decision_card_patch' AND decision_id = ? LIMIT 1`,
-    ).get(decision.id)) return;
+    const revisionKey = `decision_state:${String(decision.history.length).padStart(10, "0")}`;
+    const patchId = `fbo_${decision.id}_${String(decision.history.length).padStart(10, "0")}`;
+    const previousPatch = this.ctx.db.query(
+      `SELECT id, unit_key FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE kind = 'decision_card_patch' AND decision_id = ?
+       ORDER BY unit_key DESC, created_at DESC, id DESC LIMIT 1`,
+    ).get(decision.id) as Row | null;
+    // Older outbox rows have no revision key. Keep their first-terminal-state
+    // dedupe, but allow a documented member revision (history length > 1).
+    if (previousPatch && (String(previousPatch.id) === patchId || decision.history.length <= 1)) return;
     const row = this.ctx.db.query(
       `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
               o.external_message_id, o.decision_id, o.degraded
@@ -1798,10 +1810,12 @@ export class FeishuBotRepo {
       `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
          reply_to_message_id, body, status, available_at, created_at, updated_at,
-         kind, decision_id, decision_issue_id, target_message_id
-       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, 'decision_card_patch', ?, ?, ?)`,
+         kind, decision_id, decision_issue_id, target_message_id,
+         unit_key, previous_delivery_id, cascade_failure
+       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, 'decision_card_patch', ?, ?, ?, ?, ?, 0)
+       ON CONFLICT (id) DO NOTHING`,
       [
-        createId("fbo"),
+        patchId,
         String(row.workspace_id),
         String(row.binding_id),
         String(row.chat_id),
@@ -1814,6 +1828,8 @@ export class FeishuBotRepo {
         decision.id,
         decision.issueId,
         messageId,
+        revisionKey,
+        previousPatch ? String(previousPatch.id) : null,
       ],
     );
   }
@@ -2870,6 +2886,7 @@ export class FeishuBotRepo {
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       // Read candidates before taking write locks. Each row is revalidated and
       // claimed by CAS below, so concurrent pollers can share this snapshot.
       const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
@@ -3272,11 +3289,10 @@ export class FeishuBotRepo {
         const action = card ? questionCardAction(card) : null;
         const recipient = cleanOptionalString(input.interactionOpenId);
         if (action && recipient && !input.degraded) {
-          const table = row.decision_id ? "multiremi_message_decision_records" : "multiremi_message_question_records";
           this.ctx.db.run(
             `UPDATE multiremi_conversation_log SET card_token_recipient=COALESCE(card_token_recipient,?)
              WHERE id=? AND card_token_hash=? AND card_token_consumed_at IS NULL`,
-            [recipient, String(action.r), hashQuestionCardToken(String(action.t))],
+            [recipient, String(action.message_id), hashQuestionCardToken(String(action.t))],
           );
         }
         // A degrade the host decided (a `group_owner` lookup that came back

@@ -704,7 +704,8 @@ export class IssuesRepo {
       const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(target.id);
       const task=actor.type==='agent'&&actor.taskId?this.ctx.tasks().getTask(actor.taskId):null;
       const turn=task?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(task.id):null;
-      const member=this.ctx.workspaces().listWorkspaceMembers(target.workspaceId).find(m=>m.role==='owner'&&!m.archivedAt);
+      const audience = this.decisionMemberRecipients(target);
+      const member=audience.length?this.ctx.workspaces().getWorkspaceMember(audience[0]!):null;
       if(status==='escalated'&&!member)throw new IssueDecisionError(400,'No active member can decide');
       sendMessageWithinTransaction(this.ctx,{id,session_id:session.id,sender:{type:actor.type,id:actor.id},source_turn_id:turn?.turn_id??null,
         to:status==='escalated'?{type:'member',ref:member!.id}:{type:'agent',ref:owner!.id},
@@ -745,7 +746,7 @@ export class IssuesRepo {
     if (actor.type === "agent" && (!reason || !overturn)) throw new IssueDecisionError(400, "agent answers require reason and overturn instructions");
     const events = createCommitEventQueue();
     const changes: ChildStatusChangeCollector = [];
-    const updated = this.ctx.db.transaction(() => {
+    const write = () => {
       const parent = this.getIssue(issueId);
       if (!parent) throw new IssueDecisionError(404, "decision not found");
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
@@ -831,9 +832,12 @@ export class IssuesRepo {
       // realtime event is queued rather than emitted mid-transaction.
       this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(answered, events);
       return answered;
-    })();
-    this.ctx.tasks().runCollectedChildStatusChanges(changes);
-    this.ctx.emitCommitEvents(events);
+    };
+    const updated = this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
+    afterCommit(this.ctx.db, () => {
+      this.ctx.tasks().runCollectedChildStatusChanges(changes);
+      this.ctx.emitCommitEvents(events);
+    });
     return updated;
   }
 
@@ -901,6 +905,20 @@ export class IssuesRepo {
   }
 
   private notifyDecisionRequested(parent: MultiremiIssue, decision: MultiremiIssueDecision, events: CommitEventQueue): void {
+    for (const memberId of this.decisionMemberRecipients(parent)) {
+      if(this.ctx.inbox().getMessage(decision.id)?.to_member_id===memberId)continue;
+      const item = this.ctx.createInboxItem({
+        issueId: parent.id, memberId, type: "decision_requested", severity: "action",
+        title: `${parent.key}: ${decision.title}`, body: decision.body,
+        actorType: "system", details: { decision_id: decision.id, kind: decision.kind },
+      });
+      if (item) events.workspace.push({
+        type: "inbox:new", workspaceId: parent.workspaceId, actorType: "system", payload: { item },
+      });
+    }
+  }
+
+  private decisionMemberRecipients(parent: MultiremiIssue): string[] {
     const recipients = new Set<string>();
     // Only members that actually resolve in this workspace count as an
     // audience: an unresolvable `owner_id`, a member of another workspace or an
@@ -921,17 +939,7 @@ export class IssuesRepo {
     if (recipients.size === 0) {
       for (const memberId of this.decisionFallbackRecipients(parent)) recipients.add(memberId);
     }
-    for (const memberId of recipients) {
-      if(this.ctx.inbox().getMessage(decision.id)?.to_member_id===memberId)continue;
-      const item = this.ctx.createInboxItem({
-        issueId: parent.id, memberId, type: "decision_requested", severity: "action",
-        title: `${parent.key}: ${decision.title}`, body: decision.body,
-        actorType: "system", details: { decision_id: decision.id, kind: decision.kind },
-      });
-      if (item) events.workspace.push({
-        type: "inbox:new", workspaceId: parent.workspaceId, actorType: "system", payload: { item },
-      });
-    }
+    return [...recipients];
   }
 
   /**
@@ -2809,6 +2817,9 @@ export class IssuesRepo {
       ],
     );
     if (moving) {
+      // Canonical conversations follow the Issue's authority when it moves.
+      this.ctx.db.run("UPDATE multiremi_issue_sessions SET workspace_id=? WHERE issue_id=?",[nextWorkspaceId,id]);
+      this.ctx.db.run("UPDATE multiremi_conversation_heads SET workspace_id=? WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[nextWorkspaceId,id]);
       const foreignLabels = this.listLabelsForExistingIssue(id).filter(label => label.workspaceId !== nextWorkspaceId);
       for (const label of foreignLabels) {
         this.ctx.db.run("DELETE FROM multiremi_issue_to_labels WHERE issue_id = ? AND label_id = ?", [id, label.id]);
@@ -3339,6 +3350,10 @@ export class IssuesRepo {
       if (outcome && !parent.assigneeId) {
         this.notifyParentSubscribersOfChildOutcome(parent, issue, outcome, deferredEvents,
           this.getIssueComment(delivered.message.id)!);
+      } else if (outcome && !this.parentNotificationAgent(parent) && parent.assigneeType !== 'member') {
+        this.recordChildDoneParentSkipped(parent, this.getIssueComment(delivered.message.id)!,
+          parent.assigneeType === 'squad' ? 'squad_leader_unavailable' : 'agent_unavailable',
+          { outcome }, deferredEvents);
       }
     }
     if (parent.status === "done" || parent.status === "cancelled") {
@@ -3696,6 +3711,7 @@ export class IssuesRepo {
           workspaceId: current.workspaceId,
           prompt: current.title,
           parentTaskId,
+          assignmentAuthorType: "system",
         }, nested, deferredEvents);
         deferredEvents.enqueuedTasks.push(task);
         this.ctx.appendIssueActivity(dependent.id, {
@@ -4820,7 +4836,7 @@ export class IssuesRepo {
       "New comment",
       body,
       authorType,
-      input.authorId ?? null,
+      comment.authorId,
       mentionedMemberIds,
       { comment_id: comment.id, issue_session_id: issueSessionId },
     );
@@ -5106,7 +5122,8 @@ export class IssuesRepo {
         prompt: assigneeCommentPrompt(comment),
         dependencyForce: {
           source: "comment",
-          actorMemberId: comment.authorId ?? "local",
+          actorMemberId: this.ctx.workspaces().getWorkspaceMember(comment.authorId ?? "")?.userId
+            ?? comment.authorId ?? "local",
           commentId: comment.id,
         },
       }, deferredEvents, childStatusChanges);
@@ -5156,6 +5173,8 @@ export class IssuesRepo {
   } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
+    const workspaceId = this.getIssue(current.issueId)?.workspaceId;
+    if (workspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     const body = (input.body ?? input.content ?? "").trim();
     if (!body) throw new Error("Comment body is required");
     const now = nowIso();
@@ -5210,6 +5229,8 @@ export class IssuesRepo {
   private deleteIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): { issueId: string; commentIds: string[]; dispatchIntentId: string } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
+    const workspaceId = this.getIssue(current.issueId)?.workspaceId;
+    if (workspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     const ids = this.collectCommentTreeIds(id);
     const deletedComments = ids
       .map((commentId) => this.ctx.getRawIssueComment(commentId))
@@ -5272,6 +5293,8 @@ export class IssuesRepo {
   private resolveIssueCommentWithinTransaction(id: string, input: { actorType?: string; actorId?: string | null }, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
+    const workspaceId = this.getIssue(current.issueId)?.workspaceId;
+    if (workspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     if (current.parentId) throw new Error("Only root comments can be resolved");
     if (current.resolvedAt) return this.getIssueComment(id)!;
     const now = nowIso();
@@ -5317,6 +5340,8 @@ export class IssuesRepo {
   private unresolveIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
+    const workspaceId = this.getIssue(current.issueId)?.workspaceId;
+    if (workspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     if (current.parentId) throw new Error("Only root comments can be resolved");
     if (!current.resolvedAt) return this.getIssueComment(id)!;
     const now = nowIso();
@@ -6244,6 +6269,27 @@ export class IssuesRepo {
     return grouped;
   }
 
+  /** Canonical messages use either Issue or Chat attachment sidecars. */
+  listAttachmentsForMessages(messageIds: string[]): Map<string, MultiremiAttachment[]> {
+    const grouped = new Map<string, MultiremiAttachment[]>();
+    const ids = [...new Set(messageIds.filter(Boolean))];
+    if (!ids.length) return grouped;
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(`SELECT * FROM multiremi_attachments
+      WHERE comment_id IN (${placeholders}) OR chat_message_id IN (${placeholders})
+      ORDER BY created_at ASC`).all(...ids, ...ids) as Row[];
+    const selected = new Set(ids);
+    for (const attachment of rows.map(toAttachment)) {
+      for (const id of new Set([attachment.commentId, attachment.chatMessageId])) {
+        if (!id || !selected.has(id)) continue;
+        const list = grouped.get(id) ?? [];
+        list.push(attachment);
+        grouped.set(id, list);
+      }
+    }
+    return grouped;
+  }
+
   listAttachmentsForChatMessage(chatMessageId: string): MultiremiAttachment[] {
     if (!this.ctx.chat().getChatMessage(chatMessageId)) throw new Error(`Chat message not found: ${chatMessageId}`);
     const rows = this.ctx.db.query(
@@ -6311,11 +6357,12 @@ export class IssuesRepo {
     const placeholders = attachmentIds.map(() => "?").join(", ");
     this.ctx.db.run(
       `UPDATE multiremi_attachments
-       SET chat_message_id = ?
-       WHERE chat_session_id = ?
+       SET chat_message_id = ?, chat_session_id = ?
+       WHERE (chat_session_id = ? OR chat_session_id IS NULL)
+         AND issue_id IS NULL AND comment_id IS NULL
          AND chat_message_id IS NULL
          AND id IN (${placeholders})`,
-      [chatMessageId, chatSessionId, ...attachmentIds],
+      [chatMessageId, chatSessionId, chatSessionId, ...attachmentIds],
     );
   }
 

@@ -291,9 +291,9 @@ async function main(): Promise<void> {
     };
     const cases = [
       {
-        label: "GET /api/chat/pending-tasks",
-        path: "/api/chat/pending-tasks",
-        entries: (body: unknown) => (body as { tasks: unknown[] }).tasks.length,
+        label: "GET /api/turns?status=pending",
+        path: "/api/turns?status=pending",
+        entries: (body: unknown) => (body as { turns: unknown[] }).turns.length,
       },
       {
         // The untyped fallback (MUL-473 rework): a `usr_` reference is not

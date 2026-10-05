@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -43,13 +43,13 @@ describe("chat workspace request context", () => {
         expect(listed.status).toBe(200);
         const list = await listed.json();
         expect((list.sessions ?? list).map((item: { id: string }) => item.id)).toEqual([session.id]);
-        const sent = await app.request(`${route}/${session.id}/messages`, {
-          method: "POST", headers, body: JSON.stringify({ content: "Hello" }),
+        const sent = await app.request(`/api/sessions/${session.id}/messages`, {
+          method: "POST", headers, body: JSON.stringify({ body_md: "Hello", to: { type: "agent", ref: agent.id } }),
         });
-        expect(sent.status).toBe(201);
-        const pending = await app.request("/api/chat/pending-tasks", { headers: selected });
+        expect(sent.status).toBe(200);
+        const pending = await app.request("/api/turns?status=pending", { headers: selected });
         expect(pending.status).toBe(200);
-        expect((await pending.json()).tasks.map((item: { chat_session_id: string }) => item.chat_session_id)).toEqual([session.id]);
+        expect((await pending.json()).turns.map((item: { session_id: string }) => item.session_id)).toEqual([session.id]);
       });
     }
 
@@ -62,7 +62,7 @@ describe("chat workspace request context", () => {
         { ...headers, Authorization: "Bearer root-secret", "X-Workspace-Slug": "missing" },
       ];
       for (const context of contexts) {
-        for (const path of [route, "/api/chat/pending-tasks"]) {
+        for (const path of [route, "/api/turns?status=pending"]) {
           const response = await app.request(path, { headers: context });
           expect(response.status).toBe(404);
           expect(await response.json()).toEqual({ error: "workspace not found" });
@@ -130,7 +130,7 @@ describe("chat workspace request context", () => {
       for (const credential of [taskToken, pat, daemon]) {
         const auth = { ...headers, Authorization: `Bearer ${credential.token}` };
         for (const context of contexts) {
-          for (const path of [route, "/api/chat/pending-tasks", `${route}/${foreignSession.id}`]) {
+          for (const path of [route, "/api/turns?status=pending", `${route}/${foreignSession.id}`]) {
             const response = await app.request(path, { headers: { ...auth, ...context } });
             expect([403, 404]).toContain(response.status);
           }

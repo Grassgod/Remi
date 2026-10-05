@@ -102,10 +102,10 @@ const capture = async (stream: ReadableStream<Uint8Array>) => {
   for await (const chunk of stream) logs += decoder.decode(chunk);
 };
 try {
-  const write = await fetch(`${upstream}/api/issues/${fixture.longIssueId}/comments`, { method: "POST", headers,
-    body: JSON.stringify({ content: xss, issue_session_id: fixture.longDefaultSessionId, body_html: '<script>window.__xss=10</script>' }) });
+  const write = await fetch(`${upstream}/api/sessions/${fixture.longDefaultSessionId}/messages`, { method: "POST", headers,
+    body: JSON.stringify({ body_md: xss, body_html: '<script>window.__xss=10</script>' }) });
   check("XSS API write accepted markdown", write.ok);
-  const written = await write.json() as { id: string };
+  const { message: written } = await write.json() as { message: { id: string } };
   check("XSS API response has comment id", typeof written.id === "string");
   const writtenRow = await fetch(`${upstream}/api/sessions/${fixture.longDefaultSessionId}/log?before=30`, { headers })
     .then(response => response.json()) as { entries: Array<{ id: string; body_html: string | null; kind: string; resolved_at: string | null; resolved_by_type: string | null }> };
@@ -124,8 +124,8 @@ try {
   check("XSS API sanitized rendered body", typeof html === "string" && !/<script[\s>]|\son\w+=|javascript:/i.test(html));
   check("XSS write and backfill use identical renderer", writeHtml === html);
   const forgedHtml = '<script>window.__xss=10</script>';
-  const commentUpdate = await fetch(`${upstream}/api/comments/${written.id}`, { method: "PUT", headers,
-    body: JSON.stringify({ body: xss, body_html: forgedHtml }) });
+  const commentUpdate = await fetch(`${upstream}/api/messages/${written.id}`, { method: "PATCH", headers,
+    body: JSON.stringify({ body_md: xss, body_html: forgedHtml }) });
   check("comment update ignores client body_html", commentUpdate.ok);
   const issueUpdate = await fetch(`${upstream}/api/issues/${fixture.longIssueId}`, { method: "PATCH", headers,
     body: JSON.stringify({ body_html: forgedHtml }) });
@@ -342,10 +342,10 @@ try {
     await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.longIssueId}`);
     await ready(page);
     const body = "MUL-444 realtime Issue comment";
-    const response = await fetch(`${upstream}/api/issues/${fixture.longIssueId}/comments`, { method: "POST", headers,
-      body: JSON.stringify({ content: body, issue_session_id: fixture.longDefaultSessionId }) });
-    check("realtime Issue comment uses the real API", response.status === 201, { status: response.status });
-    const comment = await response.json() as { id: string };
+    const response = await fetch(`${upstream}/api/sessions/${fixture.longDefaultSessionId}/messages`, { method: "POST", headers,
+      body: JSON.stringify({ body_md: body }) });
+    check("realtime Issue comment uses the real API", response.status === 200, { status: response.status });
+    const { message: comment } = await response.json() as { message: { id: string } };
     const appeared = await page.locator(`[data-perf-key="${comment.id}"]`).waitFor({ timeout: 2_000 })
       .then(() => true, () => false);
     check("open Issue page receives the comment within 2 seconds without reload", appeared

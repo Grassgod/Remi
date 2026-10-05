@@ -50,6 +50,7 @@ export interface BrowserStreamHandlerDeps {
   auth: StreamAuthReader;
   /** The kind this socket accepts; the other one answers `wrong_endpoint`. */
   endpoint: BrowserStreamEndpoint;
+  projectLogFrames?: (client: MultiremiWebSocketClient, sessionId: string, frames: readonly HubFrame[]) => Promise<HubFrame[]>;
 }
 
 interface ActiveStreamSubscription {
@@ -224,17 +225,40 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       // empty and takes the same path.
       let ackSent = false;
       let alive = true;
+      let delivery = Promise.resolve();
+      let projectionBytes = 0;
       const buffered: Array<() => void> = [];
-      const emit = (deliver: () => void) => {
+      const emit = (deliver: () => void | Promise<void>) => {
         if (!alive) return;
-        if (ackSent) deliver();
-        else buffered.push(deliver);
+        const ordered = () => {
+          if (parsed.stream !== "log" || !deps.projectLogFrames) { void deliver(); return; }
+          delivery = delivery.then(async () => { if (alive) await deliver(); }).catch(() => {
+            if (!alive) return;
+            active.get(key)?.unsubscribe();
+            active.delete(key);
+            sendError(client, parsed.stream, parsed.id, "unavailable");
+          });
+        };
+        if (ackSent) ordered();
+        else buffered.push(ordered);
       };
       const sink: HubSubscriberSink = {
-        getBufferedAmount: () => client.getBufferedAmount?.() ?? 0,
+        getBufferedAmount: () => (client.getBufferedAmount?.() ?? 0) + projectionBytes,
         send: (batch) => {
           if (batch.length === 0) return;
-          emit(() => sendFrame(client, "stream.data", { stream: parsed.stream, id: parsed.id, frames: batch }));
+          const bytes = parsed.stream === "log" && deps.projectLogFrames ? new TextEncoder().encode(JSON.stringify(batch)).byteLength : 0;
+          projectionBytes += bytes;
+          emit(async () => {
+            try {
+              const frames = parsed.stream === "log" && deps.projectLogFrames
+                ? await deps.projectLogFrames(client, parsed.id, batch) : batch;
+              if (alive && frames.length) sendFrame(client, "stream.data", { stream: parsed.stream, id: parsed.id, frames });
+            } finally {
+              projectionBytes -= bytes;
+              // A queued read counts as backpressure until its frames reach the socket.
+              if (bytes && alive) subscription.notifyDrain?.();
+            }
+          });
         },
         gap: (from, to) => emit(() => sendStreamGap(client, parsed.stream, parsed.id, from, to)),
       };

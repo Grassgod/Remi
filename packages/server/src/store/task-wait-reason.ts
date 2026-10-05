@@ -82,7 +82,7 @@ export function deviceRoutingRepair(state: DeviceRoutingState, machineName: stri
 }
 
 function chatResendSteps(chatId: string, taskId: string): string {
-  return `由能查看该 Chat 的用户运行 remi chat message list ${chatId} --output json，找到 task_id 为 ${taskId} 且 role 为 user 的消息；若本页没有，用上一页的 next_cursor JSON 作为 --cursor '<next_cursor JSON>' 继续翻到更早的消息；把 content 字段正文原样存成文件，再运行 remi chat message create ${chatId} --content-file <文件> 重发（两步可以由不同的人执行；附件需重新上传）`;
+  return `由能查看该 Chat 的用户运行 remi turn get ${taskId} --input --output json，读取本轮输入；用 remi message get <消息 ID> 读取完整 body_md，原样存成文件，再运行 remi message send ${chatId} --content-file <文件> 重发（两步可以由不同的人执行；附件需重新上传）`;
 }
 
 function rebindRemedy(input: {
@@ -95,7 +95,7 @@ function rebindRemedy(input: {
     return `直接改绑会取消这条已冻结的任务；由 Agent 所有者或工作区 owner/admin 先运行 ${command}，再${chatResendSteps(input.chatSessionId, input.taskId)}；由 ${input.targetName} 领取新任务`;
   }
   const redispatch = input.taskId
-    ? `remi task redispatch ${input.taskId} --reason '恢复已冻结任务并保留原请求' --yes`
+    ? `remi turn retry ${input.taskId} --cold --reason '恢复已冻结任务并保留原请求' --yes`
     : null;
   return redispatch
     ? `直接改绑会取消这条已冻结的任务；先运行 ${redispatch}，再运行 ${command}，由 ${input.targetName} 领取替代任务`
@@ -178,7 +178,7 @@ export function placementWaitReason(input: {
   const listed = input.constraints.join("；");
   let remedy: string;
   const redispatch = input.redispatchTaskId
-    ? `remi task redispatch ${input.redispatchTaskId} --reason '恢复已冻结任务并保留原请求' --yes`
+    ? `remi turn retry ${input.redispatchTaskId} --cold --reason '恢复已冻结任务并保留原请求' --yes`
     : null;
   const anchor = anchoredRemedy({ ...input, taskId: input.redispatchTaskId });
   if (input.workspaceRuntimeMissing) {

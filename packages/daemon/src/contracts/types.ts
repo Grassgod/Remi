@@ -278,7 +278,7 @@ export interface AgentTaskRepo {
  * structurally assignable.
  */
 export interface AgentTask {
-  turn_id?: string;
+  turn_id?: string | null;
   attempt_id?: string;
   input_from_seq?: number;
   input_to_seq?: number;
