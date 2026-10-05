@@ -57,7 +57,8 @@ function issueSamples(db: SqlDatabase, issues: Row[]): Row[] {
     ...issue,
     turns: pages(db, `SELECT t.id,t.agent_id,t.status,t.wake_source,t.session_id,t.trigger_message_id,
       (SELECT COUNT(*) FROM multiremi_turn_attempts a WHERE a.turn_id=t.id) AS attempts
-      FROM multiremi_turns t WHERE t.issue_id=? ORDER BY t.created_at DESC,t.seq DESC,t.id DESC`, [issue.id]),
+      FROM multiremi_turns t WHERE t.issue_id=? ORDER BY t.created_at DESC,t.seq DESC,t.id DESC`, [issue.id])
+      .map(turn => ({ ...turn, attempts: Number(turn.attempts) })),
     decisions: pages(db, `SELECT m.id,m.sender_type,m.sender_id,m.resolved_at,
       CASE WHEN EXISTS(SELECT 1 FROM multiremi_conversation_log r WHERE r.reply_to_id=m.id AND r.message_kind='reply' AND r.deleted_at IS NULL) THEN 1 ELSE 0 END AS answered
       FROM multiremi_conversation_log m JOIN multiremi_issue_sessions s ON s.id=m.session_id

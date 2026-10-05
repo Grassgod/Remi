@@ -10,7 +10,7 @@ Remi-CC 将以下具体内容提交给贺华杰，批准后把评论 ID 保存�
 
 - 副本来源、快照时间、脱敏范围、备份校验值；源副本必须尚未应用 `20261004_unified_message_turn_lane`，不能用已迁移的草稿库代替。
 - 候选完整 SHA、API 镜像 digest 和 OCI revision；旧版完整 SHA、可恢复的旧 API 镜像 digest；PG 服务端主版本和匹配的工具镜像 digest。镜像在执行前由负责人准备并加载，脚本不拉取镜像、不构建或发版。
-- 209 上全新演练目录、所需磁盘空间（源备份、工作副本、回滚备份、两个 api-home 和报告）、时间预算及操作者 Remi-CC。目录不位于生产数据卷或部署目录内。
+- 209 上全新演练目录、所需磁盘空间（源备份、工作副本、回滚备份、两个 api-home 和报告）、时间预算及操作者 Remi-CC 的宿主 UID/GID。执行必须使用非 root 账号；目录不位于生产数据卷或部署目录内。
 - 副本四项预检均为 0 的证据。若原快照有 awaiting_human、未消费 steer、running 回填组或 running/dispatched task，脚本拒绝；先申请新的、正常 drain 后取得的副本，不删行、不改状态来造绿。
 - 需抽样的 Issue 和读进度类型、负责人、缺失覆盖如何补充。没有部分消费记录时明确记为“真实副本无此样本”，不能写成通过。
 
@@ -38,6 +38,8 @@ bash scripts/rehearse-unified-model-copy.sh \
 --execute --operator Remi-CC --approval-ref <approval-comment-id>
 ```
 
+脚本在任何 Docker 操作及工作目录创建前拒绝宿主 UID 0；不要用 sudo 执行。非 root 操作者须已获准访问本地 Docker socket，并将其 UID/GID 纳入审批材料。旧版与候选 job 均固定使用执行开始时读取的该 UID/GID，写入 `authorization.txt`，新目录和解包文件也归该账号所有。
+
 脚本固定使用 `unix:///var/run/docker.sock`，忽略远程 Docker context；若 209 的本地 Docker 入口不同，停下交给负责人核对，不替换成远程入口。每次执行新建带随机后缀的内部网络、PG 容器和空数据卷；不发布端口、不加入生产网络、不挂载生产目录或 Docker socket 到容器。PG 的 trust 认证只用于该隔离网络和新建的副本容器。候选 job 非 root、只读镜像、丢弃全部 capabilities，只挂载本次新目录。没有对生产对象执行任何修改命令。
 
 ## 脚本执行顺序与产物
@@ -53,7 +55,7 @@ bash scripts/rehearse-unified-model-copy.sh \
 
 | 产物 | 用途 |
 |---|---|
-| `authorization.txt` | 操作者、批准引用、两版 SHA、PG 主版本 |
+| `authorization.txt` | 操作者及宿主 UID/GID、批准引用、两版 SHA、PG 主版本 |
 | `docker-resources.txt` | 本次新建对象 ID/名称，中断后只按这些对象清理 |
 | `rollback.pgdump`、`rollback-api-home.tar.gz`、恢复清单和校验文件 | 工作副本的回滚点及恢复验证 |
 | `durations-ms.tsv` | 源副本恢复、旧代码启动、副本备份、候选容器、回滚数据库和 home 恢复、旧版重启分别耗时 |

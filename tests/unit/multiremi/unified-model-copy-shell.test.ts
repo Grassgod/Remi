@@ -19,6 +19,15 @@ function fixture() {
   const sums = spawnSync("sha256sum", ["platform.pgdump", "api-home.tar.gz"], { cwd: backup, encoding: "utf8" });
   expect(sums.status).toBe(0);
   writeFileSync(join(backup, "SHA256SUMS"), sums.stdout);
+  // Model host identity alongside Docker so root test runners cannot execute
+  // a real privileged rehearsal, while the job UID/GID gate remains covered.
+  writeFileSync(join(bin, "id"), `#!/usr/bin/env bash
+case "$1" in
+  -u) printf '%s\\n' "\${COPY_OPERATOR_UID:-1000}";;
+  -g) printf '1000\\n';;
+  *) exit 2;;
+esac
+`, { mode: 0o755 });
   // Stub every Docker call. These tests cannot reach any Docker daemon.
   writeFileSync(join(bin, "docker"), `#!/usr/bin/env python3
 import os,sys,json
@@ -72,12 +81,25 @@ test.skipIf(process.platform === "win32")("candidate failure still restores and 
   expect(calls.find(a => a[0] === 'network' && a[1] === 'create')).toContain('--internal');
   const candidate = calls.find(a => a.includes('scripts/rehearse-unified-model-copy.ts'))!;
   expect(candidate).toContain('--read-only');
+  expect(candidate[candidate.indexOf('--user') + 1]).toBe('1000:1000');
   expect(candidate).toContain('ALL');
   expect(candidate).not.toContain('-p');
   expect(calls.filter(a => a.includes('pg_restore') && a.includes('--exit-on-error')).length).toBe(2);
   expect(calls.filter(a => a.includes('-e')).length).toBe(2); // old startup before + after rollback
   expect(calls.slice(-3)).toEqual([['rm', '-f', 'new-pg-id'], ['volume', 'rm', 'new-volume-name'], ['network', 'rm', 'new-network-id']]);
   const evidence = join(f.dir, 'new-run/evidence');
+  expect(readFileSync(join(evidence, 'authorization.txt'), 'utf8')).toContain('operator_uid=1000\noperator_gid=1000');
   expect(readFileSync(join(evidence, 'pre-cutover-data.sha256'), 'utf8')).toBe(readFileSync(join(evidence, 'old-restart-data.sha256'), 'utf8'));
   expect(readFileSync(join(evidence, 'durations-ms.tsv'), 'utf8')).toContain('rollback-restore-db');
+});
+
+test.skipIf(process.platform === "win32")("root operator is refused before Docker or work directory creation even with approval", () => {
+  const f = fixture();
+  const result = spawnSync("bash", [...f.args, "--execute", "--operator", "Remi-CC", "--approval-ref", "synthetic-approval"], {
+    env: { ...f.env, COPY_OPERATOR_UID: "0" }, encoding: "utf8",
+  });
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("non-root host operator UID");
+  expect(existsSync(f.calls)).toBe(false);
+  expect(existsSync(join(f.dir, "new-run"))).toBe(false);
 });

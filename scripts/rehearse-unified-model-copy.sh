@@ -10,7 +10,7 @@ Usage: rehearse-unified-model-copy.sh
   --old-image IMAGE@sha256:DIGEST --old-sha FULL_SHA
   [--execute --operator Remi-CC --approval-ref APPROVAL_COMMENT]
 Default: print the plan only, with no Docker/database operations.
-Execute only after 贺华杰 approval, by Remi-CC. Input is an existing verified
+Execute only after 贺华杰 approval, by Remi-CC with a non-root host UID. Input is an existing verified
 copy backup (platform.pgdump, api-home.tar.gz, SHA256SUMS). No production URLs,
 env files, mounts, Compose projects, ports, bots, daemons or traffic are used.
 USAGE
@@ -46,6 +46,9 @@ if (( ! execute )); then
   exit 0
 fi
 [[ "$operator" == 'Remi-CC' && -n "$approval_ref" ]] || { echo 'Execution requires Remi-CC and the recorded 贺华杰 approval reference' >&2; exit 2; }
+operator_uid=$(id -u)
+operator_gid=$(id -g)
+[[ "$operator_uid" != 0 ]] || { echo 'Execution requires a non-root host operator UID' >&2; exit 2; }
 [[ -d "$backup_dir" && ! -e "$work_dir" && ! -L "$work_dir" ]] || { echo 'Copy backup must exist; work directory must be new' >&2; exit 2; }
 for file in platform.pgdump api-home.tar.gz SHA256SUMS; do
   [[ -s "$backup_dir/$file" && ! -L "$backup_dir/$file" ]] || { echo 'Missing or symlinked copy backup file' >&2; exit 2; }
@@ -69,7 +72,7 @@ fi
 mkdir "$work_dir"
 work_dir=$(cd "$work_dir" && pwd -P)
 mkdir "$work_dir/api-home" "$work_dir/evidence" "$work_dir/scratch"
-printf '%s\n' "operator=$operator" "approval_ref=$approval_ref" "candidate_sha=$candidate_sha" "old_sha=$old_sha" "pg_major=$pg_major" > "$work_dir/evidence/authorization.txt"
+printf '%s\n' "operator=$operator" "operator_uid=$operator_uid" "operator_gid=$operator_gid" "approval_ref=$approval_ref" "candidate_sha=$candidate_sha" "old_sha=$old_sha" "pg_major=$pg_major" > "$work_dir/evidence/authorization.txt"
 tar --no-same-owner --no-same-permissions -xzf "$backup_dir/api-home.tar.gz" -C "$work_dir/api-home"
 run_id="mul493-copy-$(date -u +%Y%m%d%H%M%S)-$$-$RANDOM"
 network='' volume='' pg_container=''
@@ -117,7 +120,7 @@ restore_copy() {
 copy_url='postgresql://mul493_rehearsal@mul493-copy-postgres:5432/mul493_rehearsal'
 job() {
   local image="$1"; shift
-  docker_local run --rm --network "$network" --user "$(id -u):$(id -g)" \
+  docker_local run --rm --network "$network" --user "$operator_uid:$operator_gid" \
     --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp \
     --mount "type=bind,source=$work_dir/api-home,target=/srv/multiremi" \
     --mount "type=bind,source=$work_dir/evidence,target=/evidence" \

@@ -1,10 +1,15 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { chmodSync, chownSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -14,6 +19,71 @@ afterEach(() => {
 test("resolves the HOME data directory and keeps an explicit report override", () => {
   expect(resolveMigrationReportDirectory("")).toBe(join(homedir(), "reports", "migrations"));
   expect(resolveMigrationReportDirectory(" /writable/custom ")).toBe("/writable/custom");
+});
+
+function databaseSnapshot(db: SqlDatabase) {
+  const tables = db.query(db.dialect === "postgres"
+    ? "SELECT tablename AS name FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename"
+    : "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
+  const schema = db.dialect === "postgres" ? {
+    columns: db.query(`SELECT table_name,column_name,ordinal_position,udt_name,is_nullable,column_default,
+      character_maximum_length,numeric_precision,numeric_scale FROM information_schema.columns
+      WHERE table_schema=current_schema() ORDER BY table_name,ordinal_position`).all(),
+    indexes: db.query("SELECT * FROM pg_indexes WHERE schemaname=current_schema() ORDER BY tablename,indexname").all(),
+    constraints: db.query(`SELECT c.conname, t.relname, pg_get_constraintdef(c.oid) AS definition
+      FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid
+      WHERE t.relnamespace=current_schema()::regnamespace ORDER BY t.relname,c.conname`).all(),
+  } : db.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").all();
+  return { schema, data: tables.map(({ name }) => ({ name,
+    rows: db.query(`SELECT * FROM "${name}"`).all().map(row => JSON.stringify(row)).sort(),
+  })) };
+}
+
+unifiedModelBackendTests("MUL-493 nonempty report write preflight", fixture => {
+  for (const state of ["empty", "historical"] as const) {
+    for (const code of ["ENOSPC", "EFBIG"]) {
+      test(`${code} on nonempty writes preserves ${state} schema and all data`, () => {
+        const { db: historicalDb, store } = fixture();
+        const db = state === "empty" && historicalDb.dialect === "sqlite"
+          ? openSqliteDatabase(":memory:") as unknown as SqlDatabase : historicalDb;
+        if (state === "empty" && db.dialect === "postgres") {
+          db.exec("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
+        } else if (state === "historical") {
+          const agent = store.createAgent({ name: "write failure history", provider: "codex" });
+          const issue = store.createIssue({ title: "preserve report failure data" });
+          const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "historical input" });
+          db.run("UPDATE multiremi_tasks SET status='completed' WHERE id=?", [task.id]);
+        }
+        const dir = mkdtempSync(join(tmpdir(), "mul493-nonempty-write-"));
+        dirs.push(dir);
+        const before = databaseSnapshot(db);
+        const originalWrite = fs.writeFileSync;
+        const prior = process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+        let rejectedWrites = 0;
+        const write = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof originalWrite>) => {
+          const [path, data] = args;
+          const length = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+          if (String(path).startsWith(`${dir}${sep}`) && length > 0) {
+            rejectedWrites++;
+            throw Object.assign(new Error(`injected nonempty write ${code}`), { code });
+          }
+          return originalWrite(...args);
+        });
+        try {
+          process.env.MULTIREMI_MIGRATION_REPORT_DIR = dir;
+          expect(() => runMigrations(db)).toThrow("Migration report directory is not writable");
+          expect(rejectedWrites).toBe(1);
+          expect(databaseSnapshot(db)).toEqual(before);
+          expect(fs.readdirSync(dir)).toEqual([]);
+        } finally {
+          write.mockRestore();
+          if (prior === undefined) delete process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+          else process.env.MULTIREMI_MIGRATION_REPORT_DIR = prior;
+          if (db !== historicalDb) db.close();
+        }
+      });
+    }
+  }
 });
 
 // chmod alone does not produce EACCES as root. Exercise the same unprivileged

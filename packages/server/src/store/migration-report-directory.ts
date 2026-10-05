@@ -14,7 +14,7 @@ export function prepareMigrationReportDirectory(dir: string): void {
   const renamed = `${probe}.renamed`;
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(probe, "", { mode: 0o600, flag: "wx" });
+    writeFileSync(probe, "migration report write check\n", { mode: 0o600, flag: "wx" });
     renameSync(probe, renamed);
   } catch (cause) {
     throw new Error(`Migration report directory is not writable: ${dir}; check api-home ownership or MULTIREMI_MIGRATION_REPORT_DIR`, { cause });
