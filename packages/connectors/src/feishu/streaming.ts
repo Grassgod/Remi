@@ -247,11 +247,12 @@ export class FeishuStreamingSession {
     this.touch();
   }
 
-  updateStepDesc(desc: string): void {
+  updateStepDesc(desc: string, toolName?: string): void {
     if (!this.isActive()) return;
     const step = this.steps.findLast(s => !s.durationMs);
     if (!step) return;
     step.desc = desc;
+    if (toolName) step.tool = toolName;
     this.touch();
   }
 

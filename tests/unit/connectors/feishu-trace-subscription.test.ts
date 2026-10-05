@@ -65,6 +65,46 @@ async function waitUntil(predicate: () => boolean) {
 }
 
 describe("Feishu trace subscription", () => {
+  it("releases a producer blocked on a partially consumed batch when the iterator closes", async () => {
+    let released = false;
+    let unsubscribed = false;
+    const daemon = {
+      subscribeTrace: async (_task: string, _cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+        await callback([event(1), event(2)], false);
+        released = true;
+        return async () => { unsubscribed = true; };
+      },
+      getFeishuBotTaskSnapshot: async () => { throw new Error("no terminal snapshot expected"); },
+    };
+    const iterator = subscribeFeishuTask(daemon, "task");
+    expect((await iterator.next()).value).toMatchObject({ kind: "message", message: { seq: 1 } });
+    expect(released).toBe(false);
+    await iterator.return(undefined);
+    expect(released).toBe(true);
+    expect(unsubscribed).toBe(true);
+  });
+
+  it("consumes bounded replay pages before the producer can fetch the next page", async () => {
+    let consumed = 0;
+    let unsubscribed = false;
+    const daemon = {
+      subscribeTrace: async (_task: string, cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+        expect(cursor).toBe(0);
+        for (let start = 0; start < 1500; start += 500) {
+          await callback(Array.from({ length: 500 }, (_, offset) => event(start + offset + 1)), false);
+          expect(consumed).toBe(start + 500);
+        }
+        await callback([], true);
+        return async () => { unsubscribed = true; };
+      },
+      getFeishuBotTaskSnapshot: async () => ({ taskId: "task", status: "completed", result: "answer", error: null,
+        sessionId: null, workDir: null, usage: [] }) as FeishuBotTaskSnapshot,
+    };
+    for await (const row of subscribeFeishuTask(daemon, "task")) if (row.kind === "message") consumed += 1;
+    expect(consumed).toBe(1500);
+    expect(unsubscribed).toBe(true);
+  });
+
   it("resumes from the consumed checkpoint, starting at throughSeq + 1 without duplicates or omissions", async () => {
     const f = fixture([1, 2, 3, 4, 5, 6].map(event), true);
     try {

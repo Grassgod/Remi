@@ -58,7 +58,7 @@ export class FeishuTaskPresentation {
     private readonly meta: TaskStreamMeta, private readonly options: TaskPresentationOptions) {
     this.cot = new FeishuCotTransport(client);
     this.state = structuredClone(options.checkpoint ?? { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} });
-    this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq);
+    this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq, Date.now, this.state.deferredToolIds);
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
     this.metadata = new FeishuTaskMetadata(options.displayName ?? meta.displayName);
@@ -159,6 +159,14 @@ export class FeishuTaskPresentation {
   private async message(message: TraceEvent): Promise<void> {
     this.timeline.accept(message);
     this.metadata.accept(message);
+    // Presentation restart replays the canonical prefix for answer/metadata
+    // reconstruction. Its requests and native events are already acknowledged.
+    if (message.seq <= this.state.throughSeq) {
+      // Discard each acknowledged presentation sample as we rebuild state,
+      // rather than collecting a whole historical native-event queue.
+      this.timeline.drain();
+      return;
+    }
     if (message.type === "execution" || message.type === "usage") return;
     if (Date.now() - this.lastFlush >= 500) await this.flush();
     if (message.type === "permission_request" || message.type === "question_request") {
@@ -173,7 +181,14 @@ export class FeishuTaskPresentation {
 
   private async flush(force = false): Promise<void> {
     const { samples, throughSeq } = this.timeline.drain(force);
-    if (!samples.length) return;
+    if (!samples.length) {
+      if (throughSeq > this.state.throughSeq || JSON.stringify(this.state.deferredToolIds ?? []) !== JSON.stringify(this.timeline.deferredToolIds)) {
+        this.state.throughSeq = Math.max(this.state.throughSeq, throughSeq);
+        this.state.deferredToolIds = this.timeline.deferredToolIds;
+        await this.save();
+      }
+      return;
+    }
     this.lastFlush = Date.now();
     await this.writeProcess(samples, throughSeq);
   }
@@ -201,6 +216,7 @@ export class FeishuTaskPresentation {
       this.state.cot.writePending = false;
     }
     this.state.throughSeq = Math.max(this.state.throughSeq, throughSeq);
+    this.state.deferredToolIds = this.timeline.deferredToolIds;
     await this.save();
   }
 
@@ -224,11 +240,18 @@ export class FeishuTaskPresentation {
   }
 
   private async finishCot(status: string): Promise<void> {
-    if (this.state.cot?.status !== "active") return;
+    const pending = this.timeline.finish(status);
+    let initial = false;
+    if (!this.state.cot && pending.length) {
+      await this.writeProcess(pending, this.state.throughSeq);
+      initial = true;
+    }
+    this.state.deferredToolIds = this.timeline.deferredToolIds;
+    if (this.state.cot?.status !== "active") { await this.save(); return; }
     const ending: CotSample[] = status === "failed"
       ? [["RUN_ERROR", { code: "TASK_FAILED", message: "执行失败，详情见结果卡" }]]
       : [["RUN_FINISHED", { threadId: this.chatId, runId: this.meta.taskId, status: status === "cancelled" ? "interrupted" : "done" }]];
-    await this.writeSamples([...this.timeline.finish(status), ...ending]);
+    await this.writeSamples([...(initial ? [] : pending), ...ending]);
     if (status === "failed" && this.state.cot?.status === "active") {
       const { cotId, messageId } = this.state.cot;
       try { await this.retry(() => this.cot.complete({ cotId: cotId!, messageId: messageId! }, "error"), true); }

@@ -10,10 +10,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { cn } from "@multiremi/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
-import { buildTraceTimeline } from "../../common/task-transcript/build-timeline";
-import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
-import { formatToolInputSummary, toolIcon } from "../../common/task-transcript/tool-summaries";
 import { useT } from "../../i18n";
 
 const ACTIVE_STATUS = new Set(["queued", "dispatched", "waiting_local_directory", "running", "awaiting_human"]);
@@ -91,21 +88,6 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman || isWaitingToStart;
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
-  const traceActive = ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
-  const events = useTaskTrace(task.id, traceActive, traceActive);
-  const items = useMemo(
-    () => buildTraceTimeline(events),
-    [events],
-  );
-
-  // The step the agent is on right now — the last tool call to start.
-  const currentStep = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const item = items[i];
-      if (item?.type === "tool_use") return item;
-    }
-    return null;
-  }, [items]);
 
   useEffect(() => {
     if (ended) return;
@@ -122,8 +104,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
     return () => clearInterval(interval);
   }, [ended, isParked, task.started_at, task.dispatched_at, task.created_at]);
 
-  const StepIcon = toolIcon(currentStep?.tool);
-  const stepSummary = currentStep ? formatToolInputSummary(currentStep.tool ?? "", currentStep.input) : "";
+  const stepSummary = task.progress_summary ?? "";
   const blocker = isQueued || isWaitingToStart ? task.queue_blocker : null;
 
   return (
@@ -188,8 +169,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
           )}
           {!ended && !blocker && stepSummary && (
             <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-              <StepIcon className="h-3 w-3 shrink-0" />
-              <span className="truncate font-mono">{stepSummary}</span>
+              <span className="truncate">{stepSummary}</span>
             </span>
           )}
         </span>

@@ -1,33 +1,31 @@
 // The ACP-event → TaskMessage translation layer: a stateful per-run mapper plus
 // the provider-response → usage-entry conversion. Pure translation, no daemon
-// state — extracted verbatim from worker/daemon.ts (the daemon imports it back
+// state — extracted from worker/daemon.ts (the daemon imports it back
 // and re-exports `createEventMapper` for existing importers).
 import type { AgentAdapter } from "@acp/index.js";
 import type { ProviderEvent } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readExecutionModel } from "@shared/agent-execution.js";
+import { isTerminalTraceToolStatus } from "@shared/trace-semantics.js";
+import { TRACE_OUTPUT_MAX_BYTES, truncateUtf8 } from "@shared/trace-sanitize.js";
 import type { TaskMessageInput, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
 interface ToolCallState {
   name: string;
+  nameAuthoritative: boolean;
   kind?: string;
+  title?: string;
   input?: Record<string, unknown>;
+  output?: string;
   status: string;
   startMs: number;
   terminalEmitted: boolean;
   lastFingerprint?: string;
-  /**
-   * JSON of the input as last emitted for this call. A later message repeats the
-   * input only when the merged one differs, which covers both directions: claude
-   * emits nothing on the use and the args later, codex collab emits an input up
-   * front and enriches it (agentsStates, receiverThreadIds) on the terminal frame.
-   */
+  /** JSON of the input as last emitted for active-call refinement deduplication. */
   lastEmittedInputJson?: string;
   /** Owning subagent call, decided once at state creation (see resolveParentToolCallId). */
   parentToolCallId?: string;
 }
-
-const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
 
 /** Tool names that spawn a subagent — `Task` is the legacy name of `Agent`. */
 const SUBAGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
@@ -60,7 +58,7 @@ function resolveParentToolCallId(
   for (const [candidateId, candidate] of tools) {
     if (candidateId === id) continue;
     if (!SUBAGENT_TOOL_NAMES.has(candidate.name)) continue;
-    if (TERMINAL_TOOL_STATUS.has(candidate.status)) continue;
+    if (isTerminalTraceToolStatus(candidate.status)) continue;
     if (parent !== undefined) return undefined;
     parent = candidateId;
   }
@@ -162,16 +160,27 @@ function mapToolEvent(
   // title/content/locations — claude-agent-acp leaves rawInput empty and encodes
   // the args there instead (the command in title, file path in locations, etc.).
   const existing = tools.get(id);
-  const resolvedName = adapter.resolveToolName(raw as never);
-  // Codex terminal updates only carry the id, status and output. Its adapter
-  // therefore resolves those sparse frames to the placeholder `unknown`; keep
-  // the concrete name learned from the initial frame instead of replacing it.
-  const name = isPlaceholderToolName(resolvedName) && existing
-    ? existing.name
-    : resolvedName || existing?.name || "tool";
-  const input = adapter.extractToolInput(raw as never);
+  const explicitName = raw._meta?.claudeCode?.toolName ?? raw.name;
+  const resolvedName = adapter.agentType === "claude" && typeof explicitName === "string"
+    ? explicitName : adapter.resolveToolName(raw as never);
+  const rawInput = parseMaybeJson(raw.rawInput);
+  const namedInput = rawInput?.toolName ?? rawInput?.tool_name ?? rawInput?.name ?? rawInput?.type;
+  const authoritative = (typeof explicitName === "string" && !isPlaceholderToolName(explicitName))
+    || (adapter.agentType === "codex" && typeof namedInput === "string" && !isPlaceholderToolName(namedInput));
+  // A sparse title is presentation, not a replacement tool identity (a Bash
+  // command containing `git grep` must not turn into a Grep invocation).
+  const name = existing && !isPlaceholderToolName(existing.name) && (existing.nameAuthoritative || !authoritative)
+    ? existing.name : resolvedName || existing?.name || "tool";
+  const extractionFrame = { ...raw, kind: raw.kind ?? existing?.kind,
+    ...(adapter.agentType === "claude" ? { _meta: { ...raw._meta,
+      claudeCode: { ...raw._meta?.claudeCode, toolName: name } } } : {}) };
+  let input = adapter.extractToolInput(extractionFrame as never);
+  const commandTitle = raw._meta?.jetbrains?.air?.commandTitle;
+  if (name === "Bash" && typeof commandTitle === "string" && commandTitle) {
+    input = { ...input, description: input?.description ?? commandTitle };
+  }
   const status: string | undefined = typeof raw.status === "string" ? raw.status : undefined;
-  const output = raw.rawOutput != null ? JSON.stringify(raw.rawOutput) : extractText(raw.content) || undefined;
+  const output = extractToolOutput(raw, input);
   const meta: Record<string, unknown> = {};
   if (raw.title) meta.title = raw.title;
   if (raw.kind) meta.kind = raw.kind;
@@ -180,6 +189,7 @@ function mapToolEvent(
   const messages: TaskMessageInput[] = [];
   const state: ToolCallState = existing ?? {
     name,
+    nameAuthoritative: authoritative,
     kind: raw.kind,
     input,
     status: status ?? "pending",
@@ -199,15 +209,32 @@ function mapToolEvent(
   // real command lands in the following update) while bridges that send the
   // full input up front keep every key they already reported.
   state.name = name;
+  state.nameAuthoritative ||= authoritative;
   if (raw.kind) state.kind = raw.kind;
+  if (raw.title) state.title = raw.title;
   if (input) state.input = { ...state.input, ...input };
+  if (output != null) {
+    // The terminal extension sends stdout chunks. Standard content/rawOutput
+    // is a complete result snapshot and replaces those chunks at completion.
+    const chunk = raw.rawOutput == null
+      ? raw._meta?.terminal_output ?? raw._meta?.terminal_output_delta : undefined;
+    if (chunk) {
+      // The extension has no replay ID. Identical stdout fragments can be
+      // legitimate consecutive writes, so never guess duplication from content.
+      state.output = truncateUtf8((state.output ?? "") + output, TRACE_OUTPUT_MAX_BYTES) ?? undefined;
+    } else {
+      state.output = truncateUtf8(output, TRACE_OUTPUT_MAX_BYTES) ?? undefined;
+    }
+  }
   if (status) state.status = status;
   tools.set(id, state);
+  if (state.kind) meta.kind = state.kind;
+  if (state.title) meta.title = state.title;
   // Carried by every emission of this call (tool_use and tool_result) so the
   // frontend can nest it whichever message it sees first.
   if (state.parentToolCallId) meta.parent_tool_call_id = state.parentToolCallId;
 
-  const isTerminal = status != null && TERMINAL_TOOL_STATUS.has(status);
+  const isTerminal = isTerminalTraceToolStatus(status);
 
   if (isInitial) {
     // A placeholder-only input isn't the tool's args — emitting it would pin the
@@ -239,7 +266,7 @@ function mapToolEvent(
     && output == null
     && !isTerminal
     && !state.terminalEmitted
-    && !TERMINAL_TOOL_STATUS.has(state.status)
+    && !isTerminalTraceToolStatus(state.status)
     && hasMeaningfulInput(state.input)
   ) {
     const mergedInputJson = JSON.stringify(state.input);
@@ -261,28 +288,25 @@ function mapToolEvent(
   // by fingerprint so a repeat of the same terminal frame doesn't double-post,
   // but a real statusless→terminal transition still lands once.
   if (output != null || isTerminal) {
-    const fingerprint = `${status ?? ""}:${output ?? ""}`;
-    if (!(state.terminalEmitted && state.lastFingerprint === fingerprint)) {
+    const fingerprint = JSON.stringify([status ?? state.status, state.output, state.input]);
+    if (state.lastFingerprint !== fingerprint) {
       state.lastFingerprint = fingerprint;
       if (isTerminal) state.terminalEmitted = true;
       const resultMeta: Record<string, unknown> = { ...meta };
       if (isTerminal) resultMeta.duration_ms = Date.now() - state.startMs;
-      // Repeat the input only when it changed since the last emission: claude
-      // sends the args after the use, codex collab enriches an already-emitted
-      // input with the subagent's states and answer on the terminal frame. An
-      // unchanged input stays off the result, as before.
+      // Results are self-contained snapshots so a bounded tail can reconstruct
+      // the call even when its invocation/argument refinements were earlier.
       const mergedInputJson = state.input ? JSON.stringify(state.input) : undefined;
-      const inputChanged = mergedInputJson != null && mergedInputJson !== state.lastEmittedInputJson;
       messages.push({
         type: "tool_result",
         toolCallId: id,
         status: status ?? state.status,
         tool: state.name,
-        input: inputChanged ? state.input : undefined,
-        output,
+        input: hasMeaningfulInput(state.input) ? state.input : undefined,
+        output: state.output,
         meta: Object.keys(resultMeta).length ? resultMeta : undefined,
       });
-      if (inputChanged) state.lastEmittedInputJson = mergedInputJson;
+      state.lastEmittedInputJson = mergedInputJson;
     }
   }
 
@@ -291,7 +315,19 @@ function mapToolEvent(
 
 function isPlaceholderToolName(name: string | null | undefined): boolean {
   const normalized = name?.trim().toLowerCase();
-  return !normalized || normalized === "unknown" || normalized === "tool";
+  return !normalized || normalized === "unknown" || normalized === "tool" || normalized === "terminal";
+}
+
+function extractToolOutput(raw: Record<string, any>, input: Record<string, unknown> | undefined): string | undefined {
+  if (raw.rawOutput != null) return JSON.stringify(raw.rawOutput);
+  const terminalOutput = raw._meta?.terminal_output?.data ?? raw._meta?.terminal_output_delta?.data;
+  if (typeof terminalOutput === "string") return terminalOutput;
+  const text = extractText(raw.content);
+  // The Claude argument refinement can carry its description as a content
+  // block. That label is not a result; actual terminal and completed content
+  // still take the output paths above/below.
+  if (!isTerminalTraceToolStatus(raw.status) && input?.description === text) return undefined;
+  return text || undefined;
 }
 
 function extractText(content: unknown): string {
@@ -301,6 +337,8 @@ function extractText(content: unknown): string {
     if (typeof block === "string") text += block;
     else if (block && typeof block === "object" && "text" in block) {
       text += String((block as { text?: unknown }).text ?? "");
+    } else if (block && typeof block === "object" && "content" in block) {
+      text += extractText((block as { content?: unknown }).content);
     }
   }
   return text;

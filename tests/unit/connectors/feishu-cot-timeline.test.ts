@@ -55,30 +55,74 @@ describe("semantic native CoT timeline", () => {
     expect(isCotSubagent("get_agent", {})).toBe(false);
     expect(isCotSubagent("remi/get_task", {})).toBe(false);
   });
-  it("waits for delayed ACP args and description instead of permanently naming a shell Bash", () => {
+  it("waits for meaningful ACP args and attaches a later description to the existing invocation", () => {
     let now = 0;
     const timeline = new FeishuCotTimeline("task", 0, () => now);
     timeline.accept(message(1, "tool_use", { toolCallId: "tc", tool: "Bash" }));
     timeline.accept(message(2, "tool_use", { toolCallId: "tc", input: { command: "rg foo src" } }));
     now = 500;
-    expect(timeline.drain()).toEqual({ samples: [], throughSeq: 0 });
+    const initial = timeline.drain();
+    expect(initial.samples.find(([type]) => type === "TOOL_CALL_START")?.[1].title).toBe("执行：rg foo src");
     timeline.accept(message(3, "tool_use", { toolCallId: "tc", input: { description: "搜索调用入口" } }));
     const { samples, throughSeq } = timeline.drain();
     expect(throughSeq).toBe(3);
-    expect(samples.filter(([t]) => t === "TOOL_CALL_START").map(([, c]) => c)).toEqual([
-      expect.objectContaining({ title: "搜索调用入口", icon: "search", toolCallName: "Bash" }),
-    ]);
+    expect(samples.filter(([type]) => type === "TOOL_CALL_START")).toEqual([]);
+    expect(JSON.parse(String(samples.find(([type]) => type === "TOOL_CALL_RESULT")?.[1].content)).text).toContain("搜索调用入口");
     timeline.accept(message(4, "tool_result", { toolCallId: "tc", output: '{"huge":"private log"}', status: "completed" }));
     expect(timeline.drain().samples).toEqual([]);
   });
 
-  it("bounded title buffering never hides a long running command indefinitely", () => {
+  it("defers a bare placeholder independently until real arguments or the terminal event", () => {
     let now = 0;
     const timeline = new FeishuCotTimeline("task", 0, () => now);
-    timeline.accept(message(1, "tool_use", { tool: "Bash", toolCallId: "tc", input: { command: "bun test" } }));
+    timeline.accept(message(1, "tool_use", { tool: "Bash", toolCallId: "tc" }));
     expect(timeline.drain().samples).toHaveLength(0);
     now = 1001;
-    expect(timeline.drain().samples[0]?.[1].title).toBe("执行：bun test");
+    expect(timeline.drain().samples).toEqual([]);
+    timeline.accept(message(2, "text", { content: "仍在执行", meta: { phase: "commentary" } }));
+    expect(timeline.drain().samples.some(([type]) => type === "REASONING_MESSAGE_CONTENT")).toBe(true);
+    expect(timeline.deferredToolIds).toEqual(["tc"]);
+    timeline.accept(message(3, "tool_result", { tool: "Bash", toolCallId: "tc", status: "completed" }));
+    expect(timeline.drain().samples.find(([type]) => type === "TOOL_CALL_START")?.[1].title).toBe("Bash");
+    expect(timeline.deferredToolIds).toEqual([]);
+  });
+
+  it("restores an unsent placeholder and starts it once when late arguments arrive", () => {
+    let now = 0;
+    const initial = message(1, "tool_use", { tool: "Bash", toolCallId: "late" });
+    const refined = message(2, "tool_use", { tool: "Bash", toolCallId: "late", input: {
+      command: "git status --short", description: "检查仓库状态",
+    } });
+    const timeline = new FeishuCotTimeline("task", 0, () => now);
+    timeline.accept(initial);
+    expect(timeline.drain().samples).toEqual([]);
+    now = 1001;
+    expect(timeline.drain().samples).toEqual([]);
+    timeline.accept(refined);
+    const update = timeline.drain();
+    const first = update.samples.find(([type]) => type === "TOOL_CALL_START")!;
+    expect(first[1]).toMatchObject({ title: "检查仓库状态", toolCallName: "Bash" });
+    expect(timeline.toolCount).toBe(1);
+    timeline.accept({ ...refined, seq: 3 });
+    expect(timeline.drain().samples).toEqual([]);
+
+    const restart = new FeishuCotTimeline("task", update.throughSeq);
+    restart.accept(initial);
+    restart.accept(refined);
+    restart.accept(message(3, "tool_result", { toolCallId: "late", status: "completed" }));
+    expect(restart.drain().samples).toEqual([]);
+    const pending = new FeishuCotTimeline("task", 1, Date.now, ["late"]);
+    pending.accept(refined);
+    expect(pending.drain().samples.find(([type]) => type === "TOOL_CALL_START")?.[1])
+      .toMatchObject({ toolCallId: first[1].toolCallId, title: "检查仓库状态" });
+    expect(pending.deferredToolIds).toEqual([]);
+    const terminalOnly = new FeishuCotTimeline("task", 1, Date.now, ["late"]);
+    terminalOnly.accept(message(2, "tool_result", { tool: "Bash", toolCallId: "late", status: "completed" }));
+    expect(terminalOnly.drain().samples.filter(([type]) => type === "TOOL_CALL_START")).toHaveLength(1);
+    expect(terminalOnly.deferredToolIds).toEqual([]);
+    const ending = new FeishuCotTimeline("task", 1, Date.now, ["late"]);
+    expect(ending.finish("cancelled").filter(([type]) => type === "TOOL_CALL_START")).toHaveLength(1);
+    expect(ending.deferredToolIds).toEqual([]);
   });
 
   it("recovers both an unacknowledged placeholder and an acknowledged invocation without losing or duplicating it", () => {
@@ -142,8 +186,8 @@ describe("semantic native CoT timeline", () => {
     const samples = timeline.finish("completed");
     const prose = samples.filter(([t]) => t === "REASONING_MESSAGE_CONTENT").map(([, c]) => c.delta).join("");
     expect(prose).toBe("先读取。再检查。已核对。");
-    expect(samples.filter(([t]) => t === "REASONING_MESSAGE_START")).toHaveLength(2);
-    expect(samples.filter(([t]) => t === "REASONING_MESSAGE_END")).toHaveLength(2);
+    expect(samples.filter(([t]) => t === "REASONING_MESSAGE_START")).toHaveLength(3);
+    expect(samples.filter(([t]) => t === "REASONING_MESSAGE_END")).toHaveLength(3);
     expect(timeline.answer("")).toBe("最终答案");
     expect(JSON.stringify(samples)).not.toContain("secret");
     expect(samples.find(([type]) => type === "system")).toEqual(["system", { ...unknown }]);

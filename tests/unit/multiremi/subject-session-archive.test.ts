@@ -19,6 +19,25 @@ afterEach(() => {
 });
 
 describe("Chat and one-shot Task Session archive", () => {
+  it("cancels an in-flight upload without completing or unlinking another process's staging", async () => {
+    const root = tempRoot(); const runtimeRoot = join(root, ".runtime", "tsk_cancel");
+    mkdirSync(runtimeRoot, { recursive: true }); writeFileSync(join(runtimeRoot, "history.jsonl"), "{}\n");
+    const fake = fakeClient(); const abort = new AbortController();
+    let uploadEntered!: () => void;
+    const entered = new Promise<void>(resolve => { uploadEntered = resolve; });
+    let staged = "";
+    fake.uploadSessionArchive = async (_rt, _subject, _id, archivePath, signal) => {
+      staged = archivePath; uploadEntered();
+      return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    };
+    const run = ensureSubjectSessionArchive({ ...options(root, fake), signal: abort.signal },
+      { kind: "task", id: "tsk_cancel" }, runtimeRoot, false);
+    await entered; abort.abort(new Error("shutdown"));
+    await expect(run).rejects.toThrow("shutdown");
+    expect(fake.completed).toEqual([]);
+    expect(existsSync(staged)).toBe(true);
+    expect(existsSync(join(runtimeRoot, "history.jsonl"))).toBe(true);
+  });
   it("archives the subject's .runtime root once and removes the staged bytes", async () => {
     const root = tempRoot();
     const runtimeRoot = join(root, ".runtime", "tsk_one");

@@ -34,7 +34,7 @@ const cpus = Number.isInteger(buildCpus) && buildCpus > 0 ? buildCpus : undefine
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
-  transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views", "@multiremi/contracts"],
+  transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views", "@multiremi/contracts", "@multiremi/shared"],
   experimental: {
     // Skill edits send the full bundle. Match the API's 128 MiB request limit
     // so Next does not truncate JSON containing large or binary attachments.

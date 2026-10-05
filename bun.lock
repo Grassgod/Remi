@@ -218,6 +218,7 @@
         "@dnd-kit/utilities": "^3.2.2",
         "@floating-ui/dom": "^1.7.6",
         "@multiremi/core": "workspace:*",
+        "@multiremi/shared": "workspace:*",
         "@multiremi/ui": "workspace:*",
         "@tiptap/core": "^3.22.1",
         "@tiptap/extension-code-block-lowlight": "^3.22.1",

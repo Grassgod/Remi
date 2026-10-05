@@ -4586,6 +4586,8 @@ export type FeishuBotOutboundBodyOrigin = "issue" | "agent";
 
 /** Delivery state only. Task messages and human responses remain authoritative. */
 export interface FeishuPresentationCheckpoint {
+  /** Invocation IDs whose native START is deferred until display arguments arrive. */
+  deferredToolIds?: string[];
   version: "native_cot_v1";
   startedAt: number;
   throughSeq: number;

@@ -112,7 +112,7 @@ import {
   type TaskFailureReasonValue,
 } from "./task-failure.js";
 import { executeRuntimeCommand } from "./runtime-command.js";
-import { ensureSubjectSessionArchive, type SubjectSessionArchiveSubject } from "./subject-session-archive.js";
+import { ensureSubjectSessionArchive, SubjectSessionArchiveQueue, type SubjectSessionArchiveSubject } from "./subject-session-archive.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   writeTaskContext,
@@ -126,6 +126,7 @@ import {
   type SnapshotGcSummary,
 } from "@daemon/agent-runtime/repo/snapshot-gc.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
+import { TraceFileStore } from "./trace-file-store.js";
 import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/readonly-code.js";
 import {
   assertIssueSessionNativeCodexOAuth,
@@ -788,6 +789,8 @@ export class MultiremiDaemon {
   private appliedDrainGeneration = 0;
   private outbox: MultiremiTaskReportOutbox | null = null;
   private traceTransport: DaemonTraceTransport | null = null;
+  private subjectArchiveQueue: SubjectSessionArchiveQueue | null = null;
+  private subjectArchiveRuntimeId: string | null = null;
   private outboxAbort: AbortController | null = null;
   private readonly outboxPath: string;
   private readonly legacyOutboxPath: string;
@@ -1471,6 +1474,10 @@ export class MultiremiDaemon {
       // Running tasks depend on the repo-checkout server, so let any in-flight
       // tasks drain before waiting for the GC lease they may currently hold.
       await Promise.allSettled([...this.inflight]);
+      this.subjectArchiveQueue?.stop();
+      await this.subjectArchiveQueue?.drain();
+      this.subjectArchiveQueue = null;
+      this.subjectArchiveRuntimeId = null;
       for (const run of this.feishuOutboundRuns.values()) run.abort.abort();
       await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
@@ -2548,6 +2555,7 @@ export class MultiremiDaemon {
   }
 
   stop(): void {
+    this.subjectArchiveQueue?.stop();
     if (this.pluginLocalRetryTimer !== null) clearTimeout(this.pluginLocalRetryTimer);
     this.pluginLocalRetryTimer = null;
     if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
@@ -2778,6 +2786,7 @@ export class MultiremiDaemon {
       workspaceFailure = error;
     }
     this.assertWorkspaceRootOwner();
+    this.traceTransport?.pruneMissing();
     try {
       const snapshots = await this.runSnapshotGcPass({
         workspacesRoot: this.options.workspacesRoot,
@@ -3034,6 +3043,7 @@ export class MultiremiDaemon {
     subject: SubjectSessionArchiveSubject,
     workspaceDir: string,
     forceFreshSnapshot: boolean,
+    signal?: AbortSignal,
   ): Promise<MultiremiIssueWorkspaceArchiveBinding | null> {
     return this.issueWorkspaceLifecycleLocks.runExclusive(`session-archive:${subject.kind}:${subject.id}`, () =>
       ensureSubjectSessionArchive({
@@ -3041,6 +3051,7 @@ export class MultiremiDaemon {
         runtimeId: this.options.runtimeId,
         workspacesRoot: this.options.workspacesRoot,
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
+        signal,
         assertRootOwner: () => this.assertWorkspaceRootOwner(),
       }, subject, workspaceDir, forceFreshSnapshot));
   }
@@ -3068,7 +3079,19 @@ export class MultiremiDaemon {
   }
 
   private ensureTrace(): DaemonTraceTransport {
-    return this.traceTransport ??= acquireDaemonTrace(this.protocolClient, undefined,
+    if (this.options.runtimeId && this.subjectArchiveRuntimeId !== this.options.runtimeId) {
+      this.subjectArchiveQueue?.stop();
+      this.subjectArchiveRuntimeId = this.options.runtimeId;
+      this.subjectArchiveQueue = new SubjectSessionArchiveQueue(
+        this.options.workspacesRoot, this.options.runtimeId, () => this.assertWorkspaceRootOwner(),
+        (subject, signal) => this.ensureSubjectSessionArchive(subject, subjectRuntimeStateRoot(this.options.workspacesRoot, subject.id), false, signal));
+    }
+    if (this.traceTransport) return this.traceTransport;
+    const store = () => new TraceFileStore({ workspacesRoot: this.options.workspacesRoot,
+      // Only replay of a legacy outbox row can reach this fallback. New tasks
+      // register their Session/Agent/provider context before any report.
+      resolveTask: () => ({ agentId: "unknown", provider: "unknown", startedAt: new Date().toISOString() }) });
+    return this.traceTransport = acquireDaemonTrace(this.protocolClient, store,
       () => daemonOutboxHasPriority(this.protocolClient),
       error => log.warn(`Trace transport failed: ${error instanceof Error ? error.message : String(error)}`));
   }
@@ -3198,6 +3221,14 @@ export class MultiremiDaemon {
       log.warn(`Ignored duplicate claim for active task ${task.id}`);
       return;
     }
+    const trace = this.ensureTrace();
+    if (trace.store instanceof TraceFileStore) trace.store.registerTask(task.id, {
+      sessionId: task.issueSessionId ?? task.chatSessionId ?? (task.issueId ? `legacy-${task.issueId}` : task.id),
+      agentId: task.agent?.id ?? "unknown", provider: task.agent?.provider ?? "unknown",
+      startedAt: new Date().toISOString(), runtimeId: this.options.runtimeId ?? undefined,
+      issueId: task.issueId,
+      subjectKind: task.issueId ? undefined : task.chatSessionId ? "chat" : "task",
+    });
     this.activeTaskIds.add(task.id);
     this.activeTaskCount++;
     log.info(`Claimed task ${task.id}`);
@@ -3463,14 +3494,13 @@ export class MultiremiDaemon {
       ).catch((error) => {
         log.warn(`Failed to clean task private temp for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
       });
-      if (!task.issueId && !task.chatSessionId && (providerHome?.temporaryTaskRoot || pluginRuntimeBase)) {
+      if (!task.issueId && !task.chatSessionId) {
         // The one-shot task is terminal here. Its `.runtime/<task id>` stays for
         // workspace GC, which deletes it only past TTL against a ready archive;
         // archive it once now so that history is saved without waiting for GC.
-        const runtimeRoot = subjectRuntimeStateRoot(this.options.workspacesRoot, task.id);
-        await this.ensureSubjectSessionArchive({ kind: "task", id: task.id }, runtimeRoot, false).catch((error) => {
+        try { this.subjectArchiveQueue?.enqueue({ kind: "task", id: task.id }); } catch (error) {
           log.warn(`Failed to archive task Session history for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
-        });
+        }
       }
       resolvedWorkDir?.release?.();
       releaseIssueWorkspaceLifecycle?.();

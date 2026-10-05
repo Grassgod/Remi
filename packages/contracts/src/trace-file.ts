@@ -73,6 +73,8 @@ export interface TraceFileHeader {
   agent_id: string;
   provider: string;
   started_at: string;
+  /** Persisted hot-trace ACL; older files without this field remain unowned. */
+  runtime_id?: string;
 }
 
 /**
@@ -98,8 +100,8 @@ export interface TraceFileTrailer {
  * This is deliberately NOT `TraceEventStatus`. Event status is the ACP tool
  * lifecycle (`TRACE_EVENT_STATUSES` in `./trace.js`) and stays the sole source
  * for an event's `status` field; a turn's outcome is a different vocabulary
- * (`completed` / `failed` / `cancelled`, where `cancelled` has no event
- * counterpart). A-0's `TraceStore.close` already narrows to these three values,
+ * (`completed` / `failed` / `cancelled`). `TraceStore.close` also narrows
+ * to these three outcomes,
  * and the contract tests assert both sides stay assignable in both directions,
  * so neither can drift.
  */
@@ -170,6 +172,7 @@ export function checkTraceFileLines(
     || (options.sessionId !== undefined && first.session_id !== options.sessionId)
     || typeof first.agent_id !== "string" || !first.agent_id
     || typeof first.provider !== "string" || !first.provider
+    || (first.runtime_id !== undefined && (typeof first.runtime_id !== "string" || !first.runtime_id))
     || !validTimestamp(first.started_at) || "seq" in first) return { ok: false, reason: "invalid header" };
 
   let head = 0;

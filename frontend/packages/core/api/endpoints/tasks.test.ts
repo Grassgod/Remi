@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../client";
+import { TasksEndpoints } from "./tasks";
+import { HttpClient } from "../http";
 import { ApiContractError } from "../schema";
 
 afterEach(() => {
@@ -72,4 +74,21 @@ describe("TasksEndpoints steer", () => {
     const client = new ApiClient("https://api.example.test");
     await expect(client.listTaskSteers("task-1")).resolves.toEqual({ messages: [] });
   });
+});
+
+const task = { id: "task", agentId: "agent", runtimeId: "runtime", issueId: null,
+  status: "completed", priority: 0, createdAt: "2026-10-05T00:00:00Z", dispatchedAt: null,
+  startedAt: null, completedAt: null, result: "Complete final answer", error: null, agent: { name: "Agent" },
+  usage: [{ totalTokens: 40 }] };
+function endpoint(response: unknown) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } })));
+  return new TasksEndpoints(new HttpClient("https://example.test"));
+}
+it("maps native task detail to the transcript view model", async () => {
+  await expect(endpoint({ task }).getTask("task")).resolves.toMatchObject({
+    id: "task", agent_id: "agent", runtime_id: "runtime", issue_id: "", status: "completed", agent_name: "Agent", usage: [{ totalTokens: 40 }],
+  });
+});
+it.each([{ task: { ...task, status: 4 } }, { task: { ...task, agentId: undefined } }, { task: null }])("rejects malformed task detail", async response => {
+  await expect(endpoint(response).getTask("task")).rejects.toBeInstanceOf(ApiContractError);
 });

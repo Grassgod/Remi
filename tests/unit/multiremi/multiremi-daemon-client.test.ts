@@ -685,6 +685,23 @@ describe("MultiremiDaemonClient workspace configuration", () => {
 });
 
 describe("MultiremiDaemonClient Issue session archive wire", () => {
+  it("abort cancels a live content upload without starting a failure-report request", async () => {
+    const root = mkdtempSync(join(tmpdir(), "archive-upload-abort-")); temporaryRoots.push(root);
+    const archivePath = join(root, "archive.zip"); writeFileSync(archivePath, "bytes");
+    const abort = new AbortController(); let putEntered!: () => void;
+    const entered = new Promise<void>(resolve => { putEntered = resolve; }); let failures = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/init")) return Response.json({ archive: { id: "sar_cancel", status: "pending" }, upload_attempt: 1, upload_url: null });
+      if (init?.method === "PUT") { putEntered(); return rejectWhenAborted(init.signal); }
+      failures++; return Response.json({ archive: { id: "sar_cancel", status: "failed" } });
+    }) as typeof fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "token");
+    const subject = { kind: "task", id: "tsk_cancel" } as const;
+    await client.initSessionArchive("rt", subject, { sourceRevision: "rev", sha256: "abc", sizeBytes: 5, fileCount: 1 });
+    const upload = client.uploadSessionArchive("rt", subject, "sar_cancel", archivePath, abort.signal);
+    await entered; abort.abort(new Error("shutdown"));
+    await expect(upload).rejects.toThrow("shutdown"); expect(failures).toBe(0);
+  });
   it("supports a lightweight archive status preflight without snapshot fields", async () => {
     const requests: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {

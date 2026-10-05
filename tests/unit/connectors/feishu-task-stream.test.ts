@@ -79,6 +79,85 @@ async function* events(): AsyncGenerator<TaskStreamEvent> {
 }
 
 describe("Feishu canonical Task stream", () => {
+  it("updates the existing step when a guessed tool name is refined by use or result", async () => {
+    for (const refinementType of ["tool_use", "tool_result"]) {
+      const steps: Array<{ tool: string; desc: string }> = [];
+      const session = {
+        addStep: (tool: string, desc: string) => { steps.push({ tool, desc }); },
+        updateStepDesc: (desc: string, tool?: string) => { Object.assign(steps.at(-1)!, { desc, ...(tool ? { tool } : {}) }); },
+        updateStatus: async () => {}, getElapsed: () => 1,
+      };
+      async function* replay(): AsyncGenerator<TaskStreamEvent> {
+        yield { kind: "message", message: message(1, "tool_use", { tool: "Grep", toolCallId: "shell" }) };
+        yield { kind: "message", message: message(2, refinementType, { tool: "Bash", toolCallId: "shell",
+          input: { command: "git grep durable" }, status: "completed" }) };
+      }
+      const result = await handleTaskStream(session as any, replay(), "chat", { taskId: "tsk_1",
+        respondHumanRequest: async () => { throw new Error("unexpected interaction"); } });
+      expect(result.toolCount).toBe(1);
+      expect(result.toolEntries[0]?.name).toBe("Bash");
+      expect(steps).toEqual([{ tool: "Bash", desc: "Bash `$ git grep durable`" }]);
+    }
+  });
+
+  it("does not replace the current operation when an earlier parallel result refines its name", async () => {
+    const steps: Array<{ tool: string; desc: string }> = [];
+    const session = {
+      addStep: (tool: string, desc: string) => { steps.push({ tool, desc }); },
+      updateStepDesc: (desc: string, tool?: string) => { Object.assign(steps.at(-1)!, { desc, ...(tool ? { tool } : {}) }); },
+      updateStepDuration: () => { throw new Error("must not finish the current operation"); },
+      updateStatus: async () => {}, getElapsed: () => 1,
+    };
+    async function* replay(): AsyncGenerator<TaskStreamEvent> {
+      for (const row of [
+        message(1, "tool_use", { tool: "Grep", toolCallId: "shell" }),
+        message(2, "tool_use", { tool: "Read", toolCallId: "read", input: { file_path: "/repo/app.ts" } }),
+        message(3, "tool_result", { tool: "Bash", toolCallId: "shell", status: "completed",
+          input: { command: "git grep durable" }, output: "found", meta: { duration_ms: 50 } }),
+      ]) yield { kind: "message", message: row };
+    }
+    const result = await handleTaskStream(session as any, replay(), "chat", { taskId: "tsk_1",
+      respondHumanRequest: async () => { throw new Error("unexpected interaction"); } });
+    expect(result.toolEntries.map(entry => entry.name)).toEqual(["Bash", "Read"]);
+    expect(steps.at(-1)?.tool).toBe("Read");
+    expect(steps.at(-1)?.desc).toContain("/repo/app.ts");
+  });
+
+  it("refines one tool without completing partial output or mixing narration/child prose into the answer", async () => {
+    const updates: string[] = [];
+    const status: string[] = [];
+    const context: unknown[] = [];
+    const session = {
+      update: async (value: string) => { updates.push(value); }, updateThinking: async () => {},
+      updateContextUsage: (value: unknown) => { context.push(value); }, updateExecution: () => {},
+      addStep: () => {}, updateStatus: async (value: string) => { status.push(value); },
+      updateStepDesc: () => {}, updateStepDuration: () => {}, getElapsed: () => 2,
+    };
+    async function* replay(): AsyncGenerator<TaskStreamEvent> {
+      for (const row of [
+        message(1, "text", { content: "Checking.", meta: { phase: "commentary" } }),
+        message(2, "tool_use", { tool: "Bash", toolCallId: "shell" }),
+        message(3, "tool_result", { tool: "Bash", toolCallId: "shell", status: "in_progress", output: "partial",
+          input: { command: "git status --short" } }),
+        message(4, "tool_use", { tool: "Bash", toolCallId: "shell", input: { description: "检查状态" } }),
+        message(5, "tool_result", { tool: "Bash", toolCallId: "shell", status: "cancelled" }),
+        message(6, "usage", { meta: { used: 100, size: 200 } }),
+        message(7, "usage", { meta: { used: 1, size: 2, parent_tool_call_id: "agent" } }),
+        message(8, "text", { content: "Child answer", meta: { phase: "final", parent_tool_call_id: "agent" } }),
+        message(9, "text", { content: "Done.", meta: { phase: "final" } }),
+      ]) yield { kind: "message", message: row };
+    }
+    const result = await handleTaskStream(session as any, replay(), "chat", {
+      taskId: "tsk_1", respondHumanRequest: async () => { throw new Error("unexpected interaction"); },
+    });
+    expect(result).toMatchObject({ contentText: "Done.", toolCount: 1, stats: "2s · 100/200 · 1 tools" });
+    expect(result.toolEntries[0]?.input).toEqual({ command: "git status --short", description: "检查状态" });
+    expect(status.filter(value => value === "Thinking...")).toEqual([]);
+    expect(status).toContain("Tool cancelled");
+    expect(context).toEqual([{ used: 100, size: 200 }]);
+    expect(updates).toEqual(["Done."]);
+  });
+
   it("preserves intermediate events and responds through the Task human request", async () => {
     const status: string[] = [];
     const steps: Array<[string, string]> = [];

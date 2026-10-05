@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api, TRACE_LIVE_WINDOW_SIZE } from "@multiremi/core/api";
 import { toast } from "sonner";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -14,7 +16,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
-import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy, LoaderCircle, Check } from "lucide-react";
+import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy, LoaderCircle, Check, ScrollText } from "lucide-react";
 import { AttachmentSchema } from "@multiremi/core/api/schemas";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
@@ -28,7 +30,8 @@ import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
 import { TaskStatusPill } from "./task-status-pill";
-import { useTaskTrace } from "../../common/task-transcript/use-task-trace";
+import { useTaskTraceState } from "../../common/task-transcript/use-task-trace";
+import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
@@ -64,6 +67,7 @@ export function ChatMessageList({
   initialPositioned = false,
 }: ChatMessageListProps) {
   const { t } = useT("chat");
+  const { t: traceT } = useT("agents");
   const scrollRoot = useRef<HTMLElement | null>(null);
   const prependAnchor = useRef<{ id: string; top: number } | null>(null);
   const previousAvailability = useRef(availability);
@@ -113,10 +117,11 @@ export function ChatMessageList({
       && !isNonterminalTurn(row.metadata);
   });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const liveTaskEvents = useTaskTrace(pendingTaskId, visible && showLiveTimeline, true);
+  const liveTrace = useTaskTraceState(pendingTaskId, visible && showLiveTimeline, true);
+  const liveTaskEvents = liveTrace.events;
   const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskEvents);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
-  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
+  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask && !liveTrace.closed && !liveTrace.error;
 
   return <SessionLogList sessionId={sessionId} replica={replica} perfScroll="session-log"
     onScrollRoot={element => { scrollRoot.current = element; }}
@@ -155,7 +160,9 @@ export function ChatMessageList({
       </div>;
     }}
     footer={<div className="space-y-4 pb-4">
-      {hasLive && <TimelineView items={liveTimeline} isStreaming />}
+      {hasLive && <div className="text-[10px] text-muted-foreground">{traceT(($) => $.transcript.trace_window, { count: TRACE_LIVE_WINDOW_SIZE })}</div>}
+      {hasLive && <TimelineView items={liveTimeline} isStreaming={!liveTrace.closed && !liveTrace.error} />}
+      {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
         taskMessages={liveTaskEvents} availability={availability} />}
     </div>} />;
@@ -220,16 +227,7 @@ function AssistantMessage({
   isPush: boolean;
   visible: boolean;
 }) {
-  const taskId = message.task_id;
-  // A mid-run attachment push shares its task id with the terminal reply that
-  // follows. The timeline belongs to that reply: drawing it here would both
-  // displace this row's own caption and, once the reply lands, repeat the
-  // whole timeline a second time.
-  const taskEvents = useTaskTrace(taskId, visible && !isPush);
-
-  const timeline: ChatTimelineItem[] = isPush
-    ? []
-    : toChatTimeline(taskEvents);
+  const timeline: ChatTimelineItem[] = [];
 
   // Failure bubble path: when the server's FailTask wrote a failure
   // chat_message (failure_reason set), render a destructive bubble with the
@@ -237,24 +235,22 @@ function AssistantMessage({
   // so the user can see exactly where the run broke.
   if (message.failure_reason) {
     return (
-      <FailureBubble
+      <div className="w-full space-y-1.5"><FailureBubble
         reason={message.failure_reason}
         rawError={message.content}
         timeline={timeline}
         elapsedMs={message.elapsed_ms}
       />
+        {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} visible={visible} />}
+      </div>
     );
   }
 
   return (
     <div className="w-full space-y-1.5">
-      {timeline.length > 0 ? (
-        <TimelineView items={timeline} attachments={message.attachments} />
-      ) : (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
-          <Markdown attachments={message.attachments}>{message.content}</Markdown>
-        </div>
-      )}
+      <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+        <Markdown attachments={message.attachments}>{message.content}</Markdown>
+      </div>
       <AttachmentList
         attachments={message.attachments}
         content={message.content}
@@ -265,8 +261,31 @@ function AssistantMessage({
         timeline={timeline}
         isPending={isPending}
       />
+      {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} visible={visible} />}
     </div>
   );
+}
+
+/** Task detail and trace are requested only after the reader opens execution. */
+function ChatTraceButton({ taskId, visible }: { taskId: string; visible: boolean }) {
+  const { t } = useT("agents");
+  const [open, setOpen] = useState(false);
+  const { data: task, isFetching, isError, refetch } = useQuery({
+    queryKey: ["task-detail", taskId],
+    enabled: visible && open,
+    queryFn: () => api.getTask(taskId),
+  });
+  return <>
+    <button type="button" disabled={!visible || isFetching} onClick={() => {
+      setOpen(true);
+      if (isError) void refetch();
+    }} data-chat-trace className="inline-flex h-8 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+      {isFetching ? <LoaderCircle className="size-3 animate-spin" /> : <ScrollText className="size-3" />}
+      {isError ? t(($) => $.transcript.trace_retry) : t(($) => $.transcript.view_finished)}
+    </button>
+    {open && visible && task && <TaskTraceDialog task={task} agentName={task.agent_name ?? ""} onOpenChange={setOpen} />}
+    {isError && <span role="alert" className="text-xs text-destructive">{t(($) => $.transcript.trace_failed)}</span>}
+  </>;
 }
 
 // Inline footer row beneath the assistant reply: "Replied in 38s · [Copy]".

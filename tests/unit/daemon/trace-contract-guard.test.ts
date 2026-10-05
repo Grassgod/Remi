@@ -325,7 +325,7 @@ describe("trace contract drift guards", () => {
 
   it("derives the sanitizer's status set from the contract, so they cannot drift", () => {
     // `TRACE_EVENT_STATUSES` (contracts) is the single definition; the sanitizer's
-    // lookup set is built from it rather than restating the four values. Assert the
+    // lookup set is built from it rather than restating the values. Assert the
     // derivation is live: every contract status must be accepted by the sanitizer,
     // and the two sets must have the same size. A status added to the contract but
     // not picked up by the sanitizer would fail here.
@@ -335,7 +335,8 @@ describe("trace contract drift guards", () => {
     }
     expect(TRACE_STATUSES.size).toBe(TRACE_EVENT_STATUSES.length);
     // And nothing outside the contract set is accepted.
-    expect(normalizeTraceStatus("cancelled")).toBeNull();
+    expect(normalizeTraceStatus("cancelled")).toBe("cancelled");
+    expect(normalizeTraceStatus("unsupported")).toBeNull();
   });
 
   it("round-trips a TaskMessageInput without losing a field", () => {
