@@ -24,7 +24,7 @@ MUL-506 QA 修订（带头大哥裁定，2026-10-05，MUL-493 评论 cmt_ahun4f6
 4. `multiremi_session_lanes` 以 `(session_id,reader_type,reader_id,execution_scope)` 为主键，支持 agent 与 member。人的 lane 不包含 provider 状态，没有逐条归档；读取只推进 cursor。历史 inbox_items 不迁移，人的 cursor 初始化为迁移后的 head；迁移报告单列未读 attention 项。
 5. 每个自动化拥有 `auto_<autopilot id>` 对话；timer 发送 request 消息。Issue 模式执行仍在 Issue 对话，自动化对话记录指向它的 status。运行账本引用 turn，状态从轮推导。现有 run_only 和按目标调度入口按 run id 分配独立 execution_scope，同一个 auto 对话可以排队多个独立运行；Issue 模式将 timer request 的 seq 绑定到轮的 wake_seq/input 范围，完成时不会重复执行这条输入。
 6. 唯一消息入口为 `sendMessageWithinTransaction(ctx,input,deferredEvents)`，返回 `{message,wake_applied,wake_reason,turn_id?}`。事务归调用方。状态机、门铃规则和 producer 已接入；终态回复暂存与自动化结果也通过该入口。agent 来回上限默认 5 次，可通过环境变量调整。
-7. Issue 状态只由轮与未答复 decision 推导，尝试失败、等待重试、换机不参与。父子 Issue 守卫与依赖规则继续适用。
+7. Issue 状态只由轮与未答复 decision 推导，尝试失败、等待重试、换机不参与。intake 的轮正常结束后，有生成单则 done，没有则 in_review；轮失败为 blocked，无负责人也适用。活跃轮、未答复负责人 decision 和父子守卫优先。成员发给 agent 的 now request 在依赖未满足时统一强启，同事务写 dependency_force_started；agent request 仍降为 next_turn。显式 next_turn/inbox_only 不提升，HTTP 不接受 force 参数。父子 Issue 守卫与依赖规则继续适用。
 8. 旧 CLI 命令登记 retired，执行提示替代命令；旧路由返回 410。daemon 协议号仍为 2，以最低 CLI 版本门拒绝旧客户端并走现有升级通道。这些接口及 daemon 改接与存储同一版本发布。
 9. 迁移在启动的一次事务中完成，四项预检任一失败即拒绝切换。PG 原 attempts 表原地改造，保留入向 trace/归档外键，并显式建立 attempt.turn_id → turn.id 外键；已完成迁移的 PG 启动也检查补齐该外键。旧表迁移后保留但停止写入；物理删除通过单独脚本的两组选项执行。
 

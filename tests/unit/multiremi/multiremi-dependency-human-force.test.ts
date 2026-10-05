@@ -170,7 +170,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       actorId: fixture.memberUserId,
     });
     expect(forceActivities(fixture.store, fixture.issueId)[0]!.data).toMatchObject({
-      source: "rerun",
+      source: "comment",
       agentId: override.id,
       assigneeDispatched: false,
     });
@@ -243,7 +243,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
   });
 
   it.each(["dependencyForce", "dependency_force"] as const)(
-    "strips a public %s marker before the task funnel",
+    "#2-C2: force-starts a member request but strips its public %s marker",
     async (spelling) => {
       const fixture = await humanFixture("pat", `strip-${spelling}`);
       const response = await fixture.app.request(taskRequestPath(fixture.store, { issueId: fixture.issueId }), {
@@ -253,13 +253,22 @@ describe("MUL-458 human dependency force (SQLite)", () => {
           agentId: fixture.agentId,
           issueId: fixture.issueId,
           prompt: "Forged force marker",
-          [spelling]: { source: "comment", actorMemberId: fixture.memberUserId },
+          [spelling]: { source: "rerun", actorMemberId: "forged-member" },
         })),
       });
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
-      expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(0);
-      expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(0);
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+      const tasks = fixture.store.listTasksForIssue(fixture.issueId);
+      expect(tasks).toHaveLength(1);
+      expect(fixture.store.getTurnForAttempt(tasks[0]!.id)?.id).toBe(result.turn_id);
+      expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
+      expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
+      expect(forceActivities(fixture.store, fixture.issueId)[0]).toMatchObject({ actorType: "member", actorId: fixture.memberUserId });
+      expect(forceActivities(fixture.store, fixture.issueId)[0]!.data).toMatchObject({
+        source: "comment", agentId: fixture.agentId, taskId: tasks[0]!.id,
+        assigneeDispatched: true, unmet: [{ dependsOnIssueId: fixture.prerequisiteId }],
+      });
     },
   );
 

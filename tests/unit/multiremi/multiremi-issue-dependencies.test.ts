@@ -156,7 +156,8 @@ describe("MUL-452 E3 replay", () => {
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     const rounds = store.listTasksForIssue(dependent.id);
     expect(rounds).toHaveLength(1);
-    expect(rounds[0]?.parentTaskId).toBe(task.id);
+    const turn = store.getTurnForAttempt(rounds[0]!.id)!;
+    expect(store.getMessage(turn.trigger_message_id!)?.task_id).toBe(store.getTurnForAttempt(task.id)?.id);
     expect(allActivityRows(store, dependent.id, "dependency_auto_started")[0]?.data)
       .toMatchObject({ dependency_check_event_id: check.id });
   });
@@ -1220,23 +1221,28 @@ describe("MUL-400 E3 — task-creation gate", () => {
     return { store, runtime, agent, prereq, dependent };
   }
 
-  it("refuses a task-identity call through POST /api/multiremi/tasks with 409", async () => {
+  it("#2-C2: records a real task-identity request without force-starting", async () => {
     const { store, agent, dependent } = parked();
+    const sender = store.createAgent({ name: "Task requester", provider: "claude" });
+    const sourceIssue = store.createIssue({ title: "Task request source" });
+    const source = store.createTask({ agentId: sender.id, issueId: sourceIssue.id, prompt: "Request work" });
+    const credential = await store.createTaskAccessToken(source, "local");
     const app = createMultiremiApp({ store });
     const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${credential.token}` },
       body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early" })),
     });
-    expect(response.status).toBe(409);
-    const body = await response.json() as { code?: string; error?: string };
-    expect(body.code).toBe("dependencies_unmet");
-    expect(body.error).toContain("force");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ wake_applied: "next_turn", wake_reason: "dependencies_unmet", message: { sender_type: "agent", sender_id: sender.id } });
+    expect(body.turn_id).toBeUndefined();
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(0);
   });
 
-  it("refuses a member call through POST /api/multiremi/tasks with 409 too", async () => {
-    // The gate is structural: a member passes the route's auth but not the gate.
+  it("#2-C2: force-starts a member request to an unassigned Issue", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
     const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
@@ -1244,10 +1250,15 @@ describe("MUL-400 E3 — task-creation gate", () => {
       headers: { "content-type": "application/json", "x-multiremi-actor": "member" },
       body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "member start" })),
     });
-    expect(response.status).toBe(409);
-    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
-    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.agentId).toBe(agent.id);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, assigneeDispatched: false });
   });
 
   it("lets assignIssue dispatch once a member force moved the issue out of backlog", () => {
@@ -1371,15 +1382,15 @@ describe("MUL-400 E3 — task-creation gate", () => {
     const response = await app.request(issueMessagesPath(store, dependent.id), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id }, { type: "role", ref: "issue_owner" })),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     });
     expect(response.status).toBe(200);
     const tasks = store.listTasksForIssue(dependent.id);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.prompt).toContain("started it by rerunning it");
+    expect(tasks[0]!.prompt).toContain("started it by commenting");
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({
-      source: "rerun",
+      source: "comment",
       taskId: tasks[0]!.id,
       agentId: agent.id,
       assigneeDispatched: false,
@@ -1470,12 +1481,16 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra })),
     });
-    expect(response.status).toBe(409);
-    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
-    // The whole row set: nothing at all was created.
-    expect(allTaskRows(store, dependent.id)).toEqual([]);
-    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
-    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+    // #2-C2: a member request starts work; the public exemption fields remain ignored.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ attempt: 1, maxAttempts: 3 });
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, assigneeDispatched: true });
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
   });
 
@@ -2269,7 +2284,7 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
     };
   }
 
-  it("answers 409 dependencies_unmet and leaves participants, lanes and tasks unchanged", async () => {
+  it("#2-C2: a member session request force-starts with participant, lane, turn and audit", async () => {
     const { store, agent, dependent, session, prereq } = waiting("session_409");
     const app = createMultiremiApp({ store });
     const before = sessionShape(store, session.id);
@@ -2280,17 +2295,19 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
       headers: { "content-type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, prompt: "Start blocked work" }, { type: "role", ref: "issue_owner" })),
     });
-    const payload = await response.json() as { code?: string; error?: string; unmet?: Array<{ key: string }> };
+    const payload = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(payload.code).toBe("dependencies_unmet");
-    // The report names the prerequisite that holds the issue.
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
     const prerequisite = store.getIssue(prereq.id)!;
-    expect(payload.unmet).toHaveLength(1);
-    expect(payload.unmet![0]).toMatchObject({ key: prerequisite.key, status: "in_progress" });
-
-    // Nothing about the session moved.
-    expect(sessionShape(store, session.id)).toEqual(before);
+    expect(sessionShape(store, session.id)).toEqual({ participants: [agent.id], lanes: 1, tasks: 1 });
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(store.getTurnForAttempt(tasks[0]!.id)?.id).toBe(payload.turn_id);
+    const audit = allActivityRows(store, dependent.id, "dependency_force_started");
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(audit[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, unmet: [{ key: prerequisite.key, status: "in_progress" }] });
   });
 
   it("still creates the participant, the lane and the round for an ordinary issue", async () => {

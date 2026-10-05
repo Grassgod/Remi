@@ -443,7 +443,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getIssue(issue.id)?.status).toBe("in_progress");
   });
 
-  it("maps a waiting session task request to 409 with unmet prerequisites (PG)", async () => {
+  it("#2-C2: force-starts a waiting member session request with an audit (PG)", async () => {
     const agent = store.createAgent({ name: `Session gate ${++wsCounter}`, provider: "claude" });
     const prerequisite = store.createIssue({ title: "Session prerequisite", status: "in_progress" });
     const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
@@ -453,15 +453,23 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id, prompt: "blocked" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prerequisite.key }] });
-    expect(store.listTasksForIssue(issue.id)).toEqual([]);
-    expect(store.getIssue(issue.id)?.status).toBe("backlog");
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+    const tasks = store.listTasksForIssue(issue.id);
+    expect(tasks).toHaveLength(1);
+    expect(store.getTurnForAttempt(tasks[0]!.id)?.id).toBe(result.turn_id);
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    const audit = store.listIssueActivity(issue.id).filter(row => row.type === "dependency_force_started");
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(audit[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, assigneeDispatched: false, unmet: [{ key: prerequisite.key }] });
     const unknownAgent = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { agent_id: "agt_not_found", prompt: "blocked" }, { type: "role", ref: "issue_owner" })),
     });
     expect(unknownAgent.status).toBe(400);
+    store.cancelTurn(result.turn_id);
   });
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
@@ -3476,15 +3484,24 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
 
     // (a) forged exemptions are ignored on the public task route
+    const requester = store.createAgent({ name: "PG exemption requester", provider: "codex" });
+    const sourceIssue = store.createIssue({ title: "PG exemption source" });
+    const source = store.createTask({ agentId: requester.id, issueId: sourceIssue.id, prompt: "Request work" });
+    const credential = await store.createTaskAccessToken(source, "local");
     for (const extra of [{ attempt: 2 }, { preserve_issue_status: true }]) {
-      const response = await post(issueMessagesPath(store, waiting.id), requestMessageBody(store, {
-        agentId: owner.id,
-        issueId: waiting.id,
-        prompt: "forged",
-        ...extra,
-      }));
-      expect(response.status).toBe(409);
-      expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
+      const response = await app.request(issueMessagesPath(store, waiting.id), {
+        method: "POST", headers: { "content-type": "application/json", Authorization: `Bearer ${credential.token}` },
+        body: JSON.stringify(requestMessageBody(store, {
+          agentId: owner.id,
+          issueId: waiting.id,
+          prompt: "forged",
+          ...extra,
+        })),
+      });
+      expect(response.status).toBe(200);
+      const payload = await response.json();
+      expect(payload).toMatchObject({ wake_applied: "next_turn", wake_reason: "dependencies_unmet" });
+      expect(payload.turn_id).toBeUndefined();
     }
     expect(taskRows()).toHaveLength(0);
     expect(store.getIssue(waiting.id)?.status).toBe("backlog");

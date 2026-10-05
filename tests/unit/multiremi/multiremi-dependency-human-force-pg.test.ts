@@ -234,14 +234,17 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     }
   });
 
-  it("retains the unresolved member rerun override conflict", async () => {
+  it("#2-C2: force-starts a member request to the rerun override", async () => {
     const rerun = await fixture("jwt", "rerun");
     const override = store.createAgent({ name: `PG override ${counter}`, provider: "claude", visibility: "workspace" });
     expect((await rerun.app.request(issueMessagesPath(rerun.store, rerun.issue.id), {
       method: "POST", headers: rerun.headers, body: JSON.stringify(requestMessageBody(rerun.store, { agent_id: override.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     })).status).toBe(200);
     expect(store.listTasksForIssue(rerun.issue.id)[0]!.agentId).toBe(override.id);
-    expect(forces(rerun.issue.id)[0]!.data).toMatchObject({ source: "rerun", assigneeDispatched: false });
+    expect(store.getIssue(rerun.issue.id)?.status).toBe("todo");
+    expect(forces(rerun.issue.id)).toHaveLength(1);
+    expect(forces(rerun.issue.id)[0]).toMatchObject({ actorType: "member", actorId: rerun.userId });
+    expect(forces(rerun.issue.id)[0]!.data).toMatchObject({ source: "comment", agentId: override.id, assigneeDispatched: false });
 
   });
 
@@ -294,12 +297,20 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
         method: "POST", headers: target.headers,
         body: JSON.stringify(requestMessageBody(target.store, {
           agentId: target.agent.id, issueId: target.issue.id, prompt: "Forged",
-          [spelling]: { source: "comment", actorMemberId: target.userId },
+          [spelling]: { source: "rerun", actorMemberId: "forged-member" },
         })),
       });
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
-      expect(store.listTasksForIssue(target.issue.id)).toHaveLength(0);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+      const tasks = store.listTasksForIssue(target.issue.id);
+      expect(tasks).toHaveLength(1);
+      expect(store.getIssue(target.issue.id)?.status).toBe("todo");
+      expect(forces(target.issue.id)).toHaveLength(1);
+      expect(forces(target.issue.id)[0]).toMatchObject({ actorType: "member", actorId: target.userId });
+      expect(forces(target.issue.id)[0]!.data).toMatchObject({
+        source: "comment", agentId: target.agent.id, taskId: tasks[0]!.id,
+        assigneeDispatched: true, unmet: [{ dependsOnIssueId: target.prerequisite.id }],
+      });
     }
   });
 

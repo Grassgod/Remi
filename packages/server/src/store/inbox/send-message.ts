@@ -8,7 +8,7 @@ import { resolveWake } from './wake-policy.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { lockLane } from './lane-machine.js';
 import { deliverToRunningTurn, ensurePendingTurn } from './lane-machine.js';
-import { dependencyGateEnabled, IssueDependencyError } from '../repos/issue-dependencies.js';
+import { dependencyGateEnabled } from '../repos/issue-dependencies.js';
 import { parseJson } from '../helpers.js';
 import { toConversationLogEntry } from '../repos/conversation-log-repo.js';
 import type { MultiremiAgent } from '@multiremi/contracts/types.js';
@@ -127,16 +127,12 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     ?ctx.db.query("SELECT * FROM multiremi_turns WHERE id=? AND status IN ('running','awaiting_human')").get(reply.task_id):null;
   const unmet=dependencyGateEnabled()&&targetIssue?.status==='backlog'?ctx.issues().listUnmetPrerequisites(targetIssue.id):[];
   let force=createInput.dependencyForce??createInput.dependency_force;
-  if (!force && unmet.length && input.sender.type === 'member' && policyWantsWork(input) && targetIssue) {
+  if (!force && unmet.length && input.sender.type === 'member' && recipientType === 'agent' && policyWantsWork(input) && targetIssue) {
     const mention = /mention:\/\/(agent|squad)\/([^\s)]+)/.exec(input.body_md);
     const mentionedAgent = mention?.[1] === 'squad' ? ctx.squads().getSquad(mention[2]!)?.leaderId : mention?.[2];
-    if (input.to.type === 'role' && input.to.ref === 'issue_owner' || mentionedAgent === recipientId) {
-      const actor = ctx.workspaces().getWorkspaceMember(input.sender.id!);
-      force = { source: mention ? 'mention' : 'comment', actorMemberId: actor?.userId ?? input.sender.id! };
-      createInput = { ...createInput, dependencyForce: force };
-    } else {
-      throw new IssueDependencyError('dependencies_unmet', `${targetIssue.key} is waiting on unfinished prerequisites; a member can force its status to todo`, { unmet });
-    }
+    const actor = ctx.workspaces().getWorkspaceMember(input.sender.id!);
+    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.userId ?? input.sender.id! };
+    createInput = { ...createInput, dependencyForce: force };
   }
   const sourceSession=source?ctx.issueSessions().getIssueSession(source.session_id):null;
   const limit=pairRoundTripLimit();

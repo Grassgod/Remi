@@ -3711,6 +3711,7 @@ export class IssuesRepo {
           workspaceId: current.workspaceId,
           prompt: current.title,
           parentTaskId,
+          assignmentAuthorType: "system",
         }, nested, deferredEvents);
         deferredEvents.enqueuedTasks.push(task);
         this.ctx.appendIssueActivity(dependent.id, {
