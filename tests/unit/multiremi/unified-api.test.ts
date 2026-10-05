@@ -69,15 +69,37 @@ it("gets, edits, resolves, reacts and tombstones a message", async () => {
   expect(store.getMessage(id)?.to_agent_id).toBe(agent.id);
   expect((await request(`/api/messages/${id}/resolve`, "POST", {})).data.message.resolved_at).toBeTruthy();
   expect((await request(`/api/messages/${id}/resolve`, "POST", { resolved: false })).data.message.resolved_at).toBeNull();
-  for (let i = 0; i < 2; i++) expect((await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", actorId: "forged" })).data.reactions).toHaveLength(1);
+  // Unauthenticated internal requests trust an explicitly supplied actor.
+  for (let i = 0; i < 2; i++) {
+    const explicit = await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", actorId: "forged" });
+    expect(explicit.status).toBe(200);
+    expect(explicit.data.reactions).toEqual([expect.objectContaining({ actorId: "forged", actorType: "member", emoji: "+1" })]);
+  }
+  expect((await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", actorId: "forged", remove: true })).data.reactions).toHaveLength(0);
   const reactions = (await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1" })).data.reactions;
-  expect(reactions[0]).toMatchObject({ commentId: id, actorId: "mem_local_local", actorType: "member", emoji: "+1" });
+  expect(reactions[0]).toMatchObject({ commentId: id, actorId: "local", actorType: "member", emoji: "+1" });
   expect((await request(`/api/messages/${id}`)).data.message.reactions).toEqual(reactions);
   expect((await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", remove: true })).data.reactions).toHaveLength(0);
   expect((await request(`/api/messages/${id}`, "GET")).data.message.body_md).toBe("edited");
   expect((await request(`/api/messages/${id}`, "DELETE")).data.message.deleted_at).toBeTruthy();
   expect((await request(`/api/messages/${id}`, "DELETE")).status).toBe(200);
   expect((await request(path())).data.messages).toHaveLength(0);
+});
+it("uses the authenticated member PAT for reactions despite an explicit forged actor", async () => {
+  const id = (await send("reaction")).data.message.id;
+  const user = store.getOrCreateUser({ externalId: "reaction-member", name: "Reaction member" });
+  store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
+  const access = await store.createAccessToken({ name: "reaction-member", type: "pat", userId: user.id, workspaceId: "local" });
+  app = createMultiremiApp({ store, authToken: "fixture-master" });
+  const headers = { Authorization: `Bearer ${access.token}` };
+  for (let i = 0; i < 2; i++) {
+    const result = await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", actorId: "forged" }, headers);
+    expect(result.status).toBe(200);
+    expect(result.data.reactions).toEqual([expect.objectContaining({ commentId: id, actorId: user.id, actorType: "member", emoji: "+1" })]);
+    expect((await request(`/api/messages/${id}`, "GET", undefined, headers)).data.message.reactions).toEqual(result.data.reactions);
+  }
+  const removed = await request(`/api/messages/${id}/reactions`, "POST", { emoji: "+1", actorId: "forged", remove: true }, headers);
+  expect(removed.status).toBe(200); expect(removed.data.reactions).toHaveLength(0);
 });
 it("rejects editing consumed content and editing another sender's message", async () => {
   const sent = await send("consumed");
@@ -136,14 +158,27 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).data.turn.wrap_up_requested_at).toBeTruthy();
   expect(store.listMessages(session.id)).toHaveLength(1);
   expect((await request(`/api/turns/${id}/cancel`, "POST", {})).data.turn.status).toBe("cancelled");
-  store.setAgentRole(agent.id, "supervisor");
-  const supervisor = await store.createTaskAccessToken(store.getTask(oldAttempt!)!, "local");
+  store.setAgentRole(other.id, "supervisor");
+  const supervisorIssue = store.createIssue({ title: "Supervision", assigneeType: "agent", assigneeId: other.id });
+  const supervisorTask = store.createTask({ agentId: other.id, issueId: supervisorIssue.id, prompt: "Supervise" });
+  const supervisor = await store.createTaskAccessToken(supervisorTask, "local");
+  store.updateWorkspace("local", { settings: { ...store.getWorkspace("local")!.settings, organizer: { mode: "act" } } });
   const retried = await request(`/api/turns/${id}/retry`, "POST", { cold: true }, { Authorization: `Bearer ${supervisor.token}` });
-  expect(retried.status).toBe(200); expect(retried.data.turn.id).toBe(id); expect(retried.data.turn.current_attempt_id).not.toBe(oldAttempt);
-  expect(store.listTurns({ workspace_id: "local" })).toHaveLength(1); expect(store.listTurnAttempts(id)).toHaveLength(2);
+  expect(retried.status, JSON.stringify(retried.data)).toBe(200); expect(retried.data.turn.id).toBe(id); expect(retried.data.turn.current_attempt_id).not.toBe(oldAttempt);
+  expect(store.listTurns({ workspace_id: "local", issue_id: issue.id })).toHaveLength(1); expect(store.listTurnAttempts(id)).toHaveLength(2);
   expect((await request(`/api/turns/${id}/trace`)).data.attempt_id).toBe(retried.data.turn.current_attempt_id);
   expect((await request(`/api/turns/${id}/trace?attempt_id=${oldAttempt}`)).data.attempt_id).toBe(oldAttempt);
   expect((await request(`/api/turns/${id}/trace?attempt_id=other`)).status).toBe(404);
+});
+it("rejects a supervisor retrying its own target task with its task token", async () => {
+  store.setAgentRole(agent.id, "supervisor");
+  store.updateWorkspace("local", { settings: { ...store.getWorkspace("local")!.settings, organizer: { mode: "act" } } });
+  const sent = await send("work"), turn = store.getTurn(sent.data.turn_id)!;
+  const access = await store.createTaskAccessToken(store.getTask(turn.current_attempt_id!)!, "local");
+  app = createMultiremiApp({ store, authToken: "fixture-master" });
+  const result = await request(`/api/turns/${turn.id}/retry`, "POST", { cold: true }, { Authorization: `Bearer ${access.token}` });
+  expect(result.status).toBe(403); expect(result.data.code).toBe("organizer_self_action_forbidden");
+  expect(store.getTurn(turn.id)).toEqual(turn); expect(store.listTurnAttempts(turn.id)).toHaveLength(1);
 });
 it("uses the task credential for message sender, source turn and its own inbox", async () => {
   const sent = await send("source"), turn = store.getTurn(sent.data.turn_id)!;
