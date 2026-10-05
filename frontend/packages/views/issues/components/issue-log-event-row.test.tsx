@@ -6,6 +6,10 @@ import { renderWithI18n } from "../../test/i18n";
 import { IssueLogEventRow } from "./issue-log-event-row";
 import { firstTaskResponses, isSystemDetail, assignmentAuthor } from "./issue-log-presentation";
 
+// This suite asserts the event summary row. Turn controls have their own
+// QueryClient-backed component suite in common/turn-controls.test.tsx.
+vi.mock("../../common/turn-controls", () => ({ TurnControls: () => null }));
+
 const getActorName = (type: string, id: string) => ({ "agent:qa": "QA", "agent:lead": "Lead", "member:user": "User" })[type + ":" + id as "agent:qa"] ?? "";
 function row(extra: Partial<SessionLogRow> = {}): SessionLogRow {
   return SessionLogEntrySchema.parse({ session_id: "s", seq: 1, id: "r", revision: 1, kind: "turn", task_id: "task",
@@ -21,6 +25,16 @@ function Event({ entry = row(), results = new Map(), onShowKeyResults = vi.fn(),
 }
 
 describe("Issue log presentation", () => {
+  it.each(["reply", "request", "report", "status", "final", "decision"])(
+    "keeps canonical %s messages in the default conversation despite legacy envelopes", messageKind => {
+      const entry = row({ kind: "message", sender_type: "member", sender_id: "user",
+        message_kind: messageKind, body_md: "中文 **正文** 🧪", metadata: { envelope: { kind: "notification" } } });
+      expect(isSystemDetail(entry)).toBe(false);
+      expect(isSystemDetail(row({ ...entry, sender_type: "agent", sender_id: "qa" }))).toBe(false);
+      expect(isSystemDetail(row({ ...entry, sender_type: undefined }))).toBe(false);
+    },
+  );
+
   it("routes the five internal types before rendering, preserving assignments, comments and workspace changes", () => {
     const hidden = [
       row({ kind: "result_published" }),

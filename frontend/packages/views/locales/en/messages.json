@@ -67,5 +67,6 @@
   "no_attempts": "No attempts",
   "load_more": "Load more",
   "retry_load": "Reload",
-  "consumed_draft": "This message has been read or removed. Your draft is kept here so you can copy it."
+  "consumed_draft": "This message has been read or removed. Your draft is kept here so you can copy it.",
+  "consumed_message": "This message has already been read by the agent. It can no longer be edited or deleted."
 }

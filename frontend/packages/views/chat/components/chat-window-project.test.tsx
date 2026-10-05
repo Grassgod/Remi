@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
+import { chatKeys } from "@multiremi/core/chat/queries";
 import type { ChatSession } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
@@ -12,7 +13,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
   pending: {} as Record<string, unknown>,
-  create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(),
+  create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
@@ -41,6 +42,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     createChatSession: backend.create,
     updateChatSession: backend.update,
     sendChatMessage: backend.send,
+    markChatSessionRead: backend.markRead,
   } };
 });
 vi.mock("@multiremi/core/logger", async (importOriginal) => {
@@ -161,7 +163,29 @@ beforeEach(() => {
   });
   backend.send.mockReset().mockResolvedValue({ task_id: "task-a", message_id: "message-a", created_at: "2026-09-17", supports_queue: true, queued: false });
   backend.refresh.mockReset().mockResolvedValue(undefined);
+  backend.markRead.mockReset().mockImplementation(async (id: string) => {
+    backend.sessions = backend.sessions.map(current => current.id === id
+      ? { ...current, has_unread: false, unread_count: 0 } : current);
+  });
   apiLogger.error.mockReset();
+});
+
+describe("ChatWindow automatic read", () => {
+  it("stops after the acknowledged list refresh and reads again only for a new reply", async () => {
+    backend.sessions = [{ ...session, has_unread: true, unread_count: 1 }];
+    const view = mount(true);
+    try {
+      await waitFor(() => expect(backend.markRead).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(view.client.getQueryData<ChatSession[]>(chatKeys.sessions("workspace-a"))?.[0]?.has_unread).toBe(false));
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ["chat"] }); });
+      expect(backend.markRead).toHaveBeenCalledTimes(1);
+      backend.sessions = [{ ...session, has_unread: true, unread_count: 1, updated_at: "2026-10-05" }];
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ["chat"] }); });
+      await waitFor(() => expect(backend.markRead).toHaveBeenCalledTimes(2));
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ["chat"] }); });
+      expect(backend.markRead).toHaveBeenCalledTimes(2);
+    } finally { view.unmount(); view.client.clear(); }
+  });
 });
 
 describe("ChatWindow plain HTTP sends", () => {

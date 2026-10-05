@@ -6,6 +6,8 @@ export function isSystemDetail(entry: SessionLogEntry): boolean {
   if (entry.seq === 0) return false;
   const row = entry as SessionLogRow;
   const metadata = metadataRecord(row.metadata);
+  // Canonical messages may retain envelope metadata from their write adapter.
+  if (row.kind === "message" && (row.message_kind || row.sender_type)) return false;
   if (metadata.envelope) return true;
   if (metadata.type === "workspace_move_cleared") return false;
   if (row.kind === "message" && (!!row.message_kind || row.author_type === "member" || (row.sender_type ?? row.author_type) === "agent")) return false;

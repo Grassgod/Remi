@@ -4,15 +4,32 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderWithI18n } from "../../test/i18n";
 import { messageFixture } from "../../test/messages";
 const mock = vi.hoisted(() => ({ listMessages: vi.fn(), editMessage: vi.fn(), deleteMessage: vi.fn() }));
-vi.mock("@multiremi/core/api", () => ({ api: mock }));
+vi.mock("@multiremi/core/api", async importOriginal => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(), api: mock,
+}));
 vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: "user-1" } }) }));
 vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [{ id: "member-1", user_id: "user-1" }] }) }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 import { ChatQueue } from "./chat-queue";
+import { ApiError } from "@multiremi/core/api";
 const message = messageFixture({ session_id: "chat_1", sender_type: "member", sender_id: "member-1", body_md: "Follow up" });
 function mount() { return renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><ChatQueue sessionId="chat_1" agentId="agent_1" /></QueryClientProvider>); }
 beforeEach(() => { vi.clearAllMocks(); mock.listMessages.mockResolvedValue({ messages: [message], next_cursor: null }); mock.editMessage.mockResolvedValue(message); mock.deleteMessage.mockResolvedValue(message); });
 describe("unread Chat messages", () => {
+  it.each(["edit", "delete"])("explains the agent-read conflict after a rejected %s", async action => {
+    const conflict = new ApiError("A consumed message cannot be edited or deleted", 409, "Conflict");
+    (action === "edit" ? mock.editMessage : mock.deleteMessage).mockRejectedValueOnce(conflict);
+    mount(); await screen.findByText("Follow up");
+    if (action === "edit") {
+      fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep this draft" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    } else fireEvent.click(screen.getByRole("button", { name: "Remove queued message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already been read by the agent");
+    if (action === "edit") expect(screen.getByRole("textbox")).toHaveValue("Keep this draft");
+    else expect(screen.getByText("Follow up")).toBeInTheDocument();
+  });
+
   it("uses the agent unread cursor and has edit/delete without prioritize", async () => {
     mount(); await screen.findByText("Follow up");
     expect(mock.listMessages).toHaveBeenCalledWith("chat_1", { unread_by: "agent_1", cursor: undefined, limit: 100 });

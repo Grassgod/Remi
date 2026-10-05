@@ -67,5 +67,6 @@
   "no_attempts": "暂无尝试",
   "load_more": "加载更多",
   "retry_load": "重新加载",
-  "consumed_draft": "消息已被读到或删除。草稿保留在这里，可以复制后重新发送。"
+  "consumed_draft": "消息已被读到或删除。草稿保留在这里，可以复制后重新发送。",
+  "consumed_message": "消息已被 agent 读取，无法再编辑或删除。"
 }

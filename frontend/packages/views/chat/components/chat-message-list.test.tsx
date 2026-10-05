@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { TraceEvent } from "@multiremi/contracts/trace";
@@ -6,6 +6,7 @@ import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/t
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
+import type { OptimisticChatRow } from "../lib/optimistic-log";
 
 vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
   ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
@@ -179,6 +180,36 @@ function renderList(
 }
 
 describe("ChatMessageList measurement contract", () => {
+  it("shows canonical envelope messages, replaces edited bodies, removes deleted sends and survives reload", () => {
+    const client = new QueryClient();
+    const entry = (seq: number, body: string) => SessionLogEntrySchema.parse({ session_id: "cs-1", seq,
+      id: `message-${seq}`, revision: 1, kind: "message", sender_type: "member", sender_id: "user",
+      message_kind: "request", dedupe_key: `send-${seq}`, body_md: body, body_html: null,
+      render_version: null, metadata: { envelope: { kind: "notification" } } });
+    const first = entry(1, "BEFORE");
+    const second = entry(2, "DELETE_ME");
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [first, second] } });
+    const locals: OptimisticChatRow[] = [first, second].map(row => ({ clientId: row.dedupe_key!,
+      sessionId: "cs-1", content: row.body_md, localSeq: row.seq, createdAt: "2026-10-05",
+      status: "sent", confirmedAt: 100 }));
+    const content = (optimisticRows: OptimisticChatRow[]) => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={optimisticRows}
+        pendingTask={null} availability={undefined} />
+    </QueryClientProvider>;
+    const view = render(content(locals));
+    expect(view.container).toHaveTextContent("BEFORE");
+    expect(view.container).toHaveTextContent("DELETE_ME");
+    act(() => replica.setWindow("cs-1", [{ ...first, revision: 2, body_md: "AFTER 中文 🧪" }], { head: 4 }));
+    expect(view.container).toHaveTextContent("AFTER 中文 🧪");
+    expect(view.container).not.toHaveTextContent(/BEFORE|DELETE_ME/);
+    expect(view.container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(1);
+    view.unmount();
+    const reloaded = render(content([]));
+    expect(reloaded.container).toHaveTextContent("AFTER 中文 🧪");
+    expect(reloaded.container).not.toHaveTextContent(/BEFORE|DELETE_ME/);
+    reloaded.unmount(); client.clear();
+  });
+
   it("filters internal messages and future log kinds out of the row list", () => {
     const client = new QueryClient();
     const entries = ["message", "follow_frozen", "system", "result_published"].map((kind, index) => ({

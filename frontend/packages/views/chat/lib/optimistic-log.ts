@@ -40,6 +40,9 @@ export function mergeOptimisticChatRows(
   }
   for (const local of localRows) {
     if (matched.has(local.clientId)) continue;
+    // Once observed in the log, only the authoritative row may supply its body.
+    // Deletes, hidden markers and window changes must not revive the draft.
+    if (local.confirmedAt !== undefined) continue;
     rows.push({
       session_id: local.sessionId,
       seq: local.localSeq,

@@ -109,8 +109,10 @@ export function ChatMessageList({
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
     mergeOptimisticChatRows(entries.filter(entry => {
-      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; metadata?: Record<string, unknown> };
-      if (row.seq === 0 || metadataRecord(row.metadata).envelope) return false;
+      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; metadata?: Record<string, unknown> };
+      if (row.seq === 0) return false;
+      if (row.kind === "message" && (row.message_kind || row.sender_type)) return true;
+      if (metadataRecord(row.metadata).envelope) return false;
       if (row.kind === "message" && row.author_type === "system" && !row.sender_type) return false;
       return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message";
     }), optimisticRows), [optimisticRows]);

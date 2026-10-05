@@ -26,6 +26,16 @@ function attachment(id: string): Attachment {
 }
 
 describe("optimistic chat log merge", () => {
+  it("uses edited canonical bodies and never restores an observed row after deletion or hiding", () => {
+    const draft = { ...local("send-1", 5.000001), content: "BEFORE", status: "sent" as const, confirmedAt: 100 };
+    const edited = { ...entry(6, "send-1"), revision: 2, body_md: "AFTER" };
+    expect(mergeOptimisticChatRows([edited], [draft])).toMatchObject([{ body_md: "AFTER", revision: 2 }]);
+    expect(mergeOptimisticChatRows([], [draft])).toEqual([]);
+    expect(mergeOptimisticChatRows([], [{ ...draft, status: "hidden" }])).toEqual([]);
+    expect(mergeOptimisticChatRows([], [local("unconfirmed", 7.000001)])).toHaveLength(1);
+    expect(mergeOptimisticChatRows([], [{ ...local("failed", 7.000002), status: "failed" }])).toHaveLength(1);
+  });
+
   it("matches by canonical dedupe_key, keeps the DOM identity and position as each send is confirmed", () => {
     const first = local("send-1", 5.000001);
     const second = local("send-2", 5.000002);

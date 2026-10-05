@@ -38,7 +38,9 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 
 ## 统一消息与轮展示
 
-对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Chat 乐观发送以 canonical dedupe_key 匹配日志行。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 优先识别 canonical 消息头，保留的 metadata.envelope 不会把正常消息变成系统详情。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+
+Chat 列表和详情的未读数来自创建者对应的 workspace member lane：只计 cursor_seq 之后、发给该成员且 shown/未删除的消息。自动已读经统一 inbox/read 推进同一游标，随后刷新会话列表保持已读；新消息到达后才再次标读。
 
 [TurnControls](../../frontend/packages/views/common/turn-controls.tsx) 展开时才读取 attempts，查看日志时传选中 attempt_id；历史日志与当前尝试独立。失败/取消轮可以暖重试或冷重试，服务端返回同一 turn.id 和新的 current_attempt_id。输入弹窗按需读取 turn input 的完整 `(from_seq,to_seq]` 消息与 legacy_prompt，不在首屏逐行展开。
 

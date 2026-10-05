@@ -7,7 +7,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useAuthStore } from "@multiremi/core/auth";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
-import { api } from "@multiremi/core/api";
+import { api, ApiError } from "@multiremi/core/api";
 import {
   useRemoveChatQueuedTask,
   useUpdateChatQueuedTask,
@@ -38,18 +38,18 @@ export function ChatQueue({
   const tasks = query.data?.pages.flatMap(page => page.messages).filter(message => message.sender_type === "member" && !message.deleted_at) ?? [];
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<"consumed" | "failed" | null>(null);
   const update = useUpdateChatQueuedTask();
   const remove = useRemoveChatQueuedTask();
   const busy =
     update.isPending ||
     remove.isPending;
   const act = async (action: () => Promise<unknown>) => {
-    setError(false);
+    setError(null);
     try {
       await action();
-    } catch {
-      setError(true);
+    } catch (error) {
+      setError(error instanceof ApiError && error.status === 409 ? "consumed" : "failed");
     }
   };
   const editingRemoved = editingId && !tasks.some(task => task.id === editingId);
@@ -152,7 +152,7 @@ export function ChatQueue({
       </div>}
       {(error || query.isError) && (
         <p role="alert" className="px-3 py-2 text-destructive">
-          {t(($) => $.queue.failed)}
+          {error === "consumed" ? tm($ => $.consumed_message) : t(($) => $.queue.failed)}
         </p>
       )}
     </section>
