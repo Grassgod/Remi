@@ -411,7 +411,8 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
         expect(getIssue).toHaveBeenCalledTimes(1);
         expect(getProject).toHaveBeenCalledTimes(1);
       });
-      // The message/form observers need an open window even after the shell gate.
+      // Human requests and the session stream need an open window even after
+      // the shell gate; the persisted final reply keeps its trace dormant.
       expect(getTaskTrace).not.toHaveBeenCalled();
       expect(listTaskHumanRequests).not.toHaveBeenCalled();
       expect(getSessionLog).not.toHaveBeenCalled();
@@ -421,7 +422,6 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       }
       act(() => { useChatStore.getState().setOpen(true); });
       await waitFor(() => {
-        expect(getTaskTrace).toHaveBeenCalledTimes(1);
         expect(listTaskHumanRequests).toHaveBeenCalledTimes(1);
         expect(subscribeStream).toHaveBeenCalledTimes(1);
         expect(getPendingChatTask).toHaveBeenCalledTimes(1);
@@ -429,6 +429,8 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
           expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(true);
         }
       });
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      expect(client.getQueryCache().find({ queryKey: ["task-trace", taskId] })?.isActive()).toBe(false);
       // The 444 replica keeps its window across minimisation; reopening only
       // reconnects the stream and never falls back to the removed page API.
       expect(getSessionLog).not.toHaveBeenCalled();
