@@ -335,6 +335,17 @@ export class AutopilotsRepo {
         id,
         ],
       );
+      if (current.status !== "active" && (input.status ?? current.status) === "active") {
+        // Resume from now: scheduled runs missed while inactive are not replayed.
+        for (const trigger of existingTriggers) {
+          if (trigger.kind !== "schedule" || !trigger.enabled || !trigger.cronExpression) continue;
+          const nextRunAt = computeScheduleNextRun(trigger.cronExpression, trigger.timezone, new Date(now));
+          this.ctx.db.run(
+            "UPDATE multiremi_autopilot_triggers SET next_run_at = ?, updated_at = ? WHERE id = ?",
+            [nextRunAt, now, trigger.id],
+          );
+        }
+      }
       if (restrictionInput === false) {
         this.ctx.db.run(
           `UPDATE multiremi_autopilot_triggers
