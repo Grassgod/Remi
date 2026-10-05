@@ -104,6 +104,35 @@ describe("Session archive v2 writer", () => {
     expect(archive.bytes.toString("latin1")).not.toContain("DO_NOT_ARCHIVE");
   });
 
+  it("closes source descriptors after repeated scans and ZIP writes on Linux", async () => {
+    // Regression: Bun retains the descriptor behind FileHandle.createReadStream
+    // with autoClose:false even when the original FileHandle is closed.
+    if (process.platform !== "linux") return;
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-session-archive-fds-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-1");
+    const sessionRoot = join(storage, ".runtime", "ises_1");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(sessionRoot, "traces"), { recursive: true });
+    mkdirSync(join(sessionRoot, "home"), { recursive: true });
+    writeFileSync(join(sessionRoot, "traces", "tsk_1.jsonl"), traceFileBody({ events: 1 }));
+    for (let index = 0; index < 4; index++) {
+      writeFileSync(join(sessionRoot, "home", `history-${index}.jsonl`), `${index}\n`);
+    }
+
+    const openBefore = readdirSync("/proc/self/fd").length;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const archive = await prepareIssueSessionArchive(issueRoot, {
+        issueId: "iss_1",
+        sessionRoots: [{ sessionId: "ises_1", root: sessionRoot }],
+        sessionRootBoundary: storage,
+      });
+      expect(archive.fileCount).toBe(5);
+    }
+    const openAfter = readdirSync("/proc/self/fd").length;
+    expect(openAfter - openBefore).toBeLessThanOrEqual(8);
+  });
+
   it("records offsets, sizes and digests in index.json that match the container", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-index-"));
     roots.push(root);

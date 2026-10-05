@@ -18,7 +18,7 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_PROVIDER` | 可选，指定 provider；未指定时探测本机健康 provider。至少一个 provider 可执行且已认证，前台 daemon 才能启动。 |
 | `MULTIREMI_WORKSPACES_ROOT` | 工作目录根，默认 `~/.remi/multiremi/workspaces`；不要放在临时发版 checkout 中。 |
 | `MULTIREMI_DAEMON_PORT` | 本机 daemon 控制端口，默认 6131；多 provider 时分配相邻端口。 |
-| `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性 workspace GC。 |
+| `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性 workspace GC。应急设为 false 可暂停定时清理，但不关闭任务结束时的 Session 归档；故障修复上线并验证后应恢复默认值，否则过期工作区不会按计划清理。 |
 | `MULTIREMI_GC_INTERVAL_MS` / `MULTIREMI_GC_TTL_MS` | 启动默认分别为 900000 / 259200000 ms。工作区 `settings.session_archive` 可覆盖有效间隔和 TTL，见[GC policy](../../packages/daemon/src/agent-runtime/workspace/gc-policy.ts)。 |
 | `MULTIREMI_HEARTBEAT_INTERVAL_MS` | v2 不再读取；进程级 `hb` 固定每 15000 ms，所有 provider 与 concierge 共用这条连接。 |
 | `MULTIREMI_CLAIM_IDLE_MAX_MS` | 空闲 claim 的退避上限，默认 30000 ms；退避从 3000 ms 起翻倍到该值。 |
