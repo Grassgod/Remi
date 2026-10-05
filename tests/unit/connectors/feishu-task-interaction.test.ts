@@ -172,7 +172,9 @@ describe("standalone Task interactions", () => {
     expect(JSON.stringify(events)).not.toContain("<at ");
   });
 
-  it.each(["permission", "question"] as const)("finishes a saved native %s waiting step after restart without repeating the card or waiting announcement", async kind => {
+  it.each((["permission", "question"] as const).flatMap(kind =>
+    [undefined, "responded"].map(receiptStatus => ({ kind, receiptStatus }))))(
+    "finishes a saved native waiting step after restart without repeating the card or waiting announcement (%j)", async ({ kind, receiptStatus }) => {
     const h = nativeHarness();
     const r = answered(request(kind), kind === "permission" ? { option_id: "allow" } : { answers: { "Which features?": "A" } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
@@ -180,7 +182,7 @@ describe("standalone Task interactions", () => {
     }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save, checkpoint: {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1,
       cot: { status: "active", presentation: "semantic_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
-      interactions: { hr_test: { messageId: "om_request", waitingStarted: true } },
+      interactions: { hr_test: { messageId: "om_request", waitingStarted: true, receiptStatus } },
     } });
     async function* stream() {
       yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { request_id: r.id } });

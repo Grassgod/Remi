@@ -11,6 +11,8 @@ to reconstruct answer text, tool identity and statistics. Its saved
 acknowledged; it is not used to skip the state needed to reconstruct the final
 answer. Replay also resumes a saved interaction card whose receipt or waiting
 step is unfinished, without repeating its card or waiting announcement.
+An acknowledged receipt with no unfinished waiting step is not read or sent
+again during historical replay.
 Replay is consumed in bounded pages with consumer backpressure.
 The established subscription still owns cursor-based reconnect replay and gap
 filling. The connector performs no messages or status polling, and reads a final
