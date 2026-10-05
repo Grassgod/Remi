@@ -172,9 +172,9 @@ describe("standalone Task interactions", () => {
     expect(JSON.stringify(events)).not.toContain("<at ");
   });
 
-  it("finishes a saved native waiting step after restart without repeating the card or waiting announcement", async () => {
+  it.each(["permission", "question"] as const)("finishes a saved native %s waiting step after restart without repeating the card or waiting announcement", async kind => {
     const h = nativeHarness();
-    const r = answered(request("permission"), { option_id: "allow" });
+    const r = answered(request(kind), kind === "permission" ? { option_id: "allow" } : { answers: { "Which features?": "A" } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, getHumanRequest: async () => r, respondHumanRequest: async () => { throw new Error("already answered"); },
     }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save, checkpoint: {
@@ -182,7 +182,11 @@ describe("standalone Task interactions", () => {
       cot: { status: "active", presentation: "semantic_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
       interactions: { hr_test: { messageId: "om_request", waitingStarted: true } },
     } });
-    async function* stream() { yield taskEvent(1, "permission_request", { input: { request_id: r.id } }); yield completed; }
+    async function* stream() {
+      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { request_id: r.id } });
+      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { request_id: r.id } });
+      yield completed;
+    }
     await presentation.consume(stream());
     expect(h.events().filter(e => e.event_type === "STEP_STARTED")).toHaveLength(0);
     expect(h.events().filter(e => e.event_type === "STEP_FINISHED")).toHaveLength(1);

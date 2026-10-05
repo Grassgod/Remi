@@ -414,8 +414,14 @@ class PgBridge {
     const startedAt = measured ? performance.now() : 0;
     let waitRecorded = false;
     try {
-      const waited = Atomics.wait(this.ctl, 0, STATUS_PENDING, QUERY_TIMEOUT_MS);
-      if (waited === "timed-out") throw new Error("postgres bridge timed out");
+      const deadline = performance.now() + QUERY_TIMEOUT_MS;
+      // A prior reply can set DONE before its notify arrives. If the next
+      // request is already waiting, that late notify must not expose old bytes.
+      while (Atomics.load(this.ctl, 0) === STATUS_PENDING) {
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) throw new Error("postgres bridge timed out");
+        Atomics.wait(this.ctl, 0, STATUS_PENDING, remaining);
+      }
       const status = Atomics.load(this.ctl, 0);
       const len = Atomics.load(this.ctl, 1);
       // The reply is on the shared buffer by now, so its size is what crossed the
