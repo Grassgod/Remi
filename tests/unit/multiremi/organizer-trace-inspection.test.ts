@@ -1,8 +1,9 @@
+import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { organizerTaskInspection, organizerTurnStats } from "@multiremi/api/helpers/organizer.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { TraceReader } from "@multiremi/trace/trace-reader.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -34,7 +35,7 @@ describe("organizer trace inspection", () => {
       store.completeTask(task.id, { output: "" });
       db!.transaction(() => store.recordAttemptOutcomeWithinTransaction(task.id, counts))();
       const app = createMultiremiApp({ store, authToken: "root-secret" });
-      const response = await app.request(`/api/tasks/${task.id}/inspection`, { headers: { Authorization: "Bearer root-secret" } });
+      const response = await app.request(turnApiPath(store, task.id, "?attempts=true"), { headers: { Authorization: "Bearer root-secret" } });
       expect(response.status).toBe(200);
       const { inspection } = await response.json();
       expect(inspection).toMatchObject(counts.eventCount === null ? {

@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -152,13 +153,13 @@ describe("Feishu sender allowlist Issue authorization", () => {
   it("applies approval changes to existing delegated and run-only Autopilot tasks without freezing their policy", async () => {
     const fixture = await allowlistFixture();
     fixture.allow(true);
-    const delegated = await fixture.app.request("/api/multiremi/tasks", {
+    const delegated = await fixture.app.request(taskRequestPath(fixture.store, {  }), {
       method: "POST",
       headers: fixture.headers,
-      body: JSON.stringify({ agentId: fixture.worker.id, prompt: "Delegate the requested Issue" }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { agentId: fixture.worker.id, prompt: "Delegate the requested Issue" })),
     });
-    expect(delegated.status).toBe(201);
-    const delegatedTaskId = (await delegated.json() as { task: { id: string } }).task.id;
+    expect(delegated.status).toBe(200);
+    const delegatedTaskId = sentTask(fixture.store, await delegated.json()).id;
     const autopilot = fixture.store.createAutopilot({
       title: "Existing run-only automation", assigneeId: fixture.worker.id, executionMode: "run_only",
     });

@@ -35,7 +35,7 @@ function seedInbox(store: MultiremiStore, workspaceId: string, memberId: string,
 
 const inboxRoutes = [
   { path: "/api/inbox", memberParameter: "member_id" },
-  { path: "/api/multiremi/inbox", memberParameter: "memberId" },
+  { path: "/api/inbox", memberParameter: "memberId" },
 ];
 
 async function expectInboxMutationsAllowed(
@@ -49,7 +49,7 @@ async function expectInboxMutationsAllowed(
     for (const action of ["read", "archive"]) {
       const item = seedInbox(store, workspaceId, memberId, "Own mutable notification");
       expect(store.getInboxItem(item.id)).toMatchObject({ read: false, archived: false });
-      const response = await app.request(`${route.path}/${item.id}/${action}`, { method: "POST", headers });
+      const response = await app.request("/api/inbox/read", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ session_id: store.getMessage(item.id)?.session_id ?? item.id }) });
       expect(response.status).toBe(200);
       const body = await response.json();
       expect((body.item ?? body).id).toBe(item.id);
@@ -295,7 +295,7 @@ describe("MUL-288: explicit workspace user identity", () => {
     for (const route of inboxRoutes) {
       for (const action of ["read", "archive"]) {
         for (const headers of headerVariants) {
-          const denied = await app.request(`${route.path}/${oldItem.id}/${action}`, { method: "POST", headers });
+          const denied = await app.request("/api/inbox/read", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ session_id: store.getMessage(oldItem.id)?.session_id ?? oldItem.id }) });
           expect(denied.status).toBe(404);
           expect(await denied.json()).toEqual({ error: "inbox item not found" });
           expect(store.getInboxItem(oldItem.id)).toEqual(oldItem);

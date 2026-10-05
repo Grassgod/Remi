@@ -1,8 +1,10 @@
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import { attemptMessagesPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -194,9 +196,12 @@ describe("task human requests (store)", () => {
     expect(runtime.activeTaskCount).toBeGreaterThanOrEqual(1);
   });
 
+});
+
+pendingTurnBackendTests("Human Request unified API", fixture => {
   it("guards Human Request read and response with task transcript visibility", async () => {
-    const store = createStore();
-    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    const { store } = fixture();
+    const aliceMember = store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
     const aliceToken = await store.createAccessToken({
       name: "Alice",
@@ -224,7 +229,8 @@ describe("task human requests (store)", () => {
       ownerId: "alice",
       visibility: "private",
     });
-    const task = store.createTask({ agentId: agent.id, prompt: "Ask Alice" });
+    const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
+    const task = store.sendChatMessage(chat.id, { content: "Ask Alice" }).task;
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     const request = store.createTaskHumanRequest({
@@ -236,24 +242,24 @@ describe("task human requests (store)", () => {
     const aliceAuth = { Authorization: `Bearer ${aliceToken.token}` };
     const bobAuth = { Authorization: `Bearer ${bobToken.token}` };
 
-    expect((await app.request(`/api/tasks/${task.id}/human-requests`, { headers: bobAuth })).status).toBe(403);
-    expect((await app.request(`/api/tasks/${task.id}/human-requests/${request.id}/respond`, {
+    expect((await app.request(`/api/messages/${request.id}`, { headers: bobAuth })).status).toBe(403);
+    expect((await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: { ...bobAuth, "Content-Type": "application/json" },
-      body: JSON.stringify({ response: { answers: { "Proceed?": "yes" } } }),
+      body: JSON.stringify({ ...{ response: { answers: { "Proceed?": "yes" } } }, reply_to_id: request.id, message_kind: "reply" }),
     })).status).toBe(403);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
 
-    const visible = await app.request(`/api/tasks/${task.id}/human-requests`, { headers: aliceAuth });
+    const visible = await app.request(`/api/messages/${request.id}`, { headers: aliceAuth });
     expect(visible.status).toBe(200);
-    expect((await visible.json()).requests).toEqual([expect.objectContaining({ id: request.id })]);
-    const responded = await app.request(`/api/tasks/${task.id}/human-requests/${request.id}/respond`, {
+    expect((await visible.json()).message).toMatchObject({ id: request.id, metadata: { human_request: { status: "pending" } } });
+    const responded = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: { ...aliceAuth, "Content-Type": "application/json" },
-      body: JSON.stringify({ response: { answers: { "Proceed?": "yes" } } }),
+      body: JSON.stringify({ ...{ response: { answers: { "Proceed?": "yes" } } }, reply_to_id: request.id, message_kind: "reply" }),
     });
     expect(responded.status).toBe(200);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
-    expect(store.getTaskHumanRequest(request.id)?.respondedBy).toBe("alice");
+    expect(store.getTaskHumanRequest(request.id)?.respondedBy).toBe(aliceMember.id);
   });
 });

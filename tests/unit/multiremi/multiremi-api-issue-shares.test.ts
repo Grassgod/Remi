@@ -1,9 +1,10 @@
+import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
 import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES, traceFiniteEventBytes } from "./trace-budget-fixtures.js";
@@ -37,7 +38,7 @@ describe("Multiremi API - issue sharing", () => {
         const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
         expect(shared.status).toBe(201);
         const token = (await shared.json()).share.token;
-        const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+        const path = endpoint === "page" ? turnApiPath(store, task.id, "/trace") : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
         const response = await app.request(path, { headers: { "X-Remi-Share": token } });
         expect(response.status).toBe(200);
         const text = await response.text();
@@ -72,7 +73,7 @@ describe("Multiremi API - issue sharing", () => {
       const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
       expect(shared.status).toBe(201);
       const token = (await shared.json()).share.token;
-      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      const path = endpoint === "page" ? turnApiPath(store, task.id, "/trace") : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
       let afterSeq = 0;
       for (const event of original) {
         const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
@@ -107,7 +108,7 @@ describe("Multiremi API - issue sharing", () => {
       const app = createMultiremiApp({ store, daemonTraceReader: daemon, shareSecret: "test-share-secret" });
       const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
       const token = (await shared.json()).share.token;
-      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      const path = endpoint === "page" ? turnApiPath(store, task.id, "/trace") : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
       for (const afterSeq of [0, 1]) {
         daemon.read = async () => ({ ok: true, events: original.slice(afterSeq), next_after_seq: 2, head: 2, eof: true, closed: true });
         const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
@@ -326,25 +327,25 @@ describe("Multiremi API - issue sharing", () => {
     ]);
     for (const [path, credential] of [
       [tracePath, viewer.token],
-      [`/api/tasks/${task.id}/trace`, owner.token],
+      [turnApiPath(store, task.id, "/trace"), owner.token],
     ]) {
       const response = await app.request(path, bearer(credential));
       expect(response.status).toBe(200);
       expect(Buffer.byteLength(await response.text())).toBeLessThanOrEqual(1024 * 1024 + 512);
     }
     // The share deliberately preserves today's private-agent bypass.
-    expect((await app.request(`/api/tasks/${task.id}/trace`, bearer(viewer.token))).status).toBe(404);
+    expect((await app.request(turnApiPath(store, task.id, "/trace"), bearer(viewer.token))).status).toBe(404);
     expect((await app.request(tracePath)).status).toBe(401);
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/tsk_unknown/trace`, bearer(viewer.token))).status).toBe(404);
     const foreignTask = store.createTask({ agentId: agent.id, issueId: otherIssue.id, workspaceId: "local", prompt: "foreign" });
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${foreignTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
     const unscopedTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "unscoped" });
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${unscopedTask.id}/trace`, bearer(viewer.token))).status).toBe(200);
-    db!.run("UPDATE multiremi_tasks SET chat_session_id = 'chat_share_excluded' WHERE id = ?", [unscopedTask.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET chat_session_id = 'chat_share_excluded' WHERE id = ?", [unscopedTask.id]);
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${unscopedTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
     const foreignSession = store.createIssueSession(otherIssue.id, { title: "Foreign session" });
     const wrongSessionTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "wrong session" });
-    db!.run("UPDATE multiremi_tasks SET issue_session_id = ? WHERE id = ?", [foreignSession.id, wrongSessionTask.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET issue_session_id = ? WHERE id = ?", [foreignSession.id, wrongSessionTask.id]);
     expect((await app.request(`/api/shares/${encodeURIComponent(share.token)}/tasks/${wrongSessionTask.id}/trace`, bearer(viewer.token))).status).toBe(404);
     const shareId = store.getActiveIssueShare(issue.id)!.id;
     db!.run("UPDATE multiremi_issue_shares SET expires_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", shareId]);

@@ -1,6 +1,7 @@
+import { requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -55,14 +56,8 @@ function completeInitialDelegation(f: ReturnType<typeof fixture>) {
     metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" },
   });
   const now = new Date().toISOString();
-  db!.run(
-    "UPDATE multiremi_tasks SET status = 'running', runtime_id = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-    [runtime.id, now, now, f.leaderTask.id],
-  );
-  db!.run(
-    "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?",
-    [runtime.id, now, f.delegated.id],
-  );
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running', runtime_id = ?, dispatched_at = ?, started_at = ? WHERE id = ?", [runtime.id, now, now, f.leaderTask.id]);
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?", [runtime.id, now, f.delegated.id]);
   f.store.buildTaskSessionProjection(f.delegated.id);
   f.store.startTask(f.delegated.id);
   f.store.completeTask(f.delegated.id, {
@@ -74,38 +69,38 @@ function completeInitialDelegation(f: ReturnType<typeof fixture>) {
 }
 
 async function createContinuation(f: ReturnType<typeof fixture>, prompt: string) {
-  const response = await f.app.request("/api/multiremi/tasks", {
+  const response = await f.app.request(taskRequestPath(f.store, {  }), {
     method: "POST",
     headers: await taskHeaders(f),
-    body: JSON.stringify({
+    body: JSON.stringify(requestMessageBody(f.store, {
       agentId: f.worker.id,
       prompt,
       continueTaskId: f.delegated.id,
-    }),
+    })),
   });
-  expect(response.status).toBe(201);
-  const body = await response.json() as { task: { id: string; continuedFromTaskId: string; continued_from_task_id: string } };
-  return { response: body, task: f.store.getTask(body.task.id)! };
+  expect(response.status).toBe(200);
+  const body = await response.json() as { turn_id: string };
+  return { response: body, task: f.store.getTask(sentTask(f.store, body).id)! };
 }
 
 async function createIndependentTask(f: ReturnType<typeof fixture>, prompt: string) {
-  const response = await f.app.request("/api/multiremi/tasks", {
+  const response = await f.app.request(taskRequestPath(f.store, { issueId: f.issue.id }), {
     method: "POST",
     headers: await taskHeaders(f),
-    body: JSON.stringify({ agentId: f.worker.id, issueId: f.issue.id, prompt }),
+    body: JSON.stringify(requestMessageBody(f.store, { agentId: f.worker.id, issueId: f.issue.id, prompt })),
   });
-  expect(response.status).toBe(201);
-  const body = await response.json() as { task: { id: string } };
-  return f.store.getTask(body.task.id)!;
+  expect(response.status).toBe(200);
+  const body = await response.json() as { turn_id: string };
+  return f.store.getTask(sentTask(f.store, body).id)!;
 }
 
 describe("delegated task continuation API", () => {
   it("creates a distinct task while deriving the existing delegation lineage", async () => {
     const f = fixture();
-    const response = await f.app.request("/api/multiremi/tasks", {
+    const response = await f.app.request(taskRequestPath(f.store, {  }), {
       method: "POST",
       headers: await taskHeaders(f),
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(f.store, {
         agentId: f.worker.id,
         prompt: "Address the review feedback.",
         continue_task_id: f.delegated.id,
@@ -113,13 +108,11 @@ describe("delegated task continuation API", () => {
         delegationId: "dlg_forged",
         delegatedByAgentId: f.otherLeader.id,
         parentTaskId: f.delegated.id,
-      }),
+      })),
     });
 
-    expect(response.status).toBe(201);
-    const responseTask = ((await response.json()) as {
-      task: { id: string; continuedFromTaskId: string; continued_from_task_id: string };
-    }).task;
+    expect(response.status).toBe(200);
+    const responseTask = sentTask(f.store, await response.json());
     const createdId = responseTask.id;
     expect(createdId).not.toBe(f.delegated.id);
     expect(responseTask.continuedFromTaskId).toBe(f.delegated.id);
@@ -278,10 +271,10 @@ describe("delegated task continuation API", () => {
   it("rejects missing, cross-context, mismatched and unauthorized continuation targets", async () => {
     const f = fixture();
     const headers = await taskHeaders(f);
-    const request = (body: Record<string, unknown>, overrideHeaders = headers) => f.app.request("/api/multiremi/tasks", {
+    const request = (body: Record<string, unknown>, overrideHeaders = headers) => f.app.request(taskRequestPath(f.store, {  }), {
       method: "POST",
       headers: overrideHeaders,
-      body: JSON.stringify({ agentId: f.worker.id, prompt: "Continue.", ...body }),
+      body: JSON.stringify(requestMessageBody(f.store, { agentId: f.worker.id, prompt: "Continue.", ...body })),
     });
     const expectError = async (response: Response, status: number, message: string) => {
       expect(response.status).toBe(status);

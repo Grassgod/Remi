@@ -234,14 +234,15 @@ async function getInboxSummary(
   timezoneOffset: number,
 ): Promise<{ body: { unread: number; attention: number }; statements: number; bytes: number }> {
   harness.probe.reset();
-  const response = await harness.app.request(`/api/inbox/summary?timezone_offset=${timezoneOffset}`, {
+  const response = await harness.app.request("/api/inbox"+`?timezone_offset=${timezoneOffset}`, {
     headers: harness.headers,
   });
   const text = await response.text();
   const statements = harness.probe.statements;
   const bytes = harness.probe.bytes;
   if (response.status !== 200) throw new Error(`inbox summary: HTTP ${response.status} ${text.slice(0, 300)}`);
-  return { body: JSON.parse(text) as { unread: number; attention: number }, statements, bytes };
+  const page = JSON.parse(text) as { unread_count: number; attention_count: number };
+  return { body: { unread: page.unread_count, attention: page.attention_count }, statements, bytes };
 }
 
 describe("MUL-473 inbox summary", () => {

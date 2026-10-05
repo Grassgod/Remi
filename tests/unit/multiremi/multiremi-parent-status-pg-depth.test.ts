@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -652,15 +653,15 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       name: "PG member", type: "pat", workspaceId, userId: "local",
     })).token;
 
-    const forgedByAgent = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByAgent = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${otherToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "PG forged summary", author_type: "agent", author_id: agent,
         authorType: "agent", authorId: agent,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByAgent.status).toBe(201);
+    expect(forgedByAgent.status).toBe(200);
     const agentComment = await forgedByAgent.json();
     expect(store.getIssueComment(agentComment.id)?.authorId).toBe(other.id);
 
@@ -671,23 +672,23 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     expect((await done()).status).toBe(409);
     // A member PAT forging the same identity stores a member comment instead.
-    const forgedByMember = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByMember = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${memberToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "PG member forged summary", author_type: "agent", author_id: agent,
         authorType: "agent", authorId: agent,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByMember.status).toBe(201);
+    expect(forgedByMember.status).toBe(200);
     const memberComment = await forgedByMember.json();
     expect(store.getIssueComment(memberComment.id)).toMatchObject({ authorType: "member" });
     expect((await done()).status).toBe(409);
     // The authorized agent's own comment satisfies (b).
-    await app.request(`/api/issues/${parent.id}/comments`, {
+    await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "PG owner summary" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "PG owner summary" }, { type: "role", ref: "issue_owner" })),
     });
     expect((await done()).status).toBe(200);
   });

@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { refreshPreNativeCodexSnapshots } from "@multiremi/relay/discovery.js";
@@ -113,10 +114,10 @@ describe("Codex native model membership through API and dispatch", () => {
       store.onTaskEvent(({ type, task }) => { if (type === "task:dispatch") dispatches.push(task.id); });
       await discover();
 
-      const created = await app.request("/api/multiremi/tasks", { method: "POST", headers,
-        body: JSON.stringify({ agentId: saved.id, prompt: "Must retain requested model", priority: 100 }),
+      const created = await app.request(taskRequestPath(store, {  }), { method: "POST", headers,
+        body: JSON.stringify(requestMessageBody(store, { agentId: saved.id, prompt: "Must retain requested model", priority: 100 })),
       });
-      expect(created.status).toBe(201);
+      expect(created.status).toBe(200);
       const { task: waiting } = await created.json();
       expect(store.runtimeCanRunAgent(runtime, saved)).toBe(false);
       const emptyClaim = await taskOfferResponse(store, runtime.id);
@@ -151,7 +152,7 @@ describe("Codex native model membership through API and dispatch", () => {
     const agent = store.createAgent({ name: "Lost claim response", provider: "codex", model: "inventory-only-route" });
     const task = store.createTask({ agentId: agent.id, prompt: "Not started" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     await discover();
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(store.getTask(task.id)?.status).toBe("queued");

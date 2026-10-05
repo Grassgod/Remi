@@ -160,8 +160,8 @@ describe("conversation log server Hub wiring", () => {
         expect(await subscribe(socket, chat.id, store.getConversationLogHead(chat.id)!.headSeq + 1))
           .toMatchObject({ type: "stream.ack", payload: { stream: "log", id: chat.id } });
         const chatFrame = waitForMessage(socket, message => message.type === "stream.data" && message.payload?.id === chat.id);
-        const sent = await fetch(`${base}/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "live chat" }) });
-        expect(sent.status).toBe(201);
+        const sent = await fetch(`${base}/api/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body_md: "live chat", to: { type: "agent", ref: agent.id } }) });
+        expect(sent.status).toBe(200);
         const chatData = await chatFrame;
         const chatHead = await (await fetch(`${base}/api/sessions/${chat.id}/log?before=30`, { headers })).json() as { head_seq: number };
         expect(chatData).toMatchObject({ type: "stream.data", payload: { stream: "log", id: chat.id, frames: [{ seq: chatHead.head_seq, kind: "entry" }] } });
@@ -169,22 +169,22 @@ describe("conversation log server Hub wiring", () => {
         expect(await subscribe(socket, issueSession.id, store.getConversationLogHead(issueSession.id)!.headSeq + 1))
           .toMatchObject({ type: "stream.ack", payload: { stream: "log", id: issueSession.id } });
         const issueFrame = waitForMessage(socket, message => message.type === "stream.data" && message.payload?.id === issueSession.id);
-        const posted = await fetch(`${base}/api/issues/${issue.id}/comments`, { method: "POST", headers,
-          body: JSON.stringify({ content: "live issue", issue_session_id: issueSession.id }) });
-        expect(posted.status).toBe(201);
+        const posted = await fetch(`${base}/api/sessions/${issueSession.id}/messages`, { method: "POST", headers,
+          body: JSON.stringify({ body_md: "live issue", to: { type: "none" } }) });
+        expect(posted.status).toBe(200);
         const issueData = await issueFrame;
         const issueHead = await (await fetch(`${base}/api/sessions/${issueSession.id}/log?before=30`, { headers })).json() as { head_seq: number };
         expect(issueData).toMatchObject({ type: "stream.data", payload: { stream: "log", id: issueSession.id, frames: [{ seq: issueHead.head_seq, kind: "entry" }] } });
 
         const patchFrame = waitForMessage(socket, message => message.type === "stream.data"
           && message.payload?.id === issueSession.id && message.payload.frames?.some((frame: { kind: string }) => frame.kind === "patch"));
-        const comment = await posted.json() as { id: string };
-        const edited = await fetch(`${base}/api/comments/${comment.id}`, { method: "PUT", headers, body: JSON.stringify({ body: "edited issue" }) });
+        const { message: comment } = await posted.json() as { message: { id: string } };
+        const edited = await fetch(`${base}/api/messages/${comment.id}`, { method: "PATCH", headers, body: JSON.stringify({ body_md: "edited issue" }) });
         expect(edited.status).toBe(200);
         expect(await patchFrame).toMatchObject({ payload: { frames: [{ seq: issueHead.head_seq, kind: "patch", payload: { session_id: issueSession.id } }] } });
 
         socket.close();
-        await fetch(`${base}/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content: "missed chat" }) });
+        await fetch(`${base}/api/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body_md: "missed chat", to: { type: "agent", ref: agent.id } }) });
         resumed = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
         await authenticateBrowserWebSocket(resumed, token.token);
         const replay = waitForMessage(resumed, message => ["stream.data", "stream.gap"].includes(message.type) && message.payload?.id === chat.id);

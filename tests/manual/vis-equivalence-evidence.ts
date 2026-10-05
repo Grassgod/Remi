@@ -1,3 +1,4 @@
+import { turnApiPath } from "../unit/multiremi/unified-test-paths.js";
 /**
  * MUL-357 evidence: dump the exact visible-task set for several identities and
  * several authorization rules, so the same fixture can be run on the parent
@@ -50,15 +51,15 @@ const identities: Record<string, Record<string, string>> = {
 };
 const result: Record<string, unknown> = {};
 for (const [identity, headers] of Object.entries(identities)) {
-  const list = await app.request("/api/multiremi/tasks", { headers });
-  const body = await list.json() as { tasks?: Array<{ id: string }> };
-  result[`${identity}.list`] = (body.tasks ?? []).map((task) => label.get(task.id) ?? task.id).sort();
+  const list = await app.request("/api/turns", { headers });
+  const body = await list.json() as { turns?: Array<{ current_attempt_id: string }> };
+  result[`${identity}.list`] = (body.turns ?? []).map((turn) => label.get(turn.current_attempt_id) ?? turn.current_attempt_id).sort();
   result[`${identity}.list.status`] = list.status;
-  result[`${identity}.list.body`] = body.tasks ? "tasks" : body;
+  result[`${identity}.list.body`] = body.turns ? "turns" : body;
   const perTask: Record<string, number> = {};
   for (const [taskId, name] of label) {
-    const detail = await app.request(`/api/multiremi/tasks/${taskId}`, { headers });
-    const messages = await app.request(`/api/tasks/${taskId}/messages`, { headers });
+    const detail = await app.request(turnApiPath(store, taskId), { headers });
+    const messages = await app.request(turnApiPath(store, taskId, "/trace"), { headers });
     perTask[name] = detail.status * 1000 + messages.status;
   }
   result[`${identity}.detailStatusAndMessages`] = perTask;

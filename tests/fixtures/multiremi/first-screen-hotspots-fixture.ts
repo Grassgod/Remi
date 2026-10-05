@@ -12,6 +12,8 @@
 // from a batched read. Every id is explicit and every ordering-relevant
 // timestamp is pinned through `run`, so two runs over the same fixture version
 // produce byte-comparable responses.
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { performance } from "node:perf_hooks";
 import type { MultiremiStore } from "@multiremi/store.js";
 
@@ -106,7 +108,17 @@ export function seedFirstScreenHotspotsFixture(
   const issueCount = options.issues ?? 60;
   const skillBodyBytes = options.skillBodyBytes ?? 4096;
   const taskPromptBytes = options.taskPromptBytes ?? 1024;
-  const run = options.run ?? (() => {});
+  const run = (sql: string, params: unknown[]) => {
+    if (sql.includes("multiremi_tasks")) {
+      runTurnExecutionMutation((store as unknown as { db: SqlDatabase }).db,
+        sql.replace(/multiremi_tasks/g, "multiremi_turn_execution_records"), ...params);
+    } else options.run?.(sql, params as never[]);
+  };
+  // Seed distinct historical turns directly: unified requests in one lane can
+  // join the same pending turn, which would collapse this ranking dataset.
+  const historicalTask = (sessionId: string, prompt: string) => store.createTask({
+    agentId: store.getChatSession(sessionId)!.agentId, chatSessionId: sessionId, prompt,
+  });
   const privatePrimaryAgent = options.privatePrimaryAgent ?? true;
 
   store.ensureLocalWorkspace();
@@ -198,9 +210,9 @@ export function seedFirstScreenHotspotsFixture(
   let runningWinnerTaskId: string | null = null;
   let prioritizedWinnerTaskId: string | null = null;
   if (sessionIds.length >= 3) {
-    const runningTask = store.sendChatMessage(rankingSessionId, { body: "running turn" }).task;
+    const runningTask = historicalTask(rankingSessionId, "running turn");
     for (let index = 0; index < 3; index += 1) {
-      taskIds.push(store.sendChatMessage(rankingSessionId, { body: `queued after running ${index}` }).task.id);
+      taskIds.push(historicalTask(rankingSessionId, `queued after running ${index}`).id);
     }
     run("UPDATE multiremi_tasks SET status = 'running', started_at = ?, attempt = 1 WHERE id = ?", [
       stamp(taskIds.length * 1000),
@@ -211,9 +223,9 @@ export function seedFirstScreenHotspotsFixture(
 
     // Ranking case 2: the second queued turn was prioritized, so it wins over the
     // earlier one on `priority` — not on creation order.
-    const prioritizedWinner = store.sendChatMessage(prioritizedSessionId, { body: "prioritized turn" }).task;
-    const loser = store.sendChatMessage(prioritizedSessionId, { body: "ordinary turn" }).task;
-    store.prioritizeQueuedChatTask(prioritizedSessionId, prioritizedWinner.id);
+    const prioritizedWinner = historicalTask(prioritizedSessionId, "prioritized turn");
+    const loser = historicalTask(prioritizedSessionId, "ordinary turn");
+    run("UPDATE multiremi_tasks SET priority = 10 WHERE id = ?", [prioritizedWinner.id]);
     taskIds.push(prioritizedWinner.id, loser.id);
     prioritizedWinnerTaskId = prioritizedWinner.id;
   }

@@ -1,9 +1,10 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath, turnApiPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -31,7 +32,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Legacy task" });
 
     db!.run("UPDATE multiremi_issue_comments SET issue_session_id = NULL WHERE issue_id = ?", [issue.id]);
-    db!.run("UPDATE multiremi_tasks SET issue_session_id = NULL WHERE issue_id = ?", [issue.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET issue_session_id = NULL WHERE issue_id = ?", [issue.id]);
     db!.run("DELETE FROM multiremi_session_events WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id = ?)", [issue.id]);
     // MUL-427 ruling (i), cmt_0buuxntn73ab: a pre-v2 fixture has no log, heads or B7 ledger.
     db!.run("DELETE FROM multiremi_conversation_log WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id = ?)", [issue.id]);
@@ -564,14 +565,14 @@ describe("Issue sessions and per-agent projection lanes", () => {
     });
 
     const createdMessage = await app.request(
-      `/api/issues/${issue.id}/sessions/${review.id}/messages`,
+      `/api/sessions/${review.id}/messages`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "One more review note" }),
+        body: JSON.stringify(requestMessageBody(store, { content: "One more review note" }, { type: "role", ref: "issue_owner" })),
       },
     );
-    expect(createdMessage.status).toBe(201);
+    expect(createdMessage.status).toBe(200);
     expect(await createdMessage.json()).toMatchObject({
       issue_id: issue.id,
       issue_session_id: review.id,
@@ -667,18 +668,18 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const spoofedTask = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Different run" });
     const token = await store.createTaskAccessToken(task, "local");
 
-    const res = await app.request(`/api/issues/${issue.id}/comments`, {
+    const res = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "In-run reply", task_id: spoofedTask.id }),
+      body: JSON.stringify(requestMessageBody(store, { body: "In-run reply", task_id: spoofedTask.id }, { type: "role", ref: "issue_owner" })),
     });
-    expect(res.status).toBe(201);
-    const created = (await res.json()) as { author_type: string; task_id: string | null };
-    expect(created.author_type).toBe("agent");
+    expect(res.status).toBe(200);
+    const created = (await res.json()).message as { sender_type: string; task_id: string | null };
+    expect(created.sender_type).toBe("agent");
     // The linkage the per-reply transcript button depends on: the comment
     // carries the run that wrote it even when the agent posts via its tool
     // (the auto-reply path already recorded it; this is the task-token path).
-    expect(created.task_id).toBe(task.id);
+    expect(created.task_id).toBe(store.getTurnForAttempt(task.id)!.id);
   });
 
   it("gives an owner task token parity across sibling Sessions and tasks", async () => {
@@ -705,11 +706,11 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const headers = { Authorization: `Bearer ${token.token}` };
 
     expect((await app.request(
-      `/api/issues/${issue.id}/sessions/${main.id}/events`,
+      `/api/sessions/${main.id}/messages`,
       { headers },
     )).status).toBe(200);
     expect((await app.request(
-      `/api/issues/${issue.id}/sessions/${sibling.id}/events`,
+      `/api/sessions/${sibling.id}/messages`,
       { headers },
     )).status).toBe(200);
     expect((await app.request(
@@ -725,11 +726,11 @@ describe("Issue sessions and per-agent projection lanes", () => {
       { headers },
     )).status).toBe(200);
 
-    const scopedCommentsResponse = await app.request(`/api/issues/${issue.id}/comments`, { headers });
+    const scopedCommentsResponse = await app.request(issueMessagesPath(store, issue.id), { headers });
     expect(scopedCommentsResponse.status).toBe(200);
-    const scopedComments = await scopedCommentsResponse.json();
-    expect(scopedComments.map((comment: { content: string }) => comment.content)).toContain("Visible current context");
-    expect(scopedComments.map((comment: { content: string }) => comment.content)).toContain("Hidden sibling context");
+    const scopedComments = (await scopedCommentsResponse.json()).messages;
+    expect(scopedComments.map((comment: { body_md: string }) => comment.body_md)).toContain("Visible current context");
+    expect(scopedComments.map((comment: { body_md: string }) => comment.body_md)).toContain("Hidden sibling context");
 
     const detailResponse = await app.request(`/api/multiremi/issues/${issue.id}`, { headers });
     expect(detailResponse.status).toBe(200);
@@ -745,42 +746,42 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(searchResponse.status).toBe(200);
     expect((await searchResponse.json()).issues).toEqual([expect.objectContaining({ id: issue.id })]);
 
-    const taskRunsResponse = await app.request(`/api/issues/${issue.id}/task-runs`, { headers });
+    const taskRunsResponse = await app.request(`/api/turns?issue=${issue.id}`, { headers });
     expect(taskRunsResponse.status).toBe(200);
     expect((await taskRunsResponse.json()).map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
-    const rawTasksResponse = await app.request("/api/multiremi/tasks", { headers });
+    const rawTasksResponse = await app.request("/api/turns", { headers });
     expect(rawTasksResponse.status).toBe(200);
-    expect((await rawTasksResponse.json()).tasks.map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
-    expect((await app.request(`/api/multiremi/tasks/${siblingTask.id}`, { headers })).status).toBe(200);
-    expect((await app.request(`/api/tasks/${siblingTask.id}/cancel`, {
+    expect((await rawTasksResponse.json()).turns.map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
+    expect((await app.request(turnApiPath(store, siblingTask.id), { headers })).status).toBe(200);
+    expect((await app.request(turnApiPath(store, siblingTask.id, "/cancel"), {
       method: "POST",
       headers,
     })).status).toBe(200);
-    expect((await app.request("/api/multiremi/tasks", {
+    expect((await app.request(taskRequestPath(store, { issueId: issue.id }), {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, issueId: issue.id, prompt: "Bypass Session route" }),
-    })).status).toBe(201);
-    expect((await app.request(`/api/tasks/${task.id}/messages`, { headers })).status).toBe(200);
-    expect((await app.request(`/api/tasks/${siblingTask.id}/messages`, { headers })).status).toBe(200);
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: issue.id, prompt: "Bypass Session route" })),
+    })).status).toBe(200);
+    expect((await app.request(turnApiPath(store, task.id, "/trace"), { headers })).status).toBe(200);
+    expect((await app.request(turnApiPath(store, siblingTask.id, "/trace"), { headers })).status).toBe(200);
 
-    const agentCommentResponse = await app.request(`/api/issues/${issue.id}/comments`, {
+    const agentCommentResponse = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Current Session agent note" }),
+      body: JSON.stringify(requestMessageBody(store, { content: "Current Session agent note" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(agentCommentResponse.status).toBe(201);
+    expect(agentCommentResponse.status).toBe(200);
     expect(await agentCommentResponse.json()).toMatchObject({
       issue_session_id: main.id,
       author_type: "agent",
       author_id: agent.id,
     });
 
-    expect((await app.request(`/api/issues/${issue.id}/sessions/${sibling.id}/messages`, {
+    expect((await app.request(`/api/sessions/${sibling.id}/messages`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Forbidden sibling write" }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(store, { content: "Forbidden sibling write" }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect((await app.request(`/api/issues/${issue.id}/sessions/${sibling.id}/results`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },

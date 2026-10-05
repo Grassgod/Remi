@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask, issueMessagesPath, turnApiPath } from "./unified-test-paths.js";
 /**
  * MUL-456 fix round 1, blocker 2: the terminal transaction resolves the result
  * comment exactly once.
@@ -78,13 +79,13 @@ function fixture(store: MultiremiStore, daemonId?: string) {
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue, agentId: string) {
   const app = createMultiremiApp({ store, authToken: "result-comment-root" });
   const token = await store.createTaskAccessToken(source, "local");
-  const response = await app.request("/api/multiremi/tasks", {
+  const response = await app.request(taskRequestPath(store, { issueId: issue.id }), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, issueId: issue.id, prompt: "Execute delegated work." }),
+    body: JSON.stringify(requestMessageBody(store, { agentId, issueId: issue.id, prompt: "Execute delegated work." })),
   });
-  expect(response.status).toBe(201);
-  return store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+  expect(response.status).toBe(200);
+  return store.getTask(sentTask(store, await response.json()).id)!;
 }
 
 function finishLeaderRound(store: MultiremiStore, f: ReturnType<typeof fixture>): void {
@@ -253,12 +254,12 @@ async function dispatchThroughHttp(
   agentId: string,
 ): Promise<MultiremiTask> {
   const token = await store.createTaskAccessToken(source, "local");
-  const created = await requestJson(base, "/api/multiremi/tasks", token.token, {
+  const created = await requestJson(base, issueMessagesPath(store, issue.id), token.token, requestMessageBody(store, {
     agentId,
     issueId: issue.id,
     prompt: "Execute delegated work over HTTP.",
-  }, 201);
-  return store.getTask(created.task.id)!;
+  }), 200);
+  return sentTask(store, created);
 }
 
 async function runCancelledReturnSnapshotCase(
@@ -278,9 +279,9 @@ async function runCancelledReturnSnapshotCase(
     let inRunCommentId: string | null = null;
     if (withInRunComment) {
       const taskToken = await store.createTaskAccessToken(childTask, "local");
-      const posted = await requestJson(base, `/api/multiremi/issues/${f.child.id}/comments`, taskToken.token,
-        { body: "In-run result A", issue_session_id: childTask.issueSessionId }, 201);
-      inRunCommentId = posted.comment.id;
+      const posted = await requestJson(base, issueMessagesPath(store, f.child.id), taskToken.token,
+        { body_md: "In-run result A", message_kind: "report" }, 200);
+      inRunCommentId = posted.message.id;
       // Keep A as a real HTTP-created task comment while placing it before the
       // dispatch boundary. This makes the normal post-commit auto reply C run,
       // reproducing QA's A -> C ordering without inserting a synthetic comment.
@@ -312,7 +313,7 @@ async function runCancelledReturnSnapshotCase(
     expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
     expect(inboxReportBody(store, firstReturn, childTask.id)).toContain(`结论评论：${resultCommentId}`);
 
-    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
     const sourceAfterCancel = store.getTask(childTask.id)!;
     const replacement = store.getTask(sourceAfterCancel.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
@@ -355,7 +356,7 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
     expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(automaticComment.id);
     expect(selects.count()).toBe(1);
 
-    await requestJson(base, `/api/tasks/${e2Round.id}/cancel`, credentials.member);
+    await requestJson(base, turnApiPath(store, e2Round.id, "/cancel"), credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(e2Round.id);
     expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${automaticComment.id}`);
@@ -401,7 +402,7 @@ async function runMissingSnapshotCompatibilityCase(store: MultiremiStore): Promi
     rawDb(store).run("DELETE FROM multiremi_session_events WHERE source_comment_id = ?", [envelope.id]);
     rawDb(store).run("DELETE FROM multiremi_conversation_log WHERE id = ?", [envelope.id]);
     rawDb(store).run("DELETE FROM multiremi_issue_comments WHERE id = ?", [envelope.id]);
-    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${automaticComment.id}`);
     expect(selects.count()).toBe(2);
@@ -434,9 +435,9 @@ async function runRedispatchThenDrainSnapshotCase(store: MultiremiStore): Promis
     const patrol = store.createIssue({ title: "Snapshot patrol", status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
     const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
-    const redispatched = await requestJson(base, `/api/tasks/${originalReturn.id}/redispatch`,
-      supervisorToken.token, { reason: "Rebuild the unclaimed return." }, 202);
-    const replacement = store.getTask(redispatched.replacement_task.id)!;
+    const redispatched = await requestJson(base, turnApiPath(store, originalReturn.id, "/retry"),
+      supervisorToken.token, { cold: true }, 200);
+    const replacement = store.getTask(redispatched.turn.current_attempt_id)!;
     expect(replacement.id).not.toBe(originalReturn.id);
     expect(store.getTask(first.id)?.delegationReturnTaskId).toBeNull();
 
@@ -467,9 +468,9 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     let inRunCommentId: string | null = null;
     const childToken = await store.createTaskAccessToken(childTask, "local");
     if (withInRunComment) {
-      const posted = await requestJson(base, `/api/multiremi/issues/${f.child.id}/comments`, childToken.token,
-        { body: "In-run result A", issue_session_id: childTask.issueSessionId }, 201);
-      inRunCommentId = posted.comment.id;
+      const posted = await requestJson(base, issueMessagesPath(store, f.child.id), childToken.token,
+        { body_md: "In-run result A", message_kind: "report" }, 200);
+      inRunCommentId = posted.message.id;
       const beforeDispatch = new Date(Date.parse(store.getTask(childTask.id)!.dispatchedAt!) - 1_000).toISOString();
       rawDb(store).run(
         "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
@@ -479,13 +480,13 @@ async function runSkippedManualWakeCancellationSnapshotCase(
         "UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
         [beforeDispatch, beforeDispatch, inRunCommentId]);
     }
-    const manualResponse = await requestJson(base, "/api/multiremi/tasks", childToken.token, {
+    const manualResponse = await requestJson(base, `/api/sessions/${f.leaderSession.id}/messages`, childToken.token, requestMessageBody(store, {
       agentId: f.leader.id,
       issueId: f.parent.id,
       issueSessionId: f.leaderSession.id,
       prompt: "Manual wake through the generic task endpoint.",
-    }, 201);
-    const manual = store.getTask(manualResponse.task.id)!;
+    }), 200);
+    const manual = sentTask(store, manualResponse);
     expect(manual.parentTaskId).toBe(childTask.id);
     expect(manual.delegationSkipReason).toBeNull();
     expect(manual.delegationId).toBeTruthy();
@@ -507,7 +508,7 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     expect(selects.count()).toBe(1);
     expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(resultCommentId);
 
-    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
     expect(replacement.id).not.toBe(manual.id);
@@ -551,7 +552,7 @@ async function runSameIssueResultCommentParityCase(store: MultiremiStore): Promi
     expect(store.listSessionEvents(f.leaderSession.id)
       .filter((event) => event.kind === "delegation_report" && event.taskId === delegated.id)).toHaveLength(0);
 
-    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
     const replacement = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
     expect(inboxReportBody(store, replacement, delegated.id)).toBe(expectedBody);
@@ -581,20 +582,20 @@ async function runDelegateWakeupCoverageStillDrainsHistoryCase(store: MultiremiS
     const patrol = store.createIssue({ title: "Drain patrol", status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
     const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
-    const redispatched = await requestJson(base, `/api/tasks/${firstReturn.id}/redispatch`,
-      supervisorToken.token, { reason: "Leave the historical report for the next common drain." }, 202);
-    const replacement = store.getTask(redispatched.replacement_task.id)!;
+    const redispatched = await requestJson(base, turnApiPath(store, firstReturn.id, "/retry"),
+      supervisorToken.token, { cold: true }, 200);
+    const replacement = store.getTask(redispatched.turn.current_attempt_id)!;
     expect(store.getTask(historical.id)?.delegationReturnTaskId).toBeNull();
 
     await startThroughDaemon(base, store, credentials.daemon, trigger, f.workerRuntime.id);
     const triggerToken = await store.createTaskAccessToken(trigger, "local");
-    const response = await requestJson(base, "/api/multiremi/tasks", triggerToken.token, {
+    const response = await requestJson(base, `/api/sessions/${f.leaderSession.id}/messages`, triggerToken.token, requestMessageBody(store, {
       agentId: f.leader.id,
       issueId: f.parent.id,
       issueSessionId: f.leaderSession.id,
       prompt: "Manual wake for the current delegated task.",
-    }, 201);
-    const coveringTask = store.getTask(response.task.id)!;
+    }), 200);
+    const coveringTask = sentTask(store, response);
 
     await reportThroughDaemon(store, credentials.daemon, trigger.id, "complete",
       { output: "Trigger report." });

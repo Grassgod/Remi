@@ -1,3 +1,4 @@
+import { requestMessageBody, mutateExecutionFixture, issueMessagesPath } from "./unified-test-paths.js";
 import { receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
 /**
  * Coverage for the Postgres backend of the Multiremi store.
@@ -448,17 +449,17 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: agent.id, prompt: "blocked" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id, prompt: "blocked" }, { type: "role", ref: "issue_owner" })),
     });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prerequisite.key }] });
     expect(store.listTasksForIssue(issue.id)).toEqual([]);
     expect(store.getIssue(issue.id)?.status).toBe("backlog");
-    const unknownAgent = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const unknownAgent = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: "agt_not_found", prompt: "blocked" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: "agt_not_found", prompt: "blocked" }, { type: "role", ref: "issue_owner" })),
     });
     expect(unknownAgent.status).toBe(404);
   });
@@ -487,10 +488,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages WHERE chat_session_id LIKE '%migration%' AND role IN ('user', 'assistant')").get().count)).toBe(8);
     expect(db.query("SELECT session_id, session_runtime_id, work_dir FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get()).toEqual({ session_id: null, session_runtime_id: "rt_legacy", work_dir: "/work/keep" });
     for (const status of ["queued", "dispatched"]) {
-      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = ?").get(`tsk_chat_migration_${status}`))
+      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_turn_execution_records WHERE id = ?").get(`tsk_chat_migration_${status}`))
         .toEqual({ issue_id: null, session_id: null, work_dir: "/work/keep", issue_session_id: null, issue_session_generation: null });
     }
-    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
+    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_turn_execution_records WHERE id = 'tsk_topic_migration_queued'").get())
       .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
       const chatId = classificationChatId(entry);
@@ -531,7 +532,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         session_execution_fingerprint: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
         work_dir: "/work/keep", session_runtime_id: "rt_legacy",
       });
-      expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
+      expect(db.query("SELECT issue_id, session_id FROM multiremi_turn_execution_records WHERE id = ?").get(`tsk_${chatId}`))
         .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
       expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
         .toEqual(entry.preserve
@@ -600,9 +601,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         parentTaskId: original.id, delegationId: "dlg_pg_issue_package",
         delegatedByAgentId: leader.id, prompt: "delegated" });
       for (const task of [original, retry, sibling]) {
-        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
       }
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
       const tasks = [original, retry, sibling, delegated];
       const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
         members: [original.issueSessionId!, secondSession.id].map((sessionId) => ({
@@ -650,10 +651,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const unbound = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "unbound" });
       for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id],
         [foreignSubject.id, owner.id], [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
-        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
       }
       const outside = store.createWorkspace({ name: "PG archive outside", slug: "pg-archive-outside" });
-      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [outside.id, foreignWorkspace.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [outside.id, foreignWorkspace.id]);
       for (const [taskId, runtimeId] of [[foreignRuntime.id, other.id], [foreignSubject.id, owner.id],
         [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
         db.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
@@ -720,7 +721,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const chat = store.createChatSession({ agentId: agent.id, title: "Fence", workspaceId: "local" });
       db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", [runtime.id, chat.id]);
       const task = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "trace" });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, task.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [runtime.id, task.id]);
       const scope = { kind: "chat", id: chat.id } as const;
       const fixture = await buildArchiveFixture({
         subject: scope, traces: { [task.id]: traceFileBody({ events: 1, taskId: task.id }) },
@@ -949,7 +950,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
       const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
       const upload = async (events: number) => {
         const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
@@ -964,7 +965,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const late = await upload(1);
       const complete = store.completeSessionArchiveWithTracePointers.bind(store);
       store.completeSessionArchiveWithTracePointers = (...args) => {
-        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
         return complete(...args);
       };
       await expect(service.complete(owner.id, issue.id, late.archive.id, late.attempt))
@@ -975,7 +976,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(existsSync(join(root, late.archive.relativePath))).toBe(false);
       expect(existsSync(join(root, late.archive.relativePath, "..", "manifest.json"))).toBe(false);
 
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
       const manifestFail = await upload(2);
       const internal = service as unknown as { writeManifest: (...args: unknown[]) => Promise<void> };
       const write = internal.writeManifest.bind(service);
@@ -1096,7 +1097,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     const task = store.createTask({ agentId: agent.id, prompt: "Wait for the configured capability" });
     const now = Date.now();
-    db.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 120_000).toISOString(), task.id]);
+    mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 120_000).toISOString(), task.id]);
     const events: Array<string | null> = [];
     const unsubscribe = store.onTaskEvent(({ type, task: updated }) => {
       if (type === "task:queued" && updated.id === task.id) events.push(updated.waitReason);
@@ -1142,13 +1143,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const agent = store.createAgent({ name: `PG snapshot agent ${wsCounter}`, provider: "codex", workspaceId });
     const active = store.createTask({ agentId: agent.id, prompt: "active snapshot task" });
     const terminal = store.createTask({ agentId: agent.id, prompt: "terminal snapshot task" });
-    db.run(
-      `UPDATE multiremi_tasks
+    mutateExecutionFixture(db, `UPDATE multiremi_turn_execution_records
        SET status = 'completed', completed_at = ?, updated_at = ?
-       WHERE id = ?`,
-      ["2026-09-10T09:00:00.000Z", "2026-09-10T09:00:00.000Z", terminal.id],
-    );
-    db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2026-09-10T10:00:00.000Z", active.id]);
+       WHERE id = ?`, ["2026-09-10T09:00:00.000Z", "2026-09-10T09:00:00.000Z", terminal.id]);
+    mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET updated_at = ? WHERE id = ?", ["2026-09-10T10:00:00.000Z", active.id]);
 
     expect(store.listWorkspaceAgentTaskSnapshot(workspaceId).map((task) => task.id)).toEqual([
       active.id,
@@ -1455,7 +1453,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "multiremi_projects",
       "multiremi_agents",
       "multiremi_runtimes",
-      "multiremi_tasks",
+      "multiremi_turn_execution_records",
       "multiremi_issue_sessions",
       "multiremi_session_participants",
       "multiremi_session_events",
@@ -2214,7 +2212,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
 
     const first = store.appendTaskMessages(task.id, [{ seq: 1, type: "tool_use", status: "in_progress" }]);
-    db.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     expect(store.appendTaskMessages(task.id, [{ seq: 1, type: "tool_use", status: "in_progress" }])).toEqual([]);
     expect(store.getTask(task.id)?.updatedAt).toBe("2000-01-01T00:00:00.000Z");
 
@@ -3209,7 +3207,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(edited?.body).toBe("Intermediate PG report without a mention.");
 
     await blocker`
-      UPDATE multiremi_tasks
+      UPDATE multiremi_turn_execution_records
       SET prompt = ${"Terminal PG report."}, trigger_comment_id = NULL, trigger_summary = NULL
       WHERE id = ${fixture.explicitReturn.id}
     `;
@@ -3477,7 +3475,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       assigneeType: "agent",
       assigneeId: owner.id,
     });
-    const taskRows = () => db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(waiting.id) as Array<{ id: string; status: string }>;
+    const taskRows = () => db.query("SELECT id, status FROM multiremi_turn_execution_records WHERE issue_id = ?").all(waiting.id) as Array<{ id: string; status: string }>;
     const forceActivities = () => db.query(
       "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_force_started'",
     ).all(waiting.id) as Array<{ id: string }>;
@@ -3489,12 +3487,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // (a) forged exemptions are ignored on the public task route
     for (const extra of [{ attempt: 2 }, { preserve_issue_status: true }]) {
-      const response = await post("/api/multiremi/tasks", {
+      const response = await post(issueMessagesPath(store, waiting.id), requestMessageBody(store, {
         agentId: owner.id,
         issueId: waiting.id,
         prompt: "forged",
         ...extra,
-      });
+      }));
       expect(response.status).toBe(409);
       expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
     }
@@ -3589,7 +3587,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workers.forEach((worker) => worker.terminate());
       rmSync(barrierDir, { recursive: true, force: true });
 
-      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
+      const rows = db.query("SELECT id, status FROM multiremi_turn_execution_records WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
       const autoStarted = db.query(
         "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
       ).all(dependent.id) as Array<{ id: string }>;
@@ -3634,7 +3632,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       });
       await Promise.all([forced, automatic]);
 
-      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
+      const rows = db.query("SELECT id, status FROM multiremi_turn_execution_records WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
       const started = db.query(
         "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'dependency_auto_started')",
       ).all(dependent.id) as Array<{ id: string }>;
@@ -3706,7 +3704,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // Nothing half-written on any of the eight attempts.
     expect(store.getIssue(waiting.id)?.status).toBe("backlog");
     const taskRows = db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(waiting.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([]);
     const forced = db.query(
@@ -3765,7 +3763,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // Whole row sets, not counts of a filtered subset.
     const taskRows = db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([]);
     expect(store.getIssue(dependent.id)?.status).toBe("backlog");
@@ -3796,7 +3794,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
     expect(store.getSystemEvent(check.id)?.status).toBe("processed");
     expect(db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
   });
 
@@ -4144,7 +4142,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // Whole row sets, as the plan requires.
     const taskRows = db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id) as Array<{ status: string }>;
     const status = store.getIssue(dependent.id)?.status;
     const activeRows = taskRows.filter((row) => !["completed", "failed", "cancelled"].includes(row.status));
@@ -4180,7 +4178,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(store.getIssue(dependent.id)?.status).toBe("todo");
     }
     expect(db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
   }, 60_000);
 
@@ -4215,7 +4213,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // The status UPDATE died with its transaction: the issue is still waiting
     // and nothing about the attempt survives.
     expect(store.getIssue(dependent.id)?.status).toBe("backlog");
-    expect(db.query("SELECT status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id)).toEqual([]);
+    expect(db.query("SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ?").all(dependent.id)).toEqual([]);
     const types = (db.query("SELECT type FROM multiremi_issue_activity WHERE issue_id = ?").all(dependent.id) as Array<{ type: string }>)
       .map((row) => row.type);
     expect(types).not.toContain("dependency_force_started");
@@ -4247,7 +4245,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // the override already on record. Only the live notification was lost.
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     expect(db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
     const types = (db.query("SELECT type FROM multiremi_issue_activity WHERE issue_id = ?").all(dependent.id) as Array<{ type: string }>)
       .map((row) => row.type);
@@ -4286,7 +4284,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     expect(db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
     const activities = store.listIssueActivity(dependent.id);
     expect(activities.filter((entry) => entry.type === "issue_assigned")).toHaveLength(1);
@@ -4365,7 +4363,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect({
         step,
         status: store.getIssue(dependent.id)?.status,
-        tasks: db.query("SELECT status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id),
+        tasks: db.query("SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ?").all(dependent.id),
         activities: (db.query(
           "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'issue_assigned')",
         ).all(dependent.id) as Array<{ type: string }>).map((row) => row.type),
@@ -4397,7 +4395,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // client recovers by refreshing.
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     const taskRows = db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([{ status: "queued" }]);
     const activities = db.query(
@@ -4434,7 +4432,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(response.status).toBe(200);
 
     const taskRows = db.query(
-      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+      "SELECT status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([{ status: "queued" }]);
     const auto = db.query(
@@ -4572,7 +4570,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
       // All task rows, cancelled included: a round that was queued and then
       // cancelled is still evidence that the start ran once.
-      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC")
+      const rows = db.query("SELECT id, status FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at ASC")
         .all(dependent.id) as Array<{ status: string }>;
       const activityTypes = db.query(
         "SELECT type, data FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",

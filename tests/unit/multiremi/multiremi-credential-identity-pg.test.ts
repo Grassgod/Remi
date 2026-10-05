@@ -1,3 +1,4 @@
+import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448 QA round 1 follow-up (B1-B4) on real PostgreSQL.
  *
@@ -122,13 +123,13 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
 
     const issue = store.createIssue({ title: "MUL448 R2 PG B1", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG B1 session" });
-    const sessionTasksPath = "/api/issues/" + issue.id + "/sessions/" + session.id + "/tasks";
+    const sessionTasksPath = `/api/sessions/${session.id}/messages`;
     const taskResponse = await fixture.app.request(sessionTasksPath, {
       method: "POST", headers: forged,
-      body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG session task" })),
     });
-    expect(taskResponse.status).toBe(201);
-    const taskId = ((await taskResponse.json()) as any).id as string;
+    expect(taskResponse.status).toBe(200);
+    const taskId = sentTask(store, await taskResponse.json()).id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("member");
@@ -272,15 +273,15 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     const issue = store.createIssue({ title: "MUL448 R2 PG anon", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG anon session" });
     const response = await open.request(
-      "/api/issues/" + issue.id + "/sessions/" + session.id + "/tasks",
+      `/api/sessions/${session.id}/messages`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-ID": fixture.otherAgentId },
-        body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG anon session task" }),
+        body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG anon session task" })),
       },
     );
-    expect(response.status).toBe(201);
-    const taskId = ((await response.json()) as any).id as string;
+    expect(response.status).toBe(200);
+    const taskId = sentTask(store, await response.json()).id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("agent");

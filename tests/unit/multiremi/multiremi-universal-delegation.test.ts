@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, sentTask } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -81,30 +82,28 @@ async function request(store: MultiremiStore, source: MultiremiTask | null, path
 async function dispatchResponse(store: MultiremiStore, source: MultiremiTask | null, issue: MultiremiIssue,
   agentId: string, entry: Entry = "task", issueSessionId?: string) {
   const sessionId = issueSessionId ?? store.getOrCreateDefaultIssueSession(issue.id).id;
-  const path = entry === "task" ? "/api/multiremi/tasks"
-    : entry === "session" ? `/api/issues/${issue.id}/sessions/${sessionId}/tasks`
-      : `/api/issues/${issue.id}/rerun`;
-  return request(store, source, path, { agentId, issueId: issue.id, issueSessionId: sessionId,
+  // All former task/session/rerun entry points now send an explicit request.
+  const body = { agentId, issueId: issue.id, issueSessionId: sessionId,
     prompt: "Verify this work.", parentTaskId: "tsk_forged", parent_task_id: "tsk_forged",
     delegationId: "dlg_forged", delegated_by_agent_id: "agt_forged",
-    delegatedFromIssueSessionId: sessionId, createdByType: "member", createdById: "forged" });
+    delegatedFromIssueSessionId: sessionId, createdByType: "member", createdById: "forged" };
+  return request(store, source, `/api/sessions/${sessionId}/messages`, requestMessageBody(store, body));
 }
 
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue,
   agentId: string, entry: Entry = "task", sessionId?: string) {
   const response = await dispatchResponse(store, source, issue, agentId, entry, sessionId);
-  expect(response.status).toBe(entry === "rerun" ? 202 : 201);
-  const body = await response.json() as { id?: string; task?: { id: string } };
-  return store.getTask(body.task?.id ?? body.id!)!;
+  expect(response.status).toBe(200);
+  return sentTask(store, await response.json());
 }
 
 async function mention(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue,
   sessionId: string, agentId: string) {
-  return request(store, source, `/api/multiremi/issues/${issue.id}/comments`, {
+  return request(store, source, `/api/sessions/${sessionId}/messages`, requestMessageBody(store, {
     issue_session_id: sessionId,
     body: `Concrete work [@Agent](mention://agent/${agentId}) [@Agent](mention://agent/${agentId})`,
     taskId: "tsk_forged", authorId: "agt_forged",
-  });
+  }));
 }
 
 function activity(store: MultiremiStore, issueId: string, type: string) {
@@ -575,7 +574,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           }
         }
         const before = store.listTasks().length;
-        const response = await request(store, f.source, "/api/multiremi/tasks", { agentId: f.atlas.id, prompt: "No target Issue" });
+        const response = await request(store, f.source, "/api/turns", { agentId: f.atlas.id, prompt: "No target Issue" });
         expect(response.status).toBe(200);
         const result = await response.json();
         expect(result).toMatchObject({ task: null, wake_applied: "next_turn", wake_reason: "no_issue_target" });
@@ -600,12 +599,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
         const foreign = await withLimit("50", () => dispatch(store, source, f.b, f.atlas.id, "task", f.s1.id));
         const before = store.listTasks().length;
-        const response = await request(store, source, "/api/multiremi/tasks", {
+        const response = await request(store, source, "/api/turns", {
           agentId: f.atlas.id, continueTaskId: previous!.id, prompt: "Another round" });
         expect(response.status).toBe(200);
         expectDowngradedMessage(store, await response.json(), source, f.atlas.id);
         expect(store.listTasks().length).toBe(before);
-        const cross = await request(store, source, "/api/multiremi/tasks", {
+        const cross = await request(store, source, "/api/turns", {
           agentId: f.atlas.id, continueTaskId: foreign.id, prompt: "Cross-Session continuation" });
         expect(cross.status).toBe(400);
         expect(store.listTasks().length).toBe(before);

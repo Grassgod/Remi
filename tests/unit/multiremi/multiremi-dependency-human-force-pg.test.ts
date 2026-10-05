@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458 dependency force semantics on real PostgreSQL, including two-connection races. */
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -122,6 +123,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
         })).token
       : signTestJwt({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 60 });
     return {
+      store,
       app: createMultiremiApp({ store, authToken: "mul458-pg-root" }),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       userId: user.id,
@@ -142,11 +144,11 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       if (db.inTransaction) emittedInsideTransaction.push(event.type);
     });
     db.resetTransactionDepthStats();
-    const response = await f.app.request(`/api/issues/${f.issue.id}/comments`, {
-      method: "POST", headers: f.headers, body: JSON.stringify({ body: `PG ${kind} comment` }),
+    const response = await f.app.request(issueMessagesPath(store, f.issue.id), {
+      method: "POST", headers: f.headers, body: JSON.stringify(requestMessageBody(store, { body: `PG ${kind} comment` }, { type: "role", ref: "issue_owner" })),
     });
     stop();
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(db.maxTransactionDepth).toBe(1);
     expect(emittedInsideTransaction).toEqual([]);
     expect(store.getIssue(f.issue.id)?.status).toBe("todo");
@@ -160,10 +162,10 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
   it("covers mention, rerun, repeated comments, parent derivation and kill switch on PG", async () => {
     const ownerMention = await fixture("pat", "mention-owner");
-    expect((await ownerMention.app.request(`/api/issues/${ownerMention.issue.id}/comments`, {
+    expect((await ownerMention.app.request(issueMessagesPath(ownerMention.store, ownerMention.issue.id), {
       method: "POST", headers: ownerMention.headers,
-      body: JSON.stringify({ body: `[@Owner](mention://agent/${ownerMention.agent.id}) inspect` }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(ownerMention.store, { body: `[@Owner](mention://agent/${ownerMention.agent.id}) inspect` }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(store.listTasksForIssue(ownerMention.issue.id)[0]!.agentId).toBe(ownerMention.agent.id);
     expect(forces(ownerMention.issue.id)[0]!.data).toMatchObject({
       source: "mention", agentId: ownerMention.agent.id, assigneeDispatched: true,
@@ -171,10 +173,10 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
     const mention = await fixture("pat", "mention");
     const specialist = store.createAgent({ name: `PG specialist ${counter}`, provider: "claude", visibility: "workspace" });
-    expect((await mention.app.request(`/api/issues/${mention.issue.id}/comments`, {
+    expect((await mention.app.request(issueMessagesPath(mention.store, mention.issue.id), {
       method: "POST", headers: mention.headers,
-      body: JSON.stringify({ body: `[@${specialist.name}](mention://agent/${specialist.id}) inspect` }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(mention.store, { body: `[@${specialist.name}](mention://agent/${specialist.id}) inspect` }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(store.listTasksForIssue(mention.issue.id)).toHaveLength(1);
     expect(store.listTasksForIssue(mention.issue.id)[0]!.agentId).toBe(specialist.id);
     expect(forces(mention.issue.id)[0]!.data).toMatchObject({
@@ -185,10 +187,10 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const leader = store.createAgent({ name: `PG squad leader ${counter}`, provider: "claude", visibility: "workspace" });
     const squad = store.createSquad({ name: `PG mention squad ${counter}`, leaderId: leader.id });
     store.assignIssue(squadMention.issue.id, { assigneeType: "squad", assigneeId: squad.id });
-    expect((await squadMention.app.request(`/api/issues/${squadMention.issue.id}/comments`, {
+    expect((await squadMention.app.request(issueMessagesPath(squadMention.store, squadMention.issue.id), {
       method: "POST", headers: squadMention.headers,
-      body: JSON.stringify({ body: `[@${squad.name}](mention://squad/${squad.id}) inspect` }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(squadMention.store, { body: `[@${squad.name}](mention://squad/${squad.id}) inspect` }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(store.listTasksForIssue(squadMention.issue.id)[0]!.agentId).toBe(leader.id);
     expect(forces(squadMention.issue.id)[0]!.data).toMatchObject({
       source: "mention", agentId: leader.id, assigneeDispatched: true,
@@ -196,17 +198,17 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
     const rerun = await fixture("jwt", "rerun");
     const override = store.createAgent({ name: `PG override ${counter}`, provider: "claude", visibility: "workspace" });
-    expect((await rerun.app.request(`/api/issues/${rerun.issue.id}/rerun`, {
-      method: "POST", headers: rerun.headers, body: JSON.stringify({ agent_id: override.id }),
-    })).status).toBe(202);
+    expect((await rerun.app.request(issueMessagesPath(rerun.store, rerun.issue.id), {
+      method: "POST", headers: rerun.headers, body: JSON.stringify(requestMessageBody(rerun.store, { agent_id: override.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(store.listTasksForIssue(rerun.issue.id)[0]!.agentId).toBe(override.id);
     expect(forces(rerun.issue.id)[0]!.data).toMatchObject({ source: "rerun", assigneeDispatched: false });
 
     const repeated = await fixture("pat", "repeated");
     for (const body of ["one", "two", "three"]) {
-      expect((await repeated.app.request(`/api/issues/${repeated.issue.id}/comments`, {
-        method: "POST", headers: repeated.headers, body: JSON.stringify({ body }),
-      })).status).toBe(201);
+      expect((await repeated.app.request(issueMessagesPath(repeated.store, repeated.issue.id), {
+        method: "POST", headers: repeated.headers, body: JSON.stringify(requestMessageBody(repeated.store, { body }, { type: "role", ref: "issue_owner" })),
+      })).status).toBe(200);
     }
     expect(store.listTasksForIssue(repeated.issue.id)).toHaveLength(true ? 1 : 3);
     expect(store.listIssueActivity(repeated.issue.id).filter(activity => activity.type === "pending_turn_coalesced"))
@@ -219,9 +221,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       title: `PG child ${counter}`, status: "backlog", parentIssueId: parent.id,
       blockedBy: [parentCase.prerequisite.id], assigneeType: "agent", assigneeId: parentCase.agent.id,
     });
-    expect((await parentCase.app.request(`/api/issues/${child.id}/comments`, {
-      method: "POST", headers: parentCase.headers, body: JSON.stringify({ body: "Start child" }),
-    })).status).toBe(201);
+    expect((await parentCase.app.request(issueMessagesPath(parentCase.store, child.id), {
+      method: "POST", headers: parentCase.headers, body: JSON.stringify(requestMessageBody(parentCase.store, { body: "Start child" }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "parent_status_derived")).toBe(true);
 
@@ -229,9 +231,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const previous = process.env.MULTIREMI_DEPENDENCY_GATE;
     process.env.MULTIREMI_DEPENDENCY_GATE = "0";
     try {
-      expect((await kill.app.request(`/api/issues/${kill.issue.id}/comments`, {
-        method: "POST", headers: kill.headers, body: JSON.stringify({ body: "Gate disabled" }),
-      })).status).toBe(201);
+      expect((await kill.app.request(issueMessagesPath(kill.store, kill.issue.id), {
+        method: "POST", headers: kill.headers, body: JSON.stringify(requestMessageBody(kill.store, { body: "Gate disabled" }, { type: "role", ref: "issue_owner" })),
+      })).status).toBe(200);
       expect(store.listTasksForIssue(kill.issue.id)).toHaveLength(1);
       expect(forces(kill.issue.id)).toHaveLength(0);
     } finally {
@@ -254,31 +256,31 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const taskToken = await store.createTaskAccessToken(source, f.userId);
     const taskHeaders = { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" };
 
-    const spoofed = await f.app.request(`/api/issues/${sourceIssue.id}/comments`, {
+    const spoofed = await f.app.request(issueMessagesPath(store, sourceIssue.id), {
       method: "POST", headers: taskHeaders,
-      body: JSON.stringify({ body: "Pretend member", author_type: "member", author_id: f.userId }),
+      body: JSON.stringify(requestMessageBody(store, { body: "Pretend member", author_type: "member", author_id: f.userId }, { type: "role", ref: "issue_owner" })),
     });
-    expect(spoofed.status).toBe(201);
+    expect(spoofed.status).toBe(200);
     const commentId = ((await spoofed.json()) as { id: string }).id;
     expect(store.getIssueComment(commentId)).toMatchObject({ authorType: "agent", authorId: leader.id, taskId: source.id });
 
-    const mention = await f.app.request(`/api/issues/${sourceIssue.id}/comments`, {
+    const mention = await f.app.request(issueMessagesPath(store, sourceIssue.id), {
       method: "POST", headers: taskHeaders,
-      body: JSON.stringify({ body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }),
+      body: JSON.stringify(requestMessageBody(store, { body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(mention.status).toBe(201);
+    expect(mention.status).toBe(200);
     expect(store.listIssueActivity(sourceIssue.id).some((entry) =>
       entry.type === "comment_mention_skipped" && (entry.data as any)?.reason === "dependencies_unmet")).toBe(true);
 
-    const agentRerun = await f.app.request(`/api/issues/${sourceIssue.id}/rerun`, {
-      method: "POST", headers: taskHeaders, body: JSON.stringify({ agent_id: leader.id }),
+    const agentRerun = await f.app.request(issueMessagesPath(store, sourceIssue.id), {
+      method: "POST", headers: taskHeaders, body: JSON.stringify(requestMessageBody(store, { agent_id: leader.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     });
     expect(agentRerun.status).toBe(409);
     expect(await agentRerun.json()).toMatchObject({ code: "dependencies_unmet" });
 
-    const agentCreate = await f.app.request("/api/multiremi/tasks", {
+    const agentCreate = await f.app.request(taskRequestPath(store, { issueId: sourceIssue.id }), {
       method: "POST", headers: taskHeaders,
-      body: JSON.stringify({ agentId: teammate.id, issueId: sourceIssue.id, prompt: "Delegate" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: teammate.id, issueId: sourceIssue.id, prompt: "Delegate" })),
     });
     expect(agentCreate.status).toBe(409);
     expect(await agentCreate.json()).toMatchObject({ code: "dependencies_unmet" });
@@ -287,12 +289,12 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
     for (const spelling of ["dependencyForce", "dependency_force"]) {
       const target = await fixture("pat", `strip-${spelling}`);
-      const response = await target.app.request("/api/multiremi/tasks", {
+      const response = await target.app.request(taskRequestPath(target.store, { issueId: target.issue.id }), {
         method: "POST", headers: target.headers,
-        body: JSON.stringify({
+        body: JSON.stringify(requestMessageBody(target.store, {
           agentId: target.agent.id, issueId: target.issue.id, prompt: "Forged",
           [spelling]: { source: "comment", actorMemberId: target.userId },
-        }),
+        })),
       });
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
@@ -312,8 +314,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const injected = spyOn(IssuesRepo.prototype, "recordDependencyForceStarted")
       .mockImplementation(() => { throw new Error("injected PG force audit failure"); });
     try {
-      const response = await f.app.request(`/api/issues/${f.issue.id}/comments`, {
-        method: "POST", headers: f.headers, body: JSON.stringify({ body: "Durable PG comment" }),
+      const response = await f.app.request(issueMessagesPath(store, f.issue.id), {
+        method: "POST", headers: f.headers, body: JSON.stringify(requestMessageBody(store, { body: "Durable PG comment" }, { type: "role", ref: "issue_owner" })),
       });
       expect(response.status).toBe(400);
       expect(store.getIssue(f.issue.id)?.status).toBe("backlog");
@@ -356,7 +358,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
   it("serializes concurrent human comment and rerun across two PG connections", async () => {
     const f = await fixture("pat", "race-comment-rerun");
     const results = await runRace(f.issue.id, f.prerequisite.id, f.agent.id, ["comment", "rerun"]);
-    expect(results.map((result) => result.responseStatus).sort()).toEqual([201, 202]);
+    expect(results.map((result) => result.responseStatus).sort()).toEqual([200, 200]);
     expect(results.every((result) => result.maxTransactionDepth === 1)).toBe(true);
     const tasks = store.listTasksForIssue(f.issue.id);
     const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "pending_turn_coalesced");

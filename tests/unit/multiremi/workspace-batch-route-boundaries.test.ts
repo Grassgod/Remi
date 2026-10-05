@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(() => {
   mock.restore();
@@ -423,9 +423,9 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
         for (const issue of [foreign.parent, own.parent]) {
           expect(store.getIssue(issue.id)).toMatchObject({ priority: "high", status: "in_progress" });
         }
-        const tasks = await app.request("/api/multiremi/tasks", { headers });
+        const tasks = await app.request("/api/turns", { headers });
         expect(tasks.status).toBe(200);
-        expect((await tasks.json()).tasks.map((task: { id: string }) => task.id).sort()).toEqual([foreign.task.id, own.task.id].sort());
+        expect((await tasks.json()).turns.map((task: { id: string }) => task.id).sort()).toEqual([foreign.task.id, own.task.id].sort());
       });
     }
   });
@@ -489,10 +489,10 @@ describe("batch issue parameter compatibility", () => {
 describe("ordinary task workspace boundaries", () => {
   it("hides foreign non-Chat tasks and retains the member's own tasks", async () => {
     const { app, foreign, own, headers } = await setup();
-    const response = await app.request("/api/multiremi/tasks", { headers });
+    const response = await app.request("/api/turns", { headers });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.tasks.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
+    expect(body.turns.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
     expect(JSON.stringify(body)).not.toContain(foreign.task.prompt);
   });
 
@@ -501,9 +501,9 @@ describe("ordinary task workspace boundaries", () => {
     store.createTask({ agentId: foreign.agent.id, prompt: "Second foreign task" });
     const secondOwn = store.createTask({ agentId: own.agent.id, prompt: "Second own task" });
     const membership = spyOn(store, "getUserRoleInWorkspace");
-    const response = await app.request("/api/multiremi/tasks", { headers });
+    const response = await app.request("/api/turns", { headers });
     expect(response.status).toBe(200);
-    expect((await response.json()).tasks.map((task: { id: string }) => task.id).sort()).toEqual([own.task.id, secondOwn.id].sort());
+    expect((await response.json()).turns.map((task: { id: string }) => task.id).sort()).toEqual([own.task.id, secondOwn.id].sort());
     expect(membership.mock.calls.filter((call) => call[1] === workspaceA.id)).toHaveLength(1);
     expect(membership.mock.calls.filter((call) => call[1] === workspaceB.id)).toHaveLength(1);
   });
@@ -513,9 +513,9 @@ describe("ordinary task workspace boundaries", () => {
     expect(store.getUserRoleInWorkspace(owner.id, workspaceA.id)).toBe("owner");
     expect(store.getUserRoleInWorkspace(owner.id, workspaceB.id)).toBe("owner");
     const { token } = await store.createTaskAccessToken(own.task, owner.id);
-    const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+    const response = await app.request("/api/turns", { headers: authHeaders(token) });
     expect(response.status).toBe(200);
-    expect((await response.json()).tasks.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
+    expect((await response.json()).turns.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
   });
 
   it("lists bound-workspace tasks when the task-token owner has no member row", async () => {
@@ -525,9 +525,9 @@ describe("ordinary task workspace boundaries", () => {
     expect(store.getUserRoleInWorkspace(tokenOwner.id, workspaceA.id)).toBeNull();
     expect(store.getUserRoleInWorkspace(tokenOwner.id, workspaceB.id)).toBeNull();
     const { token } = await store.createTaskAccessToken(own.task, tokenOwner.id);
-    const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+    const response = await app.request("/api/turns", { headers: authHeaders(token) });
     expect(response.status).toBe(200);
-    const taskIds = (await response.json()).tasks.map((task: { id: string }) => task.id);
+    const taskIds = (await response.json()).turns.map((task: { id: string }) => task.id);
     expect(taskIds).not.toContain(foreign.task.id);
     expect(taskIds).toEqual([own.task.id]);
   });
@@ -538,15 +538,15 @@ describe("ordinary task workspace boundaries", () => {
     expect(member).toBeDefined();
     const { token } = await store.createTaskAccessToken(own.task, user.id);
     const headers = authHeaders(token);
-    const before = await app.request("/api/multiremi/tasks", { headers });
+    const before = await app.request("/api/turns", { headers });
     expect(before.status).toBe(200);
-    expect((await before.json()).tasks.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
+    expect((await before.json()).turns.map((task: { id: string }) => task.id)).toEqual([own.task.id]);
 
     expect(store.archiveWorkspaceMember(member!.id).archivedAt).toBeTruthy();
     expect(store.getUserRoleInWorkspace(user.id, workspaceB.id)).toBeNull();
-    const after = await app.request("/api/multiremi/tasks", { headers });
+    const after = await app.request("/api/turns", { headers });
     expect(after.status).toBe(200);
-    const taskIds = (await after.json()).tasks.map((task: { id: string }) => task.id);
+    const taskIds = (await after.json()).turns.map((task: { id: string }) => task.id);
     expect(taskIds).not.toContain(foreign.task.id);
     expect(taskIds).toEqual([own.task.id]);
   });
@@ -561,9 +561,9 @@ describe("ordinary task workspace boundaries", () => {
       expect(accessToken).not.toBeNull();
       Object.defineProperty(accessToken!, "workspaceId", { value: workspaceId });
       spyOn(store, "verifyAccessToken").mockResolvedValue(accessToken);
-      const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+      const response = await app.request("/api/turns", { headers: authHeaders(token) });
       expect(response.status).toBe(200);
-      expect((await response.json()).tasks.map((task: { id: string }) => task.id).sort())
+      expect((await response.json()).turns.map((task: { id: string }) => task.id).sort())
         .toEqual([foreign.task.id, own.task.id].sort());
     });
   }
@@ -575,7 +575,7 @@ describe("ordinary task workspace boundaries", () => {
       const { token } = await store.createAccessToken({
         workspaceId: workspaceB.id, userId: owner.id, name: "Boundary daemon", type: "daemon",
       });
-      const response = await app.request("/api/multiremi/tasks", { headers: authHeaders(token) });
+      const response = await app.request("/api/turns", { headers: authHeaders(token) });
       expect(response.status).toBe(403);
       expect(await response.json()).toEqual({ error: "forbidden for daemon token" });
     });

@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 /**
  * MUL-357 on real PostgreSQL. Every other piece of evidence for this change is
  * bun:sqlite (in-process `:memory:`), while production runs PostgreSQL, so this
@@ -107,7 +108,7 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     const text = rows.map((row: any) => row["QUERY PLAN"]).join("\n");
     return {
       indexes: [...text.matchAll(/Index (?:Only )?Scan(?: Backward)? using (\S+)/g)].map((match) => match[1]!),
-      seqScanOnTasks: /Seq Scan on multiremi_tasks/.test(text),
+      seqScanOnTasks: /Seq Scan on multiremi_turn_execution_records/.test(text),
       sortNode: /(^|\n)\s+Sort\b/m.test(text),
       text,
     };
@@ -116,7 +117,7 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
   it("applies both pagination indexes on PostgreSQL", async () => {
     const created = await sql`
       SELECT indexname, indexdef FROM pg_indexes
-      WHERE schemaname='public' AND tablename='multiremi_tasks'
+      WHERE schemaname='public' AND tablename='multiremi_turn_execution_records'
         AND indexname IN ('idx_multiremi_tasks_created_at','idx_multiremi_tasks_status_created')
       ORDER BY indexname`;
     expect(created.map((row: any) => row.indexname)).toEqual([
@@ -154,7 +155,7 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
       pushTask(`tsk_pgrun_${index}`, "running", new Date(Date.UTC(2026, 6, 1) + index * 1000).toISOString());
     }
     await sql.unsafe(
-      `INSERT INTO multiremi_tasks
+      `INSERT INTO multiremi_turn_execution_records
          (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace, created_at, updated_at)
        VALUES ${values.join(",")}`,
       params as any[],
@@ -164,9 +165,9 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     // single-column `status` index there. Only a whole-table scan + sort is a bug.
     for (let index = 0; index < 3; index += 1) {
       const task = store.createTask({ agentId: agent.id, prompt: `queued ${index}`, workspaceId: "local" });
-      recorder.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", ["queued", task.id]);
+      mutateExecutionFixture(recorder, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", ["queued", task.id]);
     }
-    await sql.unsafe("ANALYZE multiremi_tasks");
+    await sql.unsafe("ANALYZE multiremi_turn_execution_records");
 
     // Re-issue exactly what the route issued, captured from the store.
     recorder.statements.length = 0;
@@ -198,7 +199,7 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     const seeded: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const task = store.createTask({ agentId: agent.id, prompt: `done ${index}`, workspaceId: "local" });
-      recorder.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", ["completed", task.id]);
+      mutateExecutionFixture(recorder, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", ["completed", task.id]);
       seeded.push(task.id);
     }
     for (let index = 0; index < 3; index += 1) {
@@ -249,21 +250,20 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     // the guardrail working.
     const reference = store.listTaskRefs({ statuses: [] }).map((task) => task.id);
     const collected: string[] = [];
-    let offset = 0;
+    let cursor: string | null = null;
     // The fixture is ~6k rows, so a cap of 100 pages at limit=100 is generous.
     for (let page = 0; page < 100; page += 1) {
-      const response = await app.request(`/api/multiremi/tasks?limit=100&offset=${offset}`, { headers });
+      const response = await app.request("/api/turns"+`?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers });
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        tasks: Array<{ id: string }>;
-        has_more: boolean;
-        next_offset: number | null;
+        turns: Array<{ id: string }>;
+        next_cursor: string | null;
       };
-      collected.push(...body.tasks.map((task: any) => task.id));
-      if (!body.has_more) break;
+      collected.push(...body.turns.map((task: any) => task.id));
+      if (!body.next_cursor) break;
       expect(page, "page walk did not terminate").toBeLessThan(99);
-      expect(body.next_offset).toBe(offset + body.tasks.length);
-      offset = body.next_offset!;
+      expect(body.next_cursor).toBeString();
+      cursor = body.next_cursor;
     }
     // The parent commit returned the whole table from this route; the page walk
     // must not drop or repeat a row.

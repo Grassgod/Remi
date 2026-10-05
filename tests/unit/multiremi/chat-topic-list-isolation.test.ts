@@ -4,7 +4,7 @@ import {
   prepareFeishuIssueTopic,
   prepareFeishuPrivateConversation,
 } from "../../fixtures/multiremi-feishu-topic.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -43,9 +43,9 @@ describe("Chat list isolation from Feishu Issue topics", () => {
         if (!Array.isArray(body)) expect(body.total).toBe(1);
       }
     }
-    const pending = await app.request("/api/chat/pending-tasks", { headers });
+    const pending = await app.request("/api/turns?status=pending", { headers });
     expect(pending.status).toBe(200);
-    expect((await pending.json()).tasks).toEqual([
+    expect((await pending.json()).turns).toEqual([
       { task_id: privateTask.id, status: "queued", chat_session_id: privateChat.id },
     ]);
     // Internal topic auditing and direct topic transport access still work.
@@ -85,9 +85,9 @@ describe("Chat list isolation from Feishu Issue topics", () => {
         expect(sessions.map((session: { id: string }) => session.id)).toEqual([webChat.id]);
       }
     }
-    const pending = await app.request("/api/chat/pending-tasks", { headers });
+    const pending = await app.request("/api/turns?status=pending", { headers });
     expect(pending.status).toBe(200);
-    expect((await pending.json()).tasks).toEqual([
+    expect((await pending.json()).turns).toEqual([
       { task_id: webTask.id, status: "queued", chat_session_id: webChat.id },
     ]);
     // Feishu transport itself keeps working: the binding still resolves and the

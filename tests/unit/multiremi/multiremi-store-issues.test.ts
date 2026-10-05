@@ -1,3 +1,4 @@
+import { issueMessagesPath } from "./unified-test-paths.js";
 // The issue domain at store level: assignment, keys, GitHub links, hierarchy,
 // dependencies, mentions, notifications/inbox, comment threads and reactions,
 // attachments, labels, pinned shortcuts, and search.
@@ -736,13 +737,13 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const requestComments = (query: string) => {
       const token = process.env.MULTIREMI_TOKEN;
       return app.request(
-        `/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`,
+        issueMessagesPath(store, issue.id) + (query ? `?${query}` : ""),
         token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
       );
     };
     const getComments = async (query: string) => {
       const response = await requestComments(query);
-      return { response, rows: await response.json() as any[] };
+      return { response, rows: (await response.json()).messages as any[] };
     };
 
     const roots = await getComments("roots_only=true&summary=true");

@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,7 +86,7 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
     ]);
     // Existing tasks supply every status and usage format without inventing new tasks.
     const taskId = fixture.taskIds[index % fixture.taskIds.length]!;
-    db.run("UPDATE multiremi_tasks SET runtime_id = ?, usage = ? WHERE id = ?", id,
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, usage = ? WHERE id = ?", id,
       JSON.stringify([{ model: "model-default", input_tokens: index, output_tokens: index * 2 }]), taskId);
     runtimeIds.push(id);
   }
@@ -136,7 +137,7 @@ export async function capturePr2QueryCounts(point?: number) {
     const harness = await createPr2Harness({ inboxRows, runtimes, foreignRuntimes });
     try {
       const routes: Record<string, number> = {};
-      for (const path of ["/api/inbox/summary", `/api/attachments/${harness.attachmentId}/content`, "/api/runtimes"]) {
+      for (const path of ["/api/inbox", `/api/attachments/${harness.attachmentId}/content`, "/api/runtimes"]) {
         harness.probe.reset();
         const response = await harness.app.request(path, { headers: harness.headers });
         await response.arrayBuffer();
@@ -165,7 +166,7 @@ export async function capturePr2Responses() {
       return { status: response.status, body: await response.text() };
     };
     const inbox = [];
-    for (const offset of [0, 480, -300, 840]) inbox.push(await json(`/api/inbox/summary?timezone_offset=${offset}`));
+    for (const offset of [0, 480, -300, 840]) inbox.push(await json(`/api/inbox?timezone_offset=${offset}`));
     const response = await app.request(`/api/attachments/${harness.attachmentId}/content`, { headers });
     const attachment = { status: response.status,
       headers: Object.fromEntries(["content-type", "content-length", "content-disposition", "x-content-type-options"].map(key => [key, response.headers.get(key)])),

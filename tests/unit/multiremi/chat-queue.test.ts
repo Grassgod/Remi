@@ -1,7 +1,9 @@
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import { requestMessageBody, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -22,7 +24,7 @@ describe("Chat queues", () => {
     const first = store.sendChatMessage(chat.id, { content: "first input" });
     const second = store.sendChatMessage(chat.id, { content: "later input" });
     const third = store.sendChatMessage(chat.id, { content: "third input" });
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE chat_session_id = ?", [first.task.createdAt, chat.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE chat_session_id = ?", [first.task.createdAt, chat.id]);
     expect(first.queued).toBe(false);
     expect(second.queued).toBe(true);
     expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
@@ -58,7 +60,7 @@ describe("Chat queues", () => {
     store.claimTask(runtime.id);
     store.startTask(next.task.id);
     const queued = store.sendChatMessage(chat.id, { content: "after retry" });
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = NULL WHERE id = ?", [next.task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = NULL WHERE id = ?", [next.task.id]);
     store.failTask(next.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow", sessionId: "unsafe-session" });
     const retry = store.listTasks().find((task) => task.parentTaskId === next.task.id)!;
     expect(retry).toBeDefined();
@@ -161,7 +163,7 @@ describe("Chat queues", () => {
     expect(store.getTask(second.task.id)?.status).toBe("cancelled");
     expect(store.claimTask(runtime.id)).toBeNull();
     const app = createMultiremiApp({ store });
-    const rejected = await app.request(`/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ content: "no" }) });
+    const rejected = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers: jsonHeaders, body: JSON.stringify(requestMessageBody(store, { content: "no" }, { type: "agent", ref: store.getChatSession(chat.id)!.agentId })) });
     expect(rejected.status).toBe(409);
     const archived = await app.request("/api/chat/sessions?status=archived");
     expect((await archived.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
@@ -283,49 +285,6 @@ describe("Chat queues", () => {
     expect(() => store.sendChatMessage(chat.id, { content: "late" })).toThrow("Chat session not found");
   });
 
-  it("enforces queue ownership, stale-state conflicts, and the public response shapes", async () => {
-    const { store, agent } = setup();
-    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
-    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "admin" });
-    const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
-    const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
-    const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const headers = { ...jsonHeaders, Authorization: `Bearer ${alice.token}` };
-    const send = async (content: string) => {
-      const response = await app.request(`/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content }) });
-      expect(response.status).toBe(201);
-      return response.json();
-    };
-    const first = await send("first");
-    const second = await send("second");
-    expect(first).toMatchObject({ queued: false, supports_queue: true });
-    expect(second).toMatchObject({ queued: true, supports_queue: true });
-    const pending = await app.request(`/api/chat/sessions/${chat.id}/pending-task`, { headers });
-    expect(await pending.json()).toMatchObject({ task_id: first.task_id, supports_queue: true, queued_tasks: [{ task_id: second.task_id, content: "second", attachment_ids: [] }] });
-    for (const method of ["PATCH", "DELETE", "POST"]) {
-      const suffix = method === "POST" ? "/prioritize" : "";
-      const denied = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}${suffix}`, {
-        method, headers: { ...jsonHeaders, Authorization: `Bearer ${bob.token}` }, ...(method === "PATCH" ? { body: JSON.stringify({ content: "not yours" }) } : {}),
-      });
-      expect(denied.status).toBe(403);
-    }
-    const foreign = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
-    const foreignTask = store.sendChatMessage(foreign.id, { content: "foreign" });
-    const rejected = await app.request(`/api/chat/sessions/${chat.id}/queue/${foreignTask.task.id}`, { method: "DELETE", headers });
-    expect(rejected.status).toBe(409);
-    const edit = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}`, { method: "PATCH", headers, body: JSON.stringify({ content: "edited" }) });
-    expect(await edit.json()).toMatchObject({ task_id: second.task_id, content: "edited", attachment_ids: [] });
-    const prioritized = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}/prioritize`, { method: "POST", headers });
-    expect(await prioritized.json()).toEqual({ task_id: second.task_id, active_task_id: null });
-    const cleared = await app.request(`/api/chat/sessions/${chat.id}/queue`, { method: "DELETE", headers });
-    expect(cleared.status).toBe(204);
-    expect(store.getTask(first.task_id)?.status).toBe("cancelled");
-    const stale = await app.request(`/api/chat/sessions/${chat.id}/queue/${first.task_id}`, { method: "DELETE", headers });
-    expect(stale.status).toBe(409);
-    const invalid = await app.request(`/api/chat/sessions/${chat.id}`, { method: "PATCH", headers, body: JSON.stringify({ pinned: "yes" }) });
-    expect(invalid.status).toBe(400);
-  });
 
   it("keeps same-millisecond messages and previews in insertion order after retiring the page route", async () => {
     const { store, runtime, chat } = setup();
@@ -374,8 +333,8 @@ describe("Chat queues", () => {
     const list = await app.request("/api/chat/sessions", { headers });
     expect((await list.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
     const sent = store.sendChatMessage(chat.id, { content: "design" });
-    const pending = await app.request("/api/chat/pending-tasks", { headers });
-    expect((await pending.json()).tasks.map((entry: any) => entry.task_id)).toEqual([sent.task.id]);
+    const pending = await app.request("/api/turns?status=pending", { headers });
+    expect((await pending.json()).turns.map((entry: any) => entry.id)).toEqual([store.getTurnForAttempt(sent.task.id)!.id]);
     const unknown = await app.request("/api/chat/sessions", { headers: { "X-Workspace-Slug": "missing" } });
     expect(unknown.status).toBe(404);
     const conflicting = await app.request("/api/chat/sessions?workspace_id=local", { headers });
@@ -384,4 +343,61 @@ describe("Chat queues", () => {
     const byId = await app.request("/api/chat/sessions", { headers: { "X-Workspace-ID": workspace.id } });
     expect((await byId.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
   });
+});
+
+pendingTurnBackendTests("Chat queue unified API", fixture => {
+  it("enforces message ownership, unread conflicts and delete/resend FIFO through the public API", async () => {
+    const { store } = fixture();
+    const agent = store.createAgent({ name: "Queue API", provider: "codex", visibility: "workspace" });
+    store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "admin" });
+    const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
+    const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
+    const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { ...jsonHeaders, Authorization: `Bearer ${alice.token}` };
+    const send = async (body_md: string, extra = {}) => {
+      const response = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers,
+        body: JSON.stringify({ body_md, to: { type: "agent", ref: agent.id }, ...extra }) });
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json();
+    };
+    const first = await send("first"), second = await send("second");
+    expect(first.message).toMatchObject({ body_md: "first", to_agent_id: agent.id, message_kind: "request" });
+    expect(second.message).toMatchObject({ body_md: "second", to_agent_id: agent.id });
+    const unread = await app.request(`/api/sessions/${chat.id}/messages?unread_by=${agent.id}`, { headers });
+    expect((await unread.json()).messages.map((m: any) => m.id)).toEqual([first.message.id, second.message.id]);
+    for (const method of ["PATCH", "DELETE"]) {
+      const denied = await app.request(`/api/messages/${second.message.id}`, {
+        method, headers: { ...jsonHeaders, Authorization: `Bearer ${bob.token}` },
+        ...(method === "PATCH" ? { body: JSON.stringify({ body_md: "not yours" }) } : {}),
+      });
+      expect(denied.status).toBe(403);
+    }
+    const foreign = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
+    const foreignMessage = store.sendChatMessage(foreign.id, { content: "foreign" }).message;
+    const rejected = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers,
+      body: JSON.stringify({ body_md: "wrong conversation", reply_to_id: foreignMessage.id }) });
+    expect(rejected.status).toBe(400);
+    expect(store.getMessage(foreignMessage.id)?.deleted_at).toBeNull();
+    const edit = await app.request(`/api/messages/${second.message.id}`, { method: "PATCH", headers,
+      body: JSON.stringify({ body_md: "edited" }) });
+    expect(edit.status).toBe(200);
+    expect((await edit.json()).message).toMatchObject({ id: second.message.id, body_md: "edited", attachments: [] });
+    const removed = await app.request(`/api/messages/${second.message.id}`, { method: "DELETE", headers });
+    expect(removed.status).toBe(200);
+    const resent = await send("edited");
+    expect(resent.message.id).not.toBe(second.message.id);
+    expect(resent.message.seq).toBeGreaterThan(second.message.seq);
+    const remaining = await app.request(`/api/sessions/${chat.id}/messages?unread_by=${agent.id}`, { headers });
+    expect((await remaining.json()).messages.map((m: any) => m.id)).toEqual([first.message.id, resent.message.id]);
+    store.recordSessionAgentInlineRead(chat.id, agent.id, [first.message.seq], first.message.seq);
+    const stale = await app.request(`/api/messages/${first.message.id}`, { method: "DELETE", headers });
+    expect(stale.status).toBe(409);
+    expect(store.getMessage(first.message.id)?.deleted_at).toBeNull();
+    const invalid = await app.request(`/api/chat/sessions/${chat.id}`, { method: "PATCH", headers, body: JSON.stringify({ pinned: "yes" }) });
+    expect(invalid.status).toBe(400);
+  });
+
 });

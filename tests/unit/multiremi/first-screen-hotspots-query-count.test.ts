@@ -173,7 +173,7 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
     const restoreIds = installFirstScreenHotspotIds();
     try {
       const harness = await createHarness();
-      const pending = await getJson(harness, "/api/chat/pending-tasks");
+      const pending = await getJson(harness, "/api/turns?status=pending");
       const byUserId = await getJson(harness, `/api/issues?assignee_id=${harness.fixture.readerUserId}&limit=50`);
       const byMemberRowId = await getJson(harness, `/api/issues?assignee_id=${harness.fixture.readerMemberId}&limit=50`);
       const byAgentName = await getJson(
@@ -193,9 +193,9 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
   it("keeps pending-tasks' ranking identical to the per-Session pendingTasks() order", async () => {
     const harness = await createHarness();
     const { fixture } = harness;
-    const body = await getJson(harness, "/api/chat/pending-tasks");
-    const tasks = body.body as { tasks: Array<{ task_id: string; status: string; chat_session_id: string }> };
-    const bySession = new Map(tasks.tasks.map((task) => [task.chat_session_id, task]));
+    const body = await getJson(harness, "/api/turns?status=pending");
+    const tasks = body.body as { turns: Array<{ current_attempt_id: string; status: string; session_id: string }> };
+    const bySession = new Map(tasks.turns.map((task) => [task.session_id, task]));
     const ranking = fixture.ranking;
     expect(ranking.runningBeatsQueuedWinnerTaskId).not.toBeNull();
     expect(ranking.prioritizedWinnerTaskId).not.toBeNull();
@@ -203,17 +203,17 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
     // Ranking case 1: an older, in-flight task outranks three queued siblings
     // that were created after it.
     expect(bySession.get(ranking.runningBeatsQueuedSessionId!)).toMatchObject({
-      task_id: ranking.runningBeatsQueuedWinnerTaskId!,
+      current_attempt_id: ranking.runningBeatsQueuedWinnerTaskId!,
       status: "running",
     });
     // Ranking case 2: `priority` decides between two queued turns, not creation order.
     expect(bySession.get(ranking.prioritizedSessionId!)).toMatchObject({
-      task_id: ranking.prioritizedWinnerTaskId!,
-      status: "queued",
+      current_attempt_id: ranking.prioritizedWinnerTaskId!,
+      status: "pending",
     });
     // Each Session contributes at most one task, and only the reader's Sessions do.
-    expect(new Set(tasks.tasks.map((task) => task.chat_session_id)).size).toBe(tasks.tasks.length);
-    expect(tasks.tasks.every((task) => fixture.sessionIds.includes(task.chat_session_id))).toBe(true);
+    expect(new Set(tasks.turns.map((task) => task.session_id)).size).toBe(tasks.turns.length);
+    expect(tasks.turns.every((task) => fixture.sessionIds.includes(task.session_id))).toBe(true);
   }, 20000);
 });
 
@@ -223,8 +223,8 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const measurements: Array<{ sessions: number; statements: number; bytes: number; tasks: number }> = [];
     for (const sessions of [1, 50, 200]) {
       const harness = await createHarness({ sessions, inboxRows: 0, issues: 0, privatePrimaryAgent: false });
-      const body = await getJson(harness, "/api/chat/pending-tasks");
-      const tasks = (body.body as { tasks: unknown[] }).tasks;
+      const body = await getJson(harness, "/api/turns?status=pending");
+      const tasks = (body.body as { turns: unknown[] }).turns;
       // One task per Chat: the fixture gives every Session exactly one pending turn.
       expect(tasks.length).toBe(sessions);
       measurements.push({ sessions, statements: body.statements, bytes: body.bytes, tasks: tasks.length });
@@ -252,7 +252,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
 
   it("reads no Chat message column for pending-tasks", async () => {
     const harness = await createHarness();
-    await getJson(harness, "/api/chat/pending-tasks");
+    await getJson(harness, "/api/turns?status=pending");
     const sql = [...harness.probe.bySql.keys()];
     const messageReads = sql.filter((statement) => /multiremi_chat_messages/i.test(statement));
     expect(messageReads).toEqual([]);
@@ -260,7 +260,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
 
   it("loads no Skill body on the pending-tasks path", async () => {
     const harness = await createHarness({ skillBodyBytes: 64_000 });
-    const baseline = await getJson(harness, "/api/chat/pending-tasks");
+    const baseline = await getJson(harness, "/api/turns?status=pending");
     // Each fixture Agent carries a 64 KB Skill file. A hydrated Agent load would
     // pull all 20 across the bridge; the lite projection keeps it to the row.
     expect(baseline.bytes).toBeLessThan(40_000);
@@ -391,9 +391,9 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     });
     harness.store.sendChatMessage(ownerSession.id, { body: "private agent turn" });
 
-    const readerView = await getJson(harness, "/api/chat/pending-tasks");
-    const readerSessions = (readerView.body as { tasks: Array<{ chat_session_id: string }> }).tasks
-      .map((task) => task.chat_session_id);
+    const readerView = await getJson(harness, "/api/turns?status=pending");
+    const readerSessions = (readerView.body as { turns: Array<{ session_id: string }> }).turns
+      .map((task) => task.session_id);
     expect(readerSessions).not.toContain(readerSession.id);
     expect(readerSessions).not.toContain(ownerSession.id);
 
@@ -405,12 +405,12 @@ describe("MUL-473 first-screen hotspot query counts", () => {
       workspaceId: fixture.workspaceId,
       purpose: "session",
     });
-    const ownerView = await getJsonWithHeaders(harness, "/api/chat/pending-tasks", {
+    const ownerView = await getJsonWithHeaders(harness, "/api/turns?status=pending", {
       Authorization: `Bearer ${ownerCredential.token}`,
       "X-Workspace-ID": fixture.workspaceId,
     });
-    expect((ownerView.body as { tasks: Array<{ chat_session_id: string }> }).tasks
-      .map((task) => task.chat_session_id)).toContain(ownerSession.id);
+    expect((ownerView.body as { turns: Array<{ session_id: string }> }).turns
+      .map((task) => task.session_id)).toContain(ownerSession.id);
   }, 20000);
 });
 

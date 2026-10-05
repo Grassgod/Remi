@@ -1,3 +1,4 @@
+import { attemptMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -97,13 +98,13 @@ describe("topic Task credential handoff through existing APIs", () => {
     store.completeTask(previous.id, { output: "Ready for follow-up", sessionId: "acp_issue_owner", workDir: "/tmp/issue-followup-work" });
     const before = store.listTasks().length;
 
-    const comment = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/messages`, {
+    const comment = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers,
-      body: JSON.stringify({ content: `[@Issue owner](mention://agent/${owner.id}) Please continue.` }),
+      body: JSON.stringify(requestMessageBody(store, { content: `[@Issue owner](mention://agent/${owner.id}) Please continue.` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(comment.status).toBe(201);
-    const posted = await comment.json();
-    expect(posted.author_type).toBe("agent");
+    expect(comment.status).toBe(200);
+    const { message: posted } = await comment.json();
+    expect(posted.sender_type).toBe("agent");
     const mentioned = store.listTasks().find((entry) => entry.triggerCommentId === posted.id)!;
     expect(mentioned).toMatchObject({
       issueId: issue.id, issueSessionId: session.id, agentId: owner.id,
@@ -125,21 +126,21 @@ describe("topic Task credential handoff through existing APIs", () => {
     expect(store.listTasks()).toHaveLength(before + 1);
     expect(store.listTasks().filter((entry) => entry.chatSessionId === chat.id).map((entry) => entry.id)).toEqual([task.id]);
 
-    const created = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const created = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers,
-      body: JSON.stringify({ agent_id: owner.id, prompt: "User requested: add tests, retain the API, and report verification." }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: owner.id, prompt: "User requested: add tests, retain the API, and report verification." }, { type: "role", ref: "issue_owner" })),
     });
-    expect(created.status).toBe(201);
+    expect(created.status).toBe(200);
     const next = await created.json();
     expect(next).toMatchObject({
       issue_id: issue.id, issue_session_id: session.id, agent_id: owner.id,
       chat_session_id: null, parent_task_id: task.id, status: "queued", session_id: "acp_issue_owner",
     });
-    const verified = await app.request(`/api/multiremi/tasks/${next.id}`, { headers });
+    const verified = await app.request(turnApiPath(store, next.id), { headers });
     expect(verified.status).toBe(200);
     expect((await verified.json()).task).toMatchObject({ id: next.id, issueSessionId: session.id, agentId: owner.id, status: "queued" });
     expect(store.getTask(next.id)).toMatchObject({ delegationId: null, delegationSkipReason: "source_not_issue_task" });
-    const listed = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, { headers });
+    const listed = await app.request(`/api/turns?session_id=${session.id}`, { headers });
     expect(listed.status).toBe(200);
     expect((await listed.json()).some((entry: { id: string }) => entry.id === next.id)).toBe(true);
     expect(store.claimTask(runtime.id)?.id).toBe(next.id);
@@ -155,22 +156,22 @@ describe("topic Task credential handoff through existing APIs", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(active.id);
     store.startTask(active.id);
     const before = store.listTasks().length;
-    const sent = await app.request(`/api/tasks/${active.id}/steer`, {
-      method: "POST", headers, body: JSON.stringify({ content: "Also test the failure path." }),
+    const sent = await app.request(attemptMessagesPath(store, active.id), {
+      method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { body_md: "Also test the failure path." }, { type: "agent", ref: store.getTask(active.id)!.agentId })),
     });
-    expect(sent.status).toBe(201);
+    expect(sent.status).toBe(200);
     const directive = (await sent.json()).message;
-    const verified = await app.request(`/api/tasks/${active.id}/steer`, { headers });
+    const verified = await app.request(attemptMessagesPath(store, active.id), { headers });
     expect(verified.status).toBe(200);
-    expect((await verified.json()).messages).toContainEqual(expect.objectContaining({ id: directive.id, content: "Also test the failure path." }));
+    expect((await verified.json()).messages).toContainEqual(expect.objectContaining({ id: directive.id, body_md: "Also test the failure path." }));
     expect(store.listTasks()).toHaveLength(before);
     expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
     expect(store.getTask(active.id)).toMatchObject({ issueId: issue.id, issueSessionId: session.id, agentId: owner.id, status: "running" });
 
     store.consumeTaskSteerMessages(active.id, [directive.id]);
     store.completeTask(active.id, { output: "Done" });
-    const late = await app.request(`/api/tasks/${active.id}/steer`, {
-      method: "POST", headers, body: JSON.stringify({ content: "Too late" }),
+    const late = await app.request(attemptMessagesPath(store, active.id), {
+      method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { content: "Too late" }, { type: "agent", ref: store.getTask(active.id)!.agentId })),
     });
     expect(late.status).toBe(409);
     expect(store.listTasks()).toHaveLength(before);
@@ -186,8 +187,8 @@ describe("topic Task credential handoff through existing APIs", () => {
       [session.id, "agt_missing", headers, 404],
       [session.id, owner.id, { ...headers, Authorization: "Bearer invalid-task-credential" }, 401],
     ] as const) {
-      const failed = await app.request(`/api/issues/${issue.id}/sessions/${sessionId}/tasks`, {
-        method: "POST", headers: auth, body: JSON.stringify({ agent_id: agentId, prompt: "Continue" }),
+      const failed = await app.request(`/api/sessions/${sessionId}/messages`, {
+        method: "POST", headers: auth, body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Continue" }, { type: "role", ref: "issue_owner" })),
       });
       expect(failed.status).toBe(expectedStatus);
       expect(await failed.json()).toHaveProperty("error");

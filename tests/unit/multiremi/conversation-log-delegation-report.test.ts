@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -65,13 +66,13 @@ function fixture(store: MultiremiStore) {
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue, agentId: string) {
   const app = createMultiremiApp({ store, authToken: "test-root" });
   const token = await store.createTaskAccessToken(source, "local");
-  const response = await app.request("/api/multiremi/tasks", {
+  const response = await app.request(taskRequestPath(store, { issueId: issue.id }), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, issueId: issue.id, prompt: "Execute delegated work." }),
+    body: JSON.stringify(requestMessageBody(store, { agentId, issueId: issue.id, prompt: "Execute delegated work." })),
   });
-  expect(response.status).toBe(201);
-  return store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+  expect(response.status).toBe(200);
+  return store.getTask(sentTask(store, await response.json()).id)!;
 }
 
 function rawDb(store: MultiremiStore) {

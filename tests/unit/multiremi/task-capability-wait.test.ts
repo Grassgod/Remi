@@ -1,3 +1,4 @@
+import { requestMessageBody, turnApiPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -54,7 +55,7 @@ function fixture(binding: "automatic" | "runtime" | "group" | "task" = "automati
 }
 
 function ageTask(taskId: string, ageMs: number, now: number) {
-  db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - ageMs).toISOString(), taskId]);
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - ageMs).toISOString(), taskId]);
 }
 
 async function redispatchAsSupervisor(store: MultiremiStore, taskId: string, reason: string) {
@@ -69,10 +70,10 @@ async function redispatchAsSupervisor(store: MultiremiStore, taskId: string, rea
   const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "organize" });
   const token = await store.createTaskAccessToken(supervisorTask, "owner");
   const app = createMultiremiApp({ store, authToken: "root-secret" });
-  const response = await app.request(`/api/tasks/${taskId}/redispatch`, {
+  const response = await app.request(turnApiPath(store, taskId, "/retry"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ reason }),
+    body: JSON.stringify({ cold: true }),
   });
   return { response, replacement: response.status === 202
     ? store.getTask((await response.json()).replacement_task.id) : null };
@@ -101,7 +102,7 @@ describe("queued task model capability waits", () => {
           const workspace = store.runtimeWorkspaces.create(workspaceRuntime.id, { name: "Explicit files", root_path: "/local/explicit" });
           // Historical invalid bindings must fail the SQL guards too; creation
           // already rejects archived and foreign-tenant workspace references.
-          db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+          mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
           if (location === "archived") {
             db!.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
           }
@@ -138,7 +139,7 @@ describe("queued task model capability waits", () => {
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     for (const prefix of ["等待项目设备：", "等待任务落点："]) {
-      db!.run("UPDATE multiremi_tasks SET wait_reason = ? WHERE id = ?", [`${prefix}stale`, task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET wait_reason = ? WHERE id = ?", [`${prefix}stale`, task.id]);
       expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 1, alerted: 0 });
       expect(store.getTask(task.id)?.waitReason).toBeNull();
     }
@@ -154,7 +155,7 @@ describe("queued task model capability waits", () => {
     const workspace = store.runtimeWorkspaces.create(owner.id, { name: "Owned files", root_path: "/local/anchor" });
     const agent = store.createAgent({ name: "Bound elsewhere", provider: "codex", runtimeId: other.id });
     const task = store.createTask({ agentId: agent.id, prompt: "Conflict" });
-    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
@@ -526,11 +527,8 @@ describe("queued task model capability waits", () => {
     const task = store.createTask({
       agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "frozen retry",
     });
-    db!.run(
-      `UPDATE multiremi_tasks SET runtime_id = ?, session_id = 'sess_frozen', work_dir = '/work/frozen',
-         attempt = 2, execution_fingerprint = 'frozen-fingerprint' WHERE id = ?`,
-      [devbox.id, task.id],
-    );
+    mutateExecutionFixture(db!, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = 'sess_frozen', work_dir = '/work/frozen',
+         attempt = 2, execution_fingerprint = 'frozen-fingerprint' WHERE id = ?`, [devbox.id, task.id]);
     move();
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
@@ -575,11 +573,8 @@ describe("queued task model capability waits", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Projectless pin", provider: "codex", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "project-less" });
-    db!.run(
-      `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen'
-        WHERE id = ?`,
-      ["rt_projectless_missing", task.id],
-    );
+    mutateExecutionFixture(db!, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen'
+        WHERE id = ?`, ["rt_projectless_missing", task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(() => store.refreshQueuedCapabilityWaitReasons(now)).not.toThrow();
@@ -609,7 +604,7 @@ describe("queued task model capability waits", () => {
     store.startTask(first.id);
     store.completeTask(first.id, { output: "ok", sessionId: "sess_label", workDir: "/abs/label-a" });
     const second = store.sendChatMessage(chat.id, { body: "second" }).task;
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [a.id, second.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [a.id, second.id]);
 
     store.deleteProjectDevice(project.id, "dev-label-a");
     store.createProjectDevice(project.id, { daemonId: "dev-label-b" });
@@ -690,10 +685,7 @@ describe("queued task model capability waits", () => {
       issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "frozen" });
-    db!.run(
-      `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen-fp' WHERE id = ?`,
-      [a.id, task.id],
-    );
+    mutateExecutionFixture(db!, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen-fp' WHERE id = ?`, [a.id, task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
@@ -728,7 +720,7 @@ describe("queued task model capability waits", () => {
     }).runtimeWorkspaces.create(m.id, { name: "Unregistered U", root_path: "/tmp/mixed-u" });
     db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", ["dev-mixed-u", workspace.id]);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "M versus U" });
-    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.describeTaskPlacement(task.id).every((verdict) => !verdict.placementOk)).toBe(true);
@@ -749,7 +741,7 @@ describe("queued task model capability waits", () => {
     });
     store.updateAgent(agent.id, { runtimeId: b.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "frozen snapshot" });
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'frozen-code-fp' WHERE id = ?", [task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = 'frozen-code-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
@@ -797,7 +789,7 @@ describe("queued task model capability waits", () => {
       const later = store.sendChatMessage(chat.id, { body: `later message ${index}` });
       store.cancelTask(later.task.id);
     }
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
@@ -819,10 +811,10 @@ describe("queued task model capability waits", () => {
     const patrol = store.createIssue({ title: "Organizer patrol" });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "organize" });
     const supervisorToken = await store.createTaskAccessToken(supervisorTask, "owner");
-    const denied = await app.request(`/api/tasks/${task.id}/redispatch`, {
+    const denied = await app.request(turnApiPath(store, task.id, "/retry"), {
       method: "POST",
       headers: { Authorization: `Bearer ${supervisorToken.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: "recover Chat" }),
+      body: JSON.stringify({ cold: true }),
     });
     expect(denied.status).toBe(403);
     expect((await denied.json()).error).toBe("forbidden");
@@ -835,13 +827,13 @@ describe("queued task model capability waits", () => {
     const originalMessage = store.listChatMessagesFromLog(command![3]!)
       .find((message) => message.role === "user" && message.taskId === task.id);
     expect(originalMessage?.body).toBe(original.message.body);
-    const resent = await app.request(`/api/chat/sessions/${command![4]}/messages`, {
-      method: "POST", headers, body: JSON.stringify({ content: originalMessage!.body }),
+    const resent = await app.request(`/api/sessions/${command![4]}/messages`, {
+      method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { content: originalMessage!.body }, { type: "agent", ref: store.getChatSession(command![4])!.agentId })),
     });
-    expect(resent.status).toBe(201);
-    const resentBody = await resent.json() as { task_id: string; message_id: string };
-    const replayed = store.getTask(resentBody.task_id)!;
-    expect(store.getChatMessage(resentBody.message_id)?.body).toBe(originalMessage!.body);
+    expect(resent.status).toBe(200);
+    const resentBody = await resent.json() as { turn_id: string; message: { id: string } };
+    const replayed = store.getTask(sentTask(store, resentBody).id)!;
+    expect(store.getChatMessage(resentBody.message.id)?.body).toBe(originalMessage!.body);
     expect(replayed.chatSessionId).toBe(task.chatSessionId);
     expect(replayed.prompt).toBe(task.prompt);
     expect(store.claimTask(b.id)).toBeNull();
@@ -858,7 +850,7 @@ describe("queued task model capability waits", () => {
     ] });
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const task = store.sendChatMessage(chat.id, { body: "original Chat work" }).task;
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-cancel-fp' WHERE id = ?", [task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = 'chat-cancel-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
@@ -876,7 +868,7 @@ describe("queued task model capability waits", () => {
     store.createProjectDevice(project.id, { daemonId: "chat-route-b" });
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const task = store.sendChatMessage(chat.id, { body: "original work" }).task;
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'chat-route-fp' WHERE id = ?", [task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = 'chat-route-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.claimTask(a.id)).toBeNull();
@@ -960,7 +952,7 @@ describe("queued task model capability waits", () => {
               }
               const chat = store.createChatSession({ agentId: agent.id, ...(project ? { projectId: project.id } : {}) });
               const task = store.sendChatMessage(chat.id, { body: "routing table request" }).task;
-              db!.run("UPDATE multiremi_tasks SET runtime_id = ?, execution_fingerprint = 'routing-table-fp' WHERE id = ?", [a.id, task.id]);
+              mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, execution_fingerprint = 'routing-table-fp' WHERE id = ?", [a.id, task.id]);
               const now = Date.now();
               ageTask(task.id, GRACE_MS, now);
               store.refreshQueuedCapabilityWaitReasons(now);
@@ -1058,7 +1050,7 @@ describe("queued task model capability waits", () => {
                 ...(project ? { projectId: project.id } : {}) }) : null;
               const task = chat ? store.sendChatMessage(chat.id, { body: prompt }).task
                 : store.createTask({ agentId: agent.id, issueId: issue!.id, issueSessionId: issueSessionId!, prompt });
-              if (frozen) db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", [`fp-${cells}`, task.id]);
+              if (frozen) mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = ? WHERE id = ?", [`fp-${cells}`, task.id]);
               const now = Date.now();
               ageTask(task.id, GRACE_MS, now);
               store.refreshQueuedCapabilityWaitReasons(now);
@@ -1154,7 +1146,7 @@ describe("queued task model capability waits", () => {
       runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
     }).runtimeWorkspaces.create(a.id, { name: "Workspace on A", root_path: "/abs/on-a" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "data conflict" });
-    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     store.refreshQueuedCapabilityWaitReasons(now);
@@ -1177,7 +1169,7 @@ describe("queued task model capability waits", () => {
     store.updateDaemonDedicated("local", "retry-a", true, "local");
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const task = store.sendChatMessage(chat.id, { body: "retry" }).task;
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = NULL WHERE id = ?", [a.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, attempt = 2, execution_fingerprint = NULL WHERE id = ?", [a.id, task.id]);
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
     expect(store.claimTask(a.id)).toBeNull();
@@ -1212,10 +1204,9 @@ describe("queued task model capability waits", () => {
     const agent = store.createAgent({ name: "Predicate", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "predicate" });
     for (const [attempt, fingerprint] of [[1, null], [2, null], [1, "fp"], [2, "fp"]] as const) {
-      db!.run("UPDATE multiremi_tasks SET attempt = ?, execution_fingerprint = ? WHERE id = ?",
-        [attempt, fingerprint, task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET attempt = ?, execution_fingerprint = ? WHERE id = ?", [attempt, fingerprint, task.id]);
       const sqlAllows = db!.query(
-        `SELECT 1 AS eligible FROM multiremi_tasks t WHERE t.id = ? AND ${REPOOLABLE_QUEUED_TASK_SQL}`,
+        `SELECT 1 AS eligible FROM multiremi_turn_execution_records t WHERE t.id = ? AND ${REPOOLABLE_QUEUED_TASK_SQL}`,
       ).get(task.id) !== null;
       expect(canRepoolQueuedTaskPin({ attempt, execution_fingerprint: fingerprint })).toBe(sqlAllows);
     }
@@ -1310,7 +1301,7 @@ describe("queued task model capability waits", () => {
       issueId: issue.id, runtimeId: old.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "legacy" });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [claude.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [claude.id, task.id]);
 
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
@@ -1362,9 +1353,9 @@ describe("queued task model capability waits", () => {
     const { store, agent, task, now, fail } = fixture();
     const directory = store.createTask({ agentId: agent.id, prompt: "Directory lock" });
     const human = store.createTask({ agentId: agent.id, prompt: "Human reply" });
-    db!.run("UPDATE multiremi_tasks SET wait_reason = ? WHERE id = ?", ["Existing queue dependency", task.id]);
-    db!.run("UPDATE multiremi_tasks SET status = 'waiting_local_directory', wait_reason = ? WHERE id = ?", ["/tmp/held-worktree", directory.id]);
-    db!.run("UPDATE multiremi_tasks SET status = 'awaiting_human', wait_reason = ? WHERE id = ?", ["Approval needed", human.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET wait_reason = ? WHERE id = ?", ["Existing queue dependency", task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'waiting_local_directory', wait_reason = ? WHERE id = ?", ["/tmp/held-worktree", directory.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'awaiting_human', wait_reason = ? WHERE id = ?", ["Approval needed", human.id]);
     for (const id of [task.id, directory.id, human.id]) ageTask(id, ALERT_MS, now);
     fail();
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });

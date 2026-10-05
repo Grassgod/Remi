@@ -1,3 +1,4 @@
+import { attemptMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
@@ -5,7 +6,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSteerInjectionPrompt, mergeTaskUsageEntries, TaskSteerFeed } from "@multiremi/worker/steer.js";
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 import { openRuntimeDownlinks } from "../../fixtures/runtime-downlinks.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 
@@ -115,43 +116,43 @@ describe("task steer API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
 
-    const created = await app.request(`/api/tasks/${task.id}/steer`, {
+    const created = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ content: "改用中文输出" }),
+      body: JSON.stringify(requestMessageBody(store, { content: "改用中文输出" }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
     });
-    expect(created.status).toBe(201);
+    expect(created.status).toBe(200);
     const createdBody = await created.json();
     expect(createdBody.message).toMatchObject({ kind: "steer", content: "改用中文输出" });
 
     // force_answer without content falls back to the default wrap-up directive.
-    const forced = await app.request(`/api/multiremi/tasks/${task.id}/steer`, {
+    const forced = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ force_answer: true }),
+      body: JSON.stringify(requestMessageBody(store, { force_answer: true }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
     });
-    expect(forced.status).toBe(201);
+    expect(forced.status).toBe(200);
     expect((await forced.json()).message.kind).toBe("force_answer");
 
     // Plain steer without content is a client error.
-    const empty = await app.request(`/api/tasks/${task.id}/steer`, {
+    const empty = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({}),
+      body: JSON.stringify(requestMessageBody(store, {}, { type: "agent", ref: store.getTask(task.id)!.agentId })),
     });
     expect(empty.status).toBe(400);
 
-    const listed = await app.request(`/api/tasks/${task.id}/steer`, { headers: auth });
+    const listed = await app.request(attemptMessagesPath(store, task.id), { headers: auth , });
     expect(listed.status).toBe(200);
     expect((await listed.json()).messages).toHaveLength(2);
 
     // The steer barrier blocks completion until the daemon consumed them.
     store.consumeTaskSteerMessages(task.id, store.listPendingTaskSteerMessages(task.id).map((m) => m.id));
     store.completeTask(task.id, { output: "done" });
-    const late = await app.request(`/api/tasks/${task.id}/steer`, {
+    const late = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ content: "too late" }),
+      body: JSON.stringify(requestMessageBody(store, { content: "too late" }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
     });
     expect(late.status).toBe(409);
     expect((await late.json()).error).toMatch(/already completed/);
@@ -168,11 +169,11 @@ describe("task steer API", () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         store.completeTask(task.id, { output: "finished first" });
-        controller.enqueue(encoder.encode(JSON.stringify({ content: "raced steer" })));
+        controller.enqueue(encoder.encode(JSON.stringify({ body_md: "raced steer", to: { type: "agent", ref: task.agentId } })));
         controller.close();
       },
     });
-    const raced = await app.request(`/api/tasks/${task.id}/steer`, {
+    const raced = await app.request(attemptMessagesPath(store, task.id), {
       method: "POST",
       headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
       body,

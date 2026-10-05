@@ -1,3 +1,4 @@
+import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -9,7 +10,7 @@ import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 const plan = readFileSync(new URL("../../fixtures/multiremi/mul404-plan.md", import.meta.url), "utf8").trimEnd();
 
@@ -337,11 +338,13 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
   });
   expect(created.status).toBe(201);
   const chatId = (await created.json()).id as string;
-  const sent = await app.request(`/api/chat/sessions/${chatId}/messages`, {
-    method: "POST", headers: aliceHeaders, body: JSON.stringify({ content: plan }),
+  const sent = await app.request(`/api/sessions/${chatId}/messages`, {
+    method: "POST", headers: aliceHeaders, body: JSON.stringify(requestMessageBody(store, { content: plan }, { type: "agent", ref: store.getChatSession(chatId)!.agentId })),
   });
-  expect(sent.status).toBe(201);
-  const { task_id: firstTaskId, message_id: messageId } = await sent.json();
+  expect(sent.status).toBe(200);
+  const sentBody = await sent.json();
+  const firstTaskId = sentTask(store, sentBody).id;
+  const messageId = sentBody.message.id;
   const firstLogEntry = store.getConversationLogEntryById(messageId)!;
   (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(chatId, firstLogEntry.seq, {
     fields: { metadata: { ...firstLogEntry.metadata, envelope: {
@@ -373,11 +376,11 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
   expect(store.claimTask(runtime.id)?.id).toBe(firstTaskId);
   store.startTask(firstTaskId);
   store.completeTask(firstTaskId, { output: "Read", workDir: "/tmp/mul485-chat" });
-  const next = await app.request(`/api/chat/sessions/${chatId}/messages`, {
-    method: "POST", headers: aliceHeaders, body: JSON.stringify({ content: "Continue" }),
+  const next = await app.request(`/api/sessions/${chatId}/messages`, {
+    method: "POST", headers: aliceHeaders, body: JSON.stringify(requestMessageBody(store, { content: "Continue" }, { type: "agent", ref: store.getChatSession(chatId)!.agentId })),
   });
-  expect(next.status).toBe(201);
-  const projection = store.buildTaskSessionProjection((await next.json()).task_id)!;
+  expect(next.status).toBe(200);
+  const projection = store.buildTaskSessionProjection(sentTask(store, (await next.json())).id)!;
   const toc = JSON.parse(projection.jsonl.split("\n")[1]!);
   expect(toc.entries).toContainEqual(expect.objectContaining({ id: messageId, chars: plan.length, folded: true, priority: 1 }));
   const folded = projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line))

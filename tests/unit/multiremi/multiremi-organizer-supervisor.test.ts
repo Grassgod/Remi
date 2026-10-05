@@ -1,8 +1,9 @@
+import { attemptMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -141,12 +142,12 @@ describe("Organizer supervisor privilege layer", () => {
       dependsOnIssueId: prerequisite.id, type: "blocked_by",
     });
     fixture.store.updateIssue(fixture.targetIssue.id, { status: "backlog" });
-    const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+    const response = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/retry"), {
       method: "POST",
       headers: headers(supervisorToken.token),
-      body: JSON.stringify({ reason: "restore lane" }),
+      body: JSON.stringify({ cold: true }),
     });
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     const replacement = fixture.store.listTasksForIssue(fixture.targetIssue.id)
       .find((task) => task.id !== fixture.targetTask.id)!;
     expect(replacement.status).toBe("queued");
@@ -193,7 +194,7 @@ describe("Organizer supervisor privilege layer", () => {
 
     const supervisorToken = await grantSupervisor(fixture);
     expect(supervisorToken.scopes).toEqual(["organizer:supervisor"]);
-    const revokedOldToken = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/inspection`, {
+    const revokedOldToken = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "?attempts=true"), {
       headers: headers(preGrantToken.token),
     });
     expect(revokedOldToken.status).toBe(401);
@@ -205,7 +206,7 @@ describe("Organizer supervisor privilege layer", () => {
     const supervisorToken = await grantSupervisor(fixture);
     const normalTaskToken = await fixture.store.createTaskAccessToken(fixture.targetTask, "owner");
 
-    const inspectionResponse = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/inspection`, {
+    const inspectionResponse = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "?attempts=true"), {
       headers: headers(supervisorToken.token),
     });
     expect(inspectionResponse.status).toBe(200);
@@ -235,31 +236,31 @@ describe("Organizer supervisor privilege layer", () => {
     expect(JSON.stringify(inspection)).not.toContain("private command");
     expect(JSON.stringify(inspection)).not.toContain("private output");
 
-    const globalList = await fixture.app.request("/api/multiremi/tasks", {
+    const globalList = await fixture.app.request("/api/turns", {
       headers: headers(supervisorToken.token),
     });
     expect(globalList.status).toBe(200);
-    const listed = (await globalList.json()).tasks;
+    const listed = (await globalList.json()).turns;
     expect(listed.map((task: any) => task.id)).toEqual(expect.arrayContaining([
       fixture.supervisorTask.id,
       fixture.targetTask.id,
     ]));
     // MUL-357 trims `prompt` from list entries, so the same cross-task content
     // parity is asserted on the detail route, which keeps the full shape.
-    const targetDetail = await fixture.app.request(`/api/multiremi/tasks/${fixture.targetTask.id}`, {
+    const targetDetail = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id), {
       headers: headers(supervisorToken.token),
     });
     expect(targetDetail.status).toBe(200);
     expect(JSON.stringify((await targetDetail.json()).task)).toContain("TOP SECRET target prompt");
 
-    const normalList = await fixture.app.request("/api/multiremi/tasks", {
+    const normalList = await fixture.app.request("/api/turns", {
       headers: headers(normalTaskToken.token),
     });
-    expect((await normalList.json()).tasks.map((task: any) => task.id)).toEqual(expect.arrayContaining([
+    expect((await normalList.json()).turns.map((task: any) => task.id)).toEqual(expect.arrayContaining([
       fixture.supervisorTask.id,
       fixture.targetTask.id,
     ]));
-    const normalCrossRead = await fixture.app.request(`/api/tasks/${fixture.supervisorTask.id}/inspection`, {
+    const normalCrossRead = await fixture.app.request(turnApiPath(fixture.store, fixture.supervisorTask.id, "?attempts=true"), {
       headers: headers(normalTaskToken.token),
     });
     expect(normalCrossRead.status).toBe(200);
@@ -271,10 +272,10 @@ describe("Organizer supervisor privilege layer", () => {
     const supervisorToken = await grantSupervisor(fixture);
     const normalTaskToken = await fixture.store.createTaskAccessToken(fixture.targetTask, "owner");
 
-    const self = await fixture.app.request(`/api/tasks/${fixture.supervisorTask.id}/redispatch`, {
+    const self = await fixture.app.request(turnApiPath(fixture.store, fixture.supervisorTask.id, "/retry"), {
       method: "POST",
       headers: headers(supervisorToken.token),
-      body: JSON.stringify({ content: "stop", reason: "self check" }),
+      body: JSON.stringify({ cold: true }),
     });
     expect(self.status).toBe(403);
     expect((await self.json()).code).toBe("organizer_self_action_forbidden");
@@ -285,7 +286,7 @@ describe("Organizer supervisor privilege layer", () => {
       workspaceId: "local",
       prompt: "ordinary owner action",
     });
-    const normalCross = await fixture.app.request(`/api/tasks/${ordinaryTarget.id}/cancel`, {
+    const normalCross = await fixture.app.request(turnApiPath(fixture.store, ordinaryTarget.id, "/cancel"), {
       method: "POST",
       headers: headers(normalTaskToken.token),
       body: JSON.stringify({ reason: "owner parity" }),
@@ -294,13 +295,13 @@ describe("Organizer supervisor privilege layer", () => {
     expect(fixture.store.getTask(ordinaryTarget.id)?.status).toBe("cancelled");
     expect(fixture.store.listOrganizerActionsForTask(ordinaryTarget.id)).toHaveLength(0);
 
-    const reportOnly = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/steer`, {
+    const reportOnly = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/wrap-up"), {
       method: "POST",
       headers: headers(supervisorToken.token),
-      body: JSON.stringify({ force_answer: true, reason: "no progress" }),
+      body: JSON.stringify({}),
     });
-    expect(reportOnly.status).toBe(201);
-    expect((await reportOnly.json()).message.kind).toBe("force_answer");
+    expect(reportOnly.status).toBe(200);
+    expect((await reportOnly.json()).turn.wrap_up_requested_at).toBeString();
     expect(fixture.store.listOrganizerActionsForTask(fixture.targetTask.id)).toHaveLength(0);
 
     for (const action of ["redispatch"] as const) {
@@ -310,7 +311,7 @@ describe("Organizer supervisor privilege layer", () => {
         workspaceId: "local",
         prompt: `${action} must remain blocked`,
       });
-      const path = `/api/tasks/${blockedTask.id}/redispatch`;
+      const path = turnApiPath(fixture.store, blockedTask.id, "/retry");
       const blocked = await fixture.app.request(path, {
         method: "POST",
         headers: headers(supervisorToken.token),
@@ -321,10 +322,10 @@ describe("Organizer supervisor privilege layer", () => {
       expect(fixture.store.getTask(blockedTask.id)?.status, action).not.toBe("cancelled");
     }
 
-    const normalRedispatch = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+    const normalRedispatch = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/retry"), {
       method: "POST",
       headers: headers(normalTaskToken.token),
-      body: JSON.stringify({ reason: "not an organizer" }),
+      body: JSON.stringify({ cold: true }),
     });
     expect(normalRedispatch.status).toBe(403);
     expect((await normalRedispatch.json()).code).toBe("organizer_supervisor_required");
@@ -351,10 +352,10 @@ describe("Organizer supervisor privilege layer", () => {
       prompt: "patrol",
     });
     await setMode(fixture, "act");
-    const protectedResponse = await fixture.app.request(`/api/tasks/${protectedTask.id}/redispatch`, {
+    const protectedResponse = await fixture.app.request(turnApiPath(fixture.store, protectedTask.id, "/retry"), {
       method: "POST",
       headers: headers(supervisorToken.token),
-      body: JSON.stringify({ reason: "looks stuck" }),
+      body: JSON.stringify({ cold: true }),
     });
     expect(protectedResponse.status).toBe(403);
     expect((await protectedResponse.json()).code).toBe("organizer_supervisor_target_forbidden");
@@ -364,20 +365,21 @@ describe("Organizer supervisor privilege layer", () => {
     const fixture = await setup();
     const token = await grantSupervisor(fixture);
     await setMode(fixture, mode);
-    for (const prefix of ["/api/tasks", "/api/multiremi/tasks"]) {
-      for (const kind of ["steer", "force_answer"]) {
-        const response = await fixture.app.request(`${prefix}/${fixture.targetTask.id}/steer`, {
-          method: "POST", headers: headers(token.token),
-          body: JSON.stringify({ kind, content: "Please wrap up" }),
-        });
-        expect(response.status).toBe(201);
-        expect((await response.json()).message).toMatchObject({ kind, authorType: "agent" });
-      }
-    }
+    const steer = await fixture.app.request(attemptMessagesPath(fixture.store, fixture.targetTask.id), {
+      method: "POST", headers: headers(token.token),
+      body: JSON.stringify({ body_md: "Please wrap up", to: { type: "agent", ref: fixture.targetAgent.id } }),
+    });
+    expect(steer.status).toBe(200);
+    expect((await steer.json()).message).toMatchObject({ message_kind: "request", sender_type: "agent" });
+    const wrapUp = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/wrap-up"), {
+      method: "POST", headers: headers(token.token), body: JSON.stringify({}),
+    });
+    expect(wrapUp.status).toBe(200);
+    expect((await wrapUp.json()).turn.wrap_up_requested_at).toBeString();
     const paths = [
-      (id: string) => `/api/tasks/${id}/cancel`,
-      (id: string) => `/api/multiremi/tasks/${id}/cancel`,
-      (id: string) => `/api/issues/${fixture.targetIssue.id}/tasks/${id}/cancel`,
+      (id: string) => turnApiPath(fixture.store, id, "/cancel"),
+      (id: string) => turnApiPath(fixture.store, id, "/cancel"),
+      (id: string) => turnApiPath(fixture.store, id, "/cancel"),
     ];
     for (const path of paths) {
       const task = fixture.store.createTask({
@@ -391,12 +393,12 @@ describe("Organizer supervisor privilege layer", () => {
     }
     expect(fixture.store.listOrganizerActionsForTask(fixture.targetTask.id)).toHaveLength(0);
     expect(fixture.store.listIssueComments(fixture.patrolIssue.id)).toHaveLength(0);
-    const selfRedispatch = await fixture.app.request(`/api/tasks/${fixture.supervisorTask.id}/redispatch`, {
-      method: "POST", headers: headers(token.token), body: JSON.stringify({ reason: "self check" }),
+    const selfRedispatch = await fixture.app.request(turnApiPath(fixture.store, fixture.supervisorTask.id, "/retry"), {
+      method: "POST", headers: headers(token.token), body: JSON.stringify({ cold: true }),
     });
     expect(selfRedispatch.status).toBe(403);
     expect((await selfRedispatch.json()).code).toBe("organizer_self_action_forbidden");
-    const self = await fixture.app.request(`/api/tasks/${fixture.supervisorTask.id}/cancel`, {
+    const self = await fixture.app.request(turnApiPath(fixture.store, fixture.supervisorTask.id, "/cancel"), {
       method: "POST", headers: headers(token.token),
     });
     expect(self.status).toBe(200);
@@ -412,7 +414,7 @@ describe("Organizer supervisor privilege layer", () => {
     const chatTask = fixture.store.sendChatMessage(chat.id, { body: "Stop the worker" }).task;
     const token = await fixture.store.createTaskAccessToken(chatTask, "owner");
     expect(chatTask.issueId).toBeNull();
-    const cancelled = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/cancel`, {
+    const cancelled = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/cancel"), {
       method: "POST", headers: headers(token.token),
     });
     expect(cancelled.status).toBe(200);
@@ -491,14 +493,14 @@ describe("Organizer supervisor privilege layer", () => {
       prompt: "queued too long",
       continuedFromTaskId: continuedFromTask.id,
     });
-    const redispatched = await fixture.app.request(`/api/tasks/${redispatchTask.id}/redispatch`, {
+    const redispatched = await fixture.app.request(turnApiPath(fixture.store, redispatchTask.id, "/retry"), {
       method: "POST",
       headers: headers(supervisorToken.token),
-      body: JSON.stringify({ reason: "Queued for 30 minutes without a running sibling" }),
+      body: JSON.stringify({ cold: true }),
     });
-    expect(redispatched.status).toBe(202);
+    expect(redispatched.status).toBe(200);
     const redispatchedBody = await redispatched.json();
-    expect(redispatchedBody.organizer_action.action).toBe("redispatch");
+    expect(redispatchedBody.organizer_action).toMatchObject({ action: "redispatch" });
     expect(redispatchedBody.cancelled_task.status).toBe("cancelled");
     expect(redispatchedBody.replacement_task).toMatchObject({
       agentId: fixture.targetAgent.id,
@@ -654,12 +656,12 @@ describe("Organizer supervisor privilege layer", () => {
     try {
       // The organizer redispatch route is the path that writes the audit comment
       // inside the organizer transaction.
-      const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+      const response = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/retry"), {
         method: "POST",
         headers: headers(supervisorToken.token),
-        body: JSON.stringify({ reason: "commit probe" }),
+        body: JSON.stringify({ cold: true }),
       });
-      expect(response.status).toBe(202);
+      expect(response.status).toBe(200);
     } finally {
       unsubscribe();
     }
@@ -715,14 +717,12 @@ describe("Organizer supervisor privilege layer", () => {
     });
 
     try {
-      const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+      const response = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id, "/retry"), {
         method: "POST",
         headers: headers(supervisorToken.token),
-        body: JSON.stringify({
-          reason: `Needs a decision [@Squad leader](mention://agent/${leader.id})`,
-        }),
+        body: JSON.stringify({ cold: true }),
       });
-      expect(response.status).toBe(202);
+      expect(response.status).toBe(200);
     } finally {
       fixture.store.ensureDelegationWakeupWithinTransaction = originalEnsure;
       unsubscribe();

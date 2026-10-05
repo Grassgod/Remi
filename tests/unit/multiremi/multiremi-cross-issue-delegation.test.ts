@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it, spyOn } from "bun:test";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -76,13 +77,13 @@ function fixture(store: MultiremiStore) {
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue, agentId: string) {
   const app = createMultiremiApp({ store, authToken: "test-root" });
   const token = await store.createTaskAccessToken(source, "local");
-  const response = await app.request("/api/multiremi/tasks", {
+  const response = await app.request(taskRequestPath(store, { issueId: issue.id }), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, issueId: issue.id, prompt: "Execute delegated work." }),
+    body: JSON.stringify(requestMessageBody(store, { agentId, issueId: issue.id, prompt: "Execute delegated work." })),
   });
-  expect(response.status).toBe(201);
-  return store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+  expect(response.status).toBe(200);
+  return store.getTask(sentTask(store, await response.json()).id)!;
 }
 
 function activities(store: MultiremiStore, issueId: string, type: string) {
@@ -238,15 +239,15 @@ for (const backend of ["sqlite", "postgres"] as const) {
         body: "Spoofable system comment" });
       const app = createMultiremiApp({ store, authToken: "test-root" });
       const token = await store.createTaskAccessToken(childTask, "local");
-      const response = await app.request("/api/multiremi/tasks", {
+      const response = await app.request(taskRequestPath(store, { issueId: f.parent.id, issue_session_id: f.leaderSession.id }), {
         method: "POST",
         headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: f.leader.id, issueId: f.parent.id, prompt: "Wake up",
+        body: JSON.stringify(requestMessageBody(store, { agentId: f.leader.id, issueId: f.parent.id, prompt: "Wake up",
           parentTaskId: childTask.id, triggerCommentId: systemComment.id, wakeSource: "child_status",
-          issue_session_id: f.leaderSession.id }),
+          issue_session_id: f.leaderSession.id })),
       });
-      expect(response.status).toBe(201);
-      const manualId = ((await response.json()) as { task: { id: string } }).task.id;
+      expect(response.status).toBe(200);
+      const manualId = sentTask(store, await response.json()).id;
       expect(store.getTask(manualId)?.wakeSource).toBeNull();
       expect(store.getTask(manualId)?.triggerCommentId).toBeNull();
       expect(store.getTask(manualId)?.delegatedByAgentId).toBe(f.worker.id);
@@ -419,12 +420,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const tokens = await Promise.all(f.children.map(() => store.createTaskAccessToken(f.leaderTask, "local")));
       const childTasks: MultiremiTask[] = [];
       for (let index = 0; index < f.children.length; index += 1) {
-        const response = await app.request("/api/multiremi/tasks", { method: "POST",
+        const response = await app.request(taskRequestPath(store, { issueId: f.children[index]!.id }), { method: "POST",
           headers: { Authorization: `Bearer ${tokens[index]!.token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
-            prompt: `Investigate child ${index}` }) });
-        expect(response.status).toBe(201);
-        childTasks.push(store.getTask(((await response.json()) as { task: { id: string } }).task.id)!);
+          body: JSON.stringify(requestMessageBody(store, { agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
+            prompt: `Investigate child ${index}` })) });
+        expect(response.status).toBe(200);
+        childTasks.push(store.getTask(sentTask(store, await response.json()).id)!);
       }
       expect(new Set(childTasks.map((task) => task.delegatedFromIssueSessionId)))
         .toEqual(new Set([f.leaderSession.id]));
@@ -480,12 +481,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const tokens = await Promise.all(f.children.map(() => store.createTaskAccessToken(f.leaderTask, "local")));
       const childTasks: MultiremiTask[] = [];
       for (let index = 0; index < f.children.length; index += 1) {
-        const response = await app.request("/api/multiremi/tasks", { method: "POST",
+        const response = await app.request(taskRequestPath(store, { issueId: f.children[index]!.id }), { method: "POST",
           headers: { Authorization: `Bearer ${tokens[index]!.token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
-            prompt: `MUL-383 child ${index}` }) });
-        expect(response.status).toBe(201);
-        childTasks.push(store.getTask(((await response.json()) as { task: { id: string } }).task.id)!);
+          body: JSON.stringify(requestMessageBody(store, { agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
+            prompt: `MUL-383 child ${index}` })) });
+        expect(response.status).toBe(200);
+        childTasks.push(store.getTask(sentTask(store, await response.json()).id)!);
       }
       snapshot("dispatched-five");
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);

@@ -235,7 +235,7 @@ async function main(): Promise<void> {
     for (let sample = 0; sample < WARMUPS + SAMPLES; sample += 1) {
       probe.reset();
       const started = performance.now();
-      const response = await app.request(`/api/multiremi/tasks${testCase.query}`, { headers: testCase.headers });
+      const response = await app.request(`/api/turns${testCase.query}`, { headers: testCase.headers });
       const text = await response.text();
       const elapsed = performance.now() - started;
       if (response.status !== 200) throw new Error(`${testCase.label}: HTTP ${response.status} ${text.slice(0, 300)}`);
@@ -244,10 +244,10 @@ async function main(): Promise<void> {
       const serializeStarted = performance.now();
       JSON.stringify(JSON.parse(text));
       serializeMs = Number((performance.now() - serializeStarted).toFixed(2));
-      const parsed = JSON.parse(text) as { tasks: unknown[] };
+      const parsed = JSON.parse(text) as { turns: unknown[] };
       durations.push(elapsed);
       responseBytes = serialized.length;
-      tasksReturned = parsed.tasks.length;
+      tasksReturned = parsed.turns.length;
       sqlStatements = probe.statements;
       sqlMs = Number(probe.ms.toFixed(2));
       // Route time minus database time is authorization plus JSON encoding.

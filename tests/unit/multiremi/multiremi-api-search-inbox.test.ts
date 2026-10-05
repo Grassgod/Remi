@@ -1,7 +1,8 @@
+import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 // Pinned shortcuts, issue/project search, issue subscribers and the member inbox.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -273,25 +274,25 @@ describe("Multiremi API — pins, search, and inbox", () => {
     });
     expect(await goUnsubscribe.json()).toEqual({ subscribed: false });
 
-    const commented = await app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+    const commented = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ authorType: "member", authorId: alice.id, body: "Can you check this?" }),
+      body: JSON.stringify(requestMessageBody(store, { authorType: "member", authorId: alice.id, body: "Can you check this?" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(commented.status).toBe(201);
+    expect(commented.status).toBe(200);
 
-    const inbox = await app.request(`/api/multiremi/inbox?memberId=${encodeURIComponent(bob.id)}`);
+    const inbox = await app.request("/api/inbox"+`?memberId=${encodeURIComponent(bob.id)}`);
     const inboxBody = await inbox.json();
-    expect(inboxBody.unread).toBe(1);
+    expect(inboxBody.unread_count).toBe(1);
     expect(inboxBody.items[0].issue.key).toBe(issue.key);
 
-    const read = await app.request(`/api/multiremi/inbox/${inboxBody.items[0].id}/read`, { method: "POST" });
+    const read = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: store.getMessage(inboxBody.items[0].id)?.session_id ?? inboxBody.items[0].id }) });
     expect((await read.json()).item.read).toBe(true);
 
-    const archived = await app.request(`/api/multiremi/inbox/${inboxBody.items[0].id}/archive`, { method: "POST" });
+    const archived = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: store.getMessage(inboxBody.items[0].id)?.session_id ?? inboxBody.items[0].id }) });
     expect((await archived.json()).item.archived).toBe(true);
 
-    const afterArchive = await app.request(`/api/multiremi/inbox?memberId=${encodeURIComponent(bob.id)}`);
+    const afterArchive = await app.request("/api/inbox"+`?memberId=${encodeURIComponent(bob.id)}`);
     expect((await afterArchive.json()).items).toHaveLength(0);
   });
 
@@ -309,7 +310,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
 
     // Sanity: the notification row exists under the member id.
     const byMemberId = await app.request(`/api/inbox?member_id=${encodeURIComponent(reviewer.id)}`);
-    expect(await byMemberId.json()).toHaveLength(1);
+    expect((await byMemberId.json()).items).toHaveLength(1);
 
     // A user id must find the same rows instead of silently matching nothing.
     const byUserId = await app.request("/api/inbox?member_id=user-rev");
@@ -317,12 +318,12 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(items).toHaveLength(1);
     expect(items[0].type).toBe("comment_created");
 
-    const count = await app.request("/api/inbox/unread-count?member_id=user-rev");
+    const count = await app.request("/api/inbox"+`?member_id=user-rev`);
     expect((await count.json()).count).toBe(1);
 
-    const markAll = await app.request("/api/inbox/mark-all-read?member_id=user-rev", { method: "POST" });
+    const markAll = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ all: true }) });
     expect((await markAll.json()).count).toBe(1);
-    const afterRead = await app.request("/api/inbox/unread-count?member_id=user-rev");
+    const afterRead = await app.request("/api/inbox"+`?member_id=user-rev`);
     expect((await afterRead.json()).count).toBe(0);
   });
 
@@ -340,24 +341,24 @@ describe("Multiremi API — pins, search, and inbox", () => {
       });
     }
 
-    const firstResponse = await app.request("/api/inbox/page?member_id=user-page&limit=2");
+    const firstResponse = await app.request("/api/inbox"+`?member_id=user-page&limit=2`);
     expect(firstResponse.status).toBe(200);
     const first = await firstResponse.json();
     expect(first.items).toHaveLength(2);
-    expect(first.has_more).toBe(true);
+    expect((first.next_cursor !== null)).toBe(true);
     expect(first.next_cursor).toBeTruthy();
     expect(first.items.every((item: any) => item.issue?.title)).toBe(true);
 
     const secondResponse = await app.request(
-      `/api/inbox/page?member_id=user-page&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
+      "/api/inbox"+`?member_id=user-page&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
     );
     const second = await secondResponse.json();
     expect(second.items).toHaveLength(1);
-    expect(second.has_more).toBe(false);
+    expect((second.next_cursor !== null)).toBe(false);
     expect(second.next_cursor).toBeNull();
     expect(new Set([...first.items, ...second.items].map((item: any) => item.id)).size).toBe(3);
 
-    const summaryResponse = await app.request("/api/inbox/summary?member_id=user-page&timezone_offset=-480");
+    const summaryResponse = await app.request("/api/inbox"+`?member_id=user-page&timezone_offset=-480`);
     expect(summaryResponse.status).toBe(200);
     expect(await summaryResponse.json()).toEqual({ unread: 3, attention: 0 });
   });
@@ -420,7 +421,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceB.id);
     expect(store.getIssue(child.id)?.workspaceId).toBe(workspaceA.id);
 
-    const inboxResponse = await app.request(`/api/inbox/page?workspace_id=${workspaceA.id}`, { headers });
+    const inboxResponse = await app.request("/api/inbox"+`?workspace_id=${workspaceA.id}`, { headers });
     expect(inboxResponse.status).toBe(200);
     const inbox = await inboxResponse.json();
     const notification = inbox.items.find((item: any) => item.issue_id === child.id);
@@ -453,7 +454,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(store.deleteIssue(parent.id)).toBe(true);
 
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/inbox/page?member_id=${encodeURIComponent(reviewer.id)}`);
+    const response = await app.request("/api/inbox"+`?member_id=${encodeURIComponent(reviewer.id)}`);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.items.find((item: any) => item.issue_id === child.id)).toMatchObject({

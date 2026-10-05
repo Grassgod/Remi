@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 // MUL-400 S2 (E3): sibling dependencies actually hold and release work.
 //
 // The dependency gate has three entry points (assign, status write, creation),
@@ -11,7 +12,7 @@ import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { DEPENDENCY_AUTO_START_REPLAY_DELAY_MS } from "@multiremi/store/repos/autopilots-repo.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(() => {
@@ -1222,10 +1223,10 @@ describe("MUL-400 E3 — task-creation gate", () => {
   it("refuses a task-identity call through POST /api/multiremi/tasks with 409", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early" })),
     });
     expect(response.status).toBe(409);
     const body = await response.json() as { code?: string; error?: string };
@@ -1238,10 +1239,10 @@ describe("MUL-400 E3 — task-creation gate", () => {
     // The gate is structural: a member passes the route's auth but not the gate.
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
       headers: { "content-type": "application/json", "x-multiremi-actor": "member" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "member start" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "member start" })),
     });
     expect(response.status).toBe(409);
     expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
@@ -1371,12 +1372,12 @@ describe("MUL-400 E3 — task-creation gate", () => {
   it("treats a human rerun as an audited force-start", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
+    const response = await app.request(issueMessagesPath(store, dependent.id), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: agent.id }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     const tasks = store.listTasksForIssue(dependent.id);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.prompt).toContain("started it by rerunning it");
@@ -1393,10 +1394,10 @@ describe("MUL-400 E3 — task-creation gate", () => {
   it("keeps an agent rerun behind the dependency gate", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
+    const response = await app.request(issueMessagesPath(store, dependent.id), {
       method: "POST",
       headers: { "content-type": "application/json", "X-Agent-ID": agent.id },
-      body: JSON.stringify({ agent_id: agent.id }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id }, { type: "role", ref: "issue_owner" })),
     });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
@@ -1476,10 +1477,10 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     const { store, agent, dependent } = parkedWithOwner();
     const app = createMultiremiApp({ store });
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra })),
     });
     expect(response.status).toBe(409);
     expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
@@ -1511,15 +1512,15 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     const original = target.createTask.bind(target);
     target.createTask = (input: CreateInput) => { seen.push(input); return original(input); };
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: prereq.id }), {
       method: "POST",
       headers: { "content-type": "application/json" },
       // Use a non-waiting issue so the request reaches the store at all: on a
       // waiting issue the gate refuses before the body matters.
-      body: JSON.stringify({ agentId: agent.id, issueId: prereq.id, prompt: "strip check", ...extra }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: prereq.id, prompt: "strip check", ...extra })),
     });
     target.createTask = original;
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(seen).toHaveLength(1);
     expect(key in seen[0]!).toBe(false);
     expect(seen[0]).not.toHaveProperty("maxAttempts");
@@ -2462,10 +2463,10 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
     const before = sessionShape(store, session.id);
     expect(before).toEqual({ participants: [], lanes: 0, tasks: 0 });
 
-    const response = await app.request(`/api/issues/${dependent.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, prompt: "Start blocked work" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, prompt: "Start blocked work" }, { type: "role", ref: "issue_owner" })),
     });
     const payload = await response.json() as { code?: string; error?: string; unmet?: Array<{ key: string }> };
 
@@ -2488,13 +2489,13 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store });
 
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, prompt: "Run ready work" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, prompt: "Run ready work" }, { type: "role", ref: "issue_owner" })),
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const shape = sessionShape(store, session.id);
     expect(shape.participants).toEqual([agent.id]);
     expect(shape.lanes).toBe(1);

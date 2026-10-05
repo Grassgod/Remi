@@ -105,7 +105,7 @@ export async function captureFirstScreenHotspotGolden(source: string): Promise<F
         skillBodyBytes: fixture.counts.skillBodyBytes,
       },
       chatPendingTasks: normalizeFirstScreenHotspotResponse(
-        await get("/api/chat/pending-tasks"),
+        await get("/api/turns?status=pending"),
         fixture,
       ),
       issuesMyAssignee: normalizeFirstScreenHotspotResponse(

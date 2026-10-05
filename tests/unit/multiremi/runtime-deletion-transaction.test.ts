@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -109,8 +110,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       ] : [];
       if (cascade) {
         const completed = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "Already completed" });
-        db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [completed.id]);
-        db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [tasks[0]!.id]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [completed.id]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [tasks[0]!.id]);
         db.run("UPDATE multiremi_issues SET status = 'in_progress' WHERE id = ?", [issue.id]);
       } else {
         store.archiveAgent(agent.id);
@@ -300,12 +301,12 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       store.buildTaskSessionProjection(leaderTask.id);
       store.startTask(leaderTask.id);
       const token = await store.createTaskAccessToken(store.getTask(leaderTask.id)!, "local");
-      const dispatched = await createMultiremiApp({ store, authToken: "mul467-atomic-fixture" }).request("/api/multiremi/tasks", {
+      const dispatched = await createMultiremiApp({ store, authToken: "mul467-atomic-fixture" }).request(taskRequestPath(store, { issueId: f.issue.id }), {
         method: "POST", headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: f.agent.id, issueId: f.issue.id, prompt: "Delegated original request" }),
+        body: JSON.stringify(requestMessageBody(store, { agentId: f.agent.id, issueId: f.issue.id, prompt: "Delegated original request" })),
       });
-      expect(dispatched.status).toBe(201);
-      const delegatedId = ((await dispatched.json()) as { task: { id: string } }).task.id;
+      expect(dispatched.status).toBe(200);
+      const delegatedId = sentTask(store, await dispatched.json()).id;
       const delegated = store.getTask(delegatedId)!;
       expect(delegated.delegationId).not.toBeNull();
       store.completeTask(leaderTask.id, { output: "Task completed." });

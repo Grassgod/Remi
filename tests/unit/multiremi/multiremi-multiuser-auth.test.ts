@@ -1,7 +1,8 @@
+import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore as freshStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as freshStore, resetMultiremiTestEnv } from "./helpers.js";
 
 // The deployment owner's stable Feishu open_id (see DEFAULT_OWNER_OPEN_ID in the store).
 const OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
@@ -228,9 +229,9 @@ describe("Multiremi multi-user auth", () => {
     store.appendTaskMessages(task.id, [{ type: "tool_use", tool: "Bash", input: { command: "cat ~/.aws/credentials" } }]);
 
     // B (member, not owner/admin) is denied; owner sees the messages.
-    const bResp = await app.request(`/api/tasks/${task.id}/messages`, bearer(b.token));
+    const bResp = await app.request(turnApiPath(store, task.id, "/trace"), bearer(b.token));
     expect(bResp.status).toBe(403);
-    const ownerResp = await app.request(`/api/tasks/${task.id}/messages`, bearer(owner.token));
+    const ownerResp = await app.request(turnApiPath(store, task.id, "/trace"), bearer(owner.token));
     expect(ownerResp.status).toBe(200);
     expect((await ownerResp.json()).length).toBe(1);
   });

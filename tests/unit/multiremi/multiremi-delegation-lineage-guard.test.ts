@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-456 fix round 1: `parent_task_id` is credential-owned lineage.
  *
@@ -102,13 +103,13 @@ async function fixture(store: MultiremiStore, authToken?: string): Promise<Fixtu
   // The delegation under test: the leader's own token dispatches the worker on
   // the child issue. The resulting row is the real `T` the forgery targets.
   const dispatchToken = await store.createTaskAccessToken(sourceTask, "local");
-  const dispatchResponse = await app.request("/api/multiremi/tasks", {
+  const dispatchResponse = await app.request(taskRequestPath(store, { issueId: child.id }), {
     method: "POST",
     headers: { Authorization: `Bearer ${dispatchToken.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId: worker.id, issueId: child.id, prompt: "Execute delegated work." }),
+    body: JSON.stringify(requestMessageBody(store, { agentId: worker.id, issueId: child.id, prompt: "Execute delegated work." })),
   });
-  expect(dispatchResponse.status).toBe(201);
-  const delegatedTask = store.getTask(((await dispatchResponse.json()) as { task: { id: string } }).task.id)!;
+  expect(dispatchResponse.status).toBe(200);
+  const delegatedTask = store.getTask(sentTask(store, await dispatchResponse.json()).id)!;
   expect(delegatedTask.delegatedByAgentId).toBe(leader.id);
   expect(delegatedTask.delegatedFromIssueSessionId).toBe(leaderSession.id);
   // A member PAT for the same workspace.
@@ -153,13 +154,13 @@ for (const backend of ["sqlite", "postgres"] as const) {
         await withStore(backend, async (store) => {
           const f = await fixture(store, "lineage-guard-root");
           const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.delegatedTask.id)) as Record<string, unknown>;
-          const response = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/tasks`, {
+          const response = await f.app.request(`/api/sessions/${f.leaderSessionId}/messages`, {
             method: "POST",
             headers: f.memberHeaders,
-            body: JSON.stringify({ agentId: f.leaderId, prompt: `wake ${label}`, ...body }),
+            body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `wake ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(201);
-          const created = store.getTask(((await response.json()) as { id: string }).id)!;
+          expect(response.status, label).toBe(200);
+          const created = sentTask(store, await response.json());
           // The credential carries no task, so the only correct value is null.
           expect(created.parentTaskId, label).toBeNull();
 
@@ -194,13 +195,13 @@ for (const backend of ["sqlite", "postgres"] as const) {
         await withStore(backend, async (store) => {
           const f = await fixture(store, "lineage-guard-root");
           const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.innocentTask.id)) as Record<string, unknown>;
-          const response = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/tasks`, {
+          const response = await f.app.request(`/api/sessions/${f.leaderSessionId}/messages`, {
             method: "POST",
             headers: f.leaderTokenHeaders,
-            body: JSON.stringify({ agentId: f.leaderId, prompt: `token dispatch ${label}`, ...body }),
+            body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `token dispatch ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(201);
-          const created = store.getTask(((await response.json()) as { id: string }).id)!;
+          expect(response.status, label).toBe(200);
+          const created = sentTask(store, await response.json());
           // The credential's own task wins; the body never contributes.
           expect(created.parentTaskId, label).toBe(f.sourceTask.id);
           expect(created.parentTaskId, label).not.toBe(f.innocentTask.id);
@@ -235,12 +236,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const f = await fixture(store, "lineage-guard-root");
         for (const [label, forged] of FORGED_SPELLINGS) {
           const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.delegatedTask.id)) as Record<string, unknown>;
-          const response = await f.app.request(`/api/issues/${f.parent.id}/rerun`, {
+          const response = await f.app.request(issueMessagesPath(store, f.parent.id), {
             method: "POST", headers: f.memberHeaders,
-            body: JSON.stringify({ agentId: f.leaderId, prompt: `rerun ${label}`, ...body }),
+            body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `rerun ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(202);
-          const created = store.getTask(((await response.json()) as { id: string }).id)!;
+          expect(response.status, label).toBe(200);
+          const created = sentTask(store, await response.json());
           expect(created.parentTaskId, label).toBeNull();
         }
       });
@@ -261,19 +262,19 @@ for (const backend of ["sqlite", "postgres"] as const) {
           issueSessionId: f.leaderSessionId, body: "Worker progress note",
         });
         for (const spelling of ["triggerCommentId", "trigger_comment_id"] as const) {
-          const response = await f.app.request("/api/multiremi/tasks", {
+          const response = await f.app.request(taskRequestPath(store, { issueId: f.parent.id, issueSessionId: f.leaderSessionId }), {
             method: "POST",
             headers: f.memberHeaders,
-            body: JSON.stringify({
+            body: JSON.stringify(requestMessageBody(store, {
               agentId: f.leaderId,
               issueId: f.parent.id,
               issueSessionId: f.leaderSessionId,
               prompt: `trigger-comment ${spelling}`,
               [spelling]: workerComment.id,
-            }),
+            })),
           });
-          expect(response.status, spelling).toBe(201);
-          const created = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+          expect(response.status, spelling).toBe(200);
+          const created = store.getTask(sentTask(store, await response.json()).id)!;
           expect(created.parentTaskId, spelling).toBeNull();
           // MUL-448 made the trigger itself server-owned too. The public body
           // cannot retain the comment pointer or use its task link as lineage.
@@ -289,14 +290,14 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const chat = store.createChatSession({ agentId: f.leaderId, creatorId: member.userId ?? member.id });
         for (const [label, forged] of FORGED_SPELLINGS) {
           const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.delegatedTask.id)) as Record<string, unknown>;
-          for (const path of [`/api/multiremi/chats/${chat.id}/messages`, `/api/chat/sessions/${chat.id}/messages`]) {
+          for (const path of [`/api/sessions/${chat.id}/messages`, `/api/sessions/${chat.id}/messages`]) {
             const response = await f.app.request(path, {
               method: "POST", headers: f.memberHeaders,
               body: JSON.stringify({ content: `chat ${label}`, ...body }),
             });
             expect(response.status, `${path} ${label}`).toBe(201);
             const payload = await response.json() as { task?: { id: string }; task_id?: string };
-            const created = store.getTask(payload.task?.id ?? payload.task_id!)!;
+            const created = sentTask(store, payload as { turn_id?: string });
             expect(created.parentTaskId, `${path} ${label}`).toBeNull();
           }
         }
@@ -309,18 +310,18 @@ for (const backend of ["sqlite", "postgres"] as const) {
         // A comment body naming another run is lineage too: the mention
         // dispatcher reads `comment.task_id` back as `sourceTask`, and
         // `createTask` turns that into the spawned task's `parent_task_id`.
-        const commentResponse = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/messages`, {
+        const commentResponse = await f.app.request(`/api/sessions/${f.leaderSessionId}/messages`, {
           method: "POST",
           headers: f.memberHeaders,
-          body: JSON.stringify({
+          body: JSON.stringify(requestMessageBody(store, {
             body: `[@Leader](mention://agent/${f.leaderId}) please wake`,
             task_id: f.delegatedTask.id,
             taskId: f.delegatedTask.id,
-          }),
+          }, { type: "role", ref: "issue_owner" })),
         });
-        expect(commentResponse.status).toBe(201);
+        expect(commentResponse.status).toBe(200);
         const comment = store.getIssueComment(
-          ((await commentResponse.json()) as { id: string }).id,
+          (await commentResponse.json()).message.id,
         )!;
         expect(comment.taskId).toBeNull();
         const coalesced = store.listIssueActivity(f.parent.id).filter(activity =>
@@ -343,20 +344,20 @@ for (const backend of ["sqlite", "postgres"] as const) {
           const headers: Record<string, string> = authToken
             ? { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" }
             : { "Content-Type": "application/json" };
-          const snakeResponse = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/tasks`, {
+          const snakeResponse = await f.app.request(`/api/sessions/${f.leaderSessionId}/messages`, {
             method: "POST", headers,
-            body: JSON.stringify({ agentId: f.leaderId, prompt: "anon snake", parent_task_id: f.delegatedTask.id }),
+            body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: "anon snake", parent_task_id: f.delegatedTask.id }, { type: "role", ref: "issue_owner" })),
           });
-          expect(snakeResponse.status, mode).toBe(201);
-          const snakeTask = store.getTask(((await snakeResponse.json()) as { id: string }).id)!;
+          expect(snakeResponse.status, mode).toBe(200);
+          const snakeTask = sentTask(store, await snakeResponse.json());
           expect(snakeTask.parentTaskId, mode).toBeNull();
 
-          const camelResponse = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/tasks`, {
+          const camelResponse = await f.app.request(`/api/sessions/${f.leaderSessionId}/messages`, {
             method: "POST", headers,
-            body: JSON.stringify({ agentId: f.leaderId, prompt: "anon camel", parentTaskId: f.delegatedTask.id }),
+            body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: "anon camel", parentTaskId: f.delegatedTask.id }, { type: "role", ref: "issue_owner" })),
           });
-          expect(camelResponse.status, mode).toBe(201);
-          const camelTask = store.getTask(((await camelResponse.json()) as { id: string }).id)!;
+          expect(camelResponse.status, mode).toBe(200);
+          const camelTask = sentTask(store, await camelResponse.json());
           expect(camelTask.parentTaskId, mode).toBeNull();
 
           // The public task route was already strict there — it destructured
@@ -364,12 +365,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
           // start honouring the alias.
           for (const [label, forged] of FORGED_SPELLINGS) {
             const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.delegatedTask.id)) as Record<string, unknown>;
-            const response = await f.app.request("/api/multiremi/tasks", {
+            const response = await f.app.request(taskRequestPath(store, { issueId: f.parent.id }), {
               method: "POST", headers,
-              body: JSON.stringify({ agentId: f.leaderId, issueId: f.parent.id, prompt: `anon ${label}`, ...body }),
+              body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, issueId: f.parent.id, prompt: `anon ${label}`, ...body })),
             });
-            expect(response.status, `${mode} ${label}`).toBe(201);
-            const created = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+            expect(response.status, `${mode} ${label}`).toBe(200);
+            const created = store.getTask(sentTask(store, await response.json()).id)!;
             expect(created.parentTaskId, `${mode} ${label}`).toBeNull();
           }
         });

@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -123,7 +124,7 @@ async function verifyLegacyFirstWrites(db: SqlDatabase, backend: "sqlite" | "pg"
   expect(migrated.listSessionEvents(direct.id, { sinceSeq: 2, toSeq: 4 }).map((event) => event.seq)).toEqual([3, 4]);
   expect(migrated.listSessionEvents(direct.id, { sinceSeq: 4, toSeq: 5 })[0]?.kind).toBe("thread_resolved");
   const app = createMultiremiApp({ store: migrated });
-  const response = await app.request(`/api/issues/${issue.id}/sessions/${direct.id}/events?since_seq=2&to_seq=5`);
+  const response = await app.request(`/api/sessions/${direct.id}/messages`+`?since_seq=2&to_seq=5`);
   expect(response.status).toBe(200);
   const wire = await response.json() as Array<{ seq: number; kind: string }>;
   expect(wire.map((event) => event.seq)).toEqual([3, 4, 5]);
@@ -351,7 +352,7 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const agent = store.createAgent({ name: "Parent assignee", provider: "codex", workspaceId: "local" });
   store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
   const child = store.createIssue({ title: "Child", parentIssueId: issue.id, workspaceId: "local" });
-  const beforeTasks = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_tasks WHERE issue_id = ?")
+  const beforeTasks = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_turn_execution_records WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeEvents = store.listSessionEvents(session.id).length;
   const beforeComments = store.listIssueComments(issue.id);
@@ -371,7 +372,7 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   expect(store.getConversationLogHead(session.id)?.headSeq).toBe(beforeHeadSeq);
   expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n)).toBe(beforeActivity);
-  expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_tasks WHERE issue_id = ?")
+  expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_turn_execution_records WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n)).toBe(beforeTasks);
   expect(store.getIssue(issue.id)?.status).toBe(beforeStatus);
 }
@@ -501,7 +502,7 @@ function verifyLateReplyDispatchFailure(db: SqlDatabase, backend: "sqlite" | "pg
   try {
     const store = new MultiremiStore(db);
     const { issue, task, teammate } = startLeaderRound(store, "rt_reply_late_dispatch");
-    rejectWrite(db, backend, "multiremi_tasks", "INSERT", `NEW.agent_id = '${teammate.id}'`);
+    rejectWrite(db, backend, "multiremi_turn_execution_records", "INSERT", `NEW.agent_id = '${teammate.id}'`);
     console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
     try {
       store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
@@ -595,7 +596,7 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
 
   const failedChat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
   const failing = store.sendChatMessage(failedChat.id, { content: "Fail once" });
-  db.run("UPDATE multiremi_tasks SET max_attempts = 1 WHERE id = ?", [failing.task.id]);
+  mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET max_attempts = 1 WHERE id = ?", [failing.task.id]);
   expect(store.claimTask(runtime.id)?.id).toBe(failing.task.id);
   store.startTask(failing.task.id);
   store.failTask(failing.task.id, { error: "terminal failure", failureReason: "terminal_failure" });

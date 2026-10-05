@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 /**
  * MUL-409 fix round 4 (QA round 3, blocker 3): every native and compatibility
  * route that can reach a dependency error must answer with the error contract
@@ -10,7 +11,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -47,12 +48,12 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
     const app = createMultiremiApp({ store });
     const session = store.getOrCreateDefaultIssueSession(dependent.id);
     for (const call of [
-      { path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, body: { agent_id: agent.id, prompt: "start" } },
-      { path: "/api/multiremi/tasks", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
-      { path: `/api/issues/${dependent.id}/rerun`, body: { agent_id: agent.id }, headers: { "X-Agent-ID": agent.id } },
+      { path: `/api/sessions/${session.id}/messages`, body: { agent_id: agent.id, prompt: "start" } },
+      { path: issueMessagesPath(store, dependent.id), body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
+      { path: issueMessagesPath(store, dependent.id), body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { "X-Agent-ID": agent.id } },
     ]) {
       const response = await app.request(call.path, {
-        method: "POST", headers: { "content-type": "application/json", ...call.headers }, body: JSON.stringify(call.body),
+        method: "POST", headers: { "content-type": "application/json", ...call.headers }, body: JSON.stringify(call.path.endsWith("/messages") ? requestMessageBody(store, call.body as Record<string, any>) : call.body),
       });
       expect(response.status).toBe(409);
       const payload = await response.json() as { code: string; unmet: Array<{ key: string }> };
@@ -80,9 +81,9 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       // Assignment does not throw, but must not dispatch or 5xx either.
       { label: "native assign", path: `/api/multiremi/issues/${dependent.id}/assign`, method: "POST", body: { assigneeType: "agent", assigneeId: agent.id } },
       // Task creation funnels.
-      { label: "task create", path: "/api/multiremi/tasks", method: "POST", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
-      { label: "session task create", path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, method: "POST", body: { agent_id: agent.id, prompt: "start" } },
-      { label: "rerun", path: `/api/issues/${dependent.id}/rerun`, method: "POST", body: { agent_id: agent.id }, headers: { "X-Agent-ID": agent.id } },
+      { label: "task create", path: issueMessagesPath(store, dependent.id), method: "POST", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
+      { label: "session task create", path: `/api/sessions/${session.id}/messages`, method: "POST", body: { agent_id: agent.id, prompt: "start" } },
+      { label: "rerun", path: issueMessagesPath(store, dependent.id), method: "POST", body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { "X-Agent-ID": agent.id } },
       // Batch reports per-row skips rather than failing the whole request.
       { label: "native batch", path: "/api/multiremi/issues/batch-update", method: "POST", body: { issueIds: [dependent.id], updates: { status: "todo" } } },
       { label: "compat batch", path: "/api/issues/batch-update", method: "POST", body: { issue_ids: [dependent.id], updates: { status: "todo" } } },
@@ -106,7 +107,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       const response = await app.request(call.path, {
         method: call.method,
         headers: { "content-type": "application/json", ...call.headers },
-        ...(call.body ? { body: JSON.stringify(call.body) } : {}),
+        ...(call.body ? { body: JSON.stringify(call.path.endsWith("/messages") ? requestMessageBody(store, call.body as Record<string, any>) : call.body) } : {}),
       });
       const payload = await response.json().catch(() => ({})) as { code?: string; error?: string; updated?: number; skipped?: unknown[] };
       rows.push({ label: call.label, status: response.status, code: payload.code ?? "" });
@@ -155,7 +156,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       await app.request(call.path, {
         method: call.method,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(call.body),
+        body: JSON.stringify(call.path.endsWith("/messages") ? requestMessageBody(store, call.body as Record<string, any>) : call.body),
       });
     }
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");

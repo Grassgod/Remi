@@ -1,7 +1,8 @@
+import { requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -190,13 +191,13 @@ describe("conversation log (MUL-426)", () => {
     store.updateChatSession(chat.id, { title: "Renamed chat" });
     expect(store.getConversationLogEntry(chat.id, 0)).toMatchObject({ body_md: "Renamed chat", revision: 2 });
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/chat/sessions/${chat.id}/messages`, {
+    const response = await app.request(`/api/sessions/${chat.id}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "hello", client_id: "client-42" }),
+      body: JSON.stringify(requestMessageBody(store, { content: "hello", client_id: "client-42" }, { type: "agent", ref: store.getChatSession(chat.id)!.agentId })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const body = await response.json();
-    expect(store.getConversationLogEntryById(body.message_id)?.metadata.client_id).toBe("client-42");
+    expect(store.getConversationLogEntryById(body.message.id)?.metadata.client_id).toBe("client-42");
   });
 
   it("hydrates Chat user, push and final attachments from current message links", async () => {
@@ -260,7 +261,7 @@ describe("conversation log (MUL-426)", () => {
     expect(window.entries.filter((entry: { kind: string }) => entry.kind === "message")
       .map((entry: { body_md: string }) => entry.body_md)).toEqual(["new message"]);
     expect(store.listChatMessagesFromLog(chat.id).map(message => message.body)).toEqual(["old message", "new message"]);
-    expect((await app.request(`/api/chat/sessions/${chat.id}/messages`)).status).toBe(404);
+    expect((await app.request(`/api/sessions/${chat.id}/messages`)).status).toBe(200);
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
   });
 });

@@ -1,3 +1,4 @@
+import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
 import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { reportFrame } from "../../fixtures/report-session.js";
@@ -8,7 +9,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
 import { daemonTaskWireResponse, daemonTaskMessageWireResponse } from "@multiremi/api/wire/index.js";
 import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
-import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -1095,7 +1096,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const status = await app.request(`/api/daemon/tasks/${task.id}/status`);
     expect((await status.json()).status).toBe("completed");
 
-    const taskRuns = await app.request(`/api/issues/${issue.id}/task-runs`);
+    const taskRuns = await app.request(`/api/turns?issue=${issue.id}`);
     expect(taskRuns.status).toBe(200);
     const taskRunsBody = await taskRuns.json();
     expect(taskRunsBody[0].result).toEqual(completeBody.result);
@@ -1288,7 +1289,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(since.status).toBe(426);
     expect(await since.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     // The remaining UI read path still exposes legacy rows during A/B/C rollout.
-    const uiMessages = await (await app.request(`/api/tasks/${task.id}/messages`)).json();
+    const uiMessages = await (await app.request(turnApiPath(store, task.id, "/trace"))).json();
     expect(uiMessages.map((message: any) => message.seq)).toEqual([1, 2]);
     const sinceBody = store.listTaskMessages(task.id).filter(message => message.seq > 1).map(message => daemonTaskMessageWireResponse(message, store.getTask(task.id)!));
     expect(sinceBody.map((message: any) => [message.seq, message.output])).toEqual([[2, "updated"]]);
@@ -1441,38 +1442,38 @@ describe("Multiremi API — daemon endpoints", () => {
 
     const queued = store.createTask({ agentId: agentA.id, prompt: "A queued" });
     const running = store.createTask({ agentId: agentA.id, prompt: "A running" });
-    db!.run("UPDATE multiremi_tasks SET status = 'running', runtime_id = ?, started_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running', runtime_id = ?, started_at = ?, updated_at = ? WHERE id = ?", [
       runtime.id,
       "2026-06-04T01:00:00.000Z",
       "2026-06-04T01:00:00.000Z",
       running.id,
     ]);
     const oldFailed = store.createTask({ agentId: agentA.id, prompt: "A old failed" });
-    db!.run("UPDATE multiremi_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
       "2026-06-04T01:01:00.000Z",
       "2026-06-04T01:01:00.000Z",
       oldFailed.id,
     ]);
     const latestCompleted = store.createTask({ agentId: agentA.id, prompt: "A latest completed" });
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?", [
       "2026-06-04T01:02:00.000Z",
       "2026-06-04T01:02:00.000Z",
       latestCompleted.id,
     ]);
     const staleFailure = store.createTask({ agentId: agentB.id, prompt: "B stale failed" });
-    db!.run("UPDATE multiremi_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
       "2026-06-04T00:50:00.000Z",
       "2026-06-04T00:50:00.000Z",
       staleFailure.id,
     ]);
     const failureBeforeCancel = store.createTask({ agentId: agentC.id, prompt: "C failure" });
-    db!.run("UPDATE multiremi_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
       "2026-06-04T00:55:00.000Z",
       "2026-06-04T00:55:00.000Z",
       failureBeforeCancel.id,
     ]);
     const cancelled = store.createTask({ agentId: agentC.id, prompt: "C cancelled" });
-    db!.run("UPDATE multiremi_tasks SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?", [
       "2026-06-04T01:03:00.000Z",
       "2026-06-04T01:03:00.000Z",
       cancelled.id,
@@ -1512,30 +1513,30 @@ describe("Multiremi API — daemon endpoints", () => {
     const recentCompletedB = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
 
     const completed = store.createTask({ agentId: agentA.id, prompt: "completed" });
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
       recentCreated,
       recentCompletedA,
       recentCompletedA,
       completed.id,
     ]);
     const failed = store.createTask({ agentId: agentA.id, prompt: "failed" });
-    db!.run("UPDATE multiremi_tasks SET status = 'failed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'failed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
       recentCreated,
       recentCompletedA,
       recentCompletedA,
       failed.id,
     ]);
     const inFlight = store.createTask({ agentId: agentA.id, prompt: "in flight" });
-    db!.run("UPDATE multiremi_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [recentCreated, recentCreated, inFlight.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ? WHERE id = ?", [recentCreated, recentCreated, inFlight.id]);
     const old = store.createTask({ agentId: agentA.id, prompt: "old" });
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
       oldCreated,
       oldCreated,
       oldCreated,
       old.id,
     ]);
     const otherAgent = store.createTask({ agentId: agentB.id, prompt: "other agent" });
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
       recentCreated,
       recentCompletedB,
       recentCompletedB,

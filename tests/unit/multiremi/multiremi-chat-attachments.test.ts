@@ -1,3 +1,4 @@
+import { attemptMessagesPath } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -49,6 +50,7 @@ async function fixture() {
 
 function sendForm(files: File[], content = "") {
   const form = new FormData();
+  form.set("message", JSON.stringify({ body_md: content, message_kind: "report" }));
   for (const file of files) form.append("file", file);
   form.set("content", content);
   return form;
@@ -115,12 +117,12 @@ describe("Chat attachment transport", () => {
     // Request-supplied conversation identities must never override the task.
     form.set("chat_session_id", "chat_victim");
     form.set("chat_id", "oc_victim");
-    const response = await f.app.request("/api/chat/attachments/send", { method: "POST", headers: { Authorization: `Bearer ${credential.token}` }, body: form });
-    expect(response.status).toBe(202);
-    const result = await response.json();
+    const response = await f.app.request(attemptMessagesPath(f.store, task.id), { method: "POST", headers: { Authorization: `Bearer ${credential.token}` }, body: form });
+    expect(response.status).toBe(200);
+    const result = (await response.json()).message;
     expect(result.attachments).toHaveLength(2);
     expect(result.attachments[0]).toMatchObject({ chatSessionId: submitted.chatSessionId, contentType: "text/html" });
-    expect(result.delivery_ids).toHaveLength(2);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toHaveLength(2);
     expect(f.store.claimFeishuBotOutbound("local", "rt_files", undefined, true, true)).toBeNull();
     const delivery = f.store.claimFeishuBotOutbound("local", "rt_files", undefined, true, true, true)!;
     expect(delivery).toMatchObject({ chatId: "oc_private", threadId: null, replyToMessageId: null, bodyOrigin: "agent", body: "Report attached" });
@@ -145,7 +147,7 @@ describe("Chat attachment transport", () => {
     const f = await fixture();
     const submitted = f.submit();
     const credential = await f.store.createTaskAccessToken(f.store.getTask(submitted.taskId)!, "local");
-    const send = (files: File[], token = credential.token) => f.app.request("/api/chat/attachments/send", {
+    const send = (files: File[], token = credential.token) => f.app.request(`/api/sessions/${submitted.chatSessionId}/messages`, {
       method: "POST", headers: { Authorization: `Bearer ${token}` }, body: sendForm(files),
     });
     const oversized = await send([new File(["ok"], "ok.html"), new File([new Uint8Array(CHAT_ATTACHMENT_MAX_BYTES + 1)], "large.pdf")]);
@@ -171,7 +173,7 @@ describe("Chat attachment transport", () => {
       expect(chatAttachmentValidationError(filename, 0)).toBe(`Attachment ${filename} is empty (0 bytes)`);
       const empty = new File([], filename);
       for (const files of [[empty], [new File(["report"], "valid.html"), empty]]) {
-        const response = await f.app.request("/api/chat/attachments/send", {
+        const response = await f.app.request(`/api/sessions/${submitted.chatSessionId}/messages`, {
           method: "POST", headers: { Authorization: `Bearer ${credential.token}` }, body: sendForm(files),
         });
         expect(response.status).toBe(400);
@@ -195,11 +197,11 @@ describe("Chat attachment transport", () => {
     expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(task.id)!).chat_message_attachments)
       .toMatchObject([{ id: attachment.id, filename: "web.pdf" }]);
     const credential = await f.store.createTaskAccessToken(task, "local");
-    const result = await (await f.app.request("/api/chat/attachments/send", {
+    const result = await (await f.app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: { Authorization: `Bearer ${credential.token}` },
       body: sendForm([new File(["1"], "same.pdf"), new File(["2"], "same.pdf")]),
-    })).json();
-    expect(result.delivery_ids).toEqual([]);
+    })).json().then(body => body.message);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
     expect(uploadedAttachmentPath(result.attachments[0])).not.toBe(uploadedAttachmentPath(result.attachments[1]));
   });
 
