@@ -20,10 +20,12 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
   }
   if (host) {
     const snapshot = turns.snapshot({ runtimeId, daemonId, workspaceId: host.workspaceId ?? "local" }, ids);
-    const attachments = store.listAttachmentsForComments(snapshot.messages.map(input => input.message.id));
+    const messageIds=snapshot.messages.map(input=>input.message.id);
+    const attachments = store.listAttachmentsForComments(messageIds);
+    const chatAttachments=store.listAttachmentsForChatMessages(messageIds);
     for (const input of snapshot.messages) entities.push({
       key: `turn.message:${input.attempt_id}:${input.message.id}`, type: "turn.message",
-      payload: { ...input, attachments: attachments.get(input.message.id) ?? [] },
+      payload: { ...input, attachments: [...(attachments.get(input.message.id) ?? []),...(chatAttachments.get(input.message.id) ?? [])] },
     });
     for (const control of snapshot.wrapUps) entities.push({
       key: `turn.wrap_up:${control.attempt_id}:${control.requested_at}`, type: "turn.wrap_up", payload: { ...control },

@@ -13,6 +13,7 @@ describe("event summaries", () => {
     expect(eventSummary("1. Work\nMore")).toBe("Work");
     expect(eventSummary("```ts\nconst value = 1;\n```\nMore")).toBe("const value = 1;");
     expect(eventSummary("# sevt_ab cmt_cd chat_ef\nActual update")).toBe("Actual update");
+    expect(eventSummary("# Receipt `rct_abc123` acknowledged")).toBe("Receipt acknowledged");
   });
 
   it("caps a long summary without adding another line", () => {

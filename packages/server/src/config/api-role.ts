@@ -39,6 +39,7 @@ export function isDaemonPath(pathname: string): boolean {
 /** Browser trace reads share the runtime process with the trace socket. */
 export function isTraceReadPath(pathname: string): boolean {
   return /^\/api\/tasks\/[^/]+\/trace$/.test(pathname)
+    || /^\/api\/turns\/[^/]+\/trace$/.test(pathname)
     || /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname);
 }
 

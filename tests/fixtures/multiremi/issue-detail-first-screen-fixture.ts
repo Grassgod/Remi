@@ -332,14 +332,13 @@ export function seedIssueDetailFirstScreenFixture(
   const taskIds: string[] = [];
   for (let index = 0; index < taskCount; index += 1) {
     const sessionId = sessionIds[index % sessionIds.length]!;
-    const task = store.createTask({
-      id: `tsk_mul385_${String(index).padStart(3, "0")}`,
-      agentId: agent.id,
-      issueId: issue.id,
-      issueSessionId: sessionId,
-      prompt: filler("task prompt", index, taskPromptBytes),
-      requestingUserName: owner.name ?? "Owner",
+    // #3/#7: independent scopes preserve 54 real Turns at the original scale.
+    const sent = store.sendMessage({
+      session_id: sessionId, sender: {type: "member", id: "mem_local_local"},
+      to: {type: "agent", ref: agent.id}, message_kind: "request", wake_requested: "now",
+      execution_scope: `fixture_${index}`, body_md: filler("task prompt", index, taskPromptBytes),
     });
+    const task = store.getTask(store.getTurn(sent.turn_id!)!.current_attempt_id!)!;
     taskIds.push(task.id);
   }
 

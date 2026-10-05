@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 /**
  * MUL-357 on real PostgreSQL. Every other piece of evidence for this change is
  * bun:sqlite (in-process `:memory:`), while production runs PostgreSQL, so this
@@ -107,90 +108,52 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     const text = rows.map((row: any) => row["QUERY PLAN"]).join("\n");
     return {
       indexes: [...text.matchAll(/Index (?:Only )?Scan(?: Backward)? using (\S+)/g)].map((match) => match[1]!),
-      seqScanOnTasks: /Seq Scan on multiremi_tasks/.test(text),
+      seqScanOnTasks: /Seq Scan on multiremi_turn_execution_records/.test(text),
       sortNode: /(^|\n)\s+Sort\b/m.test(text),
       text,
     };
   }
 
-  it("applies both pagination indexes on PostgreSQL", async () => {
+  it("applies both authoritative-turn pagination indexes on PostgreSQL", async () => {
     const created = await sql`
       SELECT indexname, indexdef FROM pg_indexes
-      WHERE schemaname='public' AND tablename='multiremi_tasks'
-        AND indexname IN ('idx_multiremi_tasks_created_at','idx_multiremi_tasks_status_created')
+      WHERE schemaname='public' AND tablename='multiremi_turns'
+        AND indexname IN ('idx_multiremi_turns_workspace_created','idx_multiremi_turns_workspace_status_created')
       ORDER BY indexname`;
     expect(created.map((row: any) => row.indexname)).toEqual([
-      "idx_multiremi_tasks_created_at",
-      "idx_multiremi_tasks_status_created",
+      "idx_multiremi_turns_workspace_created", "idx_multiremi_turns_workspace_status_created",
     ]);
-    // Both sort columns are DESC and in route order, which is what lets the
-    // planner satisfy `ORDER BY created_at DESC, id DESC` from the index.
     for (const row of created as any[]) {
       expect(String(row.indexdef)).toContain("created_at DESC");
       expect(String(row.indexdef)).toContain("id DESC");
     }
-    const recorded = await sql`
-      SELECT id FROM multiremi_schema_migrations WHERE id = '20260921_task_list_pagination_indexes'`;
-    expect(recorded).toHaveLength(1);
   });
 
-  it("plans the route's page statements through those indexes, not a scan plus sort", async () => {
+  it("plans the canonical route pages through indexes without a scan plus sort", async () => {
     const agent = store.createAgent({ name: "MUL-357 agent", provider: "codex", workspaceId: "local", visibility: "workspace" });
-    // Insert the bulk pool straight into the table: it only exists to give the
-    // planner realistic statistics, and per-task store writes are PG round trips.
-    // Production's status mix is dominated by `completed`, so both groups are
-    // large enough for the planner to consider an index that preserves order.
-    const values: string[] = [];
-    const params: unknown[] = [];
-    const pushTask = (id: string, status: string, createdAt: string) => {
+    // Independent conversations preserve the one-pending-turn-per-lane constraint.
+    const values: string[] = [], params: unknown[] = [];
+    for (let index = 0; index < 6003; index++) {
+      const status = index < 4000 ? "completed" : index < 6000 ? "running" : "pending";
+      const id = `tsk_pgpool_${index}`;
       const base = params.length;
-      values.push(`($${base + 1},'direct',$${base + 2},'local',$${base + 3},0,$${base + 4},1,3,1,$${base + 5},$${base + 5})`);
-      params.push(id, agent.id, status, `pooled ${id} ${"x".repeat(200)}`, createdAt);
-    };
-    for (let index = 0; index < 4000; index += 1) {
-      pushTask(`tsk_pgdone_${index}`, "completed", new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString());
+      values.push(`($${base+1},$${base+2},1,$${base+3},'local',$${base+4},$${base+5})`);
+      params.push(id, `auto_fixture_${id}`, agent.id, status, new Date(Date.UTC(2026, 0, 1)+index*1000).toISOString());
     }
-    for (let index = 0; index < 2000; index += 1) {
-      pushTask(`tsk_pgrun_${index}`, "running", new Date(Date.UTC(2026, 6, 1) + index * 1000).toISOString());
+    await sql.unsafe(`INSERT INTO multiremi_turns (id,session_id,seq,agent_id,workspace_id,status,created_at) VALUES ${values.join(",")}`, params as any[]);
+    await sql.unsafe("ANALYZE multiremi_turns");
+    for (const status of [undefined, "running", "pending"]) {
+      recorder.statements.length = 0;
+      store.listTurns({ workspace_id:"local", status, limit:200 });
+      const statement = recorder.statements.find(s => s.includes("ORDER BY created_at DESC,id DESC"))!;
+      expect(statement).toBeDefined();
+      const plan = await explain(statement, status ? ["local",status,200] : ["local",200]);
+      expect(/Seq Scan on multiremi_turns/.test(plan.text)).toBe(false);
+      if (status !== "pending") {
+        expect(plan.sortNode).toBe(false);
+        expect(plan.indexes).toContain(status ? "idx_multiremi_turns_workspace_status_created" : "idx_multiremi_turns_workspace_created");
+      }
     }
-    await sql.unsafe(
-      `INSERT INTO multiremi_tasks
-         (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace, created_at, updated_at)
-       VALUES ${values.join(",")}`,
-      params as any[],
-    );
-    // A selective status group: production has a handful of `running`/`queued`
-    // rows too, and the planner is allowed to prefer the pre-existing
-    // single-column `status` index there. Only a whole-table scan + sort is a bug.
-    for (let index = 0; index < 3; index += 1) {
-      const task = store.createTask({ agentId: agent.id, prompt: `queued ${index}`, workspaceId: "local" });
-      recorder.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", ["queued", task.id]);
-    }
-    await sql.unsafe("ANALYZE multiremi_tasks");
-
-    // Re-issue exactly what the route issued, captured from the store.
-    recorder.statements.length = 0;
-    store.listTasksChunk(undefined, null, 200);
-    const unfilteredStatement = recorder.statements.find((statement) => statement.includes("ORDER BY created_at DESC, id DESC"))!;
-    expect(unfilteredStatement).toBeDefined();
-    const unfiltered = await explain(unfilteredStatement, [200]);
-    expect(unfiltered.seqScanOnTasks).toBe(false);
-    expect(unfiltered.sortNode).toBe(false);
-    expect(unfiltered.indexes).toContain("idx_multiremi_tasks_created_at");
-
-    // Status-filtered page with a large matching group: `status` leads the
-    // composite index, so the order comes from the index instead of a sort.
-    recorder.statements.length = 0;
-    store.listTasksChunk("running", null, 200);
-    const filteredStatement = recorder.statements.find((statement) => statement.includes("status = ?"))!;
-    expect(filteredStatement).toBeDefined();
-    const filtered = await explain(filteredStatement, ["running", 200]);
-    expect(filtered.seqScanOnTasks).toBe(false);
-    expect(filtered.indexes).toContain("idx_multiremi_tasks_status_created");
-
-    // Selective status group: either index is acceptable, a Seq Scan is not.
-    const selective = await explain(filteredStatement, ["queued", 200]);
-    expect(selective.seqScanOnTasks).toBe(false);
   }, 120_000);
 
   it("binds status, cursor and limit in the order the query shape requires", async () => {
@@ -198,7 +161,7 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     const seeded: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const task = store.createTask({ agentId: agent.id, prompt: `done ${index}`, workspaceId: "local" });
-      recorder.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", ["completed", task.id]);
+      mutateExecutionFixture(recorder, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", ["completed", task.id]);
       seeded.push(task.id);
     }
     for (let index = 0; index < 3; index += 1) {
@@ -247,23 +210,22 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     // legitimately refuses a reply that size. The id set is what this comparison
     // needs, so the projection is equivalent here — and that refusal is itself
     // the guardrail working.
-    const reference = store.listTaskRefs({ statuses: [] }).map((task) => task.id);
+    const reference = (db.query("SELECT id FROM multiremi_turns WHERE workspace_id=? ORDER BY created_at DESC,id DESC").all("local") as Array<{id:string}>).map(turn => turn.id);
     const collected: string[] = [];
-    let offset = 0;
+    let cursor: string | null = null;
     // The fixture is ~6k rows, so a cap of 100 pages at limit=100 is generous.
     for (let page = 0; page < 100; page += 1) {
-      const response = await app.request(`/api/multiremi/tasks?limit=100&offset=${offset}`, { headers });
+      const response = await app.request("/api/turns"+`?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers });
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        tasks: Array<{ id: string }>;
-        has_more: boolean;
-        next_offset: number | null;
+        turns: Array<{ id: string }>;
+        next_cursor: string | null;
       };
-      collected.push(...body.tasks.map((task: any) => task.id));
-      if (!body.has_more) break;
+      collected.push(...body.turns.map((task: any) => task.id));
+      if (!body.next_cursor) break;
       expect(page, "page walk did not terminate").toBeLessThan(99);
-      expect(body.next_offset).toBe(offset + body.tasks.length);
-      offset = body.next_offset!;
+      expect(body.next_cursor).toBeString();
+      cursor = body.next_cursor;
     }
     // The parent commit returned the whole table from this route; the page walk
     // must not drop or repeat a row.

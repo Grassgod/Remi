@@ -75,7 +75,7 @@ export function inboxFlowStatus(store: MultiremiStore, fixture: InboxFlowFixture
 }
 
 export function inboxWakeSeq(db: SqlDatabase, taskId: string): number {
-  const row = db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(taskId) as { wake_seq: number } | null;
+  const row = db.query("SELECT wake_seq FROM multiremi_turns WHERE current_attempt_id = ?").get(taskId) as { wake_seq: number } | null;
   if (!row) throw new Error(`Inbox task is missing: ${taskId}`);
   return Number(row.wake_seq);
 }

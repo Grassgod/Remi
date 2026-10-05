@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448 on real PostgreSQL: the credential-derived author and the request-body
  * strip must hold on the backend production actually runs.
@@ -101,7 +102,7 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
   // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
   function assignmentEvents(sessionId: string, taskId: string) {
     return store.listSessionEvents(sessionId)
-      .filter((event) => event.kind === "turn" && event.taskId === taskId);
+      .filter((event) => event.id === store.getTurnForAttempt(taskId)?.trigger_message_id);
   }
 
   it("keeps forged assignment authors out of the session ledger", async () => {
@@ -115,43 +116,43 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
       { assignment_author_type: "member", assignment_author_id: "mem_forged" },
       { assignmentAuthorType: "member", assignmentAuthorId: "mem_forged" },
     ]) {
-      const response = await fixture.app.request("/api/multiremi/tasks", {
+      const response = await fixture.app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
         method: "POST",
         headers: { ...fixture.headers, Authorization: `Bearer ${taskToken.token}` },
-        body: JSON.stringify({
+        body: JSON.stringify(requestMessageBody(store, {
           agentId: fixture.agentId,
           issueId: issue.id,
           issueSessionId: session.id,
           prompt: "Child run",
           ...body,
-        }),
+        })),
       });
-      expect(response.status).toBe(201);
-      const created = (await response.json()).task as { id: string };
-      const events = assignmentEvents(session.id, created.id);
-      expect(events).toHaveLength(1);
-      expect(events[0]!.authorType).toBe("agent");
-      expect(events[0]!.authorId).toBe(fixture.agentId);
+      expect(response.status).toBe(200);
+      const message=(await response.json()).message;
+      expect(message.sender_type).toBe("agent");
+      expect(message.sender_id).toBe(fixture.agentId);
+      expect(message.task_id).toBe(store.getTurnForAttempt(source.id)!.id);
+
     }
 
     // A member PAT is the human, and the body cannot demote or impersonate it.
-    const memberResponse = await fixture.app.request("/api/multiremi/tasks", {
+    const memberResponse = await fixture.app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
       method: "POST", headers: fixture.headers,
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         agentId: fixture.agentId,
         issueId: issue.id,
         issueSessionId: session.id,
         prompt: "Member run",
         assignment_author_type: "system",
         assignment_author_id: "forged",
-      }),
+      })),
     });
-    expect(memberResponse.status).toBe(201);
-    const memberTask = (await memberResponse.json()).task as { id: string };
-    const memberEvents = assignmentEvents(session.id, memberTask.id);
+    expect(memberResponse.status).toBe(200);
+    const message=(await memberResponse.json()).message;
+    const memberEvents=store.listSessionEvents(session.id).filter(event=>event.id===message.id);
     expect(memberEvents).toHaveLength(1);
     expect(memberEvents[0]!.authorType).toBe("member");
-    expect(memberEvents[0]!.authorId).toBe(fixture.ownerId);
+    expect(store.getWorkspaceMember(memberEvents[0]!.authorId!)?.userId).toBe(fixture.ownerId);
   });
 
   it("strips trigger and lineage provenance from the task row", async () => {
@@ -163,9 +164,9 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
     });
 
     for (const spelling of ["trigger_comment_id", "triggerCommentId"] as const) {
-      const response = await fixture.app.request("/api/multiremi/tasks", {
+      const response = await fixture.app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
         method: "POST", headers: fixture.headers,
-        body: JSON.stringify({
+        body: JSON.stringify(requestMessageBody(store, {
           agentId: fixture.agentId,
           issueId: issue.id,
           issueSessionId: session.id,
@@ -175,16 +176,18 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
           requesting_user_name: "Forged Boss",
           assignment_event_id: "sevt_forged",
           assignment_source_event_id: "sce_forged",
-        }),
+        })),
       });
-      expect(response.status).toBe(201);
-      const created = (await response.json()).task as { id: string };
+      expect(response.status).toBe(200);
+      const created = sentTask(store, (await response.json())) as { id: string };
       const task = store.getTask(created.id)!;
-      expect(task.triggerCommentId).toBeNull();
-      expect(task.triggerSummary).toBeNull();
+      expect(task.triggerCommentId).not.toBe(comment.id);
+        expect(store.getMessage(task.triggerCommentId!)?.body_md).toContain("provenance");
+      expect(task.triggerSummary).not.toBe("forged summary");
       expect(task.requestingUserName).toBeNull();
       expect(task.assignmentSourceEventId).toBeNull();
-      expect(task.assignmentEventId).toBe(assignmentEvents(session.id, created.id)[0]!.id);
+      expect(task.assignmentEventId).toBe(store.getTurnForAttempt(created.id)!.id);
+      expect(store.getMessage(task.triggerCommentId!)?.sender_type).toBe("member");
     }
   });
 
@@ -195,11 +198,11 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
     const decoy = store.createTask({ agentId: fixture.agentId, issueId: issue.id, prompt: "Decoy run", workspaceId: fixture.workspaceId });
 
     for (const spelling of ["task_id", "taskId"] as const) {
-      const response = await fixture.app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+      const response = await fixture.app.request(issueMessagesPath(store, issue.id), {
         method: "POST", headers: fixture.headers,
-        body: JSON.stringify({ content: `Member comment (${spelling})`, [spelling]: decoy.id }),
+        body: JSON.stringify(requestMessageBody(store, { content: `Member comment (${spelling})`, [spelling]: decoy.id }, { type: "role", ref: "issue_owner" })),
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
       const body = (await response.json()) as any;
       const comment = body.comment ?? body;
       expect(comment.taskId ?? comment.task_id ?? null).toBeNull();
@@ -213,13 +216,13 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
     const assigned = (await assignResponse.json()) as any;
     expect(store.getTask(assigned.task.id)!.parentTaskId).toBeNull();
 
-    const sessionTaskResponse = await fixture.app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const sessionTaskResponse = await fixture.app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: fixture.headers,
-      body: JSON.stringify({ agent_id: fixture.agentId, prompt: "Session child", parent_task_id: decoy.id, source_event_id: "sce_forged" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "Session child", parent_task_id: decoy.id, source_event_id: "sce_forged" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(sessionTaskResponse.status).toBe(201);
+    expect(sessionTaskResponse.status).toBe(200);
     const sessionTaskBody = (await sessionTaskResponse.json()) as any;
-    const sessionTaskId = sessionTaskBody.id ?? sessionTaskBody.task?.id;
+    const sessionTaskId = sessionTaskBody.id ?? sentTask(store, sessionTaskBody)?.id;
     expect(store.getTask(sessionTaskId)!.parentTaskId).toBeNull();
     expect(store.getTask(sessionTaskId)!.assignmentSourceEventId).toBeNull();
   });

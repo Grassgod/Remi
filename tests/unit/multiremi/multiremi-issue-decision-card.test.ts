@@ -794,6 +794,84 @@ describe("MUL-412 issue decision cards", () => {
     expect(settled.answeredByMemberId).not.toBe(otherMember.id);
   });
 
+  it("patches the existing card after a unified member revision and rejects callback replay", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Member revision", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
+    sendCard(store, "om_revision_card")!;
+    const action = cardAction(decision.id);
+    store.answerIssueDecision(parent.id, decision.id, { answer: "Yes", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
+    const firstPatch = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(firstPatch.kind).toBe("decision_card_patch");
+    const token = await store.createAccessToken({ name: "Revision member", type: "pat", workspaceId: "local", userId: store.getWorkspaceMember(member.id)!.userId! });
+    const sessionId = store.getMessage(decision.id)!.session_id;
+    const response = await app(store).request(`/api/sessions/${sessionId}/messages`, {
+      method: "POST", headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ reply_to_id: decision.id, message_kind: "reply", body_md: "Hold for QA" }),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const reply = (await response.json()).message;
+    expect(store.getMessage(reply.id)).toMatchObject({ reply_to_id: decision.id, body_md: "Hold for QA", sender_id: member.id });
+    expect(store.getIssueDecision(parent.id, decision.id)?.history).toHaveLength(2);
+    const patches = db.query("SELECT body,target_message_id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind='decision_card_patch' AND decision_id=?").all(decision.id);
+    expect(patches).toHaveLength(2);
+    expect(patches.every(p => p.target_message_id === "om_revision_card")).toBe(true);
+    expect(patches.some(p => String(p.body).includes("Hold for QA"))).toBe(true);
+    // A member may revise while the previous patch is leased. The new patch
+    // waits for that delivery so the screen cannot regress to the old answer.
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+    store.reportFeishuBotOutbound("local", "rt_bot", firstPatch.id, {
+      claimToken: firstPatch.claimToken, status: "sent", externalMessageId: "om_revision_card",
+    });
+    const revisedPatch = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(revisedPatch.kind).toBe("decision_card_patch");
+    expect(revisedPatch.targetMessageId).toBe("om_revision_card");
+    expect(revisedPatch.body).toContain("Hold for QA");
+    const counts = decisionSideEffectCounts();
+    const host = await daemonToken(store);
+    const replay = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
+      method: "POST", headers: { Authorization: `Bearer ${host.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ answer: "Yes", token: action.t, operator_open_id: CARD_OPEN_ID }),
+    });
+    expect(replay.status).toBe(403);
+    expect(decisionSideEffectCounts()).toEqual(counts);
+    expect(store.getIssueDecision(parent.id, decision.id)?.history).toHaveLength(2);
+  });
+
+  it("chains later revisions after the newest patch when a legacy patch has no unit key", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Legacy patch revision", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
+    sendCard(store, "om_legacy_revision")!;
+    store.answerIssueDecision(parent.id, decision.id, { answer: "First", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
+    db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET unit_key='' WHERE kind='decision_card_patch' AND decision_id=?", [decision.id]);
+    const token = await store.createAccessToken({ name: "Legacy revision member", type: "pat", workspaceId: "local", userId: store.getWorkspaceMember(member.id)!.userId! });
+    for (const body_md of ["Second", "Third"]) {
+      const response = await app(store).request(`/api/sessions/${store.getMessage(decision.id)!.session_id}/messages`, {
+        method: "POST", headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ reply_to_id: decision.id, body_md }),
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+    }
+    const patches = db.query("SELECT id,unit_key,previous_delivery_id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind='decision_card_patch' AND decision_id=?").all(decision.id);
+    const legacy = patches.find(p => p.unit_key === "")!;
+    const second = patches.find(p => p.unit_key === "decision_state:0000000002")!;
+    const third = patches.find(p => p.unit_key === "decision_state:0000000003")!;
+    expect(patches).toHaveLength(3);
+    expect(second.previous_delivery_id).toBe(legacy.id);
+    expect(third.previous_delivery_id).toBe(second.id);
+    for (const patch of [legacy, second, third]) {
+      const claimed = store.claimFeishuBotOutbound("local", "rt_bot")!;
+      expect(claimed.id).toBe(patch.id);
+      expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+      store.reportFeishuBotOutbound("local", "rt_bot", claimed.id, {
+        claimToken: claimed.claimToken, status: "sent", externalMessageId: "om_legacy_revision",
+      });
+    }
+  });
+
   it("lands one answer for a double tap and for a replayed callback", async () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Replay", { type: "agent", id: agentId });

@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,21 +59,22 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
   const store = new MultiremiStore(db);
   const fixture = seedFirstScreenHotspotsFixture(store, {
     inboxRows: options.inboxRows ?? 300,
+    privatePrimaryAgent:false,
     run: (sql, params) => { db.run(sql, ...params); },
   });
-  // Older unread rows and archived rows distinguish a full summary from a page.
-  for (const [index, type, issueId, read, archived, createdAt, details] of [
-    [0, "issue_comment", null, 0, 0, "2026-09-01T12:00:00.000Z", null],
-    [1, "autopilot_run_failed", null, 0, 1, "2026-09-26T14:00:00.000Z", null],
-    [2, "autopilot_run_completed", null, 0, 0, "2026-09-25T01:00:00.000Z", '{"autopilot_id":"atp_date"}'],
-    [3, "autopilot_run_completed", null, 1, 0, "2026-09-25T01:00:00.000Z", '{"autopilot_id":"atp_date"}'],
-    [4, "autopilot_run_completed", null, 0, 0, "2026-09-22T12:00:00.000Z", '{"autopilot_id":"atp_date"}'],
-    [5, "autopilot_run_completed", null, 0, 0, "2026-09-01T12:00:00.000Z", "invalid JSON"],
-  ] as const) {
-    db.run(`INSERT INTO multiremi_inbox_items
-      (id, workspace_id, issue_id, member_id, recipient_type, recipient_id, severity, actor_type, type, title, body, details, read, archived, created_at)
-      VALUES (?, 'local', ?, ?, 'member', ?, 'attention', 'system', ?, 'PR2 sentinel', '', ?, ?, ?, ?)`,
-      `inb_pr2_sentinel_${index}`, issueId, fixture.readerMemberId, fixture.readerMemberId, type, details, read, archived, createdAt);
+  // #4: independent canonical conversations replace notification archive/fold
+  // sentinels. A lane cursor reads one; a message tombstone hides another.
+  for (let index=0;index<6;index++) {
+    const issue=store.createIssue({title:`PR2 sentinel ${index}`});
+    const session=store.getOrCreateDefaultIssueSession(issue.id);
+    const message=store.sendMessage({id:`cmt_pr2_sentinel_${index}`,session_id:session.id,
+      sender:{type:'platform',id:null},to:{type:'member',ref:fixture.readerMemberId},
+      message_kind:'status',wake_requested:'now',body_md:'PR2 sentinel',
+      metadata:{lifecycle_event:'task_failed'}}).message;
+    db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',
+      index===0?'2026-09-01T12:00:00.000Z':'2026-09-25T01:00:00.000Z',message.id);
+    if(index===1)store.deleteMessage(message.id);
+    if(index===3)store.readMessageInbox(fixture.readerMemberId,session.id,message.seq);
   }
   const other = store.createWorkspace({ id: "ws_pr2_foreign", name: "Foreign fleet", slug: "pr2-foreign" });
   const runtimeIds = [fixture.runtimeId];
@@ -85,7 +87,7 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
     ]);
     // Existing tasks supply every status and usage format without inventing new tasks.
     const taskId = fixture.taskIds[index % fixture.taskIds.length]!;
-    db.run("UPDATE multiremi_tasks SET runtime_id = ?, usage = ? WHERE id = ?", id,
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, usage = ? WHERE id = ?", id,
       JSON.stringify([{ model: "model-default", input_tokens: index, output_tokens: index * 2 }]), taskId);
     runtimeIds.push(id);
   }
@@ -136,7 +138,7 @@ export async function capturePr2QueryCounts(point?: number) {
     const harness = await createPr2Harness({ inboxRows, runtimes, foreignRuntimes });
     try {
       const routes: Record<string, number> = {};
-      for (const path of ["/api/inbox/summary", `/api/attachments/${harness.attachmentId}/content`, "/api/runtimes"]) {
+      for (const path of ["/api/inbox", `/api/attachments/${harness.attachmentId}/content`, "/api/runtimes"]) {
         harness.probe.reset();
         const response = await harness.app.request(path, { headers: harness.headers });
         await response.arrayBuffer();
@@ -144,7 +146,7 @@ export async function capturePr2QueryCounts(point?: number) {
         routes[path.replace(harness.attachmentId, ":id")] = harness.probe.statements;
         if (path === "/api/runtimes") {
           for (const table of ["multiremi_tasks", "multiremi_execution_group_members", "multiremi_runtime_models"]) {
-            const reads = harness.probe.sql.filter(sql => sql.includes(`FROM ${table}`));
+            const reads = harness.probe.sql.filter(sql => sql.includes(`FROM ${table==="multiremi_tasks"?"multiremi_turn_execution_records":table}`));
             if (reads.length !== 1) throw new Error(`${table}: expected one batch, got ${reads.length}`);
           }
         }
@@ -165,7 +167,7 @@ export async function capturePr2Responses() {
       return { status: response.status, body: await response.text() };
     };
     const inbox = [];
-    for (const offset of [0, 480, -300, 840]) inbox.push(await json(`/api/inbox/summary?timezone_offset=${offset}`));
+    for (const limit of [1, 25, 50, 100]) inbox.push(await json(`/api/inbox?limit=${limit}`));
     const response = await app.request(`/api/attachments/${harness.attachmentId}/content`, { headers });
     const attachment = { status: response.status,
       headers: Object.fromEntries(["content-type", "content-length", "content-disposition", "x-content-type-options"].map(key => [key, response.headers.get(key)])),
@@ -179,7 +181,7 @@ export async function capturePr2Responses() {
     const owned = await json("/api/runtimes?owner=me");
     const hydrated = harness.runtimeIds.map(id => harness.store.getRuntime(id));
     const normalize = (value: unknown) => JSON.parse(JSON.stringify(value).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<timestamp>"));
-    return normalize({ source: "pre-PR2 main 58bf5cc0 with MUL-421 protocol fields", fixture: { sessions: fixture.counts.sessions,
+    return normalize({ source: "MUL-493 canonical inbox; unchanged attachment/runtime wire contracts", fixture: { sessions: fixture.counts.sessions,
       agents: fixture.counts.agents, inboxRows: fixture.counts.inboxRows + 6 }, inbox, attachment, denied, unauthorized, runtimes, owned, hydrated });
   } finally { await harness.dispose(); restore(); }
 }

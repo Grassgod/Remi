@@ -1,3 +1,4 @@
+import { attemptMessagesPath, requestMessageBody, sentTask, turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -56,18 +57,18 @@ describe("bound Issue continuation prompt", () => {
         expect(prompt).toContain("route to its leader, not an arbitrary teammate");
         expect(prompt).toContain("This is not the Chat Session ID or the provider session_id");
         expect(prompt).toContain("If ambiguous or archived, ask");
-        expect(prompt).toContain("Exclude Chat/reporting tasks");
+        expect(prompt).toContain("Exclude Chat/reporting turns");
         expect(prompt).toContain("the target does not share your Chat transcript");
-        expect(prompt).toContain("remi task steer <task-id>");
-        expect(prompt).toContain(`remi session task create ${issue.id} <issue-session-id>`);
-        expect(prompt).toContain("A rich mention from an Issue task delegates to that agent");
-        expect(prompt).toContain("its result returns automatically to the dispatching Issue Session");
+        expect(prompt).toContain("remi message send <issue-session-id>");
+        expect(prompt).toContain(`remi turn list --issue ${issue.id} --output json`);
+        expect(prompt).toContain("A running turn receives the message as an interruption");
+        expect(prompt).toContain("otherwise the inbox schedules a turn in the original Issue Session");
         expect(prompt).toContain("Chat-origin dispatch keeps the existing topic relay reporting path");
-        expect(prompt).toContain("remi task get <returned-task-id> --output json");
-        expect(prompt).toContain("remi task steer list <target-task-id> --output json");
+        expect(prompt).toContain("remi turn get <returned-turn-id> --output json");
+        expect(prompt).toContain("remi message get <returned-message-id> --output json");
         expect(prompt).toContain("never describe queued work as running");
         expect(prompt).toContain("do not claim the handoff succeeded or bypass authorization");
-        expect(prompt).toContain("read back the task/directive list before retrying");
+        expect(prompt).toContain("read back the message list by dedupe key before retrying");
         expect(prompt).toContain("After a verified handoff, finish this Chat turn");
       });
     }
@@ -97,51 +98,43 @@ describe("topic Task credential handoff through existing APIs", () => {
     store.completeTask(previous.id, { output: "Ready for follow-up", sessionId: "acp_issue_owner", workDir: "/tmp/issue-followup-work" });
     const before = store.listTasks().length;
 
-    const comment = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/messages`, {
+    const comment = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers,
-      body: JSON.stringify({ content: `[@Issue owner](mention://agent/${owner.id}) Please continue.` }),
+      body: JSON.stringify(requestMessageBody(store, { content: `[@Issue owner](mention://agent/${owner.id}) Please continue.` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(comment.status).toBe(201);
-    const posted = await comment.json();
-    expect(posted.author_type).toBe("agent");
+    expect(comment.status).toBe(200);
+    const { message: posted } = await comment.json();
+    expect(posted.sender_type).toBe("agent");
     const mentioned = store.listTasks().find((entry) => entry.triggerCommentId === posted.id)!;
     expect(mentioned).toMatchObject({
       issueId: issue.id, issueSessionId: session.id, agentId: owner.id,
-      chatSessionId: null, parentTaskId: task.id, status: "queued", sessionId: "acp_issue_owner",
+      chatSessionId: null, parentTaskId: null, status: "queued", sessionId: "acp_issue_owner",
       delegationId: null, delegatedByAgentId: null, delegatedFromIssueSessionId: null,
-      delegationSkipReason: "source_not_issue_task",
+      delegationSkipReason: null,
     });
     expect(store.listTasks()).toHaveLength(before + 1);
     expect(store.claimTask(runtime.id)?.id).toBe(mentioned.id);
     store.startTask(mentioned.id);
     store.completeTask(mentioned.id, { output: "Rich mention follow-up verified." });
     expect(store.getTask(mentioned.id)?.delegationReturnTaskId).toBeNull();
-    expect(store.listIssueActivity(issue.id)).toContainEqual(expect.objectContaining({
-      type: "delegation_return_skipped",
-      data: expect.objectContaining({
-        reason: "source_not_issue_task", sourceTaskId: mentioned.id, terminalStatus: "completed",
-      }),
-    }));
+    // #3/#9: source provenance is on the request header; Chat has no delegation return.
+    expect(store.getMessage(posted.id)?.task_id).toBe(store.getTurnForAttempt(task.id)!.id);
     expect(store.listTasks()).toHaveLength(before + 1);
     expect(store.listTasks().filter((entry) => entry.chatSessionId === chat.id).map((entry) => entry.id)).toEqual([task.id]);
 
-    const created = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const created = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers,
-      body: JSON.stringify({ agent_id: owner.id, prompt: "User requested: add tests, retain the API, and report verification." }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: owner.id, prompt: "User requested: add tests, retain the API, and report verification." }, { type: "role", ref: "issue_owner" })),
     });
-    expect(created.status).toBe(201);
-    const next = await created.json();
-    expect(next).toMatchObject({
-      issue_id: issue.id, issue_session_id: session.id, agent_id: owner.id,
-      chat_session_id: null, parent_task_id: task.id, status: "queued", session_id: "acp_issue_owner",
-    });
-    const verified = await app.request(`/api/multiremi/tasks/${next.id}`, { headers });
+    expect(created.status).toBe(200);
+    const next = sentTask(store, await created.json());
+    expect(next).toMatchObject({issueId:issue.id,issueSessionId:session.id,agentId:owner.id,chatSessionId:null,parentTaskId:null,status:"queued",sessionId:"acp_issue_owner",delegationId:null});
+    const verified = await app.request(turnApiPath(store, next.id), { headers });
     expect(verified.status).toBe(200);
-    expect((await verified.json()).task).toMatchObject({ id: next.id, issueSessionId: session.id, agentId: owner.id, status: "queued" });
-    expect(store.getTask(next.id)).toMatchObject({ delegationId: null, delegationSkipReason: "source_not_issue_task" });
-    const listed = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, { headers });
+    expect((await verified.json()).turn).toMatchObject({id:store.getTurnForAttempt(next.id)!.id,current_attempt_id:next.id,session_id:session.id,agent_id:owner.id,status:"pending"});
+    const listed = await app.request(`/api/turns?session_id=${session.id}`, { headers });
     expect(listed.status).toBe(200);
-    expect((await listed.json()).some((entry: { id: string }) => entry.id === next.id)).toBe(true);
+    expect((await listed.json()).turns.some((entry: { id: string }) => entry.id === store.getTurnForAttempt(next.id)!.id)).toBe(true);
     expect(store.claimTask(runtime.id)?.id).toBe(next.id);
     expect(store.getSessionAgentLane(session.id, owner.id)?.providerSessionId).toBe("acp_issue_owner");
     expect(store.getChatSession(chat.id)?.agentId).toBe(remi.id);
@@ -155,25 +148,26 @@ describe("topic Task credential handoff through existing APIs", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(active.id);
     store.startTask(active.id);
     const before = store.listTasks().length;
-    const sent = await app.request(`/api/tasks/${active.id}/steer`, {
-      method: "POST", headers, body: JSON.stringify({ content: "Also test the failure path." }),
+    const sent = await app.request(attemptMessagesPath(store, active.id), {
+      method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { body_md: "Also test the failure path." }, { type: "agent", ref: store.getTask(active.id)!.agentId })),
     });
-    expect(sent.status).toBe(201);
+    expect(sent.status).toBe(200);
     const directive = (await sent.json()).message;
-    const verified = await app.request(`/api/tasks/${active.id}/steer`, { headers });
+    const verified = await app.request(attemptMessagesPath(store, active.id), { headers });
     expect(verified.status).toBe(200);
-    expect((await verified.json()).messages).toContainEqual(expect.objectContaining({ id: directive.id, content: "Also test the failure path." }));
+    expect((await verified.json()).messages).toContainEqual(expect.objectContaining({ id: directive.id, body_md: "Also test the failure path." }));
     expect(store.listTasks()).toHaveLength(before);
     expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
     expect(store.getTask(active.id)).toMatchObject({ issueId: issue.id, issueSessionId: session.id, agentId: owner.id, status: "running" });
 
     store.consumeTaskSteerMessages(active.id, [directive.id]);
     store.completeTask(active.id, { output: "Done" });
-    const late = await app.request(`/api/tasks/${active.id}/steer`, {
-      method: "POST", headers, body: JSON.stringify({ content: "Too late" }),
+    const late = await app.request(attemptMessagesPath(store, active.id), {
+      method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { content: "Too late" }, { type: "agent", ref: store.getTask(active.id)!.agentId })),
     });
-    expect(late.status).toBe(409);
-    expect(store.listTasks()).toHaveLength(before);
+    expect(late.status).toBe(200);
+    expect(store.listTasks()).toHaveLength(before + 1);
+    expect(sentTask(store,await late.json()).status).toBe("queued");
   });
 
   it("surfaces invalid targets and rejected credentials without creating follow-up work", async () => {
@@ -182,12 +176,12 @@ describe("topic Task credential handoff through existing APIs", () => {
     const wrongSession = store.getOrCreateDefaultIssueSession(other.id);
     const before = store.listTasks().length;
     for (const [sessionId, agentId, auth, expectedStatus] of [
-      [wrongSession.id, owner.id, headers, 404],
-      [session.id, "agt_missing", headers, 404],
+      ["ises_missing", owner.id, headers, 403],
+      [session.id, "agt_missing", headers, 400],
       [session.id, owner.id, { ...headers, Authorization: "Bearer invalid-task-credential" }, 401],
     ] as const) {
-      const failed = await app.request(`/api/issues/${issue.id}/sessions/${sessionId}/tasks`, {
-        method: "POST", headers: auth, body: JSON.stringify({ agent_id: agentId, prompt: "Continue" }),
+      const failed = await app.request(`/api/sessions/${sessionId}/messages`, {
+        method: "POST", headers: auth, body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Continue" }, { type: "role", ref: "issue_owner" })),
       });
       expect(failed.status).toBe(expectedStatus);
       expect(await failed.json()).toHaveProperty("error");

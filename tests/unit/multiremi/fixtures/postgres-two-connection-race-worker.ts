@@ -23,7 +23,7 @@ interface RaceInput {
   prerequisiteId: string;
   agentId?: string;
   barrierPath: string;
-  role: "force" | "comment" | "rerun" | "auto";
+  role: "force" | "comment" | "rerun" | "owner_request" | "auto";
 }
 
 self.onmessage = async (message: MessageEvent<RaceInput>) => {
@@ -57,23 +57,23 @@ self.onmessage = async (message: MessageEvent<RaceInput>) => {
       }
     } else if (role === "comment") {
       const app = createMultiremiApp({ store });
-      const response = await app.request(`/api/issues/${issueId}/comments`, {
+      const response = await app.request(`/api/sessions/${store.getOrCreateDefaultIssueSession(issueId).id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ body: "Concurrent human comment", author_type: "member", author_id: "local" }),
+        body: JSON.stringify({ body_md: "Concurrent human comment", message_kind: "request", to: { type: "role", ref: "issue_owner" } }),
       });
       responseStatus = response.status;
-      if (response.status !== 201) throw new Error(`unexpected comment response ${response.status}`);
-    } else if (role === "rerun") {
+      if (response.status !== 200) throw new Error(`unexpected comment response ${response.status}`);
+    } else if (role === "rerun" || role === "owner_request") {
       if (!agentId) throw new Error("rerun role requires agentId");
       const app = createMultiremiApp({ store });
-      const response = await app.request(`/api/issues/${issueId}/rerun`, {
+      const response = await app.request(`/api/sessions/${store.getOrCreateDefaultIssueSession(issueId).id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
+        body: JSON.stringify({ body_md: "Concurrent rerun", message_kind: "request", to: role === "owner_request" ? { type: "role", ref: "issue_owner" } : { type: "agent", ref: agentId } }),
       });
       responseStatus = response.status;
-      if (response.status !== 202) throw new Error(`unexpected rerun response ${response.status}`);
+      if (response.status !== 200) throw new Error(`unexpected rerun response ${response.status}`);
     } else {
       try {
         store.updateIssue(prerequisiteId, { status: "done" });

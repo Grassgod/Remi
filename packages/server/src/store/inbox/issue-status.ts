@@ -21,28 +21,35 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
       AND d.deleted_at IS NULL AND d.resolved_at IS NULL AND NOT EXISTS(SELECT 1 FROM multiremi_conversation_log r
       WHERE r.reply_to_id=d.id AND r.message_kind='reply' AND r.deleted_at IS NULL) LIMIT 1`).get(issueId,owner.id):null;
   let status:string|null=null;
+  let last=turns[0];
   if(active.some(t=>t.status==='running'))status='in_progress';
   else if(active.some(t=>t.status==='awaiting_human')||decision)status='in_review';
   else if(active.some(t=>t.status==='pending')){
     if(active.some(t=>Number(t.merged_work_triggers)>0||t.trigger_sender==='member'||t.trigger_reason==='agent_dispatch'||['human_sender','agent_dispatch'].includes(t.wake_source)))status='todo';
   }else{
-    const latest=turns.find(t=>t.agent_id===owner?.id);
+    // Intake completion belongs to the business round, including unassigned intake work.
+    const latest=issue.issueKind==='intake'
+      ? turns.toSorted((a,b)=>String(b.ended_at??b.created_at).localeCompare(String(a.ended_at??a.created_at)))[0]
+      : turns.find(t=>t.agent_id===owner?.id);
+    if(issue.issueKind==='intake')last=latest??last;
     status=latest?.status==='completed'?'in_review':latest?.status==='failed'?'blocked':latest?.status==='cancelled'?'todo':null;
+    if(issue.issueKind==='intake'&&latest?.status==='completed'&&ctx.issues().listGeneratedIssues(issueId).length)status='done';
   }
   if(!status)return {changed:false,previousStatus:issue.status};
   status=ctx.issues().holdParentStatusForOpenChildren(issueId,status,{exempt:active.some(t=>t.status==='awaiting_human')||!!decision,deferredEvents:events});
   if(status===issue.status)return {changed:false,previousStatus:issue.status};
   const at=nowIso();
-  ctx.db.run('UPDATE multiremi_issues SET status=?,completed_at=NULL,archived_at=NULL,updated_at=? WHERE id=?',[status,at,issueId]);
+  const completedAt=status==='done'?at:null;
+  ctx.db.run('UPDATE multiremi_issues SET status=?,completed_at=?,archived_at=NULL,updated_at=? WHERE id=?',[status,completedAt,at,issueId]);
   const updated=ctx.issues().getIssue(issueId)!;
-  const last=turns[0];
+  const actorId=issue.issueKind==='intake'?last?.agent_id??null:owner?.id??last?.agent_id??null;
   const {event,dependencyCheckEventId}=ctx.autopilots().enqueueIssueStatusChangedEvent({issue:updated,previousStatus:issue.status,
-    actorType:'agent',actorId:owner?.id??last?.agent_id??null,automationSourceTaskId:last?.current_attempt_id??null});
+    actorType:'agent',actorId,automationSourceTaskId:last?.current_attempt_id??null});
   const changes:import('../repos/tasks-repo.js').ChildStatusChangeCollector=[];
   ctx.issues().notifyChildStatusChangeWithinTransaction(issue,updated,last?.current_attempt_id??'',changes,events,{statusChangeEventId:event?.id,taskTerminalStatus:['completed','failed','cancelled'].includes(last?.status)?last.status:undefined});
   if(last)changes.push({previous:issue,issue:updated,taskId:last.current_attempt_id,dependencyCheckEventId,taskTerminalStatus:['completed','failed','cancelled'].includes(last.status)?last.status:undefined});
   if(changes.length)afterCommit(ctx.db,()=>ctx.tasks().runCollectedChildStatusChanges(changes));
-  events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:'agent',actorId:owner?.id??last?.agent_id??null,
-    payload:{issue:{id:issueId,status,completed_at:null,archived_at:null,updated_at:at},status_changed:true,prev_status:issue.status}});
+  events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:'agent',actorId,
+    payload:{issue:{id:issueId,status,completed_at:completedAt,archived_at:null,updated_at:at},status_changed:true,prev_status:issue.status}});
   return {changed:true,previousStatus:issue.status};
 }

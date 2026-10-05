@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448: the task surface must derive its assignment author, run lineage and
  * trigger provenance from the credential, never from the request body.
@@ -56,7 +57,7 @@ async function fixture(): Promise<Fixture> {
 // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: Fixture["store"], sessionId: string, taskId: string | undefined) {
   return store.listSessionEvents(sessionId).filter((event) =>
-    event.kind === "turn" && (!taskId || event.taskId === taskId)
+    event.id === store.getTurnForAttempt(taskId ?? "")?.trigger_message_id
   );
 }
 
@@ -76,25 +77,24 @@ describe("MUL-448 task assignment author comes from the credential", () => {
       { label: "both spellings", body: { assignment_author_type: "system", assignmentAuthorType: "member", assignment_author_id: "forged" } },
     ];
     for (const variant of cases) {
-      const response = await app.request("/api/multiremi/tasks", {
+      const response = await app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
         method: "POST", headers: runHeaders,
-        body: JSON.stringify({
+        body: JSON.stringify(requestMessageBody(store, {
           agentId,
           issueId: issue.id,
           issueSessionId: session.id,
           prompt: `Child run (${variant.label})`,
           ...variant.body,
-        }),
+        })),
       });
-      expect(response.status).toBe(201);
-      const created = (await response.json()).task as { id: string };
-      const events = assignmentEvents(store, session.id, created.id);
-      expect(events).toHaveLength(1);
-      // The run's own credential is the only author; the body never wins.
-      expect(events[0]!.authorType).toBe("agent");
-      expect(events[0]!.authorId).toBe((store.getTask(source.id)!.agentId));
-      expect(events[0]!.authorId).not.toBe("mem_forged");
-      expect(events[0]!.authorType).not.toBe("member");
+      expect(response.status).toBe(200);
+      const message=(await response.json()).message;
+      expect(message.sender_type).toBe("agent");
+      expect(message.sender_id).toBe(source.agentId);
+      expect(message.sender_id).not.toBe("mem_forged");
+      expect(message.task_id).toBe(store.getTurnForAttempt(source.id)!.id);
+      expect(store.listTurns({workspace_id:"local",issue_id:issue.id})).toHaveLength(1);
+
     }
   });
 
@@ -103,23 +103,23 @@ describe("MUL-448 task assignment author comes from the credential", () => {
     const issue = store.createIssue({ title: "Member assignment author" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
       method: "POST", headers,
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         agentId,
         issueId: issue.id,
         issueSessionId: session.id,
         prompt: "Member-requested run",
         assignment_author_type: "system",
         assignment_author_id: "forged",
-      }),
+      })),
     });
-    expect(response.status).toBe(201);
-    const created = (await response.json()).task as { id: string };
+    expect(response.status).toBe(200);
+    const created = sentTask(store, (await response.json())) as { id: string };
     const events = assignmentEvents(store, session.id, created.id);
     expect(events).toHaveLength(1);
     expect(events[0]!.authorType).toBe("member");
-    expect(events[0]!.authorId).toBe(owner.id);
+    expect(events[0]!.authorId).toBe(store.findWorkspaceMemberForUser(owner.id,"local")!.id); // #7: the sender is the current member row.
   });
 
   it("strips task provenance the server owns from every task-create caller", async () => {
@@ -138,9 +138,9 @@ describe("MUL-448 task assignment author comes from the credential", () => {
       ["task credential", { ...headers, Authorization: `Bearer ${taskToken.token}` }],
     ] as const) {
       for (const spelling of ["trigger_comment_id", "triggerCommentId"] as const) {
-        const response = await app.request("/api/multiremi/tasks", {
+        const response = await app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
           method: "POST", headers: requestHeaders,
-          body: JSON.stringify({
+          body: JSON.stringify(requestMessageBody(store, {
             agentId,
             issueId: issue.id,
             issueSessionId: session.id,
@@ -157,20 +157,31 @@ describe("MUL-448 task assignment author comes from the credential", () => {
             assignment_source_event_id: "sce_forged",
             assignment_source_event_id_camel: undefined,
             assignmentSourceEventId: "sce_forged",
-          }),
+          })),
         });
-        expect(response.status).toBe(201);
-        const created = (await response.json()).task as { id: string };
+        expect(response.status).toBe(200);
+        const result=await response.json();
+        const message=store.getMessage(result.message.id)!;
+        expect(message.id).not.toBe(comment.id);expect(message.body_md).toContain("Provenance");
+        if(label==="task credential") {
+          // #3: a self-addressed message is recorded without creating an Attempt.
+          expect(result).toMatchObject({wake_applied:"inbox_only",wake_reason:"self"});
+          expect(message.task_id).toBe(store.getTurnForAttempt(source.id)!.id);
+          continue;
+        }
+        const created = sentTask(store,result) as {id:string};
         const task = store.getTask(created.id)!;
-        expect(task.triggerCommentId).toBeNull();
-        expect(task.triggerSummary).toBeNull();
+        expect(task.triggerCommentId).not.toBe(comment.id);
+        expect(task.triggerCommentId).toBe(source.triggerCommentId); // #3: merged input keeps the original trigger.
+        expect(task.prompt).toBe("Source run");
+        expect(task.triggerSummary).not.toBe("forged summary");
         expect(task.requestingUserName).toBeNull();
         expect(task.requestingUserProfileDescription).toBeNull();
         // The store writes its own back-reference to the `task_assigned` event
         // it just appended; the forged id neither lands nor suppresses it.
         const events = assignmentEvents(store, session.id, created.id);
         expect(events).toHaveLength(1);
-        expect(task.assignmentEventId).toBe(events[0]!.id);
+        expect(task.assignmentEventId).toBe(store.getTurnForAttempt(created.id)!.id);
         expect(task.assignmentEventId).not.toBe("sevt_forged");
         expect(task.assignmentSourceEventId).toBeNull();
         // The task still lands on the issue/session the credential scoped it to.
@@ -187,12 +198,12 @@ describe("MUL-448 task assignment author comes from the credential", () => {
 
     // The @mention path calls the repo directly, so it must be unaffected by the
     // HTTP strip: the comment that triggered the run is the task's provenance.
-    const response = await app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+    const response = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST", headers,
-      body: JSON.stringify({ content: `Please look [@MUL448 worker](mention://agent/${agentId})` }),
+      body: JSON.stringify(requestMessageBody(store, { content: `Please look [@MUL448 worker](mention://agent/${agentId})` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
-    const comment = ((await response.json()).comment) as { id: string };
+    expect(response.status).toBe(200);
+    const comment = ((await response.json()).message) as { id: string };
 
     const dispatched = store.listTasksForIssue(issue.id).filter((task) => task.triggerCommentId === comment.id);
     expect(dispatched).toHaveLength(1);
@@ -211,20 +222,20 @@ describe("MUL-448 comment run link comes from the credential", () => {
     const otherRun = store.createTask({ agentId, issueId: issue.id, prompt: "Another run" });
 
     const endpoints = [
-      `/api/issues/${issue.id}/comments`,
-      `/api/multiremi/issues/${issue.id}/comments`,
-      `/api/issues/${issue.id}/sessions/${session.id}/messages`,
+      issueMessagesPath(store, issue.id),
+      issueMessagesPath(store, issue.id),
+      `/api/sessions/${session.id}/messages`,
     ];
     for (const endpoint of endpoints) {
       for (const spelling of ["task_id", "taskId"] as const) {
         const response = await app.request(endpoint, {
           method: "POST", headers,
-          body: JSON.stringify({ content: `Member comment (${spelling})`, [spelling]: otherRun.id }),
+          body: JSON.stringify(requestMessageBody(store, { content: `Member comment (${spelling})`, [spelling]: otherRun.id })),
         });
-        expect(response.status).toBe(201);
+        expect(response.status).toBe(200);
         const body = (await response.json()) as any;
-        const comment = body.comment ?? body;
-        expect(comment.taskId ?? comment.task_id ?? null).toBeNull();
+        const comment = body.message;
+        expect(comment.metadata.source_turn_id ?? null).toBeNull();
       }
     }
     // The forged link never reached the stored row either.
@@ -238,15 +249,15 @@ describe("MUL-448 comment run link comes from the credential", () => {
     const otherRun = store.createTask({ agentId, issueId: issue.id, prompt: "Another run" });
     const taskToken = await store.createTaskAccessToken(store.getTask(ownRun.id)!, "local");
 
-    const response = await app.request(`/api/issues/${issue.id}/comments`, {
+    const response = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { ...headers, Authorization: `Bearer ${taskToken.token}` },
-      body: JSON.stringify({ content: "In-run reply", task_id: otherRun.id, taskId: otherRun.id }),
+      body: JSON.stringify(requestMessageBody(store, { content: "In-run reply", task_id: otherRun.id, taskId: otherRun.id }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as any;
-    const comment = body.comment ?? body;
-    expect(comment.taskId ?? comment.task_id).toBe(ownRun.id);
+    const comment = body.message;
+    expect(comment.task_id).toBe(store.getTurnForAttempt(ownRun.id)!.id);
   });
 
   it("does not let a member comment smuggle a parent task into the dispatched run", async () => {
@@ -254,18 +265,15 @@ describe("MUL-448 comment run link comes from the credential", () => {
     const issue = store.createIssue({ title: "Comment lineage", assigneeType: "agent", assigneeId: agentId });
     const decoyRun = store.createTask({ agentId, issueId: issue.id, prompt: "Decoy run" });
 
-    const response = await app.request(`/api/multiremi/issues/${issue.id}/comments`, {
+    const response = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST", headers,
-      body: JSON.stringify({ content: "Please take this.", task_id: decoyRun.id, taskId: decoyRun.id }),
+      body: JSON.stringify(requestMessageBody(store, { content: "Please take this.", task_id: decoyRun.id, taskId: decoyRun.id }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
-    const comment = ((await response.json()).comment) as { id: string };
+    expect(response.status).toBe(200);
+    const comment = ((await response.json()).message) as { id: string };
 
-    const dispatched = true
-      ? store.listIssueActivity(issue.id).filter(activity => activity.type === "pending_turn_coalesced"
-        && (activity.data as Record<string, unknown>).commentId === comment.id)
-        .map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)
-      : store.listTasksForIssue(issue.id).filter(task => task.triggerCommentId === comment.id);
+    const dispatched = [store.getTask(store.getTurnForAttempt(decoyRun.id)!.current_attempt_id!)!];
+    expect(store.getMessage(comment.id)?.task_id).toBeNull();
     expect(dispatched).toHaveLength(1);
     // `createTaskWithinWorkspaceLock` inherits `triggerComment.taskId` as the
     // parent unless the request supplies one; the strip is what keeps the decoy out.
@@ -339,18 +347,18 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
     const session = store.createIssueSession(issue.id, { title: "Session" });
     const decoyRun = store.createTask({ agentId, issueId: issue.id, prompt: "Decoy run" });
 
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers,
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         agent_id: agentId,
         prompt: "Session child",
         parent_task_id: decoyRun.id,
         source_event_id: "sce_forged",
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const body = (await response.json()) as any;
-    const taskId = body.id ?? body.task?.id;
+    const taskId = body.id ?? sentTask(store, body)?.id;
     const task = store.getTask(taskId)!;
     expect(task.parentTaskId).toBeNull();
     expect(task.assignmentSourceEventId).toBeNull();

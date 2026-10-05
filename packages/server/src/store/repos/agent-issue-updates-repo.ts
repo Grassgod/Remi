@@ -135,6 +135,7 @@ export class AgentIssueUpdatesRepo {
     }
     if (targets.length === 0) return;
     const write = () => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
       for (const { chat, channelId } of targets) this.upsertPending(chat, channelId, input);
     };
     if (this.ctx.db.inTransaction) write();

@@ -2,12 +2,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setSystemTime } f
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 // The answered-window cases pin "now" so created_at / answered_at are ordered.
 afterEach(() => setSystemTime());
+
+// #1/#4: the decision itself addresses its first human recipient; additional
+// audiences receive canonical status messages rather than duplicate ledger rows.
+function decisionInbox(store:MultiremiStore,memberId:string){
+  return store.listMessageInbox(memberId,"local").items.filter(message=>
+    message.message_kind==='decision' || (message.metadata.inbox_item as any)?.type==='decision_requested');
+}
 
 async function exerciseDecisions(store: MultiremiStore): Promise<void> {
   store.ensureLocalWorkspace();
@@ -36,33 +43,34 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const create = async (issueId: string, token: string, kind: string, title: string) => {
-    const response = await request(`/api/issues/${issueId}/decisions`, token, {
-      kind, title, body: `${title} context`, createdByAgentId: unrelated.id,
-      sourceTaskId: foreignTask.id, ownerAgentId: unrelated.id, status: "answered",
-    });
-    expect(response.status, await response.clone().text()).toBe(201);
-    return (await response.json()).decision as { id: string; status: string; issueId: string; createdByAgentId: string | null; sourceTaskId: string | null };
+    // Domain creation is a fixture: the unified public decision creator does
+    // not synthesize the old source/owner/escalation metadata.
+    const actor = token === sourceToken.token ? { type: "agent" as const, id: sourceAgent.id, taskId: sourceTask.id }
+      : { type: "member" as const, id: member.id, taskId: null };
+    return store.createIssueDecision(issueId, { kind, title, body: `${title} context` }, actor);
   };
   try {
     const first = await create(source.id, sourceToken.token, "merge", "Merge the change");
     const second = await create(source.id, sourceToken.token, "permission", "Access the resource");
     expect(first).toMatchObject({ status: "pending", issueId: parent.id, createdByAgentId: sourceAgent.id, sourceTaskId: sourceTask.id });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.agentId === owner.id && task.status === "queued")).toHaveLength(1);
-    const parentInbox = inboxReportBody(store, ownerTask);
+    const parentMessages = await request(`/api/sessions/${store.getMessage(first.id)!.session_id}/messages?unread_by=${owner.id}`, ownerToken.token);
+    expect(parentMessages.status).toBe(200);
+    const parentInbox = await parentMessages.text();
     expect(parentInbox).toContain(first.id);
     expect(parentInbox).toContain(second.id);
     expect(store.getTask(ownerTask.id)!.prompt).toBe(ownerTask.prompt);
-    expect(store.listInboxItems(member.id).filter((item) => item.type === "decision_requested")).toHaveLength(0);
+    expect(decisionInbox(store,member.id)).toHaveLength(0);
 
-    const answerPath = `/api/issues/${parent.id}/decisions/${first.id}/answer`;
+    const answerPath = `/api/sessions/${store.getMessage(first.id)!.session_id}/messages`;
     for (const token of [sourceToken.token, foreignToken.token]) {
-      const denied = await request(answerPath, token, { answer: "spoofed", reason: "r", overturn: "o", answererType: "member", answererId: member.id });
+      const denied = await request(answerPath, token, { reply_to_id: first.id, body_md: "spoofed", response: { reason: "r", overturn: "o" }, answererType: "member", answererId: member.id });
       expect(denied.status).toBe(403);
     }
-    const missingReason = await request(answerPath, ownerToken.token, { answer: "yes", answererType: "member", answererId: member.id });
+    const missingReason = await request(answerPath, ownerToken.token, { reply_to_id: first.id, body_md: "yes", answererType: "member", answererId: member.id });
     expect(missingReason.status).toBe(400);
     const ownerAnswer = await request(answerPath, ownerToken.token, {
-      answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails",
+      reply_to_id: first.id, body_md: "Merge after CI", response: { reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
       answererType: "member", answererId: member.id,
     });
     expect(ownerAnswer.status, await ownerAnswer.clone().text()).toBe(200);
@@ -71,12 +79,12 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
         answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
     });
     expect(inboxReportBody(store, sourceTask)).toContain(`decision:${first.id}`);
-    expect(store.listTasksForIssue(source.id).filter(task => task.status === "queued")).toHaveLength(1);
+    expect(store.getTurnForAttempt(sourceTask.id)).toMatchObject({status:"awaiting_human",current_attempt_id:sourceTask.id,waiting_on_message_id:second.id});
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_answered" && entry.actorType === "agent")).toBe(true);
     expect(store.listIssueActivity(source.id).some((entry) => entry.type === "decision_received")).toBe(true);
 
     const revised = await request(answerPath, memberToken.token, {
-      answer: "Hold for QA", reason: "Human review", answererType: "agent", answererId: unrelated.id,
+      reply_to_id: first.id, body_md: "Hold for QA", response: { reason: "Human review" }, answererType: "agent", answererId: unrelated.id,
     });
     expect(revised.status, await revised.clone().text()).toBe(200);
     const history = store.getIssueDecision(parent.id, first.id)!.history;
@@ -87,20 +95,19 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect(inboxReportBody(store, ownerTask)).toContain(`member changed your answer to decision ${first.id}`);
     expect(inboxReportBody(store, sourceTask)).toContain("Hold for QA");
 
-    const escalated = await request(`/api/issues/${parent.id}/decisions/${second.id}/escalate`, ownerToken.token, {});
-    expect(escalated.status, await escalated.clone().text()).toBe(200);
+    store.escalateIssueDecision(parent.id, second.id, { type: "agent", id: owner.id, taskId: ownerTask.id });
     expect(store.getIssueDecision(parent.id, second.id)?.status).toBe("escalated");
-    expect((await request(`/api/issues/${parent.id}/decisions/${second.id}/answer`, ownerToken.token, {
-      answer: "no", reason: "r", overturn: "o",
+    expect((await request(`/api/sessions/${store.getMessage(second.id)!.session_id}/messages`, ownerToken.token, {
+      reply_to_id: second.id, body_md: "no", response: { reason: "r", overturn: "o" },
     })).status).toBe(403);
     const prod = await create(source.id, sourceToken.token, "production_change", "Deploy to production");
     expect(prod.status).toBe("escalated");
-    expect((await request(`/api/issues/${parent.id}/decisions/${prod.id}/answer`, ownerToken.token, {
-      answer: "yes", reason: "r", overturn: "o",
+    expect((await request(`/api/sessions/${store.getMessage(prod.id)!.session_id}/messages`, ownerToken.token, {
+      reply_to_id: prod.id, body_md: "yes", response: { reason: "r", overturn: "o" },
     })).status).toBe(403);
-    const items = store.listInboxItems(member.id).filter((item) => item.type === "decision_requested");
+    const items = decisionInbox(store,member.id);
     expect(items).toHaveLength(2);
-    expect(items.every((item) => item.severity === "action")).toBe(true);
+    expect(items.every(item => item.message_kind=== "decision" || (item.metadata.inbox_item as any)?.severity=== "action")).toBe(true);
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_escalated")).toBe(true);
 
     const criteriaPending = await create(source.id, sourceToken.token, "criteria", "Acceptance terms");
@@ -108,9 +115,11 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
 
     const parentHuman = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Human request" });
     const human = store.createTaskHumanRequest({ taskId: parentHuman.id, kind: "question", payload: { message: "Pick a date" } });
-    const list = await request(`/api/issues/${parent.id}/decisions`, memberToken.token);
+    const list = await request(`/api/sessions/${store.getMessage(first.id)!.session_id}/messages?message_kind=decision`, memberToken.token);
     expect(list.status).toBe(200);
-    const model = await list.json();
+    expect((await list.json()).messages.map((message: { id: string }) => message.id))
+      .toEqual(expect.arrayContaining([first.id, second.id, prod.id, human.id, criteriaPending.id, questionPending.id]));
+    const model = store.listIssueDecisions(parent.id);
     expect(model.count).toBe(3);
     expect(model.waiting_on_human.map((entry: { id: string }) => entry.id)).toEqual([second.id, prod.id, human.id]);
     expect(model.owner_and_answered.answered[0].id).toBe(first.id);
@@ -120,8 +129,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     const native = await request(`/api/multiremi/issues/${parent.id}`, memberToken.token);
     expect((await native.json()).issue.pending_decision_count).toBe(3);
 
-    const memberAnswer = await request(`/api/issues/${parent.id}/decisions/${prod.id}/answer`, memberToken.token, {
-      answer: "Approved for the maintenance window", answererType: "agent", answererId: unrelated.id,
+    const memberAnswer = await request(`/api/sessions/${store.getMessage(prod.id)!.session_id}/messages`, memberToken.token, {
+      reply_to_id: prod.id, body_md: "Approved for the maintenance window", answererType: "agent", answererId: unrelated.id,
     });
     expect(memberAnswer.status).toBe(200);
     expect(store.getIssueDecision(parent.id, prod.id)?.answer?.answererType).toBe("member");
@@ -137,8 +146,7 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect((await create(squadChild.id, memberToken.token, "criteria", "Set acceptance")).status).toBe("pending");
 
     const pending = await create(source.id, sourceToken.token, "criteria", "Withdraw this");
-    const withdrawn = await request(`/api/issues/${parent.id}/decisions/${pending.id}/withdraw`, sourceToken.token, {});
-    expect(withdrawn.status).toBe(200);
+    store.withdrawIssueDecision(parent.id, pending.id, { type: "agent", id: sourceAgent.id, taskId: sourceTask.id });
     expect(store.getIssueDecision(parent.id, pending.id)?.status).toBe("withdrawn");
     expect(events).toContain("decision:created");
     expect(events).toContain("decision:updated");
@@ -163,11 +171,19 @@ function steppedClock(startAt = Date.parse("2026-09-27T00:00:00.000Z")): () => s
 
 interface DecisionApi {
   request: (path: string, token: string, body?: unknown) => Promise<Response>;
+  create: (issueId: string, token: string, input: { kind: string; title: string }) => Promise<ReturnType<MultiremiStore["createIssueDecision"]>>;
 }
 
 function decisionApi(store: MultiremiStore): DecisionApi {
   const app = createMultiremiApp({ store, authToken: "test-master" });
   return {
+    async create(issueId, token, input) {
+      const credential = (await store.verifyAccessToken(token))!;
+      const actor = credential.type === "task"
+        ? { type: "agent" as const, id: credential.agentId!, taskId: credential.taskId }
+        : { type: "member" as const, id: store.findWorkspaceMemberForUser(credential.userId!, credential.workspaceId!)!.id, taskId: null };
+      return store.createIssueDecision(issueId, input, actor);
+    },
     // `app.request` is overloaded and returns a bare Response when the init is
     // passed as the second argument, so normalize it to a Promise here.
     request: async (path, token, body) => await app.request(path, {
@@ -213,16 +229,15 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   const decisions: Array<{ id: string }> = [];
   for (let index = 1; index <= 52; index += 1) {
     tick();
-    const response = await api.request(`/api/issues/${source.id}/decisions`, memberToken.token, {
+    const response = await api.create(source.id, memberToken.token, {
       kind: "merge", title: `Merge decision ${index}`,
     });
-    expect(response.status, await response.clone().text()).toBe(201);
-    decisions.push((await response.json()).decision);
+    decisions.push(response);
   }
   const answer = async (token: string, decision: { id: string }, text: string, reason: string, overturn?: string) => {
     tick();
-    const response = await api.request(`/api/issues/${parent.id}/decisions/${decision.id}/answer`, token, {
-      answer: text, reason, overturn,
+    const response = await api.request(`/api/sessions/${store.getMessage(decision.id)!.session_id}/messages`, token, {
+      reply_to_id: decision.id, body_md: text, response: { reason, overturn },
     });
     expect(response.status, await response.clone().text()).toBe(200);
   };
@@ -232,13 +247,13 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   await answer(ownerToken.token, decisions[0]!, "answer 1", "checked", "a member may overturn this");
 
   const list = async () => {
-    const response = await api.request(`/api/issues/${parent.id}/decisions`, memberToken.token);
+    const sessionId = store.getOrCreateDefaultIssueSession(parent.id).id;
+    const response = await api.request(`/api/sessions/${sessionId}/messages?message_kind=decision&limit=500`, memberToken.token);
     expect(response.status).toBe(200);
-    return await response.json() as {
-      waiting_on_human: Array<{ id: string; history?: unknown[] }>;
-      owner_and_answered: { pending: Array<{ id: string; kind: string; history?: unknown[] }>; answered: Array<{ id: string; kind: string; history?: unknown[]; answer: { answeredAt: string } | null }> };
-      count: number;
-    };
+    const messages = (await response.json()).messages as Array<{ id: string; metadata: { decision_record: { history: unknown[] } } }>;
+    for (const message of messages) expect(message.metadata.decision_record.history)
+      .toEqual(store.getIssueDecision(parent.id, message.id)!.history);
+    return store.listIssueDecisions(parent.id);
   };
 
   const afterProbe = await list();
@@ -272,10 +287,10 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   expect(revisedStored.answeredAt).toBe((revisedStored.history[1] as { answeredAt: string }).answeredAt);
   expect(revisedStored.answeredAt).toBe(revised.answer!.answeredAt);
   // A never-answered decision reports an empty trail, not a missing key.
-  const pending = await api.request(`/api/issues/${source.id}/decisions`, memberToken.token, {
+  const pending = await api.create(source.id, memberToken.token, {
     kind: "criteria", title: "Still pending",
   });
-  const pendingId = ((await pending.json()).decision as { id: string }).id;
+  const pendingId = pending.id;
   const withPending = await list();
   expect(withPending.owner_and_answered.pending.find((entry) => entry.id === pendingId)!.history).toEqual([]);
 
@@ -283,9 +298,8 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   // last-created permission must lead the group.
   for (const kind of ["question", "criteria", "permission"] as const) {
     tick();
-    const created = await api.request(`/api/issues/${source.id}/decisions`, memberToken.token, { kind, title: `${kind} decision` });
-    expect(created.status, await created.clone().text()).toBe(201);
-    const id = ((await created.json()).decision as { id: string }).id;
+    const created = await api.create(source.id, memberToken.token, { kind, title: `${kind} decision` });
+    const id = created.id;
     await answer(ownerToken.token, { id }, `${kind} answered`, "checked", "a member may overturn this");
   }
   const mixed = await list();
@@ -338,21 +352,20 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
   const eventTypes: string[] = [];
   const unsubscribe = store.onWorkspaceEvent((event) => eventTypes.push(event.type));
   const decisionRequested = (member: { id: string }, issueId: string) =>
-    store.listInboxItems(member.id).filter((item) => item.type === "decision_requested" && item.issueId === issueId);
+    decisionInbox(store,member.id).filter(message=>store.getIssueSession(message.session_id)?.issueId===issueId);
   try {
     // Case 1, the exact QA probe: member PAT raises production_change on a
     // childless issue with no assignee and no subscribers.
     const probe = store.createIssue({ title: "Fallback probe issue", createdBy: creator.id });
     store.removeIssueSubscriber(probe.id, creator.id);
-    const escalated = await api.request(`/api/issues/${probe.id}/decisions`, memberToken.token, {
+    const escalated = await api.create(probe.id, memberToken.token, {
       kind: "production_change", title: "Deploy the fallback",
     });
-    expect(escalated.status, await escalated.clone().text()).toBe(201);
-    expect((await escalated.json()).decision.status).toBe("escalated");
+    expect(escalated.status).toBe("escalated");
     const creatorItems = decisionRequested(creator, probe.id);
     expect(creatorItems).toHaveLength(1);
-    expect(creatorItems[0]!.severity).toBe("action");
-    expect(creatorItems[0]!.details).toMatchObject({ kind: "production_change" });
+    expect(creatorItems[0]!.message_kind).toBe("decision");
+    expect(creatorItems[0]!.metadata.decision_record).toMatchObject({ kind: "production_change",status:"escalated" });
     expect(eventTypes.filter((type) => type === "inbox:new").length).toBeGreaterThanOrEqual(1);
     expect(decisionRequested(workspaceOwner, probe.id)).toHaveLength(0);
     expect(decisionRequested(bystander, probe.id)).toHaveLength(0);
@@ -360,10 +373,10 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     // Case 2: an agent creator (or an archived member creator) resolves to
     // nobody, so every workspace owner takes it and non-owners do not.
     const agentCreated = store.createIssue({ title: "Fallback agent-created issue", createdBy: agentless.id });
-    const agentEscalated = await api.request(`/api/issues/${agentCreated.id}/decisions`, memberToken.token, {
+    const agentEscalated = await api.create(agentCreated.id, memberToken.token, {
       kind: "production_change", title: "Deploy from an agent-created issue",
     });
-    expect(agentEscalated.status).toBe(201);
+    expect(agentEscalated.status).toBe("escalated");
     expect(decisionRequested(workspaceOwner, agentCreated.id)).toHaveLength(1);
     expect(decisionRequested(bystander, agentCreated.id)).toHaveLength(0);
 
@@ -371,21 +384,22 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     const archivedIssue = store.createIssue({ title: "Fallback archived creator issue", createdBy: archivedCreator.id });
     store.removeIssueSubscriber(archivedIssue.id, archivedCreator.id);
     store.archiveWorkspaceMember(archivedCreator.id);
-    const archivedEscalated = await api.request(`/api/issues/${archivedIssue.id}/decisions`, memberToken.token, {
+    const archivedEscalated = await api.create(archivedIssue.id, memberToken.token, {
       kind: "production_change", title: "Deploy after the creator left",
     });
-    expect(archivedEscalated.status).toBe(201);
+    expect(archivedEscalated.status).toBe("escalated");
     expect(decisionRequested(workspaceOwner, archivedIssue.id)).toHaveLength(1);
-    expect(decisionRequested(archivedCreator, archivedIssue.id)).toHaveLength(0);
+    expect(store.listMessages(store.getOrCreateDefaultIssueSession(archivedIssue.id).id)
+      .filter(message=>message.to_member_id===archivedCreator.id)).toHaveLength(0);
 
     // Case 3: an explicit member subscriber suppresses the fallback entirely.
     const subscribed = store.createIssue({ title: "Fallback subscribed issue", createdBy: creator.id });
     store.removeIssueSubscriber(subscribed.id, creator.id);
     store.addIssueSubscriber(subscribed.id, bystander.id);
-    const subscribedEscalated = await api.request(`/api/issues/${subscribed.id}/decisions`, memberToken.token, {
+    const subscribedEscalated = await api.create(subscribed.id, memberToken.token, {
       kind: "production_change", title: "Deploy with a subscriber",
     });
-    expect(subscribedEscalated.status).toBe(201);
+    expect(subscribedEscalated.status).toBe("escalated");
     expect(decisionRequested(bystander, subscribed.id)).toHaveLength(1);
     expect(decisionRequested(creator, subscribed.id)).toHaveLength(0);
     expect(decisionRequested(workspaceOwner, subscribed.id)).toHaveLength(0);
@@ -397,14 +411,13 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     });
     store.removeIssueSubscriber(escalateParent.id, creator.id);
     const escalateChild = store.createIssue({ title: "Fallback escalation child", parentIssueId: escalateParent.id });
-    const pending = await api.request(`/api/issues/${escalateChild.id}/decisions`, memberToken.token, {
+    const pending = await api.create(escalateChild.id, memberToken.token, {
       kind: "question", title: "Who decides this",
     });
-    const pendingId = ((await pending.json()).decision as { id: string }).id;
+    const pendingId = pending.id;
     const escalateTask = store.createTask({ agentId: agentless.id, issueId: escalateParent.id, prompt: "Escalation round" });
     const escalateToken = await store.createTaskAccessToken(escalateTask, "local");
-    const escalatedByOwner = await api.request(`/api/issues/${escalateParent.id}/decisions/${pendingId}/escalate`, escalateToken.token, {});
-    expect(escalatedByOwner.status, await escalatedByOwner.clone().text()).toBe(200);
+    store.escalateIssueDecision(escalateParent.id, pendingId, { type: "agent", id: agentless.id, taskId: escalateTask.id });
     expect(store.getIssueDecision(escalateParent.id, pendingId)?.status).toBe("escalated");
     expect(decisionRequested(creator, escalateParent.id)).toHaveLength(1);
     expect(decisionRequested(bystander, escalateParent.id)).toHaveLength(0);

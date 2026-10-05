@@ -20,16 +20,16 @@ const option = (name: string, type: CliOptionSpec["type"] = "string"): CliOption
 
 function spec(path: string[], mutation: CommandSpec["mutation"], positionals: CommandSpec["positionals"], options: CliOptionSpec[], run: CommandSpec["run"]): CommandSpec {
   return { id: path.join("."), path, description: descriptions[path.join(".")]!, capability: path.join("."),
-    auth: ["human", "task"], outputs: ["table", "json", "jsonl"], mutation, positionals, options: commandOptions(options, ...(mutation === "read" ? [PAGE_OPTIONS] : [])),
+    auth: path.join(".") === "turn.retry" ? ["task"] : ["human", "task"], outputs: ["table", "json", "jsonl"], mutation, positionals, options: commandOptions(options, ...(mutation === "read" ? [PAGE_OPTIONS] : [])),
     run: async (invocation) => { outputMode(invocation); await run(invocation); } };
 }
 const descriptions: Record<string, string> = {
   "message.send": "Send a conversation message", "message.list": "List conversation messages",
   "message.get": "Get a message", "message.edit": "Edit an unread message", "message.delete": "Delete an unread message",
-  "message.resolve": "Resolve or reopen a message", "message.react": "Add or remove a message reaction",
+  "message.resolve": "Resolve or reopen an ordinary message", "message.react": "Add or remove a message reaction",
   inbox: "Read messages addressed to you", "inbox.read": "Advance a conversation read cursor", "inbox.read-all": "Read all conversations",
   "turn.list": "List turns", "turn.get": "Get a turn and its input or attempts", "turn.cancel": "Cancel a turn",
-  "turn.wrap-up": "Ask a running turn to finish", "turn.retry": "Retry a turn with a new attempt", "turn.trace.read": "Read an attempt trace",
+  "turn.wrap-up": "Ask a running turn to finish", "turn.retry": "Retry a turn (supervisor task credential required)", "turn.trace.read": "Read an attempt trace",
 };
 
 export function unifiedCommandSpecs(): CommandSpec[] {

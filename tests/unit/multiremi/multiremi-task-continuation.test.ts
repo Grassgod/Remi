@@ -1,6 +1,7 @@
+import { requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -36,6 +37,7 @@ function fixture() {
     delegationId: "dlg_continue",
     delegatedByAgentId: leader.id,
     parentTaskId: leaderTask.id,
+    delegatedFromIssueSessionId:session.id,
   });
   const app = createMultiremiApp({ store, authToken: "root-secret" });
   return { store, app, leader, otherLeader, worker, otherWorker, privateWorker, squad, issue, session, leaderTask, delegated };
@@ -55,14 +57,8 @@ function completeInitialDelegation(f: ReturnType<typeof fixture>) {
     metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" },
   });
   const now = new Date().toISOString();
-  db!.run(
-    "UPDATE multiremi_tasks SET status = 'running', runtime_id = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-    [runtime.id, now, now, f.leaderTask.id],
-  );
-  db!.run(
-    "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?",
-    [runtime.id, now, f.delegated.id],
-  );
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running', runtime_id = ?, dispatched_at = ?, started_at = ? WHERE id = ?", [runtime.id, now, now, f.leaderTask.id]);
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?", [runtime.id, now, f.delegated.id]);
   f.store.buildTaskSessionProjection(f.delegated.id);
   f.store.startTask(f.delegated.id);
   f.store.completeTask(f.delegated.id, {
@@ -74,292 +70,99 @@ function completeInitialDelegation(f: ReturnType<typeof fixture>) {
 }
 
 async function createContinuation(f: ReturnType<typeof fixture>, prompt: string) {
-  const response = await f.app.request("/api/multiremi/tasks", {
+  const response = await f.app.request(taskRequestPath(f.store, { issueId:f.issue.id }), {
     method: "POST",
     headers: await taskHeaders(f),
-    body: JSON.stringify({
+    body: JSON.stringify(requestMessageBody(f.store, {
       agentId: f.worker.id,
       prompt,
       continueTaskId: f.delegated.id,
-    }),
+    })),
   });
-  expect(response.status).toBe(201);
-  const body = await response.json() as { task: { id: string; continuedFromTaskId: string; continued_from_task_id: string } };
-  return { response: body, task: f.store.getTask(body.task.id)! };
+  expect(response.status).toBe(200);
+  const body = await response.json() as { turn_id: string };
+  return { response: body, task: f.store.getTask(sentTask(f.store, body).id)! };
 }
 
 async function createIndependentTask(f: ReturnType<typeof fixture>, prompt: string) {
-  const response = await f.app.request("/api/multiremi/tasks", {
+  const response = await f.app.request(taskRequestPath(f.store, { issueId: f.issue.id }), {
     method: "POST",
     headers: await taskHeaders(f),
-    body: JSON.stringify({ agentId: f.worker.id, issueId: f.issue.id, prompt }),
+    body: JSON.stringify(requestMessageBody(f.store, { agentId: f.worker.id, issueId: f.issue.id, prompt })),
   });
-  expect(response.status).toBe(201);
-  const body = await response.json() as { task: { id: string } };
-  return f.store.getTask(body.task.id)!;
+  expect(response.status).toBe(200);
+  const body = await response.json() as { turn_id: string };
+  return f.store.getTask(sentTask(f.store, body).id)!;
 }
 
-describe("delegated task continuation API", () => {
-  it("creates a distinct task while deriving the existing delegation lineage", async () => {
-    const f = fixture();
-    const response = await f.app.request("/api/multiremi/tasks", {
-      method: "POST",
-      headers: await taskHeaders(f),
-      body: JSON.stringify({
-        agentId: f.worker.id,
-        prompt: "Address the review feedback.",
-        continue_task_id: f.delegated.id,
-        continuedFromTaskId: "tsk_forged",
-        delegationId: "dlg_forged",
-        delegatedByAgentId: f.otherLeader.id,
-        parentTaskId: f.delegated.id,
-      }),
-    });
-
-    expect(response.status).toBe(201);
-    const responseTask = ((await response.json()) as {
-      task: { id: string; continuedFromTaskId: string; continued_from_task_id: string };
-    }).task;
-    const createdId = responseTask.id;
-    expect(createdId).not.toBe(f.delegated.id);
-    expect(responseTask.continuedFromTaskId).toBe(f.delegated.id);
-    expect(responseTask.continued_from_task_id).toBe(f.delegated.id);
-    expect(f.store.getTask(createdId)).toMatchObject({
-      agentId: f.worker.id,
-      issueId: f.issue.id,
-      issueSessionId: f.session.id,
-      parentTaskId: f.leaderTask.id,
-      continuedFromTaskId: f.delegated.id,
-      delegationId: f.delegated.delegationId,
-      delegatedByAgentId: f.leader.id,
-      prompt: "Address the review feedback.",
-    });
+// #3/#7/#9: continuation is another credentialed request on the original
+// conversation. Pending/running inputs merge; provenance belongs to the header.
+describe("delegated conversation continuation",()=>{
+  it("merges pending inputs without trusting legacy continuation or delegation fields",async()=>{
+    const f=fixture();
+    const response=await f.app.request(taskRequestPath(f.store,{issueId:f.issue.id}),{method:"POST",headers:await taskHeaders(f),body:JSON.stringify(requestMessageBody(f.store,{agentId:f.worker.id,prompt:"Review feedback",continue_task_id:f.delegated.id,continuedFromTaskId:"tsk_forged",delegationId:"dlg_forged",delegatedByAgentId:f.otherLeader.id,parentTaskId:f.delegated.id}))});
+    expect(response.status).toBe(200);
+    const result=await response.json();
+    expect(sentTask(f.store,result).id).toBe(f.delegated.id);
+    expect(result.message.task_id).toBe(f.store.getTurnForAttempt(f.leaderTask.id)!.id);
+    expect(f.store.getTurnForAttempt(f.delegated.id)).toMatchObject({delegated_by_agent_id:f.leader.id,execution_scope:"dlg_continue"});
+    expect(JSON.stringify(f.store.getTurnForAttempt(f.delegated.id))).not.toContain("dlg_forged");
   });
 
-  it("queues a rich mention behind an earlier continuation of the same lane", async () => {
-    const f = fixture();
-    const runtime = completeInitialDelegation(f);
-    const continued = await createContinuation(f, "Fix the review feedback.");
-    expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
-
-    const comment = f.store.createIssueComment(f.issue.id, {
-      issueSessionId: f.session.id,
-      authorType: "agent",
-      authorId: f.leader.id,
-      taskId: f.leaderTask.id,
-      body: `Now handle this too [@Worker](mention://agent/${f.worker.id}).`,
-    });
-
-    const workerTasks = f.store.listTasksForIssue(f.issue.id).filter((task) => task.agentId === f.worker.id);
-    expect(workerTasks).toHaveLength(3);
-    const mentioned = workerTasks.find((task) => task.triggerCommentId === comment.id)!;
-    expect(mentioned).toMatchObject({ continuedFromTaskId: null, status: "queued", sessionId: null });
-    expect(mentioned.delegationId).toBe(f.delegated.delegationId);
-    expect(continued.task).toMatchObject({
-      continuedFromTaskId: f.delegated.id,
-      delegationId: f.delegated.delegationId,
-    });
-    // A rich mention is the leader talking to the same teammate again, so it
-    // waits behind the turn already in flight instead of opening a second lane.
-    expect(f.store.getTaskQueueBlocker(mentioned.id)?.taskId).toBe(continued.task.id);
-    expect(f.store.listIssueActivity(f.issue.id).filter((activity) =>
-      activity.type === "comment_mention_coalesced"
-      && (activity.data as { commentId?: string } | null)?.commentId === comment.id)).toHaveLength(0);
+  it("merges a rich mention and a request in the same pending lane",async()=>{
+    const f=fixture();completeInitialDelegation(f);
+    const comment=f.store.createIssueComment(f.issue.id,{issueSessionId:f.session.id,authorType:"agent",authorId:f.leader.id,taskId:f.leaderTask.id,body:`Now inspect [@Worker](mention://agent/${f.worker.id})`});
+    const continued=await createContinuation(f,"Continue original implementation");
+    const turn=f.store.getTurnForAttempt(continued.task.id)!;
+    expect(turn.execution_scope).toBe("dlg_continue");
+    const pending=f.store.listTurns({workspace_id:"local",issue_id:f.issue.id,agent_id:f.worker.id,status:"pending"});
+    expect(pending.map(turn=>turn.id)).toEqual([turn.id]);
+    expect(f.store.getMessage(comment.id)?.metadata.execution_scope).toBe(turn.execution_scope);
+    const input=f.store.buildTaskSessionProjection(continued.task.id)!.jsonl;
+    expect(input).toContain("Now inspect");expect(input).toContain("Continue original implementation");
   });
 
-  it("lands a queued rich mention and a later continuation in one lane", async () => {
-    const f = fixture();
-    completeInitialDelegation(f);
-    const comment = f.store.createIssueComment(f.issue.id, {
-      issueSessionId: f.session.id,
-      authorType: "agent",
-      authorId: f.leader.id,
-      taskId: f.leaderTask.id,
-      body: `Now inspect this [@Worker](mention://agent/${f.worker.id}).`,
-    });
-    const mentioned = f.store.listTasksForIssue(f.issue.id)
-      .find((task) => task.agentId === f.worker.id && task.triggerCommentId === comment.id)!;
-
-    const continued = await createContinuation(f, "Continue the original implementation.");
-
-    const queued = f.store.listTasksForIssue(f.issue.id)
-      .filter((task) => task.agentId === f.worker.id && task.status === "queued");
-    expect(queued.map((task) => task.id).sort()).toEqual([mentioned.id, continued.task.id].sort());
-    expect(mentioned).toMatchObject({ continuedFromTaskId: null, sessionId: null });
-    expect(continued.task).toMatchObject({
-      continuedFromTaskId: f.delegated.id,
-    });
-    expect(mentioned.delegationId).toBe(continued.task.delegationId);
-    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, mentioned.delegationId!)).not.toBeNull();
-  });
-
-  it("keeps an explicit task create in its own lane so it can run in parallel", async () => {
-    const f = fixture();
-    const runtime = completeInitialDelegation(f);
-    const continued = await createContinuation(f, "Continue the original implementation.");
-    const independent = await createIndependentTask(f, "Investigate separately.");
-
-    expect(independent.delegationId).toBeTruthy();
-    expect(independent.delegationId).not.toBe(f.delegated.delegationId);
-    expect(independent).toMatchObject({ delegatedByAgentId: f.leader.id, continuedFromTaskId: null });
-    // Independent lanes stay claimable at the same time; only turns inside one
-    // lane serialize.
-    expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
-    expect(f.store.claimTask(runtime.id)?.id).toBe(independent.id);
-  });
-
-  it("preserves continuation lineage on an infrastructure retry", async () => {
-    const f = fixture();
-    const runtime = completeInitialDelegation(f);
-    const continued = await createContinuation(f, "Continue and retry if the runtime drops.");
+  it("interrupts the current lane without creating another attempt",async()=>{
+    const f=fixture(),runtime=completeInitialDelegation(f);
+    const continued=await createContinuation(f,"Fix review feedback");
     expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
     f.store.startTask(continued.task.id);
-    f.store.failTask(continued.task.id, { error: "offline", failureReason: "runtime_offline" });
-
-    const retry = f.store.listTasks().find((task) => task.parentTaskId === continued.task.id && task.attempt === 2)!;
-    expect(retry).toMatchObject({
-      continuedFromTaskId: f.delegated.id,
-      delegationId: f.delegated.delegationId,
-      delegatedByAgentId: f.leader.id,
-    });
+    const before=f.store.listTasks().length;
+    const amended=await createContinuation(f,"Also test failure");
+    expect(amended.task.id).toBe(continued.task.id);
+    expect(f.store.listTasks()).toHaveLength(before);
+    expect(f.store.getTask(continued.task.id)?.status).toBe("running");
   });
 
-  // The API-level cases above stop at lineage derivation, and the store-level
-  // lane tests start from a delegation ID they set themselves. Neither alone
-  // protects the wiring in between, so cover the whole chain once: a real claim
-  // freezes the execution fingerprint and runtime snapshot, and skipping it (by
-  // forcing `dispatched` in SQL, as the other fixtures do) makes the lane look
-  // resume-unsafe and cold-boots back to bootstrap for reasons unrelated to the
-  // continuation entry point.
-  it("resumes the original provider session when an API continuation is claimed", async () => {
-    const f = fixture();
-    const runtime = f.store.registerRuntime({
-      id: "rt_continuation_e2e",
-      name: "Continuation end to end",
-      provider: "claude",
-      maxConcurrency: 6,
-      metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" },
-    });
-    // The Leader turn and its delegation are both queued here; the scheduler may
-    // hand back either one first. Only the delegated task's lane matters, so
-    // drain both rather than pinning an order this test does not own.
-    // The Leader turn and its delegation are both queued here, and a child is
-    // only claimable once its parent is running, so claim and start one at a
-    // time instead of pinning an order this test does not own.
-    const claimed: string[] = [];
-    for (let turn = 0; turn < 2; turn += 1) {
-      const task = f.store.claimTask(runtime.id);
-      if (!task) break;
-      claimed.push(task.id);
-      const projection = f.store.buildTaskSessionProjection(task.id);
-      if (task.id === f.delegated.id) expect(projection?.mode).toBe("bootstrap");
-      f.store.startTask(task.id);
-    }
-    expect(claimed).toContain(f.delegated.id);
-    f.store.completeTask(f.delegated.id, {
-      output: "First round done.",
-      sessionId: "provider_continuation_e2e",
-      workDir: "/tmp/continuation-e2e",
-    });
+  it("reuses the same delegated lane for another explicit request",async()=>{
+    const f=fixture();completeInitialDelegation(f);
+    const continued=await createContinuation(f,"Continue");
+    const another=await createIndependentTask(f,"Investigate separately");
+    expect(another.id).toBe(continued.task.id);
+    expect(another.delegationId).toBe("dlg_continue");
+  });
 
-    const continued = await createContinuation(f, "Continue the same work.");
+  it("keeps the turn and delegation scope when an infrastructure retry replaces the attempt",async()=>{
+    const f=fixture(),runtime=completeInitialDelegation(f);
+    const continued=await createContinuation(f,"Retry safely");
     expect(f.store.claimTask(runtime.id)?.id).toBe(continued.task.id);
-    expect(f.store.getTask(continued.task.id)).toMatchObject({
-      sessionId: "provider_continuation_e2e",
-      workDir: "/tmp/continuation-e2e",
-      delegationId: f.delegated.delegationId,
-      continuedFromTaskId: f.delegated.id,
-    });
-    expect(f.store.buildTaskSessionProjection(continued.task.id)?.mode).toBe("delta");
-    expect(f.store.getSessionAgentLane(f.session.id, f.worker.id, f.delegated.delegationId!)?.providerSessionId)
-      .toBe("provider_continuation_e2e");
+    f.store.startTask(continued.task.id);
+    const before=f.store.getTurnForAttempt(continued.task.id)!;
+    f.store.failTask(continued.task.id,{error:"offline",failureReason:"runtime_offline"});
+    const retry=f.store.getTurn(before.id)!;
+    expect(retry.id).toBe(before.id);expect(retry.current_attempt_id).not.toBe(continued.task.id);
+    expect(retry.execution_scope).toBe(before.execution_scope);
+    expect(retry.delegated_by_agent_id).toBe(f.leader.id);
   });
 
-  it("rejects missing, cross-context, mismatched and unauthorized continuation targets", async () => {
-    const f = fixture();
-    const headers = await taskHeaders(f);
-    const request = (body: Record<string, unknown>, overrideHeaders = headers) => f.app.request("/api/multiremi/tasks", {
-      method: "POST",
-      headers: overrideHeaders,
-      body: JSON.stringify({ agentId: f.worker.id, prompt: "Continue.", ...body }),
-    });
-    const expectError = async (response: Response, status: number, message: string) => {
-      expect(response.status).toBe(status);
-      expect(((await response.json()) as { error: string }).error).toContain(message);
-    };
-
-    await expectError(await request({ continueTaskId: "tsk_missing" }), 404, "continued task not found");
-    await expectError(await request({ continueTaskId: f.delegated.id, agentId: f.otherWorker.id }), 400, "target agent");
-
-    const direct = f.store.createTask({
-      agentId: f.worker.id,
-      issueId: f.issue.id,
-      issueSessionId: f.session.id,
-      prompt: "Direct.",
-    });
-    await expectError(await request({ continueTaskId: direct.id }), 400, "not a delegated task");
-
-    const wrongDelegator = f.store.createTask({
-      agentId: f.worker.id,
-      issueId: f.issue.id,
-      issueSessionId: f.session.id,
-      prompt: "Other lineage.",
-      delegationId: "dlg_other_leader",
-      delegatedByAgentId: f.otherLeader.id,
-    });
-    await expectError(await request({ continueTaskId: wrongDelegator.id }), 403, "another agent");
-
-    const sibling = f.store.createIssueSession(f.issue.id, { title: "Sibling main Session" });
-    const siblingLeaderTask = f.store.createTask({
-      agentId: f.leader.id,
-      issueId: f.issue.id,
-      issueSessionId: sibling.id,
-      prompt: "Coordinate sibling.",
-    });
-    const siblingHeaders = await taskHeaders(f, siblingLeaderTask);
-    await expectError(await request({ continueTaskId: f.delegated.id }, siblingHeaders), 400, "another Issue Session");
-    await expectError(await request({ continueTaskId: f.delegated.id, issueSessionId: sibling.id }), 400, "requested Issue Session");
-
-    const privateDelegation = f.store.createTask({
-      agentId: f.privateWorker.id,
-      issueId: f.issue.id,
-      issueSessionId: f.session.id,
-      prompt: "Private.",
-      delegationId: "dlg_private",
-      delegatedByAgentId: f.leader.id,
-    });
-    await expectError(await request({
-      continueTaskId: privateDelegation.id,
-      agentId: f.privateWorker.id,
-    }), 403, "do not have access");
-
-    const remoteWorkspace = f.store.createWorkspace({ id: "ws_remote", name: "Remote", slug: "remote" });
-    const remoteLeader = f.store.createAgent({
-      name: "Remote leader",
-      provider: "claude",
-      workspaceId: remoteWorkspace.id,
-    });
-    const remoteWorker = f.store.createAgent({
-      name: "Remote worker",
-      provider: "claude",
-      workspaceId: remoteWorkspace.id,
-    });
-    const remoteIssue = f.store.createIssue({ title: "Remote issue", workspaceId: remoteWorkspace.id });
-    const remoteDelegation = f.store.createTask({
-      agentId: remoteWorker.id,
-      issueId: remoteIssue.id,
-      prompt: "Remote delegated work.",
-      delegationId: "dlg_remote",
-      delegatedByAgentId: remoteLeader.id,
-    });
-    await expectError(await request({
-      continueTaskId: remoteDelegation.id,
-      agentId: remoteWorker.id,
-    }), 403, "another workspace");
-
-    await expectError(await request(
-      { continueTaskId: f.delegated.id },
-      { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
-    ), 403, "requires a task credential");
+  it("preserves private recipient and cross-workspace authorization for continuation requests",async()=>{
+    const f=fixture();
+    const headers=await taskHeaders(f);
+    const request=(agentId:string)=>f.app.request(taskRequestPath(f.store,{issueId:f.issue.id}),{method:"POST",headers,body:JSON.stringify(requestMessageBody(f.store,{agentId,prompt:"Continue",continueTaskId:f.delegated.id}))});
+    const before=f.store.listTasks().length;
+    expect((await request(f.privateWorker.id)).status).toBe(403);
+    const ws=f.store.createWorkspace({name:"Remote"}),remote=f.store.createAgent({name:"Remote worker",provider:"claude",workspaceId:ws.id});
+    expect((await request(remote.id)).status).toBe(400);
+    expect(f.store.listTasks()).toHaveLength(before);
   });
 });

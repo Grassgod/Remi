@@ -45,11 +45,12 @@ export function createTurnExecutionReadProjection(db: SqlDatabase): void {
       l.resolved_at,l.resolved_by_type,l.resolved_by_id,l.created_at,l.updated_at
     FROM multiremi_conversation_log l JOIN multiremi_issue_sessions s ON s.id=l.session_id
     WHERE l.kind='message' AND l.visibility='shown' AND l.deleted_at IS NULL`);
+  if(db.dialect!=='postgres')db.exec("DROP VIEW IF EXISTS multiremi_chat_message_records");
   view(`CREATE VIEW IF NOT EXISTS multiremi_chat_message_records AS
     SELECT l.id,l.session_id AS chat_session_id,l.task_id,l.body_md AS body,l.seq AS sequence,l.created_at,
       CASE WHEN l.sender_type='agent' THEN 'assistant' WHEN l.sender_type='member' THEN 'user' ELSE 'system' END AS role,
-      NULL AS failure_reason,NULL AS elapsed_ms,0 AS pending_agent_delivery,NULL AS agent_delivery_task_id
-    FROM multiremi_conversation_log l WHERE l.session_id LIKE 'chat_%' AND l.kind='message' AND l.visibility='shown' AND l.deleted_at IS NULL`);
+      a.failure_reason AS failure_reason,${db.dialect==='postgres'?"(l.metadata::jsonb->>'elapsed_ms')::bigint":"json_extract(l.metadata,'$.elapsed_ms')"} AS elapsed_ms,0 AS pending_agent_delivery,NULL AS agent_delivery_task_id
+    FROM multiremi_conversation_log l LEFT JOIN multiremi_turns t ON t.reply_message_id=l.id LEFT JOIN multiremi_turn_attempts a ON a.id=t.current_attempt_id WHERE l.session_id LIKE 'chat_%' AND l.kind='message' AND l.visibility='shown' AND l.deleted_at IS NULL`);
   view(`CREATE VIEW IF NOT EXISTS multiremi_turn_execution_records AS SELECT
     ${db.dialect==='postgres'?"a.xmin::text || ':' || t.xmin::text":"a.updated_at || ':' || a.status"} AS execution_version,
     ${[...TURN_FIELDS.map(c=>`t.${c} AS ${c}`),...ATTEMPT_FIELDS.map(c=>`a.${c} AS ${c}`),
@@ -149,7 +150,12 @@ export function runTurnExecutionMutation(db:SqlDatabase,sql:string,...arguments_
           throw new AgentReplyCommentError(error instanceof Error ? error.message : String(error), { cause: error });
         }
       }
-      write(db,"multiremi_turn_attempts",row.id,attempt);write(db,"multiremi_turns",row.turn_id,turn);
+      write(db,"multiremi_turn_attempts",row.id,attempt);
+      try { write(db,"multiremi_turns",row.turn_id,turn); }
+      catch(error) {
+        if(turn.reply_message_id) throw new AgentReplyCommentError(error instanceof Error?error.message:String(error),{cause:error});
+        throw error;
+      }
       notifyTurnChanged(db,row.turn_id);
       if(returning)returned.push(db.query(`SELECT ${returning} FROM multiremi_turn_execution_records WHERE id=?`).get(row.id));
     }

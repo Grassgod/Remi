@@ -304,6 +304,11 @@ function recordTaskTokenWrite(
   });
 }
 
+function parseBearerToken(header: string | undefined): string {
+  const parts = header?.trim().split(/\s+/);
+  return parts?.length === 2 && parts[0]!.toLowerCase() === "bearer" ? parts[1]! : "";
+}
+
 function envEnabled(value: string | undefined, fallback = true): boolean {
   if (value === undefined) return fallback;
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
@@ -604,15 +609,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         await next();
         return;
       }
-      const header = c.req.header("Authorization") ?? "";
-      let token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      const header = c.req.header("Authorization");
+      let token = parseBearerToken(header);
       // Native browser loads (<img src="/api/attachments/…/content">, file
       // downloads) can't attach an Authorization header. Accept the HttpOnly
       // auth cookie set at login — mirroring the Go server's multimira_auth —
       // but only for safe methods, so cookie auth can never mutate state and
       // no CSRF machinery is needed. Only when the header is entirely absent:
       // a malformed or non-Bearer Authorization must fail, not fall back.
-      if (!header && (c.req.method === "GET" || c.req.method === "HEAD")) {
+      if (header === undefined && (c.req.method === "GET" || c.req.method === "HEAD")) {
         token = getCookie(c, AUTH_COOKIE_NAME) ?? "";
       }
       if (token === authToken) {
@@ -659,8 +664,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // Open dashboard mode still needs to recognize an explicitly supplied
     // daemon/task token. Runtime-observed Plugin state has a strict daemon
     // identity boundary, and treating every request as anonymous would make a
-    // locally hosted daemon unable to report its own state. Missing or unknown
-    // credentials retain the historical anonymous-admin behavior.
+    // locally hosted daemon unable to report its own state. Only requests
+    // without credentials retain the historical anonymous-admin behavior.
     app.use("*", async (c, next) => {
       // MUL-462: the peer routes authenticate themselves with a shared secret.
       // Without this a peer secret that happens to collide with a task token
@@ -670,9 +675,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         await next();
         return;
       }
-      const header = c.req.header("Authorization") ?? "";
-      const rawToken = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      const header = c.req.header("Authorization");
+      const rawToken = parseBearerToken(header);
       const accessToken = rawToken ? await store.verifyAccessToken(rawToken) : null;
+      if (header !== undefined && !accessToken) return c.json({ error: "unauthorized" }, 401);
       if (accessToken) {
         if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(c.req.raw)) {
           return c.json({ error: "forbidden for daemon token" }, 403);

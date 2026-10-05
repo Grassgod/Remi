@@ -82,8 +82,10 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   else if(input.to.type==='role'){
     if(input.to.ref==='issue_owner')owner(issue);
     else if(input.to.ref==='parent_owner'){
-      targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;owner(targetIssue);
-      if(targetIssue)sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
+      targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
+      if(!targetIssue||targetIssue.workspaceId!==workspaceId)throw new Error('Parent issue not found');
+      owner(targetIssue);
+      sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
     } else if(input.to.ref==='delegator'){
       const dispatch=source?.trigger_message_id?getMessage(ctx,source.trigger_message_id):null;
       const origin=dispatch?.task_id?ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(dispatch.task_id):null;
@@ -98,6 +100,15 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
         WHERE m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL ORDER BY s.id LIMIT 1`).get(input.sender.id,workspaceId);
       recipientType='agent';recipientId=squad?.leader_id??null;
     } else if(input.to.ref==='relay'){recipientType='agent';recipientId=originalChat?.agentId??null;}
+  }
+  if(sessionId!==input.session_id||input.to.type==='role'&&input.to.ref==='parent_owner'){
+    const finalSession=ctx.issueSessions().getIssueSession(sessionId);
+    const finalChat=ctx.chat().getChatSession(sessionId);
+    const finalWorkspace=finalSession?.workspaceId??finalChat?.workspaceId
+      ??ctx.db.query('SELECT workspace_id FROM multiremi_autopilots WHERE session_id=?').get(sessionId)?.workspace_id
+      ??ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id;
+    if(finalWorkspace!==workspaceId||targetIssue&&targetIssue.workspaceId!==workspaceId
+      ||finalSession&&ctx.issues().getIssue(finalSession.issueId)?.workspaceId!==workspaceId)throw new Error('Message conversation not found');
   }
   const targetAgent=recipientType==='agent'&&recipientId?ctx.agents().getAgent(recipientId):null;
   const member=recipientType==='member'&&recipientId?ctx.workspaces().getWorkspaceMember(recipientId):null;
@@ -115,7 +126,14 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const decisionTurn=input.message_kind==='reply'&&reply?.message_kind==='decision'&&reply.task_id
     ?ctx.db.query("SELECT * FROM multiremi_turns WHERE id=? AND status IN ('running','awaiting_human')").get(reply.task_id):null;
   const unmet=dependencyGateEnabled()&&targetIssue?.status==='backlog'?ctx.issues().listUnmetPrerequisites(targetIssue.id):[];
-  const force=createInput.dependencyForce??createInput.dependency_force;
+  let force=createInput.dependencyForce??createInput.dependency_force;
+  if (!force && unmet.length && input.sender.type === 'member' && recipientType === 'agent' && policyWantsWork(input) && targetIssue) {
+    const mention = /mention:\/\/(agent|squad)\/([^\s)]+)/.exec(input.body_md);
+    const mentionedAgent = mention?.[1] === 'squad' ? ctx.squads().getSquad(mention[2]!)?.leaderId : mention?.[2];
+    const actor = ctx.workspaces().getWorkspaceMember(input.sender.id!);
+    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.userId ?? input.sender.id! };
+    createInput = { ...createInput, dependencyForce: force };
+  }
   const sourceSession=source?ctx.issueSessions().getIssueSession(source.session_id):null;
   const limit=pairRoundTripLimit();
   const hops=source&&recipientId?countMessageDelegationPairHops(ctx,source.id,recipientId,limit):0;
@@ -125,7 +143,9 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const parentAgent=parentOwner?.assigneeType&&parentOwner.assigneeId?ctx.resolveRunnableAgentForAssignee(parentOwner.assigneeType,parentOwner.assigneeId):null;
   const policy=resolveWake(input.sender,input.to,input.wake_requested,input.message_kind,{
     recipientType,recipientId,recipientAvailable:recipientType==='agent'?!!targetAgent&&!targetAgent.archivedAt:recipientType==='member'?!!member&&!member.archivedAt:false,
-    dependenciesMet:!!force||unmet.length===0,
+    // Structural platform reports retain main's dependency exemption. Agent
+    // requests still downgrade, and HTTP callers cannot supply a platform sender.
+    dependenciesMet:input.sender.type==='platform'||!!force||unmet.length===0,
     sourceSideSession:!!sourceSession&&sourceSession.inheritMode!=='none',sourceHasIssue:input.sender.type==='agent'?!!source?.issue_id:undefined,
     targetHasIssue:!!targetIssue,pairHops:hops,pairLimit:limit,
     isReplyToDelegator:reply?.sender_type==='agent'&&reply.sender_id===recipientId||source?.delegated_by_agent_id===recipientId,isLeader:!!isLeader,isParentOwner:parentAgent?.id===recipientId,
@@ -136,7 +156,17 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     reply_to_id:sessionId===input.session_id?input.reply_to_id??null:null,dedupe_key:input.dedupe_key??null,options:input.options??null,
     card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
   const body=input.sender.type==='platform'&&['status','report'].includes(input.message_kind)?clampEnvelopeBody(input.body_md):input.body_md;
-  const metadata={...input.metadata};
+  let scope=decisionTurn?.execution_scope??input.execution_scope??roleScope??'';
+  let delegatedLane:any=null;
+  if(policy.reason==='agent_dispatch'&&sourceSession&&targetIssue){
+    delegatedLane=ctx.db.query(`SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=?
+      AND delegated_by_agent_id=? AND delegated_from_issue_session_id=? ORDER BY created_at DESC,id DESC LIMIT 1`)
+      .get(targetIssue.id,recipientId,input.sender.id,source.session_id);
+    scope=input.execution_scope??delegatedLane?.execution_scope??createInput.delegationId??createId('dlg');
+  }
+  // Freeze the resolved scope in the initial row; an insert followed by a scope patch
+  // can let Hub observers see the patch before the new message itself.
+  const metadata:Record<string,any>={...input.metadata,execution_scope:scope};
   if(input.message_kind==='decision'){
     const key=metadata.human_request?'human_request':'decision_record';
     metadata[key]={status:'pending',...(metadata[key] as object)};
@@ -150,29 +180,21 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
       wake_requested=?,wake_applied=?,wake_reason=?,dedupe_key=?,options=?,task_id=COALESCE(?,task_id) WHERE id=?`,
       [header.to_type,header.to_ref,header.to_agent_id,header.to_member_id,header.message_kind,header.wake_requested,header.wake_applied,header.wake_reason,
         header.dedupe_key,header.options?JSON.stringify(header.options):null,source?.id??null,existing.id]);
-    ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{fields:{metadata:{...existing.metadata,...metadata,pending_completion:false}}});
+    ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{deferEmit:true,fields:{metadata:{...existing.metadata,...metadata,pending_completion:false}}});
     ctx.db.run("UPDATE multiremi_conversation_log SET visibility='shown' WHERE id=?",[existing.id]);
     entry=ctx.conversationLog().getConversationLogEntryById(existing.id)!;
   }else{
   entry=ctx.conversationLog().appendWithinTransaction({sessionId,id:input.id??createId(sessionId.startsWith('ises_')?'cmt':'msg'),kind:'message',authorType:input.sender.type,
-    authorId:input.sender.id,taskId:source?.id??null,bodyMd:body,parentId:header.reply_to_id,messageHeader:header,visibility:input.visibility,
+    authorId:input.sender.id,taskId:source?.id??null,bodyMd:body,parentId:header.reply_to_id,messageHeader:header,visibility:input.visibility,deferEmit:true,
     metadata:{...metadata,...(input.execution_scope?{execution_scope:input.execution_scope}:{})}});
   }
   let message=getMessage(ctx,entry.id)!;
+  ctx.conversationLog().publishMessageWithinTransaction(sessionId,message.seq,Boolean(existing && existing.visibility === "shown"));
   if(recipientType==='member'&&recipientId){
     const at=entry.created_at;
     ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,created_at,updated_at)
       VALUES(?,'member',?,'',?,?) ON CONFLICT DO NOTHING`,[sessionId,recipientId,at,at]);
   }
-  let scope=decisionTurn?.execution_scope??input.execution_scope??roleScope??'';
-  let delegatedLane:any=null;
-  if(policy.reason==='agent_dispatch'&&source&&targetIssue){
-    delegatedLane=ctx.db.query(`SELECT * FROM multiremi_turns WHERE issue_id=? AND agent_id=?
-      AND delegated_by_agent_id=? AND delegated_from_issue_session_id=? ORDER BY created_at DESC,id DESC LIMIT 1`)
-      .get(targetIssue.id,recipientId,input.sender.id,source.session_id);
-    scope=input.execution_scope??delegatedLane?.execution_scope??createInput.delegationId??createId('dlg');
-  }
-  if(message.metadata.execution_scope!==scope){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,entry.seq,{fields:{metadata:{...message.metadata,execution_scope:scope}}});message=getMessage(ctx,entry.id)!;}
   if(input.attachment_ids?.length){
     for(const id of input.attachment_ids){const attachment=ctx.issues().getAttachment(id);
       if(!attachment||attachment.workspaceId!==workspaceId)throw new Error('Attachment belongs to another workspace');
@@ -215,16 +237,23 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     turnInput={...createInput,delegationId:delegatedLane?.delegation_id??createInput.delegationId??scope,delegatedByAgentId:input.sender.id,
       delegatedFromIssueSessionId:sourceSession.id,parentTaskId:null};
   }
+  if (source?.issue_creation_restricted) {
+    turnInput = { ...turnInput, issueCreationRestricted: true };
+  }
   // Decision answers are input for the waiting work unit, including cross-Issue answers.
   const turnId=decisionTurn
     ?deliverToRunningTurn(ctx,decisionTurn,message)
     :ensurePendingTurn(ctx,message,{...input,execution_scope:scope,session_id:sessionId},events,turnInput);
-  if(turnId){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,message.seq,{fields:{metadata:{...message.metadata,delivery_turn_id:turnId}}});message=getMessage(ctx,message.id)!;}
+  if (turnId && source?.issue_creation_restricted) {
+    ctx.db.run('UPDATE multiremi_turns SET issue_creation_restricted=1 WHERE id=?', [turnId]);
+  }
+  if(turnId){ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,message.seq,{deferEmit:true,fields:{metadata:{...message.metadata,delivery_turn_id:turnId}}});message=getMessage(ctx,message.id)!;}
   if(policy.applied!==input.wake_requested&&targetIssue)ctx.appendIssueActivity(targetIssue.id,{actorType:'system',actorId:null,type:'wake_downgraded',
     body:policy.reason,data:{message_id:message.id,requested:input.wake_requested,applied:policy.applied,reason:policy.reason}},events);
   if(turnId&&force&&targetIssue&&unmet.length)ctx.issues().recordDependencyForceStarted(targetIssue.id,{
     source:force.source,status:'todo',previousStatus:targetIssue.status,unmet,actorType:'member',actorId:force.actorMemberId,
     commentId:force.commentId??message.id,taskId:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(turnId)?.current_attempt_id,agentId:recipientId,
+    assigneeDispatched:recipientId === (targetIssue.assigneeType && targetIssue.assigneeId ? ctx.resolveRunnableAgentForAssignee(targetIssue.assigneeType,targetIssue.assigneeId)?.id : null),
   },events);
   const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
   for(const id of resumedIssues)affected.add(id);
@@ -232,4 +261,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   // Cross-conversation inbox caches need a workspace signal even without a log subscription.
   ctx.emitWorkspaceEvent({type:'inbox:new',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
   return {message,wake_applied:policy.applied,wake_reason:policy.reason,...(turnId?{turn_id:turnId}:{})};
+}
+
+function policyWantsWork(input: SendMessageInput): boolean {
+  return input.wake_requested === 'now' && input.message_kind === 'request' && input.to.type !== 'none';
 }

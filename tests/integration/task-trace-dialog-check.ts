@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { turnApiPath } from "../unit/multiremi/unified-test-paths.js";
 // Local browser probe for role=all and UI/runtime route splitting; data stays in memory.
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -74,7 +75,7 @@ let routingMode: "all" | "split" = "all";
 let runtimeTraceRequests = 0;
 const proxy = Bun.serve({ hostname: "127.0.0.1", port: proxyPort, fetch(request) {
   const url = new URL(request.url);
-  const trace = /^\/api\/tasks\/[^/]+\/trace$/.test(url.pathname);
+  const trace = /^\/api\/turns\/[^/]+\/trace$/.test(url.pathname);
   if (routingMode === "split" && trace) runtimeTraceRequests++;
   const targetPort = routingMode === "all" ? allPort : trace ? runtimePort : uiPort;
   return fetch(new Request(`http://127.0.0.1:${targetPort}${url.pathname}${url.search}`, request));
@@ -117,7 +118,7 @@ try {
   const page = await context.newPage();
   const traceRequests: string[] = [];
   page.on("request", request => {
-    if (new URL(request.url()).pathname === `/api/tasks/${fixture.runningTaskId}/trace`)
+    if (new URL(request.url()).pathname === turnApiPath(store, fixture.runningTaskId, "/trace"))
       traceRequests.push(request.url());
   });
   await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.runningIssueId}`, { waitUntil: "domcontentloaded" });
@@ -125,7 +126,7 @@ try {
   check("trace endpoint stays idle before click", traceRequests.length === 0);
   for (const mode of ["all", "split"] as const) {
     routingMode = mode;
-    const routedTrace = await fetch(`http://127.0.0.1:${proxyPort}/api/tasks/${fixture.runningTaskId}/trace?after_seq=0&limit=500`,
+    const routedTrace = await fetch(`http://127.0.0.1:${proxyPort}${turnApiPath(store, fixture.runningTaskId, "/trace")}?after_seq=0&limit=500`,
       { headers: authHeaders, signal: AbortSignal.timeout(5000) });
     check(`${mode} routed trace API responds`, routedTrace.status === 200,
       { status: routedTrace.status, runtimeRequests: runtimeTraceRequests });

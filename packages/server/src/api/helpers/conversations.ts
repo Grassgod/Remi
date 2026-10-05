@@ -1,30 +1,38 @@
 import type { Context } from "hono";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { denyCurrentUserWorkspaceAccess, loadChatSessionForCurrentUser, canCurrentUserAccessChatTask, canUserViewTaskMessages, createTaskAuthMemo } from "./auth-guards.js";
-import { currentTaskAccessToken, currentWorkspaceMember, currentRequestUserId } from "../wire/context.js";
+import { currentTaskAccessToken, currentWorkspaceMember, currentRequestUserId, hasVerifiedRequestIdentity } from "../wire/context.js";
 import type { SendMessageInput } from "@multiremi/contracts/unified-model.js";
 import type { TaskVisibilitySubject, TaskAuthMemo } from "./auth-guards.js";
 
 export function canAccessConversationTask(c: Context, store: MultiremiStore, task: TaskVisibilitySubject, memo?: TaskAuthMemo): boolean {
   if (task.chatSessionId) {
     const token = currentTaskAccessToken(c);
-    if (token && store.getTurnForAttempt(task.id)?.current_attempt_id !== token.taskId) return false;
+    if (token && task.id !== token.taskId) return false;
     return canCurrentUserAccessChatTask(c, store, task, memo);
   }
   return canUserViewTaskMessages(store, currentRequestUserId(c), task, memo);
 }
 
-/** Memo lives for one request and caches only this caller's source visibility checks. */
+/** Memo lives for one request and caches only this caller's source-task checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
   const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>();
   return (entry: ConversationVisibilityEntry): boolean => {
+    const decision = conversationEntryDecision(entry,
+      id => store.getMessage(id),
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
+    if (decision === null) return false;
+    if (decision) {
+      if (!decision.id) return false;
+      if (!decisions.has(decision.id)) {
+        const session = store.getIssueSession(decision.session_id ?? "");
+        decisions.set(decision.id, !!session && !!store.getIssueDecision(session.issueId, decision.id));
+      }
+      if (!decisions.get(decision.id)) return false;
+    }
     const sourceId = conversationEntrySource(entry,
       id => store.getMessage(id),
-      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null,
-      id => {
-        if (!decisions.has(id)) decisions.set(id, !!store.getIssueDecisionAnywhere(id));
-        return decisions.get(id)!;
-      });
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
     if (sourceId === undefined) return true;
     if (!sourceId) return false;
     if (!allowed.has(sourceId)) {
@@ -38,7 +46,6 @@ export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
 
 export interface ConversationVisibilityEntry {
   id?: string;
-  message_kind?: string | null;
   kind: string;
   task_id: string | null;
   session_id?: string;
@@ -47,33 +54,55 @@ export interface ConversationVisibilityEntry {
   metadata: Record<string, any>;
 }
 
+/** Replies and mutation markers inherit the Issue decision's relation checks. */
+export function conversationEntryDecision(
+  entry: ConversationVisibilityEntry,
+  reply: (id: string) => ConversationVisibilityEntry | null | undefined,
+  target: (seq: number) => ConversationVisibilityEntry | null | undefined,
+  depth = 0,
+): ConversationVisibilityEntry | null | undefined {
+  if (depth > 4) return null;
+  if (entry.metadata.decision_record?.source_issue_id || entry.metadata.source_issue_id) return entry;
+  if (!entry.metadata.human_response && !entry.metadata.decision_answer && !Number.isSafeInteger(entry.metadata.target_seq)
+    && typeof entry.metadata.message_id !== "string") return undefined;
+  const replyId = entry.reply_to_id ?? entry.parent_id
+    ?? (typeof entry.metadata.message_id === "string" ? entry.metadata.message_id : null);
+  const related = Number.isSafeInteger(entry.metadata.target_seq) ? target(entry.metadata.target_seq)
+    : replyId ? reply(replyId) : null;
+  return related ? conversationEntryDecision(related, reply, target, depth + 1) : undefined;
+}
+
 /** undefined is unrestricted; null is a protected row with no resolvable source. */
 export function conversationEntrySource(
   entry: ConversationVisibilityEntry,
   reply: (id: string) => ConversationVisibilityEntry | null | undefined,
   target: (seq: number) => ConversationVisibilityEntry | null | undefined,
-  decisionVisible: (id: string) => boolean,
   depth = 0,
 ): string | null | undefined {
   if (depth > 4) return null;
-  const decisionId = conversationEntryDecisionId(entry);
-  if (decisionId && !decisionVisible(decisionId)) return null;
-  if (entry.kind === "turn" || entry.metadata.human_request || entry.metadata.human_response) {
+  if (entry.kind === "turn" || entry.metadata.human_request) {
     const replyId = entry.reply_to_id ?? entry.parent_id;
     return entry.task_id ?? (replyId ? reply(replyId)?.task_id : null) ?? null;
+  }
+  if (entry.metadata.human_response) {
+    const replyId = entry.reply_to_id ?? entry.parent_id;
+    const question = replyId ? reply(replyId) : null;
+    const source = entry.task_id ?? question?.task_id;
+    if (source) return source;
+    // Ordinary decision replies also carry human_response. Inherit the
+    // question's visibility; missing or unresolved protected sources stay hidden.
+    return question ? conversationEntrySource(question, reply, target, depth + 1) : null;
   }
   // Edit/delete and lifecycle markers can contain the protected row's body.
   if (Number.isSafeInteger(entry.metadata.target_seq)) {
     const row = target(entry.metadata.target_seq);
-    return row ? conversationEntrySource(row, reply, target, decisionVisible, depth + 1) : null;
+    return row ? conversationEntrySource(row, reply, target, depth + 1) : null;
+  }
+  if (typeof entry.metadata.message_id === "string") {
+    const row = reply(entry.metadata.message_id);
+    return row ? conversationEntrySource(row, reply, target, depth + 1) : null;
   }
   return undefined;
-}
-
-/** Issue decisions and replies keep the source/target/session workspace relation. */
-export function conversationEntryDecisionId(entry: ConversationVisibilityEntry): string | null {
-  return !entry.metadata.human_request && (entry.metadata.decision_record || entry.message_kind === "decision")
-    ? entry.id ?? null : entry.metadata.decision_answer ? entry.reply_to_id ?? entry.parent_id ?? null : null;
 }
 
 export function loadConversation(c: Context, store: MultiremiStore, id: string) {
@@ -115,6 +144,7 @@ export function messageActor(c: Context, store: MultiremiStore, workspaceId: str
     return { type: "agent", id: agent.id };
   }
   const member = currentWorkspaceMember(c, store, workspaceId);
+  if (!member && !hasVerifiedRequestIdentity(c)) return { type: "platform", id: null };
   return member && !member.archivedAt ? { type: "member", id: member.id }
     : c.json({ error: "active workspace member required" }, 403);
 }

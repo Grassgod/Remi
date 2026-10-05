@@ -1,3 +1,4 @@
+import { isRelatedTurnController } from './turn-controls.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
@@ -4314,6 +4315,10 @@ runMigrations(this.db);
     return this.issues.listAttachmentsForComments(commentIds);
   }
 
+  listAttachmentsForMessages(messageIds: string[]): Map<string, MultiremiAttachment[]> {
+    return this.issues.listAttachmentsForMessages(messageIds);
+  }
+
   listAttachmentsForChatMessage(chatMessageId: string): MultiremiAttachment[] {
     return this.issues.listAttachmentsForChatMessage(chatMessageId);
   }
@@ -4479,6 +4484,9 @@ runMigrations(this.db);
   /** Insert one row at an allocated or explicit seq; the caller owns the transaction. */
   appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
     return this.conversationLog.appendWithinTransaction(input);
+  }
+  publishMessageWithinTransaction(sessionId: string, seq: number, existing: boolean): void {
+    this.conversationLog.publishMessageWithinTransaction(sessionId, seq, existing);
   }
 
   /** Insert one row; the caller owns the transaction. */
@@ -5530,6 +5538,12 @@ runMigrations(this.db);
         const attachment = this.getAttachment(id);
         if (attachment && attachment.commentId !== sent.message.id && attachment.chatMessageId !== sent.message.id) this.deleteAttachment(id);
       }
+      if (sent.message.sender_type === 'agent' && sent.message.task_id) {
+        const turn = this.getTurn(sent.message.task_id);
+        const task = turn?.current_attempt_id ? this.getTask(turn.current_attempt_id) : null;
+        const attachments = this.listAttachmentsForChatMessages([sent.message.id]).get(sent.message.id) ?? [];
+        if (task?.chatSessionId && attachments.length) this.feishuBot.registerChatAttachmentDeliveriesWithinTransaction(task.id, sent.message.id, attachments, sent.message.body_md);
+      }
       return sent;
     })();
     afterCommit(this.db,()=>this.ctx.emitCommitEvents(events));
@@ -5837,6 +5851,7 @@ runMigrations(this.db);
     action: MultiremiOrganizerActionKind;
     reason: string;
     content?: string | null;
+    cold?: boolean;
   }): {
     task: MultiremiTask;
     replacementTask: MultiremiTask | null;
@@ -5857,15 +5872,18 @@ runMigrations(this.db);
       if (
         !supervisorTask
         || !supervisorAgent
-        || !agentRoleAtLeast(supervisorAgent.role, "supervisor")
         || supervisorTask.agentId !== supervisorAgent.id
         || supervisorTask.workspaceId !== supervisorAgent.workspaceId
       ) {
         throw new OrganizerActionError("organizer_supervisor_required", "a current supervisor task is required");
       }
+      this.ctx.lockWorkspaceRuntimeLifecycle(supervisorTask.workspaceId);
       const target = this.getTask(input.targetTaskId);
       if (!target || target.workspaceId !== supervisorTask.workspaceId) {
         throw new OrganizerActionError("organizer_target_forbidden", "target task is outside the supervisor workspace");
+      }
+      if (!agentRoleAtLeast(supervisorAgent.role, "supervisor") && !isRelatedTurnController(this, supervisorAgent.id, target)) {
+        throw new OrganizerActionError("organizer_target_forbidden", "only a supervisor, squad leader or parent owner may retry this turn");
       }
       if (target.id === supervisorTask.id) {
         throw new OrganizerActionError("organizer_self_action_forbidden", "a supervisor cannot act on its own task");
@@ -5903,7 +5921,7 @@ runMigrations(this.db);
         cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = cancelledResult.task;
       } else if (input.action === "redispatch") {
-        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents, input.cold);
         task = redispatchResult.cancelled;
         replacementTask = redispatchResult.replacement;
       } else {
@@ -5941,6 +5959,13 @@ runMigrations(this.db);
           `Audit record: ${audit.id}`,
         ].join("\n"),
       }, { withinTransaction: true, deferredEvents, childStatusChanges });
+      if (supervisorTask.delegatedByAgentId && supervisorTask.delegatedByAgentId !== supervisorAgent.id) {
+        const sourceTurn=this.getTurnForAttempt(supervisorTask.id);
+        this.inbox.sendMessageWithinTransaction({id:comment.id,session_id:comment.issueSessionId!,
+          sender:{type:'agent',id:supervisorAgent.id},source_turn_id:sourceTurn?.id,
+          to:{type:'agent',ref:supervisorTask.delegatedByAgentId},message_kind:'report',wake_requested:'now',
+          body_md:comment.body},deferredEvents);
+      }
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -5951,13 +5976,12 @@ runMigrations(this.db);
       });
       return { task, replacementTask, message, audit, comment };
     })();
-    // The organizer transaction collected the cancelled task's Issue transitions;
-    // replay them now that it has committed (MUL-400 E1/E2).
-    this.tasks.runCollectedChildStatusChanges(childStatusChanges);
-    if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
-    if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
-    // The transaction committed: publish everything it deferred.
-    this.ctx.emitCommitEvents(deferredEvents);
+    afterCommit(this.db,()=>{
+      this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+      if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
+      if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
     return result;
   }
 

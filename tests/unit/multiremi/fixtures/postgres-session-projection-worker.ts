@@ -20,7 +20,7 @@ self.onmessage = async (message: MessageEvent<SessionProjectionRaceInput>) => {
     self.postMessage({ phase: "locked" });
     await Bun.sleep(holdMs);
     await sql`
-      UPDATE multiremi_tasks
+      UPDATE multiremi_turn_attempts
       SET projection_from_seq = 0, projection_to_seq = 1, projection_mode = 'bootstrap'
       WHERE id = ${taskId}
     `;

@@ -55,7 +55,7 @@ export function ensurePendingTurn(ctx: StoreContext, message: UnifiedMessage, in
     issueSessionId:session?.id??null,chatSessionId:chat?.id??null,
     conversationSessionId:message.session_id,
     prompt:message.body_md, wakeSource:message.wake_reason,
-    triggerCommentId:session?message.id:null,
+    triggerCommentId:session&&message.id.startsWith('cmt_')?message.id:null,
     assignmentAuthorType:message.sender_type==='member'?'member':message.sender_type==='agent'?'agent':'system',
     assignmentAuthorId:message.sender_id,
   },[],events,undefined,scope);
@@ -70,6 +70,10 @@ export function ensurePendingTurn(ctx: StoreContext, message: UnifiedMessage, in
 export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: CommitEventQueue): string | undefined {
   const turn=ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(turnId);
   if (!turn || !['completed','failed','cancelled'].includes(turn.status)) return;
+  const agent=ctx.agents().getAgent(turn.agent_id);
+  const session=ctx.issueSessions().getIssueSession(turn.session_id);
+  const chat=ctx.chat().getChatSession(turn.session_id);
+  if (!agent || agent.archivedAt || session?.status==='archived' || chat?.status==='archived') return;
   lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
   const lane=ctx.db.query(`SELECT cursor_seq FROM multiremi_session_lanes
     WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(turn.session_id,turn.agent_id,turn.execution_scope)!;

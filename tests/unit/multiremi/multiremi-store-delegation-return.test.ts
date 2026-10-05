@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -391,7 +392,7 @@ describe("task-level agent delegation return", () => {
   it("derives direct-task delegation lineage from the task credential even without a squad", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
-    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const qa = store.createAgent({ name: "QA", provider: "claude",visibility:"workspace" });
     const issue = store.createIssue({ title: "Direct delegation" });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
@@ -405,25 +406,25 @@ describe("task-level agent delegation return", () => {
       delegatedByAgentId: qa.id,
     };
 
-    const humanResponse = await app.request("/api/multiremi/tasks", {
+    const humanResponse = await app.request(taskRequestPath(store, body), {
       method: "POST",
       headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestMessageBody(store, body)),
     });
-    expect(humanResponse.status).toBe(201);
-    const humanTaskId = ((await humanResponse.json()) as { task: { id: string } }).task.id;
+    expect(humanResponse.status).toBe(200);
+    const humanTaskId = sentTask(store, await humanResponse.json()).id;
     expect(store.getTask(humanTaskId)).toMatchObject({
       delegationId: null,
       delegatedByAgentId: null,
     });
 
-    const delegatedResponse = await app.request("/api/multiremi/tasks", {
+    const delegatedResponse = await app.request(taskRequestPath(store, body), {
       method: "POST",
       headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestMessageBody(store, body)),
     });
-    expect(delegatedResponse.status).toBe(201);
-    const delegatedTaskId = ((await delegatedResponse.json()) as { task: { id: string } }).task.id;
+    expect(delegatedResponse.status).toBe(200);
+    const delegatedTaskId = sentTask(store, await delegatedResponse.json()).id;
     const delegated = store.getTask(delegatedTaskId)!;
     expect(delegated).toMatchObject({
       delegatedByAgentId: leader.id,
@@ -445,13 +446,13 @@ describe("task-level agent delegation return", () => {
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: issue.id }), {
       method: "POST",
       headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ agentId: outsider.id, issueId: issue.id, prompt: "Investigate." }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: outsider.id, issueId: issue.id, prompt: "Investigate." })),
     });
-    expect(response.status).toBe(201);
-    const taskId = ((await response.json()) as { task: { id: string } }).task.id;
+    expect(response.status).toBe(200);
+    const taskId = sentTask(store, await response.json()).id;
     expect(store.getTask(taskId)).toMatchObject({ delegatedByAgentId: leader.id,
       delegatedFromIssueSessionId: leaderTask.issueSessionId });
     expect(store.getTask(taskId)!.delegationId).toBeTruthy();

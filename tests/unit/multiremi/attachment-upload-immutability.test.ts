@@ -45,7 +45,8 @@ async function writer(h: Pr2Harness, kind: "ordinary" | "task" | "daemon") {
     return async () => {
       const form = new FormData();
       form.set("file", new File(["replacement"], "collision.pdf"));
-      return h.app.request("/api/chat/attachments/send", { method: "POST",
+      form.set("message", JSON.stringify({ message_kind: "report", body_md: "replacement" }));
+      return h.app.request(`/api/sessions/${task.chatSessionId}/messages`, { method: "POST",
         headers: { Authorization: `Bearer ${credential.token}` }, body: form });
     };
   }
@@ -83,9 +84,10 @@ for (const kind of ["ordinary", "task", "daemon"] as const) {
         const filesBefore = diskFiles();
         const upload = await writer(h, kind);
         const { result: response, calls } = await withIds([collisionUuid], upload);
-        expect(response.status).toBe(kind === "ordinary" ? 200 : kind === "task" ? 202 : 201);
+        expect(response.status).toBe(kind === "ordinary" || kind === "task" ? 200 : 201);
         const body = await response.json();
-        const attachment = (kind === "task" ? body.attachments[0] : body.attachment) as MultiremiAttachment;
+        if (kind === "task") expect(body.message.attachments).toHaveLength(1);
+        const attachment = (kind === "task" ? body.message.attachments[0] : body.attachment) as MultiremiAttachment;
         expect(calls).toBe(2);
         expect(attachment.id).toMatch(/^att_[0-9a-f]{32}$/);
         expect(attachment.id).not.toBe(existing.id);

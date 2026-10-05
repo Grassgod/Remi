@@ -136,7 +136,9 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).data.turn.wrap_up_requested_at).toBeTruthy();
   expect(store.listMessages(session.id)).toHaveLength(1);
   expect((await request(`/api/turns/${id}/cancel`, "POST", {})).data.turn.status).toBe("cancelled");
-  const retried = await request(`/api/turns/${id}/retry`, "POST", { cold: true });
+  store.setAgentRole(agent.id, "supervisor");
+  const supervisor = await store.createTaskAccessToken(store.getTask(oldAttempt!)!, "local");
+  const retried = await request(`/api/turns/${id}/retry`, "POST", { cold: true }, { Authorization: `Bearer ${supervisor.token}` });
   expect(retried.status).toBe(200); expect(retried.data.turn.id).toBe(id); expect(retried.data.turn.current_attempt_id).not.toBe(oldAttempt);
   expect(store.listTurns({ workspace_id: "local" })).toHaveLength(1); expect(store.listTurnAttempts(id)).toHaveLength(2);
   expect((await request(`/api/turns/${id}/trace`)).data.attempt_id).toBe(retried.data.turn.current_attempt_id);

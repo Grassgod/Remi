@@ -1,15 +1,21 @@
+import { isRelatedTurnController } from '../../store/turn-controls.js';
 import type { Context, Hono } from "hono";
 import { unlink } from "node:fs/promises";
 import { MESSAGE_KINDS, TURN_STATUSES, type SendMessageInput, type UnifiedMessage } from "@multiremi/contracts/unified-model.js";
-import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.js";
-import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canCurrentUserAccessAgent } from "../helpers/auth-guards.js";
+import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
+import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canCurrentUserAccessAgent, currentWorkspaceRole } from "../helpers/auth-guards.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { loadConversation, messageActor, messageResponse, canAccessConversationTask, conversationEntryVisibility } from "../helpers/conversations.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename, safeFilename, uploadedAttachmentPath } from "../helpers/uploads.js";
-import { currentTaskAccessToken } from "../wire/context.js";
+import { currentTaskAccessToken, currentRequestUserId } from "../wire/context.js";
 import { parseTraceWindow } from "../trace/request.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { supervisorTaskIdentity } from "../helpers/organizer.js";
+import { issueCommentCreateInput, issueMutationActor } from "../helpers/issues.js";
+import { OrganizerActionError } from "../../organizer/settings.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { issueDependencyErrorResponse } from "../wire/issues.js";
 
 class InputError extends Error {}
 function number(value: unknown, fallback?: number): number | undefined {
@@ -53,6 +59,8 @@ async function action(c: Context, run: () => unknown | Promise<unknown>): Promis
   catch (error) {
     if (error instanceof InputError) return c.json({ error: error.message }, 400);
     if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
+    if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+    if (error instanceof IssueDependencyError) return issueDependencyErrorResponse(c, error)!;
     if (error instanceof Error && /consumed|settled|running turn|retry|terminal|cancelled|pending attempt/i.test(error.message)) return c.json({ error: error.message }, 409);
     if (error instanceof Error && /not found|another workspace|recipient|required|within the log|Reply target|Source turn|Decision requires|attachment/i.test(error.message)) return c.json({ error: error.message }, 400);
     throw error;
@@ -70,9 +78,9 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   };
   const publicMessages = (messages: UnifiedMessage[]) => {
     const ids = messages.map(m => m.id);
-    const attachments = store.listAttachmentsForComments(ids), chatAttachments = store.listAttachmentsForChatMessages(ids);
+    const attachments = store.listAttachmentsForMessages(ids);
     const reactions = store.listCommentReactionsForComments(ids);
-    return messages.map(message => ({ ...messageResponse(message), attachments: [...(attachments.get(message.id) ?? []), ...(chatAttachments.get(message.id) ?? [])], reactions: reactions.get(message.id) ?? [] }));
+    return messages.map(message => ({ ...messageResponse(message), attachments: attachments.get(message.id) ?? [], reactions: reactions.get(message.id) ?? [] }));
   };
   const publicMessage = (message: UnifiedMessage) => publicMessages([message])[0]!;
   const loadMessage = (c: Context) => {
@@ -108,9 +116,11 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/sessions/:sessionId/messages", async (c) => {
     const conversation = loadConversation(c, store, c.req.param("sessionId"));
     if (conversation instanceof Response) return conversation;
-    const sender = messageActor(c, store, conversation.workspaceId);
-    if (sender instanceof Response) return sender;
+    if (conversation.chatId && store.getChatSession(conversation.chatId)?.status === "archived") {
+      return c.json({error:"Chat session is archived"},409);
+    }
     return action(c, async () => {
+      let sender: SendMessageInput['sender'];
       let input: Record<string, any>, files: File[] = [];
       if (c.req.header("Content-Type")?.startsWith("multipart/form-data")) {
         try {
@@ -120,6 +130,17 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         } catch { throw new InputError("invalid multipart message"); }
       } else input = await body(c);
       if (!input || typeof input !== "object" || Array.isArray(input)) throw new InputError("invalid message");
+      const author = issueCommentCreateInput(c, input, store, conversation.issueId ?? undefined);
+      if (author.authorType === "agent" && author.authorId) sender = { type: "agent", id: author.authorId };
+      else if (author.authorType === "member" && author.authorId) {
+        const member = store.getWorkspaceMember(author.authorId) ?? store.findWorkspaceMemberForUser(author.authorId, conversation.workspaceId);
+        if (!member || member.archivedAt || member.workspaceId !== conversation.workspaceId) throw new InputError("active workspace member required");
+        sender = { type: "member", id: member.id };
+      } else {
+        const actor = messageActor(c, store, conversation.workspaceId);
+        if (actor instanceof Response) return actor;
+        sender = actor;
+      }
       const kind = input.message_kind ?? (input.reply_to_id ? "reply" : "request"), wake = input.wake_requested ?? "now";
       if (!MESSAGE_KINDS.includes(kind) || !["now", "next_turn", "inbox_only"].includes(wake)) throw new InputError("invalid kind or wake");
       if (input.body_md != null && typeof input.body_md !== "string") throw new InputError("body_md must be a string");
@@ -156,20 +177,35 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         const attachment = store.getAttachment(id);
         if (!attachment || attachment.workspaceId !== conversation.workspaceId || denyAttachmentAccess(c, store, attachment)) throw new InputError("attachment not found");
       }
-      for (const file of files) { const error = chatAttachmentValidationError(file.name, file.size); if (error) throw new InputError(error); }
+      if (files.length + attachmentIds.length > 10) throw new InputError("at most 10 attachments are allowed per message");
+      for (const [index, file] of files.entries()) {
+        const filename = file.name || `file #${index + 1}`;
+        const error = chatAttachmentValidationError(filename, file.size);
+        if (error) {
+          if (file.size > CHAT_ATTACHMENT_MAX_BYTES) return c.json({ error }, 413);
+          throw new InputError(error);
+        }
+      }
       const sendInput: SendMessageInput = { session_id: conversation.id, sender, to, body_md: text, message_kind: kind, wake_requested: wake,
         reply_to_id: input.reply_to_id, dedupe_key: input.dedupe_key, options, attachment_ids: attachmentIds, source_turn_id: callerTurn(c) };
       const unusedUploads: Array<{ workspaceId: string; id: string; filename: string }> = [];
       const authorizeRecipient = (agent: Parameters<typeof canCurrentUserAccessAgent>[2]) => {
         if (!canCurrentUserAccessAgent(c, store, agent)) throw new IssueDecisionError(403, "you do not have access to this agent");
       };
-      const result = files.length ? await persistUploadedAttachments(conversation.workspaceId, files.map(file => ({ filename: safeFilename(file.name),
-        bytes: async () => new Uint8Array(await file.arrayBuffer()), contentType: file.type || detectContentTypeFromFilename(file.name) })),
+      const send = (uploads: Parameters<typeof store.sendMessage>[1] = []) => {
+        try { return store.sendMessage(sendInput,uploads,authorizeRecipient); }
+        catch(error){
+          if(error instanceof IssueDependencyError || error instanceof IssueDecisionError) throw error;
+          throw new InputError(error instanceof Error ? error.message : 'Message write failed');
+        }
+      };
+      const result = files.length ? await persistUploadedAttachments(conversation.workspaceId, files.map(file => ({ filename: conversation.chatId ? sanitizeChatAttachmentFilename(file.name) : safeFilename(file.name),
+        bytes: async () => new Uint8Array(await file.arrayBuffer()), contentType: file.type.split(";")[0] || detectContentTypeFromFilename(file.name) })),
         uploads => {
-          const sent = store.sendMessage(sendInput, uploads.map(upload => ({ ...upload, uploaderType: sender.type, uploaderId: sender.id })), authorizeRecipient);
+          const sent = send(uploads.map(upload => ({ ...upload, uploaderType: sender.type, uploaderId: sender.id })));
           for (const upload of uploads) if (!store.getAttachment(upload.id!)) unusedUploads.push({ workspaceId: conversation.workspaceId, id: upload.id!, filename: upload.filename });
           return sent;
-        }) : store.sendMessage(sendInput, [], authorizeRecipient);
+        }) : send();
       await Promise.all(unusedUploads.map(upload => unlink(uploadedAttachmentPath(upload))));
       return { ...result, message: publicMessage(result.message) };
     });
@@ -194,10 +230,10 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   for (const operation of ["resolve", "reactions"] as const) app.post(`/api/messages/:id/${operation}`, async c => {
     const loaded = loadMessage(c);
     if (loaded instanceof Response) return loaded;
-    const actor = messageActor(c, store, loaded.conversation.workspaceId);
-    if (actor instanceof Response) return actor;
     return action(c, async () => {
       const input = await body(c);
+      const mutation = issueMutationActor(c, input);
+      const actor = { type: mutation.actorType, id: mutation.actorId };
       if (operation === "resolve") return { message: publicMessage(store.resolveMessage(loaded.message.id, actor, boolean(input.resolved, true))) };
       if (typeof input.emoji !== "string" || !input.emoji.trim() || input.emoji.length > 64) throw new InputError("emoji is required");
       store.reactMessage(loaded.message.id, { emoji: input.emoji, actorType: actor.type, actorId: actor.id!, remove: boolean(input.remove, false) });
@@ -219,12 +255,12 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const scope = inboxScope(c);
     if (scope instanceof Response) return scope;
     return action(c, () => {
-      const visibility = new Map<string, boolean>();
-      const options = { limit: limit(c), cursor: cursor(c), visibleMessage: conversationEntryVisibility(c, store), visible: (id: string) => {
-        if (!visibility.has(id)) visibility.set(id, !(loadConversation(c, store, id) instanceof Response));
-        return visibility.get(id)!;
+      const role=currentWorkspaceRole(c,store,scope.workspaceId);
+      const options = { limit: limit(c), cursor: cursor(c), access: {
+        userId: currentRequestUserId(c), admin: role==='owner'||role==='admin',
+        attemptId: currentTaskAccessToken(c)?.taskId ?? undefined,
       } };
-      const page = scope.type === "member" ? store.listMessageInbox(scope.readerId, scope.workspaceId, options) : store.listReaderMessageInbox("agent", scope.readerId, scope.workspaceId, options);
+      const page = store.listReaderMessageInbox(scope.type,scope.readerId,scope.workspaceId,options);
       return { ...page, items: publicMessages(page.items), next_cursor: encodeCursor(page.next_cursor) };
     });
   });
@@ -236,13 +272,16 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (boolean(input.all, false)) {
         if (input.session_id != null || input.to_seq != null) throw new InputError("all cannot be combined with session_id or to_seq");
         const visible = (id: string) => !(loadConversation(c, store, id) instanceof Response);
-        return { conversations_read: scope.type === "member" ? store.readAllMessageInbox(scope.readerId, scope.workspaceId, visible) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, undefined, undefined, visible) };
+        const visibleMessage = conversationEntryVisibility(c, store);
+        return { conversations_read: scope.type === "member" ? store.readAllMessageInbox(scope.readerId, scope.workspaceId, visible, visibleMessage) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, undefined, undefined, visible, visibleMessage) };
       }
       if (typeof input.session_id !== "string") throw new InputError("session_id is required");
       const conversation = loadConversation(c, store, input.session_id);
-      if (conversation instanceof Response || conversation.workspaceId !== scope.workspaceId) throw new InputError("conversation not found");
+      if (conversation instanceof Response) return conversation;
+      if (conversation.workspaceId !== scope.workspaceId) throw new InputError("conversation not found");
       const seq = number(input.to_seq);
-      return { session_id: input.session_id, cursor_seq: scope.type === "member" ? store.readMessageInbox(scope.readerId, input.session_id, seq) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, input.session_id, seq) };
+      const visibleMessage = conversationEntryVisibility(c, store);
+      return { session_id: input.session_id, cursor_seq: scope.type === "member" ? store.readMessageInbox(scope.readerId, input.session_id, seq, visibleMessage) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, input.session_id, seq, undefined, visibleMessage) };
     });
   });
 
@@ -251,10 +290,15 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (!turn) return c.json({ error: "turn not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, turn.workspace_id);
     if (denied) return denied;
-    const conversation = loadConversation(c, store, turn.session_id);
-    if (conversation instanceof Response) return conversation;
     const task = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
-    if (task && !canAccessConversationTask(c, store, task)) return c.json({ error: "turn not found" }, 404);
+    if (task?.chatSessionId && !store.getChatSession(task.chatSessionId)) return c.json({ error: "forbidden" }, 403);
+    // Historical tasks without an Issue or Chat still have a migrated turn.
+    // Their workspace and source task are the read authority.
+    if (turn.issue_id || task?.chatSessionId) {
+      const conversation = loadConversation(c, store, turn.session_id);
+      if (conversation instanceof Response) return conversation;
+    }
+    if (task?.chatSessionId && !canAccessConversationTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
     return turn;
   };
   app.get("/api/turns", c => {
@@ -268,17 +312,11 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (status && !TURN_STATUSES.includes(status as any)) throw new InputError("invalid status");
       const sessionId = c.req.query("session_id") ?? c.req.query("chat");
       if (sessionId && loadConversation(c, store, sessionId) instanceof Response) throw new InputError("conversation not found");
-      let after = cursor(c);
-      const turns = [];
-      while (turns.length <= n) {
-        const chunk = store.listTurns({ workspace_id: workspaceId, issue_id: issue?.id, session_id: sessionId, agent_id: c.req.query("agent"), status, limit: n + 1, cursor: after });
-        for (const turn of chunk) {
-          const task = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
-          if (!(loadConversation(c, store, turn.session_id) instanceof Response) && (!task || canAccessConversationTask(c, store, task))) turns.push(turn);
-        }
-        if (chunk.length < n + 1 || turns.length > n) break;
-        after = chunk.at(-1);
-      }
+      const role = currentWorkspaceRole(c, store, workspaceId);
+      const turns = store.listTurns({ workspace_id: workspaceId, issue_id: issue?.id, session_id: sessionId,
+        agent_id: c.req.query("agent"), status, limit: n + 1, cursor: cursor(c), visibility: {
+          userId: currentRequestUserId(c), admin: role === "owner" || role === "admin", attemptId: currentTaskAccessToken(c)?.taskId ?? undefined,
+        } });
       return { turns: turns.slice(0, n), next_cursor: turns.length > n ? encodeCursor(turns[n - 1]!) : null };
     });
   });
@@ -287,6 +325,8 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (turn instanceof Response) return turn;
     return action(c, () => {
       for (const key of ["input", "attempts"]) if (c.req.query(key) != null && !["true", "false"].includes(c.req.query(key)!)) throw new InputError(`invalid ${key}`);
+      const source = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
+      if (c.req.query("input") === "true" && source && !canAccessConversationTask(c, store, source)) return c.json({error:"forbidden"},403);
       const input = c.req.query("input") === "true" ? store.getTurnInput(turn.id) : null;
       return { turn, ...(input ? { input: { ...input, messages: publicMessages(input.messages.filter(conversationEntryVisibility(c, store))) } } : {}),
         ...(c.req.query("attempts") === "true" ? { attempts: store.listTurnAttempts(turn.id) } : {}) };
@@ -296,15 +336,35 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const turn = loadTurn(c);
     if (turn instanceof Response) return turn;
     const token = currentTaskAccessToken(c);
-    if (token && token.agentId !== turn.agent_id) return c.json({ error: "only this turn's agent may control it" }, 403);
+    const supervisor = supervisorTaskIdentity(c, store);
+    const target = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
+    if (target && !canAccessConversationTask(c,store,target)) return c.json({error:"turn not found"},404);
+    const related = !!token?.agentId && !!target && isRelatedTurnController(store, token.agentId, target);
+    if (operation === "retry") {
+      if (!supervisor && !related) return c.json({ error: "supervisor or related controller task credential required", code: "organizer_supervisor_required" }, 403);
+      const controller = supervisor?.task ?? (token?.taskId ? store.getTask(token.taskId) : null);
+      const sourceSession = controller?.issueSessionId ? store.getIssueSession(controller.issueSessionId) : null;
+      if (sourceSession && sourceSession.inheritMode !== "none") return c.json({ error: "Agent delegation is not allowed from side sessions" }, 403);
+    } else if (token && token.agentId !== turn.agent_id && !supervisor && !related) {
+      return c.json({ error: "only this turn's agent or its supervisor may control it" }, 403);
+    }
     return action(c, async () => {
       const input = await body(c);
-      return { turn: operation === "cancel" ? store.cancelTurn(turn.id) : operation === "wrap-up" ? store.wrapUpTurn(turn.id) : store.retryTurn(turn.id, boolean(input.cold, false)) };
+      if (operation === "retry") {
+        boolean(input.cold, false);
+        if (!turn.current_attempt_id) throw new InputError("attempt not found");
+        const result = store.performOrganizerAction({ supervisorTaskId: supervisor?.task.id ?? token!.taskId!, supervisorAgentId: supervisor?.agentId ?? token!.agentId!,
+          targetTaskId: turn.current_attempt_id, action: "redispatch", reason: input.reason ?? "Retry requested through turn API", cold: boolean(input.cold,false) });
+        return { turn: store.getTurn(turn.id), organizer_action: result.audit, comment_id: result.comment.id };
+      }
+      return { turn: operation === "cancel" ? store.cancelTurn(turn.id) : store.wrapUpTurn(turn.id) };
     });
   });
   app.get("/api/turns/:id/trace", async c => {
     const turn = loadTurn(c);
     if (turn instanceof Response) return turn;
+    const source = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
+    if (source && !canAccessConversationTask(c, store, source)) return c.json({error:"turn not found"},404);
     const window = parseTraceWindow(c);
     if (!window) return c.json({ error: "invalid trace window" }, 400);
     const attemptId = c.req.query("attempt_id") ?? turn.current_attempt_id;

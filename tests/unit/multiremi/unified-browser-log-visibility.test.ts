@@ -20,7 +20,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
   async function scaffold(shared = false) {
     const { store, db, databaseUrl } = fixture();
     const user = store.getOrCreateUser({ externalId: "ws-member", name: "Member" });
-    store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
+    const recipient = store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const sourceOwner = store.getOrCreateUser({ externalId: "ws-source-owner", name: "Source owner" });
     store.createWorkspaceMember({ userId: sourceOwner.id, name: sourceOwner.name, role: "member" });
     const agent = store.createAgent({ name: "Source", provider: "codex", visibility: shared ? "workspace" : "private", ownerId: sourceOwner.id });
@@ -46,12 +46,20 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       const turn = store.getTurnForAttempt(task.id)!;
       return { task, request, turn, row: store.getConversationLogEntryById(request.id)! };
     }
-    function start() {
-      detach = store.subscribeConversationLog({ onEntry: (id, row) => {
+    function start(live = true) {
+      if (live) detach = store.subscribeConversationLog({ onEntry: (id, row) => {
         hub.onEntry(id, "target_seq" in row ? { ...row, session_id: id } : row);
         hub.flushNow();
       } });
       server = startMultiremiServer({ store, liveHub: hub, readPool: pool, authToken: null, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    }
+    async function request(path: string, auth: string, body?: unknown) {
+      const response = await fetch(`http://127.0.0.1:${server!.port}${path}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { Authorization: `Bearer ${auth}`, "Content-Type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, data: await response.json() as any };
     }
     async function connect(auth: string) {
       const socket = new WebSocket(`ws://127.0.0.1:${server!.port}/ws?workspace_id=local`);
@@ -82,7 +90,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       hub.shutdown();
       await pool.close();
     }
-    return { store, db, agent, issue, session, member, owner, hub, question, start, connect, close };
+    return { store, db, agent, issue, session, recipient, member, owner, hub, question, start, request, connect, close };
   }
   function noCredentials(value: unknown) {
     if (Array.isArray(value)) { value.forEach(noCredentials); return; }
@@ -128,6 +136,80 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       });
       expect(JSON.stringify(member.frames())).not.toContain("PRIVATE");
       expect(member.frames().some(frame => frame.payload.id === reply.id)).toBe(false);
+    } finally { await f.close(); }
+  });
+
+  async function readReply(f: Awaited<ReturnType<typeof scaffold>>, id: string, auth: string, visible: boolean) {
+    const path = `/api/sessions/${f.session.id}`;
+    for (const route of [`/api/messages/${id}`, `${path}/log/entry?id=${id}`, `${path}/log/locate?id=${id}`]) {
+      expect((await f.request(route, auth)).status).toBe(visible ? 200 : 404);
+    }
+    for (const [route, field] of [[`${path}/messages`, "messages"], [`${path}/log`, "entries"],
+      [`${path}/messages?from=0&to=${f.store.getConversationLogHead(f.session.id)!.headSeq}`, "entries"]]) {
+      const result = await f.request(route!, auth);
+      expect(result.status).toBe(200);
+      expect(result.data[field!].some((row: any) => row.id === id)).toBe(visible);
+      noCredentials(result.data);
+    }
+  }
+
+  for (const answer of ["option", "response"] as const) it(`M1: ordinary member decision ${answer} reply remains visible in HTTP and WS replay`, async () => {
+    const f = await scaffold();
+    try {
+      f.start(false);
+      const path = `/api/sessions/${f.session.id}/messages`;
+      const sent = await f.request(path, f.owner.token, { body_md: "Choose", message_kind: "decision",
+        to: { type: "member", ref: f.recipient.id }, options: [{ label: "Yes", value: "yes" }], wake_requested: "inbox_only" });
+      expect(sent.status).toBe(200);
+      const q = sent.data.message;
+      expect(q.task_id).toBeNull();
+      expect(q.metadata.human_request).toBeUndefined();
+      const expectedResponse = answer === "option" ? { selected_options: ["yes"] } : { answer: "yes", reason: "Member decision" };
+      const response = answer === "option" ? { metadata: expectedResponse }
+        : { body_md: "Yes, proceed", response: expectedResponse };
+      const answered = await f.request(path, f.member.token, { message_kind: "reply", reply_to_id: q.id, ...response });
+      expect(answered.status).toBe(200);
+      const reply = answered.data.message;
+      expect(reply.task_id).toBeNull();
+      expect(reply.reply_to_id).toBe(q.id);
+      expect(reply.metadata.human_response).toMatchObject(expectedResponse);
+      expect(f.store.getMessage(q.id)?.resolved_at).toBeTruthy();
+      expect((await f.request(path, f.member.token, { reply_to_id: q.id, ...response })).status).toBe(409);
+      for (const auth of [f.owner.token, f.member.token]) {
+        await readReply(f, reply.id, auth, true);
+        const browser = await f.connect(auth);
+        await browser.subscribe(1); await browser.through(reply.seq);
+        expect(browser.frames().find(frame => frame.seq === reply.seq)?.payload).toMatchObject({
+          id: reply.id, body_md: reply.body_md, metadata: { human_response: reply.metadata.human_response },
+        });
+        noCredentials(browser.frames());
+      }
+    } finally { await f.close(); }
+  });
+
+  for (const kind of ["permission", "question"] as const) it(`M1: answered private task ${kind} remains hidden in HTTP and WS replay`, async () => {
+    const f = await scaffold();
+    try {
+      const q = f.question(kind); f.start();
+      const path = `/api/sessions/${f.session.id}/messages`;
+      const answered = await f.request(path, f.owner.token, { reply_to_id: q.request.id,
+        response: kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } } });
+      expect(answered.status).toBe(200);
+      const reply = answered.data.message;
+      expect(reply.reply_to_id).toBe(q.request.id);
+      expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("responded");
+      await readReply(f, q.request.id, f.member.token, false);
+      await readReply(f, reply.id, f.member.token, false);
+      await readReply(f, reply.id, f.owner.token, true);
+      const member = await f.connect(f.member.token), owner = await f.connect(f.owner.token);
+      await member.subscribe(1); await owner.subscribe(1);
+      await member.through(reply.seq); await owner.through(reply.seq);
+      privateRowsHidden(member.frames(), [q.request.id, q.turn.id, q.task.id, reply.id]);
+      expect(member.frames().find(frame => frame.seq === reply.seq)?.payload).toEqual({
+        session_id: f.session.id, seq: reply.seq, revision: reply.revision, visibility: "hidden",
+      });
+      expect(owner.frames().find(frame => frame.seq === reply.seq)?.payload.id).toBe(reply.id);
+      noCredentials(owner.frames());
     } finally { await f.close(); }
   });
 

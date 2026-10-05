@@ -493,24 +493,26 @@ describe("Multiremi API — authentication and token scoping", () => {
       code: "task_token_hard_denied",
     });
 
-    const taskTokenComment = await app.request(`/api/issues/${taskTokenIssue.id}/comments`, {
+    const taskTokenComment = await app.request(`/api/sessions/${store.getOrCreateDefaultIssueSession(taskTokenIssue.id).id}/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${taskTokenClaimBody.task.auth_token}`,
       },
       body: JSON.stringify({
-        content: "agent-authenticated comment",
+        body_md: "agent-authenticated comment",
         authorType: "member",
         authorId: "forged-member",
       }),
     });
-    expect(taskTokenComment.status).toBe(201);
+    expect(taskTokenComment.status).toBe(200);
     const taskTokenCommentBody = await taskTokenComment.json();
     expect(taskTokenCommentBody).toMatchObject({
-      author_type: "agent",
-      author_id: taskTokenAgent.id,
-      content: "agent-authenticated comment",
+      message: {
+        sender_type: "agent",
+        sender_id: taskTokenAgent.id,
+        body_md: "agent-authenticated comment",
+      },
     });
 
     store.completeTask(taskTokenTask.id, { output: "done" });

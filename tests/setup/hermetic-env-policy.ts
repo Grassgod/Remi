@@ -104,6 +104,7 @@ export const HERMETIC_ENV_RUN_ROOT_PATHS: Readonly<Record<string, string>> = {
   MULTIREMI_SESSION_ARCHIVE_ROOT: "session-archives",
   MULTIREMI_PLUGIN_CACHE_ROOT: "plugin-cache",
   MULTIREMI_UPLOAD_DIR: "uploads",
+  MULTIREMI_MIGRATION_REPORT_DIR: "reports/migrations",
   MULTIREMI_CONFIG: "config.json",
   REMI_HOME: "remi-home",
 };

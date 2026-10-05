@@ -1,3 +1,4 @@
+import { turnApiPath } from "../unit/multiremi/unified-test-paths.js";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { Hono } from "hono";
@@ -105,8 +106,8 @@ export async function runC1Worker(input: {
           shareToken = body.share.token;
         }
         const paths = [
-          [`/api/tasks/${longTaskId}/messages`, "GET /api/tasks/:taskId/messages"],
-          [`/api/multiremi/tasks/${longTaskId}/messages`, "GET /api/multiremi/tasks/:id/messages"],
+          [turnApiPath(store, longTaskId, "/trace"), "GET /api/turns/:id/trace"],
+          [turnApiPath(store, longTaskId, "/trace"), "GET /api/turns/:id/trace"],
           [`/api/daemon/tasks/${longTaskId}/messages`, "GET /api/daemon/tasks/:taskId/messages"],
           [`/api/shares/${shareToken}`, "GET /api/shares/:token"],
         ];

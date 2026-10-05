@@ -2,6 +2,7 @@ import { createAutopilotRunReadProjection } from "./autopilot-run-records.js";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
 import type { SqlDatabase } from "./db/postgres.js";
 import { autopilotSessionId } from "@multiremi/contracts/unified-model.js";
 import { createTurnExecutionReadProjection } from "./turn-execution-records.js";
@@ -545,7 +546,8 @@ export function reconcileUnifiedModel(db: SqlDatabase, before?: UnifiedModelRepo
 
 /** A single cutover transaction; rejected preflight never mutates model data. */
 export function runUnifiedModelMigration(db: SqlDatabase, options: { reportDir?: string } = {}): UnifiedModelReport {
-  const reportDir = options.reportDir ?? "reports/migrations";
+  const reportDir = resolveMigrationReportDirectory(options.reportDir);
+  prepareMigrationReportDirectory(reportDir);
   const applied = db.query("SELECT applied_at FROM multiremi_schema_migrations WHERE id=?").get(UNIFIED_MODEL_MIGRATION);
   if (applied) {
     db.transaction(() => ensurePostgresAttemptTurnForeignKey(db))();

@@ -3,17 +3,21 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { ReadPool } from "@multiremi/store/db/read-pool.js";
 import { toConversationLogEntry } from "@multiremi/store/repos/conversation-log-repo.js";
 import type { MultiremiWebSocketClient } from "../helpers/realtime-types.js";
-import { conversationEntryDecisionId, conversationEntrySource, stripCardTokenFields, type ConversationVisibilityEntry } from "../helpers/conversations.js";
+import { conversationEntrySource, conversationEntryDecision, stripCardTokenFields, type ConversationVisibilityEntry } from "../helpers/conversations.js";
 import { canUserViewTaskMessages, createTaskAuthMemo } from "../helpers/auth-guards.js";
-import { createPostgresStreamAuthReader, decideTraceSubscription } from "./stream-auth.js";
+import { createPostgresStreamAuthReader, createSqliteStreamAuthReader, decideLogSubscription, decideTraceSubscription } from "./stream-auth.js";
 
 /** The Hub ring is shared. Project at the socket boundary for each recipient. */
 export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool | null) {
   const postgres = pool?.postgres ? pool : null;
-  const auth = postgres ? createPostgresStreamAuthReader(postgres) : null;
+  const auth = postgres ? createPostgresStreamAuthReader(postgres) : createSqliteStreamAuthReader(store);
   return async (client: MultiremiWebSocketClient, sessionId: string, frames: readonly HubFrame[]): Promise<HubFrame[]> => {
     if (client.data.kind !== "browser" || !client.data.authenticated) return [];
     const subject = { userId: client.data.userId, workspaceId: client.data.workspaceId };
+    const sessionFacts = await auth.logFacts(sessionId, subject);
+    if (!sessionFacts.ok) throw new Error("Session visibility unavailable");
+    if (!decideLogSubscription(subject, sessionFacts.facts).ok) return [];
+    if (!frames.length) return [];
     const seqs = [...new Set(frames.map(frame => frame.seq))];
     const rows = postgres
       ? (await postgres.query<Record<string, unknown>>(
@@ -24,7 +28,10 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
     const byId = new Map(rows.map(row => [row.id, row]));
     let frontier = rows;
     for (let depth = 0; depth <= 4 && frontier.length; depth++) {
-      const replies = [...new Set(frontier.flatMap(row => row.parent_id && !byId.has(row.parent_id) ? [row.parent_id] : []))];
+      const replies = [...new Set(frontier.flatMap(row => {
+        const id = row.parent_id ?? (typeof row.metadata.message_id === "string" ? row.metadata.message_id : null);
+        return id && !byId.has(id) ? [id] : [];
+      }))];
       const targets = [...new Set(frontier.flatMap(row => Number.isSafeInteger(row.metadata.target_seq)
         && !bySeq.has(Number(row.metadata.target_seq)) ? [Number(row.metadata.target_seq)] : []))];
       if (!replies.length && !targets.length) break;
@@ -39,20 +46,27 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
       for (const row of related) { byId.set(row.id, row); bySeq.set(row.seq, row); }
       frontier = related;
     }
-    // Use the same decision relation guard as HTTP, including marker targets
-    // and replies. PostgreSQL reads stay on the asynchronous read pool.
-    const decisionIds = [...new Set([...bySeq.values()].flatMap(row => conversationEntryDecisionId(row) ?? []))];
-    const decisions = new Set(postgres && decisionIds.length
-      ? (await postgres.query<{ id: string }>(
-        `SELECT d.id FROM multiremi_message_decision_records d
-         JOIN multiremi_issues target ON target.id=d.issue_id AND target.workspace_id=d.workspace_id
-         JOIN multiremi_issues source ON source.id=d.source_issue_id AND source.workspace_id=d.workspace_id
-         WHERE d.workspace_id=? AND d.id IN (${decisionIds.map(() => "?").join(",")})`,
-        [subject.workspaceId, ...decisionIds])).map(row => row.id)
-      : decisionIds.filter(id => store.getIssueDecisionAnywhere(id)?.workspaceId === subject.workspaceId));
-    const allowed = new Map<string, boolean>(), memo = createTaskAuthMemo();
+    const allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>(), memo = createTaskAuthMemo();
     const visible = async (entry: ConversationVisibilityEntry) => {
-      const sourceId = conversationEntrySource(entry, id => byId.get(id), seq => bySeq.get(seq), id => decisions.has(id));
+      const decision = conversationEntryDecision(entry, id => byId.get(id), seq => bySeq.get(seq));
+      if (decision === null) return false;
+      if (decision) {
+        if (!decision.id) return false;
+        if (!decisions.has(decision.id)) {
+          if (postgres) {
+            const row = await postgres.queryOne<{ id: string }>(`SELECT d.id FROM multiremi_message_decision_records d
+              JOIN multiremi_issues source ON source.id=d.source_issue_id AND source.workspace_id=d.workspace_id
+              JOIN multiremi_issues target ON target.id=d.issue_id AND target.workspace_id=d.workspace_id
+              WHERE d.id=? AND d.workspace_id=?`, [decision.id, subject.workspaceId]);
+            decisions.set(decision.id, !!row);
+          } else {
+            const session = store.getIssueSession(decision.session_id ?? "");
+            decisions.set(decision.id, !!session && !!store.getIssueDecision(session.issueId, decision.id));
+          }
+        }
+        if (!decisions.get(decision.id)) return false;
+      }
+      const sourceId = conversationEntrySource(entry, id => byId.get(id), seq => bySeq.get(seq));
       if (sourceId === undefined) return true;
       if (!sourceId) return false;
       if (!allowed.has(sourceId)) {

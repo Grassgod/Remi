@@ -3,6 +3,7 @@
 // scoping), and may this user reach this workspace/agent/attachment. `deny*` helpers return a
 // ready-made Response when access is refused and null when it is allowed.
 import type { Context } from "hono";
+import { conversationEntryVisibility } from "./conversations.js";
 import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { daemonRuntimeId } from "@multiremi/store/helpers.js";
@@ -359,9 +360,11 @@ export function compatibilityInboxScope(
   // Inbox rows use member ids. Resolve only inside the selected workspace,
   // and never let a human/task credential select another member's inbox.
   // Keep the workspace in the scope: a moved member can retain older inbox rows.
-  const exact = store.getWorkspaceMember(raw);
-  const member = (exact?.workspaceId === workspaceId ? exact : null)
-    ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
+  const own=currentWorkspaceMember(c,store,workspaceId);
+  const exact=requested ? store.getWorkspaceMember(raw) ?? (raw===userId||raw===own?.userId ? own : null) : own;
+  const member=(exact?.workspaceId===workspaceId ? exact : null)
+    ?? (own?.userId===raw ? own : null)
+    ?? (requested ? store.listWorkspaceMembers(workspaceId).find(candidate=>candidate.userId===raw) : null)
     ?? exact;
   if (member && (member.workspaceId !== workspaceId
     || (userId && member.userId !== userId))) {
@@ -383,7 +386,7 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
     return c.json({ error: "runtime not found" }, 404);
   }
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (token?.type !== "task" && userId && (userId !== "local" || humanPat || !token) && !currentWorkspaceMember(c, store, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
@@ -646,7 +649,7 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (token?.type !== "task" && userId && (userId !== "local" || humanPat || !token) && !currentWorkspaceMember(c, store, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;
@@ -675,10 +678,23 @@ export function loadChatSessionForCurrentUser(
   if ((session.creatorId ?? "local") !== currentRequestUserId(c)) {
     return c.json({ error: "not your chat session" }, 403);
   }
-  if (options.requireAgentAccess !== false && !canCurrentUserAccessChatSessionAgent(c, store, session)) {
+  if (!canUserAccessChatSessionFacts(currentRequestUserId(c), {
+    creatorId: session.creatorId ?? "local", requesterIsMember: true,
+    requesterCanAccessAgent: options.requireAgentAccess === false || canCurrentUserAccessChatSessionAgent(c, store, session),
+  })) {
     return c.json({ error: "you do not have access to this agent" }, 403);
   }
   return { session };
+}
+
+/** HTTP and log subscriptions share the creator, membership and agent boundary. */
+export function canUserAccessChatSessionFacts(userId: string | null, facts: {
+  creatorId: string | null;
+  requesterIsMember: boolean;
+  requesterCanAccessAgent?: boolean;
+}): boolean {
+  return (facts.creatorId ?? "local") === (userId ?? "local")
+    && (userId == null || facts.requesterIsMember) && facts.requesterCanAccessAgent === true;
 }
 
 export function canCurrentUserAccessChatSessionAgent(
@@ -695,6 +711,9 @@ export function canCurrentUserAccessChatSessionAgent(
 // comment, and free-standing attachments are scoped to the attachment workspace.
 // Returns a denial Response when access is forbidden, or null when allowed.
 export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
+  const messageId = attachment.commentId ?? attachment.chatMessageId;
+  const message = messageId ? store.getMessage(messageId) : null;
+  if (message && !conversationEntryVisibility(c, store)(message)) return c.json({ error: "attachment not available" }, 404);
   // Inbound files are private staging objects until submit atomically links them
   // to their Chat. Workspace membership must not expose an unlinked private file.
   if (attachment.uploaderType === "daemon" && !attachment.chatSessionId
@@ -708,10 +727,12 @@ export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachme
       if ((c.req.method === "GET" || c.req.method === "HEAD")
         && task?.chatSessionId === attachment.chatSessionId
         && task.workspaceId === attachment.workspaceId
-        && token.workspaceId === attachment.workspaceId) return null;
+        && token.workspaceId === attachment.workspaceId
+        && token.agentId === task.agentId
+        && store.getTurnForAttempt(task.id)?.current_attempt_id === token.taskId) return null;
       return c.json({ error: "attachment not available" }, 404);
     }
-    const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
+    const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId);
     return loaded instanceof Response ? loaded : null;
   }
   if (attachment.commentId) {

@@ -72,6 +72,14 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
 
   bindTurn(input: DaemonTurnInput): void {
     this.turns.set(input.attempt_id, { turnId: input.turn_id, inputToSeq: input.input_to_seq, wrapUpAt: null });
+    // Offer inputs have already reached this provider. A decision receipt must
+    // include them when it advances past the original, still unacknowledged range.
+    const delivered = new Set<string>();
+    for (const message of input.input_messages) {
+      this.inputSeqs.set(`${input.attempt_id}:${message.id}`, message.seq);
+      delivered.add(message.id);
+    }
+    this.confirmedDecisionInputs.set(input.attempt_id, delivered);
   }
 
   turnInput(attemptId: string): { turn_id: string; attempt_id: string; input_to_seq: number } {

@@ -206,18 +206,30 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
             expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
             expect(await transport(f, f.path)).toEqual([404, 404]);
-            const memberRead = await f.app.request(`/api/sessions/${store.getMessage(f.decision.id)!.session_id}/messages?message_kind=decision`, {
+            const sessionId = store.getMessage(f.decision.id)!.session_id;
+            const memberRead = await f.app.request(`/api/sessions/${sessionId}/messages?message_kind=decision`, {
               headers: { Authorization: `Bearer ${f.pat}` },
             });
-            expect(memberRead.status).toBe(endpoint === "target" ? 404 : 200);
+            // B4 A: Session workspace grants access; decision rows retain their relationship filter.
+            expect(memberRead.status).toBe(200);
             expect(await memberRead.text()).not.toContain(f.decision.title);
             const memberHeaders = { Authorization: `Bearer ${f.pat}` };
             expect((await f.app.request(`/api/messages/${f.decision.id}`, { headers: memberHeaders })).status).toBe(404);
-            const logPath = `/api/sessions/${store.getMessage(f.decision.id)!.session_id}/log`;
+            const logPath = `/api/sessions/${sessionId}/log`;
             const log = await f.app.request(logPath, { headers: memberHeaders });
-            expect(log.status).toBe(endpoint === "target" ? 404 : 200);
+            expect(log.status).toBe(200);
             expect(await log.text()).not.toContain(f.decision.title);
             expect((await f.app.request(`${logPath}/entry?id=${f.decision.id}`, { headers: memberHeaders })).status).toBe(404);
+            if (endpoint === "target") {
+              const foreignUser = store.getOrCreateUser({ externalId: `foreign_${sessionId}`, name: "W2-only member" });
+              store.createWorkspaceMember({ workspaceId: f.foreignId, userId: foreignUser.id, name: foreignUser.name, role: "member" });
+              const foreignPat = await store.createAccessToken({ workspaceId: f.foreignId, userId: foreignUser.id, name: "W2-only member", type: "pat" });
+              const foreignRead = await f.app.request(`/api/sessions/${sessionId}/messages?message_kind=decision`, {
+                headers: { Authorization: `Bearer ${foreignPat.token}` },
+              });
+              expect(foreignRead.status).toBe(404);
+              expect(await foreignRead.text()).not.toContain(f.decision.title);
+            }
             expect(snapshot()).toEqual(before);
             expect(events).toEqual([]);
           } finally { for (const stop of stops) stop(); }
