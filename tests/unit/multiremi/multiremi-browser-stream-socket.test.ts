@@ -358,7 +358,7 @@ describe("MUL-438 browser stream endpoints", () => {
       traceSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "trace", id: task.id, from_seq: 1 } }));
       expect(await nextWebSocketMessage(traceSocket)).toEqual({
         type: "stream.ack",
-        payload: { stream: "trace", id: task.id, first_seq: 1, head_seq: 0, log_version: null, gap: null },
+        payload: { stream: "trace", id: task.id, first_seq: 1, head_seq: 0, log_version: null, gap: null, closed: false },
       });
       traceSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "log", id: session.id, from_seq: 1 } }));
       expect(await nextWebSocketMessage(traceSocket)).toEqual({

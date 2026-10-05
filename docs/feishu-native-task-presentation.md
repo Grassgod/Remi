@@ -9,7 +9,9 @@ onEvents)`. A new or recovered presentation replays canonical history from zero
 to reconstruct answer text, tool identity and statistics. Its saved
 `presentation_checkpoint.throughSeq` suppresses native events already
 acknowledged; it is not used to skip the state needed to reconstruct the final
-answer. Replay is consumed in bounded pages with consumer backpressure.
+answer. Replay also resumes a saved interaction card whose receipt or waiting
+step is unfinished, without repeating its card or waiting announcement.
+Replay is consumed in bounded pages with consumer backpressure.
 The established subscription still owns cursor-based reconnect replay and gap
 filling. The connector performs no messages or status polling, and reads a final
 display snapshot once after `closed`.

@@ -956,7 +956,7 @@ describe("Bun Multiremi daemon smoke", () => {
         { seq: 1, type: "execution", tool: null, content: null, input: null, output: null },
         { seq: 2, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
         { seq: 3, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: null },
-        { seq: 4, type: "tool_result", tool: "Read", content: null, input: null, output: "{\"content\":\"file body\"}" },
+        { seq: 4, type: "tool_result", tool: "Read", content: null, input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
         { seq: 5, type: "text", tool: null, content: "Smoke completed", input: null, output: null },
         { seq: 6, type: "usage", tool: null, content: null, input: null, output: null },
         { seq: 7, type: "execution", tool: null, content: null, input: null, output: null },
@@ -1151,7 +1151,8 @@ describe("Bun Multiremi daemon smoke", () => {
 
       void daemon.start();
       await waitForCondition(() => store.getTask(task.id)?.status === "completed"
-        && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId }).some(state => state.status === "ready"), 5_000);
+        && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId }).some(state => state.status === "ready")
+        && store.listSessionArchivesForSubject("task", task.id).some(archive => archive.status === "ready"), 5_000);
       await daemon.stopAndDrainTestWork();
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Plugin completed" });
       expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
@@ -3954,7 +3955,7 @@ async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Pr
     port: 0,
   });
   try {
-    const daemon = new MultiremiDaemon({
+    expect(() => new MultiremiDaemon({
       sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
@@ -3970,13 +3971,9 @@ async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Pr
       providerFactory: () => {
         throw new Error("symlinked Provider Home must fail before provider creation");
       },
-    });
-    await daemon.start();
+    })).toThrow(`Unsafe trace directory: ${join(workspacesRoot, ".runtime")}`);
 
-    expect(store.getTask(task.id)).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("must be a real directory"),
-    });
+    expect(store.getTask(task.id)?.status).toBe("queued");
     expect(existsSync(externalGc)).toBe(false);
     if (receipt) expect(readFileSync(receipt, "utf8")).toBe("keep-receipt\n");
   } finally {

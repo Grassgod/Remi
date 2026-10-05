@@ -11,7 +11,9 @@ import enUI from "../../locales/en/ui.json";
 
 const download = vi.hoisted(() => vi.fn());
 vi.mock("../../editor/use-download-attachment", () => ({ useDownloadAttachment: () => download }));
-vi.mock("../../common/task-transcript/use-task-trace", () => ({ useTaskTrace: () => [] }));
+vi.mock("../../common/task-transcript/use-task-trace", () => ({
+  useTaskTraceState: () => ({ events: [], closed: false, error: false }),
+}));
 vi.mock("@multiremi/core/config", () => ({ useConfigStore: (selector: (s: { cdnDomain: string }) => unknown) => selector({ cdnDomain: "" }) }));
 vi.mock("@multiremi/core/paths", async importOriginal => {
   const actual = await importOriginal<typeof import("@multiremi/core/paths")>();

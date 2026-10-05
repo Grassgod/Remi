@@ -212,18 +212,15 @@ describe("trace file and archive request contract", () => {
 
   it("pins the trailer status vocabulary and never borrows the event one", () => {
     expect([...TRACE_END_STATUSES]).toEqual(["completed", "failed", "cancelled"]);
-    // `cancelled` is a turn outcome with no event counterpart, and the event
-    // vocabulary's `pending` / `in_progress` are not turn outcomes: the two
+    // The event vocabulary's `pending` / `in_progress` are not turn outcomes: the two
     // lists must stay different, or the trailer would accept a lifecycle value.
     expect(TRACE_END_STATUSES).not.toContain("pending" as never);
     expect(TRACE_END_STATUSES).not.toContain("in_progress" as never);
-    // The event status vocabulary stays the sole source for an event's `status`
-    // field, and B0 must not have collapsed the two concepts into one list: at
-    // least one trailer status (`cancelled`) is not an event status. Stated as a
-    // difference rather than an equality, so A-side may extend its own list.
+    // Tool cancellation is also an event outcome, but nonterminal event states
+    // must never enter the trailer vocabulary.
     expect(
-      TRACE_END_STATUSES.some(
-        (status) => !(TRACE_EVENT_STATUSES as readonly string[]).includes(status),
+      TRACE_EVENT_STATUSES.some(
+        (status) => !(TRACE_END_STATUSES as readonly string[]).includes(status),
       ),
     ).toBe(true);
   });
