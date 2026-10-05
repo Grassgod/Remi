@@ -54,7 +54,7 @@
    ```
 
    若正式版号不高于拒绝用例中的旧版号，停止填写并核对发布方案，不放宽断言。发布前核对 `package.json`、正式 tag、Release 资产、常量及目标 main SHA；此处定向检查不替代发布负责人确认的发版门禁。
-2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。
+2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。[209 数据副本演练步骤与脚本](../migrations/unified-model-copy-rehearsal.md)已准备；本任务不执行。执行须贺华杰批准，由 Remi-CC 完成，取得行数、Issue 抽样、真实读进度和恢复耗时证据后再申请生产窗口。
 3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
 
    ```bash
