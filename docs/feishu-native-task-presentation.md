@@ -4,16 +4,22 @@ New inbound chats, Issue topic replies and proactive Task reports use
 `FeishuTaskPresentation`. Agent execution, Chat Session identity, trace events
 and human responses remain on the existing Task pipeline.
 
-The co-resident connector consumes `daemon.subscribeTrace(taskId, throughSeq,
-onEvents)`. `throughSeq` comes from `presentation_checkpoint` and means the last
-acknowledged event; the next delivered event is `throughSeq + 1`. Subscription
-code owns reconnect replay and gap filling. The connector performs no messages
-or status polling, and reads a final display snapshot once after `closed`.
+The co-resident connector consumes `daemon.subscribeTrace(taskId, fromSeq,
+onEvents)`. A new or recovered presentation replays canonical history from zero
+to reconstruct answer text, tool identity and statistics. Its saved
+`presentation_checkpoint.throughSeq` suppresses native events already
+acknowledged; it is not used to skip the state needed to reconstruct the final
+answer. Replay is consumed in bounded pages with consumer backpressure.
+The established subscription still owns cursor-based reconnect replay and gap
+filling. The connector performs no messages or status polling, and reads a final
+display snapshot once after `closed`.
 `FeishuCotTimeline` accepts canonical `TraceEvent`, including `tool_call_id` and
 `ts`; unknown types retain their type and complete payload in the native stream.
 If a tool result arrives after a checkpoint without its earlier invocation,
 `tool_call_id` reconstructs the same display ID. The renderer sends the result
-without re-sending the acknowledged tool start or reading older trace events.
+without re-sending an acknowledged tool start. Unsent placeholder tools are
+recorded separately in the existing checkpoint as `deferredToolIds`, so their
+first complete invocation can still be presented after recovery.
 An unpinned provider session remains unnamed until the final snapshot arrives.
 
 The independent `result_card` lane reads canonical trace from seq 0 on the host
@@ -83,8 +89,13 @@ canonical trace events rather than its SDK-specific event feed:
   Only provider-exposed process text is consumed; no hidden reasoning is retrieved.
 - Tool titles prefer the supplied description, with semantic read/search/write/
   skill/task/agent icons. ACP placeholders and subsequent argument updates share
-  one invocation. Incomplete titles buffer for at most one second; a Task sequence
-  is never acknowledged while its buffered invocation is still unsent.
+  one invocation. A shell placeholder waits for usable arguments instead of
+  forcing a generic title after one second. Other process events can proceed;
+  unsent tool IDs are checkpointed with the acknowledged sequence. A later
+  argument update or terminal snapshot emits the invocation once; if parameters
+  never arrive, finishing the turn emits the tool-name fallback. Already-sent
+  native START/ARGS events are not repeated to guess at title-update support;
+  late descriptions use the existing result display.
   Shell icons use the leading executable of a simple pipeline: `rg`/`grep`/`find`
   use search, `cat`/`sed`/`head`/`tail` use read, and other commands or compound
   scripts use bash. A trailing log filter such as `grep -v INFO`, a filename or a

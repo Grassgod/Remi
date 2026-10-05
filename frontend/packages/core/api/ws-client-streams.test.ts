@@ -117,6 +117,22 @@ describe("MUL-438 WSClient streams", () => {
     ]);
   });
 
+  it("delivers trace completion after data without advancing the replay cursor", () => {
+    const { ws, socket } = connected();
+    const order: string[] = [];
+    const subscription = ws.subscribeStream("trace", "t", {
+      onFrames: () => order.push("data"), onClosed: () => order.push("closed"),
+    });
+    socket.serverSend({ type: "stream.data", payload: { stream: "trace", id: "t", frames: [{ seq: 2, kind: "trace", payload: {} }] } });
+    socket.serverSend({ type: "stream.closed", payload: { stream: "trace", id: "t", head_seq: 9 } });
+    expect(order).toEqual(["data", "closed"]);
+    expect(subscription.head()).toBe(2);
+    subscription.unsubscribe();
+    socket.serverSend({ type: "stream.closed", payload: { stream: "trace", id: "t", head_seq: 9 } });
+    expect(order).toEqual(["data", "closed"]);
+    ws.disconnect();
+  });
+
   it("queues subscriptions until the current socket authenticates, including reconnects", () => {
     const ws = new WSClient("ws://example.test/ws");
     ws.setAuth("tok", "acme");

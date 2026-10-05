@@ -92,7 +92,7 @@ export function isKnownTraceEventType(value: unknown): value is KnownTraceEventT
  * are enforcement policy rather than wire shape, and their single home is
  * `@shared/trace-sanitize.js`.
  */
-export const TRACE_EVENT_STATUSES = ["pending", "in_progress", "completed", "failed"] as const;
+export const TRACE_EVENT_STATUSES = ["pending", "in_progress", "completed", "failed", "cancelled"] as const;
 
 export type TraceEventStatus = (typeof TRACE_EVENT_STATUSES)[number];
 

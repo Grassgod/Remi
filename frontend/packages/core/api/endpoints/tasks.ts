@@ -12,6 +12,7 @@ import {
   TaskSteerListResponseSchema,
   TaskSteerResponseSchema,
   TaskTraceReadSchema,
+  TaskDetailResponseSchema,
   type TaskTraceRead,
   type TaskSteerListResponse,
   type TaskSteerResponse,
@@ -54,6 +55,11 @@ export class TasksEndpoints {
     const query = new URLSearchParams({ after_seq: String(afterSeq), limit: String(limit) });
     const raw = await this.http.fetch<unknown>(`/api/tasks/${encodeURIComponent(taskId)}/trace?${query}`);
     return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/tasks/:id/trace" });
+  }
+
+  async getTask(taskId: string): Promise<AgentTask & { agent_name?: string }> {
+    const raw = await this.http.fetch<unknown>(`/api/multiremi/tasks/${encodeURIComponent(taskId)}`);
+    return parseStrictResponse(raw, TaskDetailResponseSchema, { endpoint: "GET /api/multiremi/tasks/:id" });
   }
 
   async getTaskPrompt(taskId: string): Promise<TaskPromptArtifact> {

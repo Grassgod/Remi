@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
 import {
   countToolCalls,
+  createTraceSummaryAccumulator,
   deriveFinalReply,
   deriveTraceModel,
   summarizeTrace,
@@ -9,6 +10,7 @@ import {
 } from "@shared/trace-derive.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { KNOWN_TRACE_EVENT_TYPES } from "@multiremi/contracts/trace.js";
+import { canMergeTraceText, extractTraceFinalAnswer, isTerminalTraceToolStatus } from "@shared/trace-semantics.js";
 
 let nextSeq = 1;
 
@@ -188,6 +190,54 @@ describe("deriveFinalReply matches FeishuCotTimeline.answer", () => {
 });
 
 describe("trace histogram and counters", () => {
+  it("counts unique invocation IDs, including nested calls, and every legacy ID-less use", () => {
+    const events = [
+      event({ type: "tool_use", tool_call_id: "shell" }),
+      event({ type: "tool_use", tool_call_id: "shell", input: { command: "git status" } }),
+      event({ type: "tool_use", tool_call_id: "child", meta: { parent_tool_call_id: "agent" } }),
+      event({ type: "tool_use" }), event({ type: "tool_use" }),
+    ];
+    expect(countToolCalls(events)).toBe(4);
+    expect(traceTypeHistogram(events)[0]?.count).toBe(5); // raw events stay lossless
+  });
+
+  it("streaming completion agrees with replay without retaining mutable event objects", () => {
+    const events = [
+      event({ type: "execution", meta: { provider: "claude", model: "first" } }),
+      event({ content: "checking", meta: { phase: "commentary" } }),
+      event({ type: "tool_use", tool: "Bash", tool_call_id: "shell" }),
+      event({ type: "tool_use", tool: "Bash", tool_call_id: "shell", input: { command: "git grep fixture" } }),
+      event({ type: "tool_result", tool: "Bash", tool_call_id: "shell", status: "completed", output: "fixture" }),
+      event({ type: "usage", meta: { used: 100, size: 200 } }),
+      event({ content: "Done", meta: { phase: "final_answer" } }),
+      event({ content: ".", meta: { phase: "final" } }),
+    ];
+    const accumulator = createTraceSummaryAccumulator();
+    events.forEach(event => accumulator.add(event));
+    const expected = { trace: summarizeTrace(events, 99), final_reply_md: deriveFinalReply(events), model: deriveTraceModel(events) };
+    expect(accumulator.completion(99)).toEqual(expected);
+    events[0]!.meta!.model = "mutated";
+    events[6]!.content = "mutated";
+    accumulator.completion(99).trace.type_histogram[0]!.count = 999;
+    expect(accumulator.completion(99)).toEqual(expected);
+  });
+
+  it("counts standalone result snapshots in a tail window without counting anonymous results", () => {
+    const events = [
+      event({ type: "tool_result", tool_call_id: "retained", status: "in_progress" }),
+      event({ type: "tool_result", tool_call_id: "retained", status: "completed" }),
+      event({ type: "tool_use", tool_call_id: "whole" }),
+      event({ type: "tool_result", tool_call_id: "whole", status: "completed" }),
+      event({ type: "tool_result", status: "completed" }),
+      event({ type: "tool_use" }),
+    ];
+    expect(countToolCalls(events)).toBe(3);
+    const accumulator = createTraceSummaryAccumulator();
+    events.forEach(event => accumulator.add(event));
+    expect(accumulator.completion(99).trace.tool_call_count).toBe(3);
+    expect(summarizeTrace(events, 99).tool_call_count).toBe(3);
+  });
+
   it("buckets by (type, tool) and keeps tool only on tool frames", () => {
     const events = [
       event({ type: "text", content: "a" }),
@@ -249,5 +299,28 @@ describe("trace histogram and counters", () => {
     expect(deriveTraceModel(events)).toEqual({ provider: "codex", model: "new" });
     expect(deriveTraceModel([event({ type: "execution", meta: { provider: "claude" } })])).toBeNull();
     expect(deriveTraceModel([event()])).toBeNull();
+  });
+});
+
+describe("shared trace semantic boundaries", () => {
+  it("coalesces metadata-separated chunks only within the same parent and phase", () => {
+    const top = event({ content: "A" });
+    expect(canMergeTraceText(top, event({ content: "B" }))).toBe(true);
+    expect(canMergeTraceText(top, event({ content: "child", meta: { parent_tool_call_id: "agent" } }))).toBe(false);
+    expect(canMergeTraceText(event({ meta: { phase: "commentary" } }), event({ meta: { phase: "final" } }))).toBe(false);
+    expect(canMergeTraceText(event({ meta: { phase: "final_answer" } }), event({ meta: { phase: "final" } }))).toBe(true);
+    expect(canMergeTraceText(top, event({ type: "thinking" }))).toBe(false);
+  });
+
+  it("selects explicit final chunks and excludes commentary and child replies", () => {
+    expect(extractTraceFinalAnswer([
+      event({ content: "checking", meta: { phase: "commentary" } }),
+      event({ content: "child", meta: { parent_tool_call_id: "agent", phase: "final" } }),
+      event({ content: "Fixed", meta: { phase: "final_answer" } }),
+      event({ type: "usage" }), event({ content: ".", meta: { phase: "final" } }),
+    ])).toBe("Fixed.");
+    expect(extractTraceFinalAnswer([event({ content: "checking", meta: { phase: "commentary" } })])).toBeNull();
+    expect(isTerminalTraceToolStatus("cancelled")).toBe(true);
+    expect(isTerminalTraceToolStatus("in_progress")).toBe(false);
   });
 });

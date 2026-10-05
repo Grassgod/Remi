@@ -118,6 +118,8 @@ export interface HubSubscription {
   head: number;
   log_version?: number | null;
   gap?: HubSeqRange | null;
+  /** Trace completeness, including turns with no events. */
+  closed?: boolean;
   unsubscribe(): void;
 }
 
@@ -149,6 +151,14 @@ export interface HubStreamAckPayload {
   head_seq: number;
   log_version?: number | null;
   gap?: HubSeqRange | null;
+  closed?: boolean;
+}
+
+/** `stream.closed`: all buffered trace frames have been delivered. */
+export interface HubStreamClosedPayload {
+  stream: HubStreamName;
+  id: string;
+  head_seq: number;
 }
 
 /** `stream.data`: one batch of frames, in `seq` order. */
@@ -220,6 +230,7 @@ export type BrowserWsServerFrame =
   | { type: "stream.data"; payload: HubStreamDataPayload }
   | { type: "stream.gap"; payload: HubStreamGapPayload }
   | { type: "stream.error"; payload: HubStreamErrorPayload }
+  | { type: "stream.closed"; payload: HubStreamClosedPayload }
   | { type: "resync" }
   | { type: "pong" };
 

@@ -2,11 +2,8 @@
  * Derived read-side values over a task's trace: the final reply text, the tool
  * call count, and the `(type, tool)` histogram (MUL-402 ruling 5, A11).
  *
- * `deriveFinalReply` is an extraction of the rule the Feishu CoT timeline already
- * applies to a live message stream — `connectors/src/feishu/cot-timeline.ts:47-58`
- * — so a task's turn card, its Feishu card and the backfilled history all agree.
- * The connector is not changed by A-0 and does not call this yet; the equivalence
- * test pins the two behaviours together so a future edit to either shows up.
+ * Answer semantics also drive the live Feishu and browser projections, so a
+ * task's turn card, its Feishu card and the backfilled history agree.
  *
  * Lives in `@multiremi/shared` because the daemon computes these at task
  * completion (for `task.complete` / `task.fail`) and MUL-402's backfill recomputes
@@ -15,6 +12,7 @@
  */
 
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { extractTraceFinalAnswer, TraceFinalReplyAccumulator } from "./trace-semantics.js";
 
 /** One `(type, tool)` bucket, matching `api/helpers/organizer.ts:52-58`. */
 export interface TraceTypeHistogramBucket {
@@ -31,40 +29,17 @@ export interface TraceSummary {
   type_histogram: TraceTypeHistogramBucket[];
 }
 
-/** An event belongs to a nested subagent's prose when it names a parent call. */
-function isNested(event: TraceEvent): boolean {
-  return Boolean(event.meta?.parent_tool_call_id);
-}
-
-/**
- * The types that end a candidate text run.
- *
- * This is the exact list `cot-timeline.ts:56` flushes on, and it is NOT "every
- * non-text event": `tool_result`, `usage`, `execution`, `steer` and the
- * `*_response` types leave the candidate run intact. That matters — a stream of
- * `text`, `usage`, `text` is one run, while `text`, `tool_use`, `text` is two.
- */
-const CANDIDATE_FLUSH_TYPES: ReadonlySet<string> = new Set([
-  "thinking",
-  "tool_use",
-  "permission_request",
-  "question_request",
-  "plan",
-  "compaction",
-]);
-
 /**
  * The task's final answer text, in markdown, or null when there is none.
  *
- * This mirrors `FeishuCotTimeline`'s `accept` / `answer` pair
- * (`connectors/src/feishu/cot-timeline.ts:47-58` and `:32`) event for event, so
- * the turn card, the Feishu card and the backfilled history agree:
+ * The shared answer accumulator also drives Feishu and the browser, so the
+ * turn card, the Feishu card and the backfilled history agree:
  *
- *   - a top-level `text` with `meta.phase === "final"` appends to `final`;
+ *   - a top-level `text` with phase `final` / `final_answer` appends to `final`;
  *   - a top-level `text` with `meta.phase === "commentary"` flushes the candidate
  *     run and starts no new one (commentary renders as reasoning, not as answer);
  *   - any other top-level `text` appends to `candidate`;
- *   - a `CANDIDATE_FLUSH_TYPES` event ends the candidate run;
+ *   - a thought/tool/request/plan/compaction event ends the candidate run;
  *   - nested prose (a `meta.parent_tool_call_id`) never contributes.
  *
  * `final` wins when it has non-whitespace content; otherwise the surviving
@@ -72,33 +47,54 @@ const CANDIDATE_FLUSH_TYPES: ReadonlySet<string> = new Set([
  * `final.trim() || candidate.trim() || fallback.trim()`.
  */
 export function deriveFinalReply(events: readonly TraceEvent[]): string | null {
-  let final = "";
-  let candidate = "";
-
-  for (const event of events) {
-    // A nested event returns before the flush switch in the timeline
-    // (`cot-timeline.ts:42-46`), so it neither contributes nor ends a run.
-    if (isNested(event)) continue;
-    if (event.type !== "text") {
-      if (CANDIDATE_FLUSH_TYPES.has(event.type)) candidate = "";
-      continue;
-    }
-    const phase = event.meta?.phase;
-    if (phase === "final") final += event.content ?? "";
-    else if (phase === "commentary") candidate = "";
-    else candidate += event.content ?? "";
-  }
-
-  return final.trim() || candidate.trim() || null;
+  return extractTraceFinalAnswer(events);
 }
 
-/** Number of `tool_use` events, the value the turn card's tool counter shows. */
+/** Use/result snapshots share an invocation ID; legacy ID-less uses each count once. */
 export function countToolCalls(events: readonly TraceEvent[]): number {
-  let count = 0;
+  const ids = new Set<string>();
+  let legacy = 0;
   for (const event of events) {
-    if (event.type === "tool_use") count += 1;
+    if (event.type !== "tool_use" && event.type !== "tool_result") continue;
+    if (event.tool_call_id) ids.add(event.tool_call_id);
+    else if (event.type === "tool_use") legacy += 1;
   }
-  return count;
+  return ids.size + legacy;
+}
+
+/** Streaming completion figures without retaining the full trace or tool output. */
+export function createTraceSummaryAccumulator() {
+  const reply = new TraceFinalReplyAccumulator();
+  const ids = new Set<string>();
+  const buckets = new Map<string, TraceTypeHistogramBucket>();
+  let legacy = 0;
+  let eventCount = 0;
+  let model: { provider: string; model: string } | null = null;
+  return {
+    add(event: TraceEvent): void {
+      eventCount += 1;
+      reply.add(event);
+      if (event.type === "tool_use" || event.type === "tool_result") {
+        if (event.tool_call_id) ids.add(event.tool_call_id);
+        else if (event.type === "tool_use") legacy += 1;
+      }
+      const tool = event.type === "tool_use" || event.type === "tool_result" ? event.tool ?? null : null;
+      const key = `${event.type}\u0000${tool ?? ""}`;
+      const bucket = buckets.get(key) ?? { type: event.type, tool, count: 0 };
+      bucket.count += 1;
+      buckets.set(key, bucket);
+      const execution = deriveTraceModel([event]);
+      if (execution) model = execution;
+    },
+    completion(head: number) {
+      return {
+        trace: { head, event_count: eventCount, tool_call_count: ids.size + legacy,
+          type_histogram: [...buckets.values()].map(bucket => ({ ...bucket })) },
+        final_reply_md: reply.answer(),
+        model: model ? { ...model } : null,
+      };
+    },
+  };
 }
 
 /**

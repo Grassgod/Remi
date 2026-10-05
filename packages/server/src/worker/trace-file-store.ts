@@ -1,6 +1,7 @@
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync, writeSync, type Stats } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
-import { checkTraceFileLines, isTraceFileEvent, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import { checkTraceFileLines, isTraceFileEvent, isTraceFileTrailer, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
 import { assertRealDirectoryPath } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { createLogger } from "@shared/logger.js";
 import {
@@ -17,6 +18,9 @@ import {
 } from "./trace-store.js";
 
 const log = createLogger("multiremi-trace-file-store");
+export const TRACE_FILE_MAX_LINE_BYTES = 4 * 1024 * 1024;
+/** Leave room for task/runtime ids and the trace RPC/push envelope. */
+export const TRACE_FILE_MAX_EVENT_BYTES = TRACE_FILE_MAX_LINE_BYTES - 8 * 1024;
 
 export interface TraceTaskContext {
   /** Issue/chat Session id; omitted for a one-shot task. */
@@ -24,6 +28,10 @@ export interface TraceTaskContext {
   agentId: string;
   provider: string;
   startedAt: string;
+  runtimeId?: string;
+  issueId?: string | null;
+  /** Production subject identity for archive-gated collection of early failures. */
+  subjectKind?: "chat" | "task";
 }
 
 export interface TraceFileStoreOptions {
@@ -31,6 +39,8 @@ export interface TraceFileStoreOptions {
   resolveTask: (taskId: string) => TraceTaskContext;
   now?: TraceClock;
   onWarning?: (path: string, reason: string) => void;
+  /** Diagnostics: bytes physically read, including bounded chunk read-ahead. */
+  onReadBytes?: (bytes: number) => void;
 }
 
 interface IndexedTrace {
@@ -43,6 +53,10 @@ interface IndexedTrace {
   closed: boolean;
   /** Bytes through the last complete line; an interrupted final line is ignored. */
   completeBytes: number;
+  context: TraceTaskContext;
+  /** Only sequence/offset pairs are resident; event payloads stay on disk. */
+  offsets: Array<{ seq: number; offset: number }>;
+  duplicates?: boolean;
 }
 
 type TraceEvent = TraceAppendResult["events"][number];
@@ -63,24 +77,41 @@ function ensureDirectory(path: string): void {
   if (!realDirectory(path)) mkdirSync(path, { mode: 0o700 });
 }
 
-function completeLines(path: string): { lines: string[]; completeBytes: number; incompleteTail: boolean; dev: number; ino: number } {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let buffer: Buffer;
-  let stat: ReturnType<typeof fstatSync>;
-  try {
-    stat = fstatSync(fd);
-    if (!stat.isFile()) throw new Error(`Unsafe trace file: ${path}`);
-    buffer = readFileSync(fd);
-  } finally { closeSync(fd); }
-  const lastNewline = buffer.lastIndexOf(10);
-  if (lastNewline < 0) return { lines: [], completeBytes: 0, incompleteTail: buffer.length > 0, dev: stat.dev, ino: stat.ino };
-  return {
-    lines: buffer.subarray(0, lastNewline).toString("utf8").split("\n"),
-    completeBytes: lastNewline + 1,
-    incompleteTail: lastNewline !== buffer.length - 1,
-    dev: stat.dev,
-    ino: stat.ino,
-  };
+function writeLine(fd: number, line: string): number {
+  const buffer = Buffer.from(line);
+  let written = 0;
+  while (written < buffer.length) {
+    const size = writeSync(fd, buffer, written, buffer.length - written, null);
+    if (!size) throw new Error("trace append made no progress");
+    written += size;
+  }
+  return buffer.length;
+}
+
+function* completeLines(fd: number, start: number, end: number, onRead?: (bytes: number) => void): Generator<{ line: string; offset: number; end: number }> {
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let position = start;
+  let lineStart = start;
+  let pending = Buffer.alloc(0);
+  while (position < end) {
+    const size = readSync(fd, chunk, 0, Math.min(chunk.length, end - position), position);
+    if (!size) break;
+    onRead?.(size);
+    position += size;
+    const data = pending.length ? Buffer.concat([pending, chunk.subarray(0, size)]) : chunk.subarray(0, size);
+    let consumed = 0;
+    for (;;) {
+      const newline = data.indexOf(10, consumed);
+      if (newline < 0) break;
+      if (newline - consumed + 1 > TRACE_FILE_MAX_LINE_BYTES) throw new Error("trace line exceeds normalized event budget");
+      const next = lineStart + newline - consumed + 1;
+      yield { line: data.subarray(consumed, newline).toString("utf8"), offset: lineStart, end: next };
+      lineStart = next;
+      consumed = newline + 1;
+    }
+    pending = Buffer.from(data.subarray(consumed));
+    if (pending.length >= TRACE_FILE_MAX_LINE_BYTES) throw new Error("trace line exceeds normalized event budget");
+  }
 }
 
 /** Durable, per-task JSONL implementation of A-0's TraceStore. */
@@ -88,11 +119,27 @@ export class TraceFileStore implements TraceStore {
   private readonly root: string;
   private readonly index = new Map<string, IndexedTrace>();
   private readonly now: TraceClock;
+  private readonly contexts = new Map<string, TraceTaskContext>();
 
   constructor(private readonly options: TraceFileStoreOptions) {
     this.root = resolve(options.workspacesRoot);
     this.now = options.now ?? (() => new Date().toISOString());
     this.rebuildIndex();
+  }
+
+  registerTask(taskId: string, context: TraceTaskContext): void {
+    const previous = this.index.get(taskId)?.context ?? this.contexts.get(taskId);
+    if (previous?.runtimeId && previous.runtimeId !== context.runtimeId) throw new Error("trace runtime ownership changed");
+    this.contexts.set(taskId, context);
+  }
+
+  registerRuntime(taskId: string, runtimeId: string): void {
+    const context = this.index.get(taskId)?.context ?? this.contexts.get(taskId) ?? this.options.resolveTask(taskId);
+    this.registerTask(taskId, { ...context, runtimeId });
+  }
+
+  ownership(): ReadonlyMap<string, string> {
+    return new Map([...this.index].flatMap(([taskId, entry]) => entry.context.runtimeId ? [[taskId, entry.context.runtimeId] as const] : []));
   }
 
   private warn(path: string, reason: string): void {
@@ -128,14 +175,50 @@ export class TraceFileStore implements TraceStore {
     const directories = this.directoryChain(path);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular trace file");
-    const { lines, completeBytes, incompleteTail, dev, ino } = completeLines(path);
-    if (stat.dev !== dev || stat.ino !== ino) throw new Error("trace file changed during inspection");
-    const checked = checkTraceFileLines(lines, { taskId, sessionId, incompleteTail });
-    if (!checked.ok) throw new Error(checked.reason);
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const offsets: IndexedTrace["offsets"] = [];
+    let header: TraceFileHeader | undefined;
+    let completeBytes = 0;
+    let head = 0;
+    let closed = false;
+    let duplicates = false;
+    const seen = new Set<number>();
+    try {
+      const opened = fstatSync(fd);
+      if (stat.dev !== opened.dev || stat.ino !== opened.ino) throw new Error("trace file changed during inspection");
+      for (const record of completeLines(fd, 0, opened.size, this.options.onReadBytes)) {
+        if (!header) {
+          const checked = checkTraceFileLines([record.line], { taskId, sessionId });
+          if (!checked.ok) throw new Error(checked.reason);
+          header = JSON.parse(record.line);
+          if (header!.runtime_id !== undefined && (typeof header!.runtime_id !== "string" || !header!.runtime_id)) throw new Error("invalid runtime owner");
+        } else {
+          if (closed) throw new Error("trailer is not final line");
+          const row: unknown = JSON.parse(record.line);
+          if (isTraceFileTrailer(row)) {
+            if (row.end.head !== head || row.end.event_count !== offsets.length) throw new Error("trailer counts disagree with events");
+            if (duplicates || record.end !== opened.size) throw new Error("ambiguous trailer after recovered events");
+            closed = true;
+          } else {
+            if (!isTraceFileEvent(row)) throw new Error("invalid trace event");
+            if (seen.has(row.seq)) { duplicates = true; this.warn(path, `duplicate seq ${row.seq}; retaining first occurrence`); }
+            else {
+              if (row.seq < head) throw new Error(`out-of-order seq ${row.seq}`);
+              offsets.push({ seq: row.seq, offset: record.offset });
+              seen.add(row.seq);
+              head = row.seq;
+            }
+          }
+        }
+        completeBytes = record.end;
+      }
+      if (!header) throw new Error("missing complete header");
+    } finally { closeSync(fd); }
     for (const directory of directories) assertRealDirectoryPath(directory.path, directory.info, "trace directory");
-    for (const seq of checked.value.duplicate_seqs) this.warn(path, `duplicate seq ${seq}; retaining first occurrence`);
-    return { path, directories, dev, ino, head: checked.value.head,
-      eventCount: checked.value.event_count, closed: checked.value.closed, completeBytes };
+    return { path, directories, dev: stat.dev, ino: stat.ino, head,
+      eventCount: offsets.length, closed, completeBytes, offsets, duplicates,
+      context: { sessionId: header.session_id, agentId: header.agent_id, provider: header.provider,
+        startedAt: header.started_at, runtimeId: header.runtime_id } };
   }
 
   rebuildIndex(): void {
@@ -170,7 +253,7 @@ export class TraceFileStore implements TraceStore {
 
   private create(taskId: string): IndexedTrace {
     if (!safeId(taskId)) throw new Error(`Invalid trace task id: ${taskId}`);
-    const context = this.options.resolveTask(taskId);
+    const context = this.contexts.get(taskId) ?? this.options.resolveTask(taskId);
     const sessionId = context.sessionId ?? taskId;
     if (!safeId(sessionId)) throw new Error(`Invalid trace session id: ${sessionId}`);
     ensureDirectory(this.root);
@@ -178,6 +261,27 @@ export class TraceFileStore implements TraceStore {
     ensureDirectory(runtimeRoot);
     const sessionRoot = join(runtimeRoot, sessionId);
     ensureDirectory(sessionRoot);
+    if (context.issueId || context.subjectKind) {
+      // A preparation failure can emit a trace before provider-home setup
+      // writes GC metadata. The canonical Issue archive root enumerator must
+      // still discover this Session and retain its process history.
+      const metadata = join(sessionRoot, ".multiremi");
+      ensureDirectory(metadata);
+      const gcPath = join(metadata, "gc.json");
+      if (!existsSync(gcPath)) {
+        const fd = openSync(gcPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        const metadata = context.issueId
+          ? { version: 2, kind: "issue_runtime", issue_id: context.issueId }
+          : context.subjectKind === "chat"
+            ? { version: 1, kind: "chat", chat_session_id: sessionId, task_id: taskId }
+            : { version: 1, kind: "quick_create", task_id: taskId };
+        try { writeFileSync(fd, JSON.stringify(metadata)); fsyncSync(fd); }
+        finally { closeSync(fd); }
+      } else {
+        const info = lstatSync(gcPath);
+        if (!info.isFile() || info.isSymbolicLink()) throw new Error("unsafe trace Session GC metadata");
+      }
+    }
     const traces = join(sessionRoot, "traces");
     ensureDirectory(traces);
     const path = join(traces, `${taskId}.jsonl`);
@@ -193,12 +297,13 @@ export class TraceFileStore implements TraceStore {
       agent_id: context.agentId,
       provider: context.provider,
       started_at: context.startedAt,
+      ...(context.runtimeId ? { runtime_id: context.runtimeId } : {}),
     };
     const fd = openSync(path, "wx", 0o600);
     try { writeFileSync(fd, `${JSON.stringify(header)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
     const stat = lstatSync(path);
     const entry: IndexedTrace = { path, directories: this.directoryChain(path), dev: stat.dev, ino: stat.ino,
-      head: 0, eventCount: 0, closed: false, completeBytes: stat.size };
+      head: 0, eventCount: 0, closed: false, completeBytes: stat.size, offsets: [], context };
     this.index.set(taskId, entry);
     return entry;
   }
@@ -211,6 +316,10 @@ export class TraceFileStore implements TraceStore {
       ...sanitizeStoredEvent(event, event.ts ?? this.now()),
       seq: entry.head + offset + 1,
     }));
+    // Reject the whole batch before writing any row that recovery would reject.
+    for (const event of stored) {
+      if (traceEventBytes(event) > TRACE_FILE_MAX_EVENT_BYTES) throw new Error("trace line exceeds normalized event budget");
+    }
     // A previous crash may have left an unterminated JSON fragment. Remove only
     // that fragment before appending complete lines to this known-owned file.
     const fd = openSync(entry.path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
@@ -219,7 +328,17 @@ export class TraceFileStore implements TraceStore {
       if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during append");
       this.assertOwned(entry);
       ftruncateSync(fd, entry.completeBytes);
-      writeFileSync(fd, stored.map((row) => `${JSON.stringify(row)}\n`).join(""));
+      const newOffsets: IndexedTrace["offsets"] = [];
+      let offset = entry.completeBytes;
+      for (const row of stored) {
+        const line = `${JSON.stringify(row)}\n`;
+        const bytes = writeLine(fd, line);
+        newOffsets.push({ seq: row.seq, offset });
+        offset += bytes;
+      }
+      // Complete writes precede head publication. Process restart recovery
+      // needs kernel-visible bytes; close() fsyncs the final trace for archiving.
+      entry.offsets.push(...newOffsets);
       entry.completeBytes = fstatSync(fd).size;
     }
     finally { closeSync(fd); }
@@ -233,24 +352,38 @@ export class TraceFileStore implements TraceStore {
     if (!entry) return { events: [], head: 0, eof: true };
     const args = normalizeTraceReadArgs(afterSeq, limit, maxBytes);
     const events: TraceEvent[] = [];
-    const seen = new Set<number>();
     let bytes = 0;
     this.assertOwned(entry);
-    const data = completeLines(entry.path);
-    this.assertOwned(entry);
-    if (data.dev !== entry.dev || data.ino !== entry.ino) throw new Error("trace file changed during read");
-    for (const line of data.lines.slice(1)) {
-      let row: unknown;
-      try { row = JSON.parse(line); } catch { this.warn(entry.path, "invalid JSON during read"); break; }
-      if (!isTraceFileEvent(row)) continue;
-      if (seen.has(row.seq)) { this.warn(entry.path, `duplicate seq ${row.seq}; retaining first occurrence`); continue; }
-      seen.add(row.seq);
-      if (row.seq <= args.afterSeq) continue;
-      if (events.length >= args.limit) break;
-      const size = traceEventBytes(row);
-      if (events.length > 0 && bytes + size > args.maxBytes) break;
-      events.push(row);
-      bytes += size;
+    // Binary search avoids rescanning the prefix for every page, including
+    // sparse historical sequences and files recovered by a fresh daemon.
+    let low = 0;
+    let high = entry.offsets.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (entry.offsets[middle]!.seq <= args.afterSeq) low = middle + 1;
+      else high = middle;
+    }
+    const start = entry.offsets[low]?.offset;
+    if (start !== undefined) {
+      const fd = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const stat = fstatSync(fd);
+        if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during read");
+        if (stat.size < entry.completeBytes) throw new Error("trace file shortened during read");
+        for (const record of completeLines(fd, start, entry.completeBytes, this.options.onReadBytes)) {
+          // Skip the duplicate physical records excluded by the index.
+          if (record.offset !== entry.offsets[low]?.offset) continue;
+          const row: TraceEvent = JSON.parse(record.line);
+          if (!isTraceFileEvent(row) || row.seq !== entry.offsets[low]!.seq) throw new Error("trace event changed during read");
+          const size = traceEventBytes(row);
+          if (events.length > 0 && bytes + size > args.maxBytes) break;
+          events.push(row);
+          bytes += size;
+          low++;
+          if (events.length >= args.limit || low >= entry.offsets.length) break;
+        }
+        this.assertOwned(entry);
+      } finally { closeSync(fd); }
     }
     return { events, head: entry.head, eof: (events.at(-1)?.seq ?? args.afterSeq) >= entry.head };
   }
@@ -260,10 +393,70 @@ export class TraceFileStore implements TraceStore {
     return entry ? { head: entry.head, closed: entry.closed } : null;
   }
 
+  /** Release metadata only for files definitively removed by workspace GC. */
+  pruneMissing(): string[] {
+    const removed: string[] = [];
+    for (const [taskId, entry] of this.index) {
+      try { this.assertOwned(entry); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+        this.index.delete(taskId);
+        this.contexts.delete(taskId);
+        removed.push(taskId);
+      }
+    }
+    return removed;
+  }
+
+  private canonicalizeDuplicates(taskId: string, entry: IndexedTrace): void {
+    if (!entry.duplicates) return;
+    this.assertOwned(entry);
+    const partialPath = `${entry.path}.${randomUUID()}.partial`;
+    const source = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let target: number | undefined;
+    let published = false;
+    try {
+      const stat = fstatSync(source);
+      if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during duplicate recovery");
+      target = openSync(partialPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      let position = 0;
+      for (const record of completeLines(source, 0, entry.completeBytes, this.options.onReadBytes)) {
+        if (record.offset === 0) {
+          const header = checkTraceFileLines([record.line], { taskId, sessionId: entry.context.sessionId ?? taskId });
+          if (!header.ok) throw new Error(header.reason);
+          writeLine(target, `${record.line}\n`);
+        } else if (record.offset === entry.offsets[position]?.offset) {
+          const event: unknown = JSON.parse(record.line);
+          if (!isTraceFileEvent(event) || event.seq !== entry.offsets[position]!.seq) throw new Error("trace event changed during duplicate recovery");
+          writeLine(target, `${record.line}\n`);
+          position++;
+        }
+      }
+      if (position !== entry.offsets.length) throw new Error("trace shortened during duplicate recovery");
+      fsyncSync(target);
+      this.assertOwned(entry);
+      renameSync(partialPath, entry.path);
+      published = true;
+      Object.assign(entry, this.inspect(entry.path, taskId, entry.context.sessionId ?? taskId));
+    } finally {
+      closeSync(source);
+      if (target !== undefined) closeSync(target);
+      if (!published && target !== undefined) {
+        this.assertOwned(entry);
+        const partial = lstatSync(partialPath);
+        if (!partial.isFile() || partial.isSymbolicLink()) throw new Error("unsafe duplicate recovery partial file");
+        unlinkSync(partialPath);
+      }
+    }
+  }
+
   close(taskId: string, end: TraceCloseInput): void {
     const entry = this.index.get(taskId) ?? this.create(taskId);
     this.assertOwned(entry);
     if (entry.closed) return;
+    // A recovered append-only duplicate cannot remain before a trailer: the
+    // archive contract deliberately rejects ambiguous completed files.
+    this.canonicalizeDuplicates(taskId, entry);
     const trailer: TraceFileTrailer = { end: {
       status: end.status,
       head: entry.head,

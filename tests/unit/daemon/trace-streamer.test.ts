@@ -19,6 +19,19 @@ function peer() {
 }
 
 describe("trace stream frame and replay budgets", () => {
+  it("cold replay retains a sole legal event larger than the replay byte budget", async () => {
+    const store = new InMemoryTraceStore(); const p = peer();
+    const event = store.append("large", [{ type: "text", content: "\u0001".repeat(256 * 1024),
+      output: "\u0001".repeat(64 * 1024), input: { body: "!".repeat(250_000) }, meta: { body: "!".repeat(60_000) } }]).events[0]!;
+    expect(traceEventBytes(event)).toBeGreaterThan(2 * 1024 * 1024);
+    expect(coldTraceCursor(store, "large")).toBe(0);
+    const pump = new TraceStreamer(p.client, store);
+    try {
+      pump.track("large", "rt");
+      await waitFor(() => p.frames.length === 1, "cold oversized replay");
+      expect(p.frames[0]!.events).toEqual([event]);
+    } finally { await pump.stop(); }
+  });
   it("sends at most 256 events or 256 KiB, but admits one 640 KiB event", async () => {
     const store = new InMemoryTraceStore(); const p = peer();
     const pump = new TraceStreamer(p.client, store);

@@ -120,6 +120,7 @@ export interface HubSubscriberSink {
   getBufferedAmount(): number;
   send(frames: readonly HubFrame[]): void;
   gap?(from: number, to: number): void;
+  closed?(head: number): void;
 }
 
 /** A keyed subscription over a backpressure-aware sink. */
@@ -208,6 +209,7 @@ export interface HubKnownHead {
 
 /** One subscriber: its cursor, its backpressure state and its destination. */
 interface HubSubscriber {
+  closedSent: boolean;
   readonly key: HubStreamKey;
   readonly sink: HubSubscriberSink;
   /**
@@ -422,6 +424,7 @@ export class HubImpl implements ObservableLiveHub {
   close(taskId: string): void {
     this.closedTasks.add(taskId);
     this.ring.ensure(traceKey(taskId)).closed = true;
+    this.scheduleFlushFor(traceKey(taskId));
   }
 
   /** Whether `close` has run for this task. Test helper and diagnostics. */
@@ -503,6 +506,7 @@ export class HubImpl implements ObservableLiveHub {
    */
   subscribeWithSink(key: HubStreamKey, fromSeq: number, sink: HubSubscriberSink): HubSinkSubscription {
     const stream = this.ring.ensure(key);
+    if (stream.kind === "trace") stream.closed ||= this.closedTasks.has(key.slice("trace:".length));
     fromSeq = Math.max(stream.kind === "log" ? 0 : 1, fromSeq);
     this.ring.touch(stream);
     const subscriber = this.newSubscriber(key, fromSeq, sink, null, null);
@@ -521,6 +525,7 @@ export class HubImpl implements ObservableLiveHub {
       get head() { return stream.headSeq; },
       get log_version() { return stream.kind === "log" ? stream.logVersion : null; },
       get gap() { return gapFor(stream, subscriber.requested); },
+      get closed() { return stream.closed; },
       unsubscribe: () => { this.removeSubscriber(subscriber); },
       notifyDrain: () => { this.resume(subscriber); },
     };
@@ -1077,6 +1082,10 @@ export class HubImpl implements ObservableLiveHub {
         if (!subscriber.active) continue;
         const more = this.deliverOneBatch(subscriber, stream);
         if (more) this.flushDirty.add(key);
+        if (subscriber.active && !subscriber.lagging && !more && stream.closed && !this.pending.get(key)?.length && !subscriber.closedSent) {
+          subscriber.closedSent = true;
+          subscriber.sink.closed?.(stream.headSeq);
+        }
       }
     }
     if (this.flushDirty.size > 0) {
@@ -1291,6 +1300,7 @@ export class HubImpl implements ObservableLiveHub {
     traceTaskId: string | null,
   ): HubSubscriber {
     const subscriber: HubSubscriber = {
+      closedSent: false,
       key,
       sink,
       requested: fromSeq,

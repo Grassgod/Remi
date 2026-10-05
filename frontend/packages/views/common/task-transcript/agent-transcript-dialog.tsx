@@ -1,5 +1,7 @@
 "use client";
 
+import { extractTraceFinalAnswer } from "@multiremi/shared/trace-semantics";
+
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   Bot,
@@ -80,6 +82,10 @@ interface AgentTranscriptDialogProps {
   traceLoading?: boolean;
   traceError?: boolean;
   onTraceRetry?: () => void;
+  onTraceLoadMore?: () => void;
+  onTraceRestart?: () => void;
+  traceWindowLimit?: number;
+  traceComplete?: boolean;
 }
 
 // ─── Color mapping for timeline segments ────────────────────────────────────
@@ -104,6 +110,10 @@ export function AgentTranscriptDialog({
   traceLoading = false,
   traceError = false,
   onTraceRetry,
+  onTraceLoadMore,
+  onTraceRestart,
+  traceWindowLimit,
+  traceComplete = true,
 }: AgentTranscriptDialogProps) {
   const { t } = useT("agents");
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
@@ -227,7 +237,7 @@ export function AgentTranscriptDialog({
   const liveFollow = isLive && sortDirection === "chronological";
   // A finished task can't have running steps; `isLive` wins so a task whose
   // status has landed while the stream is still open keeps its spinners.
-  const taskTerminal = !isLive && TERMINAL_TASK_STATUS.has(task.status);
+  const taskTerminal = !isLive && (traceResult?.closed === true || TERMINAL_TASK_STATUS.has(task.status));
 
   // Follow the newest events while a task is live, but only when the user is
   // already parked near the bottom — scrolling up to read history pauses the
@@ -314,16 +324,7 @@ export function AgentTranscriptDialog({
   // above the event list so the outcome isn't buried in a one-line summary.
   const usage = useMemo(() => usageSnapshotFromTask(task), [task]);
   const [answerCopied, setAnswerCopied] = useState(false);
-  const finalAnswer = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      // Skip subagent prose: it is the last text on the wire but not this
-      // agent's answer (bridges >= 0.66 forward it with a parent id).
-      if (it?.meta?.parent_tool_call_id) continue;
-      if (it?.type === "text" && it.content?.trim()) return it.content;
-    }
-    return null;
-  }, [items]);
+  const finalAnswer = useMemo(() => traceComplete ? extractTraceFinalAnswer(items) : null, [items, traceComplete]);
   const handleCopyAnswer = useCallback(() => {
     if (!finalAnswer) return;
     void copyText(redactString(finalAnswer)).then((ok) => {
@@ -375,7 +376,7 @@ export function AgentTranscriptDialog({
   const StatusIcon = statusDisplay.icon;
   const statusBadge = (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", statusDisplay.tone)}>
-      {StatusIcon ? <StatusIcon className={cn("h-3 w-3", statusDisplay.spins && "animate-spin")} /> : null}
+      {StatusIcon ? <StatusIcon className={cn("h-3 w-3", statusDisplay.spins && !taskTerminal && "animate-spin")} /> : null}
       {statusDisplay.label}
     </span>
   );
@@ -390,7 +391,7 @@ export function AgentTranscriptDialog({
         : isLive
           ? t(($) => $.transcript.waiting_events)
           : null;
-  const emptyStateSpins = (task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive);
+  const emptyStateSpins = !taskTerminal && ((task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive));
   const traceUnavailable = traceError || (traceResult !== undefined && traceResult !== null && traceResult.state !== "ok");
 
   return (
@@ -503,7 +504,7 @@ export function AgentTranscriptDialog({
                   className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                 >
                   {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : t(($) => $.transcript.copy_all)}
+                  {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : traceWindowLimit ? t(($) => $.transcript.copy_loaded) : t(($) => $.transcript.copy_all)}
                 </button>
               ) : promptQuery.data?.prompt ? (
                 <button
@@ -635,7 +636,7 @@ export function AgentTranscriptDialog({
           <div
             role={traceError || traceResult?.state === "unreachable" ? "alert" : "status"}
             className={cn(
-              "flex h-10 shrink-0 items-center gap-2 border-b px-4 text-xs text-muted-foreground",
+              "flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1 text-xs text-muted-foreground",
               (traceError || traceResult?.state === "unreachable") && "h-16 max-md:h-[88px]",
             )}
           >
@@ -652,12 +653,21 @@ export function AgentTranscriptDialog({
               {traceResult?.state === "unreachable" && traceResult.last_seen_at && (
                 <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceResult.last_seen_at).toLocaleString() })}</span>
               )}
+              {traceWindowLimit && <span className="block text-[10px]">{t(($) => $.transcript.trace_window, { count: traceWindowLimit })}</span>}
             </span>
             {(traceError || traceResult?.state === "unreachable") && (
               <button type="button" onClick={onTraceRetry} className="shrink-0 text-foreground underline underline-offset-2">
                 {t(($) => $.transcript.trace_retry)}
               </button>
             )}
+            {onTraceLoadMore && (
+              <button type="button" disabled={traceLoading} onClick={onTraceLoadMore} className="shrink-0 text-foreground underline underline-offset-2 disabled:opacity-50">
+                {t(($) => $.transcript.trace_load_more)}
+              </button>
+            )}
+            {onTraceRestart && <button type="button" disabled={traceLoading} onClick={onTraceRestart} className="shrink-0 text-foreground underline underline-offset-2 disabled:opacity-50">
+              {t(($) => $.transcript.trace_restart)}
+            </button>}
           </div>
         )}
 

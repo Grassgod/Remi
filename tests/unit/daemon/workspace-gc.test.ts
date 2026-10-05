@@ -1327,6 +1327,24 @@ describe("Chat and one-shot Task workspace GC", () => {
     };
   }
 
+  for (const kind of ["chat", "task"] as const) {
+    it(`keeps an early trace-only ${kind} root behind the archive barrier`, async () => {
+      const root = tempRoot(); const id = kind === "chat" ? "cs_early" : "tsk_early";
+      const store = new TraceFileStore({ workspacesRoot: root, resolveTask: () => ({
+        sessionId: id, subjectKind: kind, agentId: "agt", provider: "codex", startedAt: OLD }) });
+      store.append("tsk_early", [{ type: "text", content: "preparation failed" }]);
+      store.close("tsk_early", { status: "failed", ended_at: OLD });
+      const client = gcClient();
+      client.getChatSessionGcCheck = async () => ({ status: "archived", updated_at: OLD });
+      client.getTaskGcCheck = async () => ({ status: "failed", completed_at: OLD });
+      const ensured: Array<[Subject, string, boolean]> = [];
+      expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, null)))
+        .toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+      expect(ensured.map(([subject]) => subject)).toEqual([{ kind, id }]);
+      expect(existsSync(join(root, ".runtime", id, "traces", "tsk_early.jsonl"))).toBe(true);
+    });
+  }
+
   for (const subject of [
     { kind: "chat", id: "cs_gc", workDir: "chats", gcMeta: { kind: "chat", task_id: "tsk_chat_turn", chat_session_id: "cs_gc" } },
     { kind: "task", id: "tsk_gc", workDir: "tasks", gcMeta: { kind: "quick_create", task_id: "tsk_gc" } },

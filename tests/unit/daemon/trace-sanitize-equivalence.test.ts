@@ -59,14 +59,13 @@ describe("cleanTraceField matches the historical null rules", () => {
 });
 
 describe("normalizeTraceStatus matches the accepted set", () => {
-  it("keeps the four known statuses", () => {
-    for (const status of ["pending", "in_progress", "completed", "failed"]) {
+  it("keeps terminal cancellation alongside the other known statuses", () => {
+    for (const status of ["pending", "in_progress", "completed", "failed", "cancelled"]) {
       expect(normalizeTraceStatus(status)).toBe(status);
     }
   });
 
   it("drops anything else to null, including the empty string", () => {
-    expect(normalizeTraceStatus("cancelled")).toBeNull();
     expect(normalizeTraceStatus("not-a-real-status")).toBeNull();
     expect(normalizeTraceStatus(null)).toBeNull();
   });
@@ -182,7 +181,8 @@ describe("sanitizeTraceEventFields produces the stored row columns", () => {
   });
 
   it("drops an unsupported status rather than storing it", () => {
-    expect(sanitizeTraceEventFields({ type: "tool_use", status: "cancelled" }).status).toBeNull();
+    expect(sanitizeTraceEventFields({ type: "tool_use", status: "unsupported" }).status).toBeNull();
+    expect(sanitizeTraceEventFields({ type: "tool_result", status: "cancelled" }).status).toBe("cancelled");
     expect(sanitizeTraceEventFields({ type: "tool_use", status: "failed" }).status).toBe("failed");
   });
 });
@@ -218,7 +218,8 @@ describe("shared sanitizer boundary fixtures", () => {
     ["content cut mid multi-byte char", { type: "text", content: `${"中".repeat(TRACE_CONTENT_MAX_BYTES / 3)}中` }, { content: "中".repeat(Math.floor(256 * 1024 / 3)) + TRACE_TRUNCATION_MARKER }],
     ["output over the cap", { type: "tool_result", output: "O".repeat(64 * 1024 + 1) }, { output: "O".repeat(64 * 1024) + TRACE_TRUNCATION_MARKER }],
     ["status accepted", { type: "tool_use", status: "completed" }, { status: "completed" }],
-    ["status rejected", { type: "tool_use", status: "cancelled" }, {}],
+    ["cancelled accepted", { type: "tool_result", status: "cancelled" }, { status: "cancelled" }],
+    ["status rejected", { type: "tool_use", status: "unsupported" }, {}],
     ["input object", { type: "tool_use", input: { command: "ls", nested: { a: [1, 2] } } }, { input: '{"command":"ls","nested":{"a":[1,2]}}' }],
     ["meta object", { type: "tool_result", meta: { duration_ms: 42, title: "Read" } }, { meta: '{"duration_ms":42,"title":"Read"}' }],
     ["input base64 elided", { type: "tool_use", input: { image: "A".repeat(5000) } }, { input: '{"image":"[base64-elided]"}' }],

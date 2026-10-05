@@ -39,6 +39,7 @@ function registerConsumer(
       onFrames: (frames) => { for (const listener of consumers) listener.current.onFrames?.(frames); },
       onGap: (payload) => { for (const listener of consumers) listener.current.onGap?.(payload); },
       onError: (payload) => { for (const listener of consumers) listener.current.onError?.(payload); },
+      onClosed: (payload) => { for (const listener of consumers) listener.current.onClosed?.(payload); },
     });
     // The provider retries this effect when its socket becomes available.
     if (!subscription) return;

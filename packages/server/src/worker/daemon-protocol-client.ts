@@ -3,7 +3,6 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import {
   DAEMON_ACK_TIMEOUT_MS,
-  DAEMON_FRAME_MAX_BYTES,
   DAEMON_HEARTBEAT_INTERVAL_MS,
   DAEMON_PROTOCOL_CLOSE_CODES,
   DAEMON_PROTOCOL_MIN,
@@ -28,6 +27,7 @@ import { systemClock, type DaemonProtocolClock, type DaemonProtocolTimer } from 
 import {
   encodeDaemonProtocolFrame,
   parseDaemonProtocolFrame,
+  daemonFrameByteLimit,
   type DaemonOutboundFrame,
   type DaemonParsedFrame,
 } from "../api/daemon-protocol/frames.js";
@@ -261,7 +261,7 @@ export class DaemonProtocolClient {
   /** Shared encoding guard also covers hello, heartbeat, RPC, res and ack. */
   send(frame: DaemonOutboundFrame): void {
     const text = encodeDaemonProtocolFrame({ ...frame, ...(this.receivedSeq ? { ack: this.receivedSeq } : {}) }, this.clock.now());
-    if (Buffer.byteLength(text, "utf8") > DAEMON_FRAME_MAX_BYTES) {
+    if (Buffer.byteLength(text, "utf8") > daemonFrameByteLimit(frame.t, frame.p)) {
       throw new DaemonProtocolRpcError("protocol_violation", false);
     }
     if (!this.socket) throw new DaemonProtocolRpcError("daemon_unreachable", true);
@@ -358,6 +358,7 @@ export class DaemonProtocolClient {
     const parsed = parseDaemonProtocolFrame(text);
     if (!parsed.ok || parsed.frame.v !== DAEMON_PROTOCOL_VERSION) { this.disconnected(4002); return; }
     const frame = parsed.frame;
+    if (Buffer.byteLength(text, "utf8") > daemonFrameByteLimit(frame.type, frame.payload)) { this.disconnected(4002); return; }
     if (frame.type === "reject") {
       if (typeof frame.payload.min_protocol === "number") this.serverMin = frame.payload.min_protocol;
       return;

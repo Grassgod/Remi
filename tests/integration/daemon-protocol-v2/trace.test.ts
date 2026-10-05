@@ -33,6 +33,29 @@ function snapshot(h: DaemonProtocolHarness, id: string) {
 }
 
 describe("memory trace over the real protocol", () => {
+  it("round-trips an escaped 2 MiB event through append, push and reverse trace.read RPC", async () => {
+    const h = await fixture(); const t = task(h);
+    const pushed: TraceEvent[] = [];
+    const unsubscribe = await trace(h).subscriptions.subscribeTrace(t.id, 0, events => { pushed.push(...events); });
+    try {
+      trace(h).append(t.id, rt(h), [{ type: "tool_use", tool: "Bash", toolCallId: "large_call",
+        content: "\u0001".repeat(256 * 1024), output: "\u0001".repeat(64 * 1024),
+        input: { body: "!".repeat(250_000) }, meta: { body: "!".repeat(60_000) } }]);
+      const expected = h.daemon.traceStore().read(t.id).events[0]!;
+      expect(Buffer.byteLength(JSON.stringify(expected))).toBeGreaterThan(2 * 1024 * 1024);
+      await waitFor(() => daemonTraceService(h.layer).sink.head(t.id) === 1, "oversized singleton append");
+      await waitFor(() => pushed.length === 1, "oversized singleton push");
+      expect(pushed[0]).toEqual(expected);
+      const result = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id, maxBytes: 8 });
+      expect(result).toMatchObject({ ok: true, head: 1, next_after_seq: 1, eof: true });
+      if (result.ok) expect(result.events).toEqual([expected]);
+      const fetched = await h.client.rpc("trace.fetch", { task_id: t.id, after_seq: 0, limit: 1 }, rt(h));
+      expect(fetched.events).toEqual([expected]);
+      expect(h.client.connectionState()).toBe("connected");
+      expect(h.errors).toEqual([]);
+    } finally { await unsubscribe(); }
+  }, 10_000);
+
   for (const injection of ["socket", "daemon", "server"] as const) {
     it(`reconciles dense trace exactly once over 20 ${injection} injections`, async () => {
       let interrupt: string | null = null;
@@ -53,7 +76,14 @@ describe("memory trace over the real protocol", () => {
         interrupt = t.id;
         trace(h).append(t.id, rt(h), Array.from({ length: 8 }, (_, i) => ({ seq: 100 + i * 2, type: "text", content: `round-${round}-${i}` })));
         trace(h).close(t.id, "completed");
-        if (injection === "daemon") await h.restartDaemon();
+        if (injection === "daemon") {
+          await h.restartDaemon();
+          const recovered = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id });
+          expect(recovered).toMatchObject({ ok: true, head: 8, closed: true });
+          // Closed history does not flood the Hub at boot. Explicit local need
+          // can start its replay after recovery.
+          trace(h).track(t.id, rt(h));
+        }
         else if (injection === "server") await h.restartServer();
         else { await waitFor(() => h.client.connectionState() === "disconnected", "trace socket fault"); await h.reconnect(); }
         await waitFor(() => daemonTraceService(h.layer).sink.head(t.id) === 8, "trace hub head");

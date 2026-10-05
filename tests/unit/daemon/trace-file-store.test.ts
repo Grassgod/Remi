@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TraceFileStore } from "@multiremi/worker/trace-file-store.js";
-import { InMemoryTraceStore, traceEventBytes, type TraceStore } from "@multiremi/worker/trace-store.js";
+import { TraceFileStore, TRACE_FILE_MAX_EVENT_BYTES } from "@multiremi/worker/trace-file-store.js";
+import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { encodeDaemonProtocolFrame, daemonFrameByteLimit } from "@multiremi/api/daemon-protocol/frames.js";
+import { prepareSessionArchive, removePreparedSessionArchive } from "@daemon/agent-runtime/workspace/session-archive.js";
+import { InMemoryTraceStore, traceEventBytes, sanitizeStoredEvent, type TraceStore } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
@@ -43,6 +46,89 @@ describeTraceStoreContract("TraceFileStore", () => fixture().make(), () => {
 });
 
 describe("TraceFileStore", () => {
+  it("reserves envelope space for every maximum-size stored event", () => {
+    const store = fixture().make();
+    const overhead = traceEventBytes({ ...sanitizeStoredEvent({ type: "x" }, NOW), seq: 1 }) - 1;
+    const type = "x".repeat(TRACE_FILE_MAX_EVENT_BYTES - overhead);
+    const event = store.append("tsk_one", [{ type }]).events[0]!;
+    expect(traceEventBytes(event)).toBe(TRACE_FILE_MAX_EVENT_BYTES);
+    for (const frameType of ["trace.append", "trace.push", "res"]) {
+      const payload = { task_id: "tsk_one", events: [event], head: 1, eof: true, closed: false, next_after_seq: 1, ok: true };
+      const frame = encodeDaemonProtocolFrame({ t: frameType, id: "id", re: "read", rt: "rt", p: payload }, 1);
+      expect(Buffer.byteLength(frame)).toBeLessThanOrEqual(DAEMON_WS_MAX_PAYLOAD_BYTES);
+      expect(daemonFrameByteLimit(frameType, payload)).toBe(DAEMON_WS_MAX_PAYLOAD_BYTES);
+    }
+    expect(() => store.append("tsk_one", [{ type: `${type}x` }])).toThrow("trace line exceeds");
+    expect(store.head("tsk_one")!.head).toBe(1);
+  });
+  it("bounds a page by bytes even when the caller omits or disables its budget", () => {
+    const store = fixture().make();
+    store.append("tsk_one", Array.from({ length: 16 }, () => row("!".repeat(200_000))));
+    const page = store.read("tsk_one");
+    expect(page.events).toHaveLength(10);
+    expect(page.events.reduce((bytes, event) => bytes + traceEventBytes(event), 0)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(page.eof).toBe(false);
+    expect(store.read("tsk_one", 0, 500, Infinity).events).toHaveLength(10);
+    expect(store.read("tsk_one", 10).events).toHaveLength(6);
+  });
+
+  it("canonicalizes recovered duplicates before closing, restarting and archiving", async () => {
+    const { make, path, root } = fixture();
+    const store = make(); store.append("tsk_one", [row("first"), row("second")]);
+    const duplicate = { ...store.read("tsk_one").events[0], content: "duplicate" };
+    writeFileSync(path, `${readFileSync(path, "utf8")}${JSON.stringify(duplicate)}\n{"seq":3`);
+    const recovered = make(); recovered.append("tsk_one", [row("third")]);
+    recovered.close("tsk_one", { status: "completed", ended_at: NOW });
+    const next = make();
+    expect(next.head("tsk_one")).toEqual({ head: 3, closed: true });
+    expect(next.read("tsk_one").events.map(event => event.content)).toEqual(["first", "second", "third"]);
+    const sessionRoot = join(root, ".runtime", "ises_one");
+    mkdirSync(join(sessionRoot, ".multiremi"));
+    const prepared = await prepareSessionArchive(sessionRoot, { subject: { kind: "task", id: "tsk_one" },
+      providerRoots: [{ sessionId: "ises_one", root: sessionRoot }], storageBoundary: root });
+    expect(prepared.traceCount).toBe(1);
+    await removePreparedSessionArchive(prepared.archivePath);
+  });
+
+  it("recovers normalized strings whose JSON escaping expands beyond two MiB", () => {
+    const { make } = fixture();
+    const original = make();
+    const expected = original.append("tsk_one", [{ type: "text", content: "\u0001".repeat(256 * 1024), output: "\u0001".repeat(64 * 1024),
+      input: { body: "!".repeat(250_000) }, meta: { body: "!".repeat(60_000) } }]).events;
+    expect(traceEventBytes(expected[0]!)).toBeGreaterThan(2 * 1024 * 1024);
+    expect(make().read("tsk_one").events).toEqual(expected);
+  });
+
+  it("rejects an oversized record before any row of its batch reaches disk", () => {
+    const { make } = fixture();
+    const store = make();
+    expect(() => store.append("tsk_one", [row("first"), { type: "x".repeat(4 * 1024 * 1024) }]))
+      .toThrow("trace line exceeds normalized event budget");
+    expect(store.head("tsk_one")).toEqual({ head: 0, closed: false });
+    expect(make().head("tsk_one")).toEqual({ head: 0, closed: false });
+    expect(store.read("tsk_one").events).toEqual([]);
+  });
+
+  it("seeks directly to bounded pages of a large recovered file", () => {
+    const { root } = fixture();
+    let bytesRead = 0;
+    const make = () => new TraceFileStore({ workspacesRoot: root,
+      resolveTask: () => ({ sessionId: "ises_large", agentId: "agt", provider: "codex", runtimeId: "rt_large", startedAt: NOW }),
+      onReadBytes: bytes => { bytesRead += bytes; } });
+    const original = make();
+    for (let batch = 0; batch < 100; batch++) original.append("tsk_large", Array.from({ length: 100 }, () => row("x".repeat(1024))));
+    original.close("tsk_large", { status: "completed", ended_at: NOW });
+    const recovered = make();
+    expect(recovered.ownership().get("tsk_large")).toBe("rt_large");
+    bytesRead = 0;
+    expect(recovered.read("tsk_large", 9990, 2, 4096).events.map(event => event.seq)).toEqual([9991, 9992]);
+    expect(bytesRead).toBeLessThanOrEqual(64 * 1024);
+    bytesRead = 0;
+    expect(recovered.read("tsk_large", 5000, 2, 4096).events.map(event => event.seq)).toEqual([5001, 5002]);
+    expect(bytesRead).toBeLessThanOrEqual(64 * 1024);
+    expect(recovered.head("tsk_large")).toEqual({ head: 10000, closed: true });
+  });
+
   it("writes framing without seq and keeps the in-memory contract across restart", () => {
     const { path, make } = fixture();
     const file = make();

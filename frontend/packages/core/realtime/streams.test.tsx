@@ -8,7 +8,7 @@ const provider = vi.hoisted(() => ({ subscribeStream: vi.fn(), subscribeTrace: v
 vi.mock("./provider", () => ({ useWS: () => provider }));
 
 function handlers() {
-  return { onAck: vi.fn(), onFrames: vi.fn(), onGap: vi.fn(), onError: vi.fn() };
+  return { onAck: vi.fn(), onFrames: vi.fn(), onGap: vi.fn(), onError: vi.fn(), onClosed: vi.fn() };
 }
 
 describe.each(["log", "trace"] as const)("shared %s stream consumers", (stream) => {
@@ -41,6 +41,7 @@ describe.each(["log", "trace"] as const)("shared %s stream consumers", (stream) 
       wireHandlers.onFrames?.([{ seq: 2, kind: stream === "log" ? "entry" : "trace", payload: {} }]);
       wireHandlers.onGap?.({ stream, id: "shared", from: 1, to: 1 });
       wireHandlers.onError?.({ stream, id: "shared", code: "unavailable" });
+      wireHandlers.onClosed?.({ stream, id: "shared", head_seq: 2 });
     });
   }
 

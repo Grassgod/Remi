@@ -749,6 +749,8 @@ export const DAEMON_OFFER_BUDGET_BYTES = 512 * 1024;
 
 /** `Bun.serve` `maxPayloadLength`; above the protocol cap so a violation is readable. */
 export const DAEMON_WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+/** One oversized normalized trace event may use the socket ceiling; ordinary frames keep 1 MiB. */
+export const DAEMON_TRACE_FRAME_MAX_BYTES = DAEMON_WS_MAX_PAYLOAD_BYTES;
 
 /** Sliding window for reliable uplink frames, whichever bound is hit first. */
 export const DAEMON_UPLINK_WINDOW_FRAMES = 64;

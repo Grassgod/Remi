@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "exports": {
+    "./trace-semantics": "./src/trace-semantics.ts",
     "./*": "./src/*"
   },
   "dependencies": {}

@@ -13,6 +13,86 @@ function renderer(h: ReturnType<typeof nativeHarness>, extra: Record<string, unk
 }
 
 describe("native CoT Task presentation", () => {
+  it.each(["final", undefined] as const)("restores checkpointed %s answer chunks without repeating process or request cards", async phase => {
+    const h = nativeHarness();
+    const prefix = [
+      taskEvent(1, "text", { content: "Checking now.", meta: { phase: "commentary" } }),
+      taskEvent(2, "tool_use", { tool: "Read", toolCallId: "read", input: { file_path: "/source.ts" } }),
+      taskEvent(3, "tool_result", { tool: "Read", toolCallId: "read", status: "completed" }),
+      taskEvent(4, "permission_request", { input: { request_id: "approved" } }),
+      taskEvent(5, "question_request", { input: { request_id: "answered" } }),
+      taskEvent(6, "text", { content: "Exact ", meta: phase ? { phase } : null }),
+      taskEvent(7, "usage", { meta: { used: 100, size: 200 } }),
+      taskEvent(8, "text", { content: "final answer.", meta: phase ? { phase } : null }),
+    ];
+    const settledMeta = { ...meta, getHumanRequest: async (requestId: string) => ({
+      id: requestId, taskId: meta.taskId, kind: "question" as const, payload: {}, status: "responded" as const,
+      response: {}, respondedBy: "user", createdAt: "2026-10-05T00:00:00Z", respondedAt: "2026-10-05T00:01:00Z",
+    }) };
+    async function* interrupted() {
+      yield* prefix;
+      await new Promise(resolve => setTimeout(resolve, 550));
+      throw new Error("simulated restart");
+    }
+    await expect(new FeishuTaskPresentation(h.client as any, "oc_group", settledMeta,
+      { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(interrupted()))
+      .rejects.toThrow("simulated restart");
+    expect(h.checkpoint?.throughSeq).toBe(8);
+    const before = h.events().filter(event => !["RUN_STARTED", "RUN_FINISHED"].includes(event.event_type));
+    const checkpoint = structuredClone(h.checkpoint!);
+    checkpoint.interactions = { approved: { messageId: "om_approved", receiptStatus: "responded" },
+      answered: { messageId: "om_answered", receiptStatus: "responded" } };
+    let requestReads = 0;
+    async function* resumed() {
+      // The production presentation restart likewise replays from trace seq 0.
+      yield* prefix;
+      yield { ...completed, snapshot: { ...(completed as any).snapshot, result: "Wrong fallback with commentary" } } as typeof completed;
+    }
+    await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, getHumanRequest: async () => {
+      requestReads += 1;
+      throw new Error("acknowledged request must not be read again");
+    } }, { appId: "cli_test", idempotencyKey: "delivery", checkpoint, save: h.save }).consume(resumed());
+    expect(requestReads).toBe(0);
+    expect(h.events().filter(event => !["RUN_STARTED", "RUN_FINISHED", "REASONING_END"].includes(event.event_type))).toEqual(before);
+    expect(h.events().filter(event => event.event_type === "REASONING_END")).toHaveLength(1);
+    expect(h.cards()).toHaveLength(1);
+    const card = JSON.stringify(h.cards()[0]);
+    expect(card).toContain("Exact final answer.");
+    expect(card).not.toContain("Checking now.");
+    expect(card).not.toContain("Wrong fallback");
+  });
+
+  it("checkpoints an unsent placeholder without blocking another tool and starts it once after restart", async () => {
+    const h = nativeHarness();
+    async function* interrupted() {
+      yield taskEvent(1, "tool_use", { tool: "Bash", toolCallId: "late" });
+      await new Promise(resolve => setTimeout(resolve, 550));
+      expect(h.checkpoint).toMatchObject({ throughSeq: 1, deferredToolIds: ["late"] });
+      expect(h.events()).toEqual([]);
+      yield taskEvent(2, "tool_use", { tool: "Read", toolCallId: "other", input: { file_path: "/source.ts" } });
+      throw new Error("simulated restart");
+    }
+    await expect(new FeishuTaskPresentation(h.client as any, "oc_group", meta,
+      { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(interrupted()))
+      .rejects.toThrow("simulated restart");
+    const checkpoint = structuredClone(h.checkpoint!);
+    expect(checkpoint).toMatchObject({ throughSeq: 2, deferredToolIds: ["late"] });
+    async function* resumed() {
+      yield taskEvent(3, "tool_use", { tool: "Bash", toolCallId: "late", input: {
+        command: "git status --short", description: "检查仓库状态",
+      } });
+      yield taskEvent(4, "tool_result", { tool: "Bash", toolCallId: "late", status: "completed" });
+      yield completed;
+    }
+    await new FeishuTaskPresentation(h.client as any, "oc_group", meta,
+      { appId: "cli_test", idempotencyKey: "delivery", checkpoint, save: h.save }).consume(resumed());
+    const starts = h.events().filter(event => event.event_type === "TOOL_CALL_START").map(event => JSON.parse(event.content));
+    expect(starts).toHaveLength(2);
+    expect(new Set(starts.map(event => event.toolCallId)).size).toBe(2);
+    expect(starts.find(event => event.toolCallName === "Bash")?.title).toBe("检查仓库状态");
+    expect(h.checkpoint?.deferredToolIds).toEqual([]);
+  });
+
   it("interrupts an unresponsive native API call on handover without sending a result from the old lease", async () => {
     const h = nativeHarness();
     let started = false;
