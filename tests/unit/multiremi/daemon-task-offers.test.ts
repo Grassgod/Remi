@@ -320,7 +320,7 @@ describe("A-3 task offers", () => {
 
   it("holds a dispatched lease after accept, and keeps 90s recovery as the final fallback", async () => {
     const h = fixture(); const task = h.task(); await h.hello(); await h.accept();
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [task.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET accepted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [task.id]);
     expect(h.store.claimTask(h.runtimeIds[0]!)).toBeNull();
     h.session.handleSocketClose();
     expect(h.store.getTask(task.id)?.status).toBe("dispatched");
@@ -372,7 +372,7 @@ describe("A-3 task offers", () => {
     const task = h.store.sendChatMessage(chat.id, { body: "no-op" }).task;
     await h.hello(); await h.accept();
     const stale = "chat-workspace:deadbeef:managed:frozen";
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = '2000-01-01T00:00:00.000Z', execution_fingerprint = ? WHERE id = ?", [stale, task.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET accepted_at = '2000-01-01T00:00:00.000Z', execution_fingerprint = ? WHERE id = ?", [stale, task.id]);
     expect(h.store.claimTask(h.runtimeIds[0]!)).toBeNull();
     expect(h.store.getTask(task.id)).toMatchObject({ status: "dispatched", executionFingerprint: stale });
     h.session.handleSocketClose();
@@ -398,7 +398,7 @@ describe("A-3 task offers", () => {
   it("runtime.ready cancels terminal active tasks, recovers missing running tasks and preserves active ones", async () => {
     const h = fixture(); const terminal = h.task(); const missing = h.task(); const active = h.task();
     h.store.claimTask(h.runtimeIds[0]!); h.store.startTask(terminal.id); h.store.completeTask(terminal.id, { output: "done" });
-    db!.run("UPDATE multiremi_tasks SET status = 'running', runtime_id = ? WHERE id IN (?, ?)", [h.runtimeIds[0]!, missing.id, active.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET status = 'running', runtime_id = ? WHERE id IN (?, ?)", [h.runtimeIds[0]!, missing.id, active.id]);
     await h.hello(); await h.send("runtime.ready", { active_task_ids: [terminal.id, active.id] }, { rt: h.runtimeIds[0] }); await h.layer.drain();
     expect(h.frames.filter(frame => frame.t === "task.cancelled")).toHaveLength(1);
     expect(h.store.getTask(missing.id)?.status).toBe("failed");
