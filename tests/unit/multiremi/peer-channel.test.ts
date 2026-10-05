@@ -1,7 +1,7 @@
 // MUL-462: the sending half of the peer channel — batching by count and by real
 // serialized bytes, ordering, backoff, the queue caps, splitting, degradation,
 // dedupe on retry, and the fact that `MULTIREMI_PEER_URL` unset means "inert".
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
 import { Hono } from "hono";
 import { registerPeerRoutes } from "../../../packages/server/src/api/peer/peer-routes.js";
 import {
@@ -20,7 +20,7 @@ import { parsePeerEventBatch } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 
 /** One POST attempt. Attempts that happened while the peer was offline are kept
- *  (the backoff test needs their timing) but flagged, so a delivery assertion can
+ *  but flagged, so a delivery assertion can
  *  look at `delivered` instead of `posts`. */
 interface Post {
   url: string;
@@ -407,22 +407,37 @@ describe("peer channel — sending", () => {
   });
 
   it("backs off from 1s toward 10s instead of hammering a dead peer", async () => {
-    const peer = fakePeer();
-    channel = createPeerChannel({
-      url: "http://peer:6120",
-      secret: "s",
-      fetchImpl: peer.fetchImpl,
-      minBackoffMs: 5,
-      maxBackoffMs: 20,
-    });
-    peer.goOffline();
-    channel.forwardRealtime("task_event", { type: "task:done", task: TASK, task_id: TASK.id });
-
-    await waitFor(() => channel!.stats().failed >= 3, "several retries");
-    // Each retry is later than the previous one: the gaps grow rather than
-    // staying at the first delay.
-    const gaps = peer.posts.slice(1).map((post, index) => post.at - peer.posts[index]!.at);
-    expect(gaps[gaps.length - 1]!).toBeGreaterThan(gaps[0]!);
+    jest.useFakeTimers();
+    const advance = async (ms: number) => {
+      jest.advanceTimersByTime(ms);
+      // Complete the async POST and its serial flush chain before the next tick.
+      for (let index = 0; index < 8; index++) await Promise.resolve();
+    };
+    try {
+      const peer = fakePeer({ fail: true });
+      channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: peer.fetchImpl });
+      channel.forwardRealtime("task_event", { type: "task:done", task: TASK, task_id: TASK.id });
+      await advance(1);
+      expect(channel.stats().failed).toBe(1);
+      for (const delay of [1_000, 2_000, 4_000, 8_000, 10_000, 10_000]) {
+        const before = peer.posts.length;
+        await advance(delay - 1);
+        expect(peer.posts).toHaveLength(before);
+        await advance(1);
+        await advance(1); // The retry schedules the zero-delay batching tick.
+        expect(peer.posts).toHaveLength(before + 1);
+        expect(channel.stats().failed).toBe(before + 1);
+      }
+      peer.goOnline();
+      await advance(10_000);
+      await advance(1);
+      expect(channel.stats()).toMatchObject({ batches: 1, sent: 1, failed: 7 });
+      expect(channel.healthy()).toBe(true);
+      expect(peer.payloads()).toHaveLength(1);
+    } finally {
+      channel?.close();
+      jest.useRealTimers();
+    }
   });
 
   it("reuses one serial chain when a burst arrives while a batch is in flight", async () => {
