@@ -44,7 +44,7 @@ Chat 列表和详情的未读数来自创建者对应的 workspace member lane�
 
 [TurnControls](../../frontend/packages/views/common/turn-controls.tsx) 展开时才读取 attempts，查看日志时传选中 attempt_id；历史日志与当前尝试独立。失败/取消轮可以暖重试或冷重试，服务端返回同一 turn.id 和新的 current_attempt_id。输入弹窗按需读取 turn input 的完整 `(from_seq,to_seq]` 消息与 legacy_prompt，不在首屏逐行展开。
 
-Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。
+Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。删除帧的 `fields.deleted_at` 会立即移除副本显示行并保留 revision 水位；重连重放或刷新回填的旧行不能恢复正文，主消息区也过滤带 `deleted_at` 的 canonical 消息。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。
 
 决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
 

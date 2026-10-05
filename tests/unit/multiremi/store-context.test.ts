@@ -2,26 +2,20 @@
 // is wired to the same state the MultiremiStore
 // facade exposes (listener Sets, analytics buffers) and that its lazy host
 // getter resolves back into the store for cross-domain lookups.
-import { afterEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
-let db: Database | null = null;
+pendingTurnBackendTests("StoreContext wiring", (fixture) => {
+let db: ReturnType<typeof fixture>["db"];
 
 function createStore(): MultiremiStore {
-  db = openSqliteDatabase(":memory:");
-  return new MultiremiStore(db);
+  db = fixture().db;
+  return fixture().store;
 }
 
-afterEach(() => {
-  db?.close();
-  db = null;
-});
-
-describe("StoreContext wiring", () => {
   it("routes facade-registered workspace listeners through the context", () => {
     const store = createStore();
     const seen: string[] = [];
@@ -115,5 +109,23 @@ describe("StoreContext wiring", () => {
 
     const inbox = store.listInboxItems(member.id);
     expect(inbox.some((item) => item.type === "issue_assigned" && item.issueId === issue.id)).toBe(true);
+  });
+
+  it("routes to the triggering Issue Session before the default and rejects sessions outside the current workspace or Issue", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Notification routing" });
+    const main = store.getOrCreateDefaultIssueSession(issue.id);
+    const side = store.createIssueSession(issue.id, { title: "Triggering comment" });
+    const foreignWorkspace = store.createWorkspace({ name: "Foreign", slug: "foreign" });
+    const foreignIssue = store.createIssue({ title: "Foreign issue", workspaceId: foreignWorkspace.id });
+    const foreign = store.getOrCreateDefaultIssueSession(foreignIssue.id);
+    const otherIssue = store.createIssue({ title: "Other local issue" });
+    const other = store.getOrCreateDefaultIssueSession(otherIssue.id);
+    const ctx = new StoreContext(db, () => store);
+    for (const [trigger, expected] of [[side.id, side.id], [foreign.id, main.id], [other.id, main.id], ["ises_missing", main.id]]) {
+      const item = ctx.createInboxItem({ issueId: issue.id, memberId: "mem_local_local", type: "comment_mention",
+        title: "Mention", details: { issue_session_id: trigger } })!;
+      expect(store.getMessage(item.id)?.session_id).toBe(expected);
+    }
   });
 });

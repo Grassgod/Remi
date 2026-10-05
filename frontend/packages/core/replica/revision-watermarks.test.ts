@@ -153,6 +153,31 @@ test.each(["tombstone", "hidden"] as const)("SQLite close/reopen persists %s wat
   }
 });
 
+test("SQLite close/reopen preserves fields.deleted_at watermarks against WS replay and HTTP backfill", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "replica-nested-delete-"));
+  const filename = join(directory, "replica.sqlite3");
+  let storage = await storageFor("sqlite", filename);
+  try {
+    const first = new ReplicaEngine(storage);
+    open(first); first.ack(sid, ack()); first.frames(sid, [entry()]);
+    first.frames(sid, [{ seq: 1, kind: "patch", payload: { session_id: sid, target_seq: 1,
+      revision: 5, fields: { deleted_at: "2026-10-06T00:00:00Z" } } }]);
+    expect(first.readWindow(sid, 1, 1)).toEqual([]);
+    first.close();
+    storage = await storageFor("sqlite", filename);
+    const reopened = new ReplicaEngine(storage);
+    open(reopened); reopened.ack(sid, ack());
+    reopened.frames(sid, [entry(1), entry(5)]);
+    reopened.writeWindow(sid, [row(1), row(5)], { from: 1, to: 1 });
+    expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
+    expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
+    expect(reopened.snapshot(sid)).toMatchObject({ head: 1, fresh: true });
+  } finally {
+    storage.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("SQLite rolls back deletion if persisting its watermark fails", async () => {
   const storage = await storageFor("sqlite");
   try {

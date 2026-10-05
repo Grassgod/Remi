@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
-import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
+import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
 import type { OptimisticChatRow } from "../lib/optimistic-log";
 
@@ -180,6 +180,56 @@ function renderList(
 }
 
 describe("ChatMessageList measurement contract", () => {
+  it("removes a canonical body on a real fields.deleted_at frame and keeps it absent after reconnect and reload", async () => {
+    const client = new QueryClient();
+    const message = SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 1, id: "msg-delete",
+      revision: 1, kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+      body_md: "N2 deleted body", body_html: null, render_version: null });
+    const subscribe = vi.fn();
+    const replica = await openBrowserReplica({ userId: "user", workspaceId: "ws-1", tabId: "n2",
+      subscribe, unsubscribe: vi.fn(), readRange: async () => [message],
+      env: { hasOpfs: false, locks: {} as never } });
+    replica.open("cs-1");
+    replica.ack("cs-1", { stream: "log", id: "cs-1", first_seq: 1, head_seq: 1, log_version: 1, gap: null });
+    replica.frames("cs-1", [{ seq: 1, kind: "entry", payload: message }]);
+    const content = () => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica.port} optimisticRows={[]}
+        pendingTask={null} availability={undefined} />
+    </QueryClientProvider>;
+    const view = render(content());
+    try {
+      expect(view.container).toHaveTextContent("N2 deleted body");
+      act(() => replica.frames("cs-1", [{ seq: 1, kind: "patch", payload: { session_id: "cs-1",
+        target_seq: 1, revision: 2, fields: { deleted_at: "2026-10-06T00:00:00Z" } } }]));
+      expect(view.container).not.toHaveTextContent("N2 deleted body");
+      act(() => {
+        replica.resubscribe("cs-1");
+        replica.frames("cs-1", [1, 2].map(revision => ({ seq: 1, kind: "entry", payload: { ...message, revision } })));
+      });
+      await act(() => replica.loadWindow("cs-1", { from: 1, to: 1 }));
+      expect(view.container).not.toHaveTextContent("N2 deleted body");
+      expect(replica.port.getSnapshot("cs-1").entries).toEqual([]);
+      view.unmount();
+      const refreshed = render(content());
+      expect(refreshed.container).not.toHaveTextContent("N2 deleted body");
+      refreshed.unmount();
+    } finally { view.unmount(); replica.dispose(); client.clear(); }
+  });
+
+  it("hides canonical tombstones supplied by a refreshed log window", () => {
+    const client = new QueryClient();
+    const deleted = SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 1, id: "msg-deleted-window",
+      revision: 2, kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+      body_md: "Deleted window body", body_html: null, render_version: null, deleted_at: "2026-10-06T00:00:00Z" });
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [deleted] } });
+    const view = render(<QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} />
+    </QueryClientProvider>);
+    expect(view.container).not.toHaveTextContent("Deleted window body");
+    expect(view.container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(0);
+    view.unmount(); client.clear();
+  });
+
   it("shows canonical envelope messages, replaces edited bodies, removes deleted sends and survives reload", () => {
     const client = new QueryClient();
     const entry = (seq: number, body: string) => SessionLogEntrySchema.parse({ session_id: "cs-1", seq,

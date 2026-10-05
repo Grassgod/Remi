@@ -1597,7 +1597,19 @@ export class StoreContext {
     const events=createCommitEventQueue();
     const write=()=>{
       this.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const sessionId=issue?this.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id).id:`auto_orphan_inbox_${workspaceId}`;
+      let sessionId = `auto_orphan_inbox_${workspaceId}`;
+      if (issue) {
+        const details = input.details && typeof input.details === "object"
+          ? input.details as Record<string, unknown> : null;
+        const triggeringSessionId = cleanOptionalString(details?.issue_session_id);
+        const triggeringSession = triggeringSessionId ? this.issueSessions().getIssueSession(triggeringSessionId) : null;
+        if (triggeringSession?.issueId === issue.id && triggeringSession.workspaceId === workspaceId) {
+          sessionId = triggeringSession.id;
+        } else {
+          const defaultSession = this.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
+          if (defaultSession.workspaceId === workspaceId) sessionId = defaultSession.id;
+        }
+      }
       sendMessageWithinTransaction(this,{id,session_id:sessionId,sender:{type:'platform',id:null},to:{type:'member',ref:member.id},
         message_kind:'status',wake_requested:'now',body_md:input.body??input.title,
         metadata:{inbox_item:{type:input.type,title:input.title,severity:input.severity??routing?.severity??'info',details:input.details??null}}},events,{id,workspaceId});

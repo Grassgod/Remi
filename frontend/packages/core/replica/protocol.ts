@@ -125,13 +125,14 @@ export function applyFrames(input: {
     if (frame.kind === "patch") {
       const target = patchTargetSeq(frame.payload, frame);
       const held = deletes.has(target) ? null : upserts.get(target) ?? input.entries.get(target) ?? null;
-      const patch = frame.payload as { revision?: unknown; deleted_at?: unknown } | null;
+      const patch = frame.payload as { revision?: unknown; deleted_at?: unknown; fields?: { deleted_at?: unknown } } | null;
       const watermark = revisions.get(target) ?? -Infinity;
       const revision = typeof patch?.revision === "number" ? payloadRevision(patch) : (revisions.get(target) ?? -1) + 1;
       if (revision <= watermark) continue;
       // A tombstone settles the seq even without a cached display row. A partial
       // edit still needs its base and must not manufacture a row from fields.
-      if (typeof patch?.deleted_at === "string" && patch.deleted_at.length > 0) {
+      const deletedAt = patch?.fields?.deleted_at ?? patch?.deleted_at;
+      if (typeof deletedAt === "string" && deletedAt.length > 0) {
         if (!Number.isFinite(revision)) continue;
         remember(target, revision);
         deletes.add(target);

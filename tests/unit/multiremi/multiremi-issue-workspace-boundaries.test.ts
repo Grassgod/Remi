@@ -501,6 +501,31 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(subscribers.some((row: { user_id: string }) => row.user_id === f.auth.sourceMember)).toBe(true);
       });
 
+      it(`${direction}: moved Issue status notifications use the target orphan inbox without creating or moving a Session`, async () => {
+        const f = await moveFixture("member");
+        const oldSession = store.getOrCreateDefaultIssueSession(f.issue.id);
+        store.addIssueSubscriber(f.issue.id, f.auth.sourceMember);
+        const sourceInbox = store.listInboxItems(f.auth.sourceMember);
+        store.updateIssue(f.issue.id, { workspaceId: f.target });
+        store.addIssueSubscriber(f.issue.id, f.auth.targetMember);
+        const prerequisite = store.createIssue({ title: "Target prerequisite", workspaceId: f.target, status: "todo" });
+        store.createIssueDependency(f.issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+        store.updateIssue(f.issue.id, { status: "backlog" });
+        const sourceLog = store.listConversationLogEntries(oldSession.id);
+        const targetBefore = store.listInboxItems(f.auth.targetMember).length;
+
+        expect(() => store.updateIssue(prerequisite.id, { status: "done" })).not.toThrow();
+        const notifications = store.listInboxItems(f.auth.targetMember);
+        expect(notifications).toHaveLength(targetBefore + 1);
+        const notification = notifications.find(item => item.type === "dependency_satisfied")!;
+        expect(store.getMessage(notification.id)).toMatchObject({ session_id: `auto_orphan_inbox_${f.target}`,
+          message_kind: "status", to_member_id: f.auth.targetMember });
+        expect(store.getIssueSession(oldSession.id)?.workspaceId).toBe(f.source);
+        expect(store.listIssueSessions(f.issue.id, true).map(session => session.id)).toEqual([oldSession.id]);
+        expect(store.listConversationLogEntries(oldSession.id)).toEqual(sourceLog);
+        expect(store.listInboxItems(f.auth.sourceMember)).toEqual(sourceInbox);
+      });
+
       it(`${direction}: MUL-480 real CLI batch-update moves a leaf with inherited fields`, async () => {
         const f = await moveFixture();
         const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: f.auth.app.fetch });

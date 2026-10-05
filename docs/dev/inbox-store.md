@@ -22,7 +22,9 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## Store 消费接口
 
-轮控制保留同工作区父单负责人和活跃组长对组员的授权；不相关 agent 拒绝。retry 的审计和巡查消息使用 organizer 事务，事件只在最外层提交后发射；warm retry 保留 provider 缓存。
+轮控制保留同工作区父单负责人和活跃组长对组员的授权；不相关 agent 拒绝。retry 的审计和巡查消息使用 organizer 事务，事件只在最外层提交后发射；warm retry 保留 provider 缓存。failed 或 cancelled attempt 直接创建 replacement，不再次取消或发送取消事件；completed attempt 仍拒绝 retry。
+
+成员通知的 `createInboxItem` 优先使用 `details.issue_session_id` 指定的触发 Session，要求它属于当前 Issue 及其当前工作区；否则尝试同工作区的默认 Session，再退到 `auto_orphan_inbox_${workspaceId}`。Issue 移动不迁移旧 Session，评论和状态通知也不能向旧工作区 Session 写入目标工作区成员的通知。
 
 类型及参数的事实来源为 [unified-model.ts](../../packages/contracts/src/unified-model.ts)、[InboxOperations](../../packages/server/src/store/inbox/operations.ts) 和 [Store facade](../../packages/server/src/store/store.ts)。HTTP/CLI 调用方负责鉴权、身份解析和参数校验；Store 同时校验消息源、收件人、对话与成员工作区边界。匿名旧领域评论允许 member/null，新用户入口应传入实际成员身份。
 
