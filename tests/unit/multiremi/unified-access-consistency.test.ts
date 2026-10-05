@@ -128,6 +128,21 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
       expect(f.store.getAccessToken(credential.id)?.revokedAt).toBeTruthy();
       expect(await f.store.verifyAccessToken(credential.token)).toBeNull();
     }
+    const openApp = createMultiremiApp({ store: f.store, authToken: null });
+    const rejectedHeaders = [
+      `Bearer ${token.token}`, `Bearer  ${token.token}`, `bearer ${token.token}`,
+      "Bearer unknown", "Basic unknown", "Bearer", "",
+    ];
+    const rejectedSnapshot = f.snapshot(), rejectedHead = f.store.getConversationLogHead(sessionId)!.headSeq;
+    for (const app of [f.app, openApp]) for (const authorization of rejectedHeaders) for (const method of ["GET", "POST"]) {
+      const response = await app.request(`/api/sessions/${sessionId}/messages`, {
+        method, headers: { Authorization: authorization, "Content-Type": "application/json" },
+        ...(method === "POST" ? { body: JSON.stringify({ body_md: "Forbidden" }) } : {}),
+      });
+      expect(response.status, `${method} rejected Authorization`).toBe(401);
+      expect(f.snapshot()).toEqual(rejectedSnapshot);
+      expect(f.store.getConversationLogHead(sessionId)?.headSeq).toBe(rejectedHead);
+    }
     // A stale row accidentally left unrevoked must still fail the current-attempt check.
     f.db.run("UPDATE multiremi_access_tokens SET revoked_at=NULL WHERE id=?", [token.id]);
     expect(await f.store.verifyAccessToken(token.token)).toBeNull();
@@ -152,6 +167,9 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     expect(f.store.getMessage(message.id)?.body_md).toBe("Editable"); expect(f.store.getMessage(message.id)?.resolved_at).toBeNull();
     expect(f.store.listCommentReactionsForComments([message.id]).get(message.id) ?? []).toEqual([]);
     const fresh = await f.store.createTaskAccessToken(f.store.getTask(replacement.current_attempt_id!)!, "local");
+    for (const app of [f.app, openApp]) for (const authorization of [`Bearer  ${fresh.token}`, `bearer ${fresh.token}`, `bEaReR\t ${fresh.token}`]) {
+      expect((await app.request(`/api/sessions/${sessionId}/messages`, { headers: { Authorization: authorization } })).status).toBe(200);
+    }
     expect((await f.request(`/api/messages/${message.id}`, "GET", undefined, fresh.token)).status).toBe(200);
     expect((await f.request(`/api/attachments/${attachment.id}`, "GET", undefined, fresh.token)).status).toBe(200);
     for (const field of ["agent_id", "workspace_id"] as const) {
