@@ -295,6 +295,9 @@ export class RuntimesRepo {
   private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
   // Postgres only: per runtime, token totals over its settled tasks and the row version they reflect.
   private readonly settledUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
+  // Lists also reuse unchanged open-task totals; a live task's row version changes
+  // on every persisted usage/status update, so this never delays a visible update.
+  private readonly openListUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -679,30 +682,34 @@ export class RuntimesRepo {
     // Do not trust xmin between writes inside one transaction. Neither read nor publish
     // cached totals there; the one SQL statement is still a coherent read-your-writes snapshot.
     const cached = db.inTransaction ? [] : runtimes.flatMap(runtime => {
-      const value = this.settledUsageCache.get(runtime.id);
-      return value ? [[runtime.id, value.version]] : [];
+      const settled = this.settledUsageCache.get(runtime.id);
+      const open = this.openListUsageCache.get(runtime.id);
+      return settled || open ? [[runtime.id, settled?.version ?? null, open?.version ?? null]] : [];
     });
-    const cacheSql = cached.length ? `VALUES ${cached.map(() => '(?::text, ?::text)').join(', ')}`
-      : 'SELECT NULL::text, NULL::text WHERE false';
+    const cacheSql = cached.length ? `VALUES ${cached.map(() => '(?::text, ?::text, ?::text)').join(', ')}`
+      : 'SELECT NULL::text, NULL::text, NULL::text WHERE false';
     const settled = SETTLED_TASK_STATUSES.map(() => '?').join(', ');
     const rows = db.query(`WITH selected_tasks AS MATERIALIZED (
         SELECT id, xmin::text AS xmin, runtime_id, status, usage FROM multiremi_tasks
         WHERE runtime_id IN (SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?)
-      ), cached(runtime_id, version) AS (${cacheSql}), summaries AS (
+      ), cached(runtime_id, settled_version, open_version) AS (${cacheSql}), summaries AS (
         SELECT runtime_id, COUNT(*) AS task_count,
           COUNT(*) FILTER (WHERE status IN (${IN_FLIGHT_TASK_STATUSES.map(() => '?').join(', ')})) AS active_task_count,
           COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
           COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
           ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
-          (json_agg(usage) FILTER (WHERE status NOT IN (${settled})))::text AS open_usage
+          ${tasksVersionSql(` FILTER (WHERE status NOT IN (${settled}))`)} AS open_version
         FROM selected_tasks GROUP BY runtime_id
       ) SELECT summaries.*,
-        CASE WHEN cached.version = COALESCE(summaries.settled_version, '') THEN NULL ELSE
+        CASE WHEN cached.settled_version = COALESCE(summaries.settled_version, '') THEN NULL ELSE
           (SELECT json_agg(usage)::text FROM selected_tasks t
-           WHERE t.runtime_id = summaries.runtime_id AND t.status IN (${settled})) END AS settled_usage
+           WHERE t.runtime_id = summaries.runtime_id AND t.status IN (${settled})) END AS settled_usage,
+        CASE WHEN cached.open_version = COALESCE(summaries.open_version, '') THEN NULL ELSE
+          (SELECT json_agg(usage)::text FROM selected_tasks t
+           WHERE t.runtime_id = summaries.runtime_id AND t.status NOT IN (${settled})) END AS open_usage
       FROM summaries LEFT JOIN cached ON cached.runtime_id = summaries.runtime_id`)
       .all(workspaceId, ...cached.flat(), ...IN_FLIGHT_TASK_STATUSES,
-        ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES) as Row[];
+        ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES) as Row[];
     const result = new Map<string, RuntimeUsageSummary>();
     for (const row of rows) {
       const id = String(row.runtime_id), version = String(row.settled_version ?? '');
@@ -713,7 +720,15 @@ export class RuntimesRepo {
         for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
       }
       if (!db.inTransaction) this.settledUsageCache.set(id, { version, tokens: { ...tokens } });
-      for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(tokens, usage);
+      const openVersion = String(row.open_version ?? '');
+      const previousOpen = db.inTransaction ? undefined : this.openListUsageCache.get(id);
+      const openTokens = previousOpen?.version === openVersion ? { ...previousOpen.tokens }
+        : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+      if (previousOpen?.version !== openVersion) {
+        for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(openTokens, usage);
+      }
+      if (!db.inTransaction) this.openListUsageCache.set(id, { version: openVersion, tokens: { ...openTokens } });
+      for (const field of Object.keys(openTokens) as Array<keyof TaskTokenTotals>) tokens[field] += openTokens[field];
       // Splitting settled/open addition is exact for safe nonnegative integers. Above
       // that range, JS addition order matters; retain the original list scan semantics.
       if (Object.values(tokens).some(total => !Number.isSafeInteger(total))) {

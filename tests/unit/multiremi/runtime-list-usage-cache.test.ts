@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { readProcessDbCounters } from "../../../packages/server/src/observability/request-metrics.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 
 const fields = ["taskCount", "activeTaskCount", "completedTaskCount", "failedTaskCount", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
@@ -68,6 +70,56 @@ test("runtime list/detail usage matches frozen parser across cold, warm, invalid
     })()).toThrow("rollback");
     compare();
     db.run("DELETE FROM multiremi_tasks WHERE id = ?", changed); compare();
+  } finally { await database.dispose(); }
+});
+
+test("unchanged open usage has bounded bridge bytes and mutations remain immediately visible", async () => {
+  const database = await openHotspotDatabase();
+  const db = database.db, store = new MultiremiStore(db);
+  try {
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "open usage golden", provider: "codex" });
+    for (let i = 0; i < 10; i++) store.registerRuntime({ id: `rt_open_${i}`, name: `open ${i}`, provider: "codex", maxConcurrency: 32 });
+    for (let i = 0; i < 200; i++) db.run(`INSERT INTO multiremi_tasks
+      (id, workspace_id, agent_id, runtime_id, status, prompt, usage, created_at, updated_at)
+      VALUES (?, 'local', ?, ?, 'running', 'golden', ?, '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z')`,
+      `tsk_open_${i}`, agent.id, `rt_open_${i % 10}`, JSON.stringify([{ inputTokens: 1234, output_tokens: 567,
+        cacheReadTokens: 89, cache_write_tokens: 10, model: "m".repeat(300) }]));
+    const compare = () => {
+      const before = readProcessDbCounters();
+      const runtimes = store.listRuntimesForWorkspace("local");
+      const bridgeBytes = readProcessDbCounters().dbBytes - before.dbBytes;
+      for (const runtime of runtimes) {
+        const expected = { taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
+          inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+        for (const row of db.query("SELECT status, usage FROM multiremi_tasks WHERE runtime_id = ?").all(runtime.id)) {
+          expected.taskCount++;
+          if (["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(row.status)) expected.activeTaskCount++;
+          if (row.status === "completed") expected.completedTaskCount++;
+          if (row.status === "failed") expected.failedTaskCount++;
+          for (const entry of parseTaskUsageEntries(row.usage)) for (const field of fields.slice(4)) expected[field] += entry[field as "inputTokens"];
+        }
+        expect(Object.fromEntries(fields.map(field => [field, runtime[field]]))).toEqual(expected);
+      }
+      return bridgeBytes;
+    };
+    compare(); // cold read
+    if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
+    else compare();
+    db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_0'", usages[6]); compare();
+    db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = 'tsk_open_1'"); compare();
+    db.run("UPDATE multiremi_tasks SET runtime_id = 'rt_open_9' WHERE id = 'tsk_open_2'"); compare();
+    db.transaction(() => {
+      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_3'", usages[7]); compare();
+      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_3'", usages[8]); compare();
+    })(); compare();
+    expect(() => db.transaction(() => {
+      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_4'", '[{"inputTokens":99999}]'); compare();
+      throw new Error("open rollback");
+    })()).toThrow("open rollback"); compare();
+    db.run("DELETE FROM multiremi_tasks WHERE id = 'tsk_open_5'"); compare();
+    db.run("DELETE FROM multiremi_tasks WHERE runtime_id = 'rt_open_6'"); compare();
+    if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
   } finally { await database.dispose(); }
 });
 
