@@ -154,11 +154,11 @@ App Secret 在 API 侧通过 [AES-256-GCM](../../packages/server/src/feishu-bot/
 
 ## 实际分配、交接与消息执行
 
-[v1 daemon 心跳路由](../../packages/server/src/api/routers/daemon.ts)中的 bot 配置指令发送 revision、desired_state、config_available；v2 指令下发由 MUL-419 接入，A-2 过渡期暂不下发。选中的 Runtime 使用绑定的 daemon 身份访问 `GET /api/daemon/runtimes/:runtimeId/feishu-bot`，获取本次启动的凭据与 Agent；其他 Runtime 无法获取该 assignment。明文凭据用于内存中的 transport，不持久化到本机环境文件。
+[daemon 配置下发](../../packages/server/src/api/daemon-protocol/runtime-input-snapshot.ts)发送 revision、desired_state、config_available；同一连接内不变的 `feishu.directive` 只下发一次，心跳只确认存活而不重复下发。选中的 Runtime 使用绑定的 daemon 身份访问 `GET /api/daemon/runtimes/:runtimeId/feishu-bot`，获取本次启动的凭据与 Agent；其他 Runtime 无法获取该 assignment。明文凭据用于内存中的 transport，不持久化到本机环境文件。
 
-v1 Runtime 从心跳响应的 `pending_feishu_outbound` 领取待发送结果；v2 下行帧由 MUL-419 接入，A-2 过渡期暂不领取。[daemon](../../packages/server/src/worker/daemon.ts)通过 concierge host 发送后，将投递结果和 claim token 上报到 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result`。这条结果推送链路独立于 bot 配置指令，过期投递租约会被服务端拒绝。
+v2 Runtime 从 [配置快照](../../packages/server/src/api/daemon-protocol/runtime-input-snapshot.ts)接收 `feishu.outbound` 下行帧并确认领取带租约的投递。[daemon](../../packages/server/src/worker/daemon.ts)通过 concierge host 发送后，经 `feishu.outbound_result` 帧回报结果和 claim token；过期投递租约会被服务端拒绝。旧 HTTP 投递结果入口已停用，不能把心跳当成 v2 出站领取通道。
 
-[FeishuBotRepo.directiveForRuntime](../../packages/server/src/store/repos/feishu-bot-repo.ts)给未选中的 Runtime 下发 stopped；新 Runtime 等待其他 host 的 online/starting 状态消失或超过当前 90 秒新鲜度窗口后才得到配置。这是基于状态上报的交接门控，不能描述为具备独立到期停机保证的强租约。[Supervisor](../../packages/server/src/worker/feishu-concierge.ts)串行启动/停止、上报状态并退避重试；新 revision 会重新尝试。
+[FeishuBotRepo.directiveForRuntime](../../packages/server/src/store/repos/feishu-bot-repo.ts)给未选中的 Runtime 下发 stopped；新 Runtime 等待其他 host 的 online/starting 状态消失或超过当前 90 秒新鲜度窗口后才得到配置。这是基于状态上报的交接门控，不能描述为具备独立到期停机保证的强租约。[Supervisor](../../packages/server/src/worker/feishu-concierge.ts)串行启动/停止、上报状态并退避重试；新 revision 会重新尝试。新版 daemon 使用 `concierge.status_report` RPC 确认控制面已落库，并在心跳确认时独立补报当前状态和重试失败启动；丢失一次 `online` 不应再需要重启进程。旧 daemon 的 `concierge.status` 尽力而为上报仍可接入；新 daemon 遇到旧 API 的 `unknown_frame` 会暂时使用旧帧并定时补报，升级顺序仍应为先 API 后 daemon，以缩短无确认窗口。
 
 单机工作目录另由[process-owner](../../packages/daemon/src/agent-runtime/workspace/process-owner.ts)的 supervisor lease 保护，以进程存活判断所有权。它与 bot 跨 Runtime 的状态交接是不同机制，不能因为一次心跳延迟就移除仍存活的本机 owner。
 
