@@ -80,7 +80,7 @@ export function loadConversation(c: Context, store: MultiremiStore, id: string) 
   const session = store.getIssueSession(id);
   if (session) {
     const issue = store.getIssue(session.issueId);
-    if (!issue || issue.workspaceId !== session.workspaceId) return c.json({ error: "conversation not found" }, 404);
+    if (!issue) return c.json({ error: "conversation not found" }, 404);
     return denyCurrentUserWorkspaceAccess(c, store, session.workspaceId)
       ?? { id, workspaceId: session.workspaceId, issueId: session.issueId, chatId: null };
   }

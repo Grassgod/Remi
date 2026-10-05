@@ -14,7 +14,7 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 发送到 agent 时，无论直接收件人还是角色解析后的最终 agent，都执行与旧任务派发一致的访问检查；拒绝会回滚消息、轮和附件。human request 及其答复沿用来源任务/agent 可见性，在 message 单条、列表、范围、inbox 和展示读取中一致过滤；答复被拒绝不会消费 pending 提问或恢复 awaiting_human 轮。共享 agent 的提问仍允许有权的活跃成员答复，不限于原收件人。
 
-Issue 决定及其答复在消息、日志和收件箱读取中统一检查来源 Issue、目标 Issue 与会话工作区的关系；跨工作区迁移留下的旧决定不返回正文，单条读取返回 404。会话仍引用已迁移的目标 Issue 时，消息和只读日志读取返回 404。
+Issue 决定及其答复在消息、日志和收件箱读取中统一检查来源 Issue、目标 Issue 与会话工作区的关系；跨工作区迁移留下的旧决定不返回正文，单条读取返回 404。Issue 跨工作区移动不迁移默认 Session 的工作区归属；消息和只读日志读取仍遵循 Session 的既有权限边界，与[认证与权限](auth.md)一致。
 
 消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用现有 `/api/attachments/:id/file`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
 
