@@ -69,12 +69,15 @@ const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
 const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
 export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseDialect } = {}): void {
+  const reportDir = resolveMigrationReportDirectory();
+  // Refuse an unwritable report directory before creating the SQLite lock file.
+  prepareMigrationReportDirectory(reportDir);
   // MUL-405: the lock spans the entire run, so a second process either waits for
   // a finished migration or proceeds exactly as before (SQLite, where the lock
   // is a no-op). It releases on throw as well as on return, so a failed
   // migration cannot strand it.
   const migrate = () => advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
-    const reportDir = resolveMigrationReportDirectory();
+    // The directory may have become unwritable while waiting for the lock.
     prepareMigrationReportDirectory(reportDir);
     const tables=existingTableNames(db);
     if(tables.has("multiremi_users"))backfillOwnerExternalId(db);

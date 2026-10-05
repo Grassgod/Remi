@@ -6,10 +6,10 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema, runMigrations } from "@multiremi/store/migrations.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
+import { historicalWriters, unifiedModelBackendTests } from "./unified-model-test-backends.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -85,6 +85,58 @@ unifiedModelBackendTests("MUL-493 nonempty report write preflight", fixture => {
     }
   }
 });
+
+for (const state of ["empty", "historical"] as const) {
+  for (const code of ["ENOSPC", "EFBIG"]) {
+    test(`disk SQLite ${code} preflight preserves ${state} database without creating a migration lock`, () => {
+      const root = mkdtempSync(join(tmpdir(), "mul508-disk-report-"));
+      dirs.push(root);
+      const dir = join(root, "reports");
+      mkdirSync(dir);
+      const filename = join(root, "state.sqlite");
+      const lockPath = `${filename}.migration-lock`;
+      const db = openSqliteDatabase(filename) as unknown as SqlDatabase;
+      const prior = process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+      let write: ReturnType<typeof spyOn> | undefined;
+      try {
+        if (state === "historical") {
+          bootstrapPreUnifiedSchema(db);
+          const store = historicalWriters(db);
+          const agent = store.createAgent({ name: "disk write failure history", provider: "codex" });
+          const issue = store.createIssue({ title: "preserve disk report failure data" });
+          const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "historical input" });
+          db.run("UPDATE multiremi_tasks SET status='completed' WHERE id=?", [task.id]);
+          expect(db.query("SELECT external_id FROM multiremi_users WHERE id='local'").get()?.external_id).toBeNull();
+        }
+        expect(fs.existsSync(filename)).toBe(true);
+        expect(fs.existsSync(lockPath)).toBe(false);
+        const before = databaseSnapshot(db);
+        const originalWrite = fs.writeFileSync;
+        const locksAtPreflight: boolean[] = [];
+        write = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof originalWrite>) => {
+          const [path, data] = args;
+          const length = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+          if (String(path).startsWith(`${dir}${sep}`) && length > 0) {
+            locksAtPreflight.push(fs.existsSync(lockPath));
+            throw Object.assign(new Error(`injected nonempty write ${code}`), { code });
+          }
+          return originalWrite(...args);
+        });
+        process.env.MULTIREMI_MIGRATION_REPORT_DIR = dir;
+        expect(() => runMigrations(db)).toThrow("Migration report directory is not writable");
+        expect(databaseSnapshot(db)).toEqual(before);
+        expect(fs.readdirSync(dir)).toEqual([]);
+        expect(locksAtPreflight).toEqual([false]);
+        expect(fs.existsSync(lockPath)).toBe(false);
+      } finally {
+        write?.mockRestore();
+        if (prior === undefined) delete process.env.MULTIREMI_MIGRATION_REPORT_DIR;
+        else process.env.MULTIREMI_MIGRATION_REPORT_DIR = prior;
+        db.close();
+      }
+    });
+  }
+}
 
 // chmod alone does not produce EACCES as root. Exercise the same unprivileged
 // startup as api-entrypoint, with a writable home mount and read-only /app.
