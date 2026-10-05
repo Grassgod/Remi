@@ -1751,9 +1751,9 @@ export class FeishuBotRepo {
    * Rewrite a decision's card in place once it leaves `escalated` (MUL-412).
    *
    * Called from inside the answer/withdraw transaction, so the patch row and
-   * the answer commit together. One patch per decision: the card only needs the
-   * first terminal state, and a card click that races a web answer must not
-   * produce two rewrites.
+   * the answer commit together. Each answer revision gets one patch; a replay
+   * of the same state cannot enqueue another. Chain revisions so an older
+   * in-flight patch cannot overwrite a newer member answer.
    */
   enqueueIssueDecisionCardPatchWithinTransaction(
     decision: MultiremiIssueDecision,
@@ -1763,10 +1763,16 @@ export class FeishuBotRepo {
     if (!current) return;
     decision = current;
     if (decision.status !== "answered" && decision.status !== "withdrawn") return;
-    if (this.ctx.db.query(
-      `SELECT 1 AS present FROM multiremi_feishu_bot_outbound_deliveries
-       WHERE kind = 'decision_card_patch' AND decision_id = ? LIMIT 1`,
-    ).get(decision.id)) return;
+    const revisionKey = `decision_state:${String(decision.history.length).padStart(10, "0")}`;
+    const patchId = `fbo_${decision.id}_${String(decision.history.length).padStart(10, "0")}`;
+    const previousPatch = this.ctx.db.query(
+      `SELECT id, unit_key FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE kind = 'decision_card_patch' AND decision_id = ?
+       ORDER BY unit_key DESC, created_at DESC, id DESC LIMIT 1`,
+    ).get(decision.id) as Row | null;
+    // Older outbox rows have no revision key. Keep their first-terminal-state
+    // dedupe, but allow a documented member revision (history length > 1).
+    if (previousPatch && (String(previousPatch.id) === patchId || decision.history.length <= 1)) return;
     const row = this.ctx.db.query(
       `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
               o.external_message_id, o.decision_id, o.degraded
@@ -1792,10 +1798,12 @@ export class FeishuBotRepo {
       `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
          reply_to_message_id, body, status, available_at, created_at, updated_at,
-         kind, decision_id, decision_issue_id, target_message_id
-       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, 'decision_card_patch', ?, ?, ?)`,
+         kind, decision_id, decision_issue_id, target_message_id,
+         unit_key, previous_delivery_id, cascade_failure
+       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, 'decision_card_patch', ?, ?, ?, ?, ?, 0)
+       ON CONFLICT (id) DO NOTHING`,
       [
-        createId("fbo"),
+        patchId,
         String(row.workspace_id),
         String(row.binding_id),
         String(row.chat_id),
@@ -1808,6 +1816,8 @@ export class FeishuBotRepo {
         decision.id,
         decision.issueId,
         messageId,
+        revisionKey,
+        previousPatch ? String(previousPatch.id) : null,
       ],
     );
   }

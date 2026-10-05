@@ -16,7 +16,7 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 没有来源轮的普通成员 decision，其选项和结构化 response 答复按会话权限可见。`metadata.human_response` 本身不代表私有 task 来源；答复关联的原提问有来源任务时仍沿来源鉴权，受保护来源无法解析时仍隐藏。
 
-消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用 `/api/attachments/:id/download`，内联内容使用 `/api/attachments/:id/content`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
+消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用 `/api/attachments/:id/download`，内联内容使用 `/api/attachments/:id/content`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、普通 decision 或 human request 的重复回答和非法轮状态 409。
 
 task token 在统一鉴权入口核对绑定的 attempt 是否仍是所属轮的 current_attempt_id，并核对 agent 和工作区；替换 attempt 时在同一事务撤销旧 token，旧 token 的所有入口返回 401。parent_owner 只解析同工作区父单；最终会话或 Issue 不属于发送工作区时拒绝并回滚全部写入。
 
@@ -49,7 +49,9 @@ task token 在统一鉴权入口核对绑定的 attempt 是否仍是所属轮的
 
 `message_kind` 为 request/reply/report/decision/status/final，缺省 request，有 reply_to_id 时缺省 reply。`to` 缺省 `{type:"none"}`；可用 agent/member/role，role 为 leader/parent_owner/delegator/issue_owner/relay。角色可能把消息写入父单或委派来源对话，应以返回的 message.session_id 为准。wake 为 now/next_turn/inbox_only，缺省 now；降级仍返回 200，使用 wake_applied/wake_reason 展示实际结果。六种降级原因见 [CLI 迁移说明](../cli-command-migration.md)。dedupe_key 在最终目标对话内唯一，重发返回同一消息与 delivery turn。
 
-decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，设置 `reply_to_id` 指向 decision，kind 为 reply；选择值放 `metadata.selected_options:[value]`，服务端验证选项并调用 answerMessageDecision。body_md 可为空。permission 的单个选择必须匹配 payload.options[].optionId，并规范化为 `response.option_id`；单题 question 的单个选择必须匹配该题选项 label，并规范化为 `response.answers:{问题:答案}`。单题正文答复也转为 answers。多题必须传 `response:{answers:{...}}`，包含每个问题的非空字符串答案；CLI 用 `message send <conversation> --reply-to <message> --response '{"answers":{"问题一":"答案一","问题二":"答案二"}}'`。permission 也可传 `--response '{"option_id":"allow_once"}'`；--response 与 --option 互斥。无效或不完整结构在消费请求前返回 400。既有 agent 裁决的 reason/overturn 也放 response。答复、原消息解决、恢复等待轮、活动及卡片更新在同一事务内，重放返回 409。
+decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，设置 `reply_to_id` 指向 decision，kind 为 reply；选择值放 `metadata.selected_options:[value]`，服务端验证选项并调用 answerMessageDecision。body_md 可为空。permission 的单个选择必须匹配 payload.options[].optionId，并规范化为 `response.option_id`；单题 question 的单个选择必须匹配该题选项 label，并规范化为 `response.answers:{问题:答案}`。单题正文答复也转为 answers。多题必须传 `response:{answers:{...}}`，包含每个问题的非空字符串答案；CLI 用 `message send <conversation> --reply-to <message> --response '{"answers":{"问题一":"答案一","问题二":"答案二"}}'`。permission 也可传 `--response '{"option_id":"allow_once"}'`；--response 与 --option 互斥。无效或不完整结构在消费请求前返回 400。既有 agent 裁决的 reason/overturn 也放 response。答复、原消息解决、恢复等待轮、活动及卡片更新在同一事务内；重复答复规则见下文。
+
+有显式 Issue 来源的 decision 保留成员改判行为：已 answered 的决定可由成员通过同一 reply 入口再次答复，每次追加 history、更新 answeredAt，并记录一条新 reply；source owner 收到答复通知，上次答复来自 agent 时 parent owner 另收到 decision_overturn，已有飞书卡片每次改判排一条 patch，并等待上一条发送结束，避免旧答案覆盖新答案。agent 仅可答 pending，withdrawn 返回 409。普通 decision 和 human request 答过后仍返回 409；卡片回调仍是一次性答复，重放不追加 history。
 
 正文或附件至少有一种。上传为 multipart：`message` 是发送体的 JSON 字符串，重复 `file` 字段为 File；文件类型/20MB 上限沿用 Chat 验证。已有附件使用 `attachment_ids`，必须可访问、同工作区且未绑定另一条消息。文件和元数据随发送失败回滚；幂等重发不会留下多余上传文件。decision 回答不接受附件。
 

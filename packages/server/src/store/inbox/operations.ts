@@ -265,10 +265,15 @@ export class InboxOperations {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
       const key=message.metadata.human_request?'human_request':'decision_record';
       const record=(message.metadata[key]??{}) as Record<string,unknown>;
-      if(message.resolved_at||message.deleted_at||!['pending','escalated'].includes(String(record.status??'pending')))throw new Error('Decision is settled');
+      const status=String(record.status??'pending');
+      const issueDecision=!message.metadata.human_request && (typeof record.source_issue_id==='string' || typeof message.metadata.source_issue_id==='string');
+      // Explicit Issue decisions retain the domain's deliberate member revision
+      // behavior. Card callbacks and other settled requests remain single-shot.
+      const memberRevision=issueDecision && status==='answered' && input.sender.type==='member' && !input.credential;
+      if(message.deleted_at || (!memberRevision && (message.resolved_at || !['pending','escalated'].includes(status))))throw new Error('Decision is settled');
       // Domain decisions keep their response projections and lifecycle hooks,
       // while their sole authority and reply still live on message rows.
-      if(message.metadata.human_request || typeof record.source_issue_id==='string' || typeof message.metadata.source_issue_id==='string') {
+      if(message.metadata.human_request || issueDecision) {
         const before=this.ctx.conversationLog().getConversationLogHead(message.session_id)?.headSeq??0;
         if(message.metadata.human_request) {
           if(input.sender.type!=='member')throw new Error('Decision requires a member answer');
