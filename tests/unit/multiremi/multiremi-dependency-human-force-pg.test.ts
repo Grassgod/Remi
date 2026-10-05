@@ -383,20 +383,84 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     expect(store.getIssue(f.issue.id)?.status).toBe("todo");
   });
 
+  function assertSingleStart(f: Awaited<ReturnType<typeof fixture>>, forceCount: number, autoCount: number) {
+    const tasks = store.listTasksForIssue(f.issue.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.status).toBe("queued");
+    const turns = db.query("SELECT id, status, trigger_message_id FROM multiremi_turns WHERE issue_id = ?")
+      .all(f.issue.id) as Array<{ id: string; status: string; trigger_message_id: string }>;
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.status).toBe("pending");
+    const attempts = db.query("SELECT id FROM multiremi_turn_attempts WHERE turn_id = ?").all(turns[0]!.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.id).toBe(tasks[0]?.id);
+    const activity = store.listIssueActivity(f.issue.id);
+    expect(forces(f.issue.id)).toHaveLength(forceCount);
+    expect(activity.filter((entry) => entry.type === "dependency_auto_started")).toHaveLength(autoCount);
+    expect(activity.filter((entry) => entry.type === "turn_created")).toHaveLength(1);
+    expect(activity.filter((entry) => entry.type === "turn_merged")).toHaveLength(autoCount);
+    const trigger = db.query("SELECT sender_type, wake_applied, wake_reason FROM multiremi_conversation_log WHERE id = ?")
+      .get(turns[0]!.trigger_message_id);
+    expect(trigger).toMatchObject({ sender_type: autoCount ? "platform" : "member", wake_applied: "now",
+      wake_reason: autoCount ? "platform_to_owner" : "human_sender" });
+    expect(store.getIssue(f.issue.id)?.status).toBe("todo");
+  }
+
+  it.each(["force_first", "auto_first", "member_after_commit"] as const)(
+    "records only the actual start for %s across two PG connections", async (order) => {
+      const f = await fixture("pat", order);
+      const peerDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+      try {
+        const peerStore = new MultiremiStore(peerDb);
+        const peerApp = createMultiremiApp({ store: peerStore, authToken: "mul458-pg-root" });
+        const memberRequest = async () => {
+          const response = await peerApp.request(issueMessagesPath(peerStore, f.issue.id), {
+            method: "POST", headers: f.headers,
+            body: JSON.stringify(requestMessageBody(peerStore, { body: `Ordered PG ${order}` }, { type: "role", ref: "issue_owner" })),
+          });
+          expect(response.status).toBe(200);
+        };
+        if (order === "force_first") {
+          await memberRequest();
+          store.updateIssue(f.prerequisite.id, { status: "done" });
+          assertSingleStart(f, 1, 0);
+        } else if (order === "auto_first") {
+          store.updateIssue(f.prerequisite.id, { status: "done" });
+          await memberRequest();
+          assertSingleStart(f, 0, 1);
+        } else {
+          // Pause only the post-COMMIT hook: the prerequisite and durable check are committed.
+          const issues = (store as unknown as { issues: IssuesRepo }).issues;
+          const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
+          try { store.updateIssue(f.prerequisite.id, { status: "done" }); } finally { hook.mockRestore(); }
+          const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+            .get(f.prerequisite.id);
+          expect(row).toBeDefined();
+          const check = store.getSystemEvent(row!.id)!;
+          await memberRequest();
+          assertSingleStart(f, 0, 0);
+          store.dispatchPendingSystemEvents(new Date(check.availableAt));
+          expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+          assertSingleStart(f, 0, 0);
+        }
+      } finally {
+        peerDb.close();
+      }
+    },
+  );
+
   it("serializes concurrent human comment and automatic start across two PG connections", async () => {
     const f = await fixture("pat", "race-comment-auto");
     const results = await runRace(f.issue.id, f.prerequisite.id, f.agent.id, ["comment", "auto"]);
     expect(results.every((result) => result.responseStatus !== 409)).toBe(true);
     expect(results.every((result) => result.maxTransactionDepth === 1)).toBe(true);
-    const tasks = store.listTasksForIssue(f.issue.id);
-    expect(tasks.some((task) => task.status === "cancelled")).toBe(false);
     const forceCount = forces(f.issue.id).length;
     const autoCount = store.listIssueActivity(f.issue.id)
       .filter((entry) => entry.type === "dependency_auto_started").length;
-    expect(forceCount + autoCount, JSON.stringify(store.listIssueActivity(f.issue.id))).toBe(1);
-    const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "turn_merged");
-    expect(merges).toHaveLength(autoCount);
-    expect(tasks).toHaveLength(1 + autoCount - merges.length);
-    expect(store.getIssue(f.issue.id)?.status).toBe("todo");
+    // If the prerequisite commits before the member request but its post-commit
+    // check loses the race, this is a normal member start with neither audit.
+    expect([[1, 0], [0, 1], [0, 0]]).toContainEqual([forceCount, autoCount]);
+    expect(store.getIssue(f.prerequisite.id)?.status).toBe("done");
+    assertSingleStart(f, forceCount, autoCount);
   });
 });

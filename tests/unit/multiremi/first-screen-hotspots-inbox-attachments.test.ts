@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
+import { readProcessDbCounters } from "@multiremi/observability/request-metrics.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { nullableString } from "@multiremi/store/helpers.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
@@ -72,7 +73,7 @@ function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   const record = (sql: string, rows: unknown[]): void => {
     probe.statements += 1;
     probe.rows += rows.length;
-    if (rows.length) probe.bytes += JSON.stringify({ rows, count: rows.length }).length;
+    probe.bytes += Buffer.byteLength(JSON.stringify({ rows, count: rows.length }), "utf8");
     const key = sql.replace(/\s+/g, " ").trim();
     probe.bySql.set(key, (probe.bySql.get(key) ?? 0) + 1);
   };
@@ -163,12 +164,17 @@ async function getInboxSummary(
   timezoneOffset: number,
 ): Promise<{ body: { unread: number; attention: number }; statements: number; bytes: number }> {
   harness.probe.reset();
+  const beforeBytes = readProcessDbCounters().dbBytes;
   const response = await harness.app.request("/api/inbox"+`?timezone_offset=${timezoneOffset}`, {
     headers: harness.headers,
   });
   const text = await response.text();
   const statements = harness.probe.statements;
-  const bytes = harness.probe.bytes;
+  // PG counts the actual bridge frames, including empty replies and command metadata.
+  const bytes = harness.db.dialect === "postgres"
+    ? readProcessDbCounters().dbBytes - beforeBytes
+    : harness.probe.bytes;
+  expect(bytes).toBeGreaterThan(0);
   if (response.status !== 200) throw new Error(`inbox summary: HTTP ${response.status} ${text.slice(0, 300)}`);
   const page = JSON.parse(text) as { unread_count: number; attention_count: number };
   return { body: { unread: page.unread_count, attention: page.attention_count }, statements, bytes };

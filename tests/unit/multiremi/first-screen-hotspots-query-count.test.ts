@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
+import { readProcessDbCounters } from "@multiremi/observability/request-metrics.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
   installFirstScreenHotspotIds,
@@ -51,7 +52,7 @@ function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   const record = (sql: string, rows: unknown[]): void => {
     probe.statements += 1;
     probe.rows += rows.length;
-    if (rows.length) probe.bytes += JSON.stringify({ rows, count: rows.length }).length;
+    probe.bytes += Buffer.byteLength(JSON.stringify({ rows, count: rows.length }), "utf8");
     const key = sql.replace(/\s+/g, " ").trim();
     probe.bySql.set(key, (probe.bySql.get(key) ?? 0) + 1);
   };
@@ -157,10 +158,15 @@ async function getJson(
   path: string,
 ): Promise<{ body: unknown; statements: number; bytes: number }> {
   harness.probe.reset();
+  const beforeBytes = readProcessDbCounters().dbBytes;
   const response = await harness.app.request(path, { headers: harness.headers });
   const text = await response.text();
   const statements = harness.probe.statements;
-  const bytes = harness.probe.bytes;
+  // PG counts the actual bridge frames, including empty replies and command metadata.
+  const bytes = harness.db.dialect === "postgres"
+    ? readProcessDbCounters().dbBytes - beforeBytes
+    : harness.probe.bytes;
+  expect(bytes).toBeGreaterThan(0);
   if (response.status !== 200) throw new Error(`${path}: HTTP ${response.status} ${text.slice(0, 300)}`);
   return { body: JSON.parse(text) as unknown, statements, bytes };
 }

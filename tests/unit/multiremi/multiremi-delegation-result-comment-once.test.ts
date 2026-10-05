@@ -223,11 +223,13 @@ async function withHttpApi(
 async function httpCredentials(store: MultiremiStore, daemonId: string) {
   const user = store.getOrCreateUser({ email: `${daemonId}@example.test`, name: "Snapshot member" });
   store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
-  const member = await store.createAccessToken({ workspaceId: "local", userId: user.id,
+  const deniedMember = await store.createAccessToken({ workspaceId: "local", userId: user.id,
     name: "Snapshot member", type: "pat", purpose: "cli" });
+  const owner = await store.createAccessToken({ workspaceId: "local", userId: "local",
+    name: "Snapshot owner", type: "pat", purpose: "cli" });
   const daemon = await store.createAccessToken({ workspaceId: "local", userId: "local",
     name: "Snapshot daemon", type: "daemon", purpose: "daemon", daemonId });
-  return { member: member.token, daemon: daemon.token };
+  return { owner: owner.token, deniedMember: deniedMember.token, daemon: daemon.token };
 }
 
 async function startThroughDaemon(
@@ -318,7 +320,12 @@ async function runCancelledReturnSnapshotCase(
     expect((bridge().metadata.message_source as any).commentId).toBe(resultCommentId);
     expect(inboxReportBody(store, firstReturn, childTask.id)).toContain(`结论评论：${resultCommentId}`);
 
-    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.deniedMember, {}, 404);
+    expect(store.getTask(firstReturn.id)?.status).toBe(firstReturn.status);
+    expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(firstReturn.id);
+    expect(JSON.stringify(reportSnapshot(bridge()))).toBe(bridgeBeforeCancel);
+    expect(selects.count()).toBe(1);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.owner);
     const sourceAfterCancel = store.getTask(childTask.id)!;
     const replacement = store.getTask(sourceAfterCancel.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
@@ -360,7 +367,7 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
     expect((bridge().metadata.message_source as any).commentId).toBe(automaticComment.id);
     expect(selects.count()).toBe(1);
 
-    await requestJson(base, turnApiPath(store, e2Round.id, "/cancel"), credentials.member);
+    await requestJson(base, turnApiPath(store, e2Round.id, "/cancel"), credentials.owner);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(e2Round.id);
     expect(inboxReportBody(store, replacement, childTask.id)).toContain(`结论评论：${automaticComment.id}`);
@@ -396,7 +403,7 @@ async function runMissingSnapshotCompatibilityCase(store: MultiremiStore): Promi
     const canonical=store.getMessage(bridge.id)!;
     const {envelope,...metadata}=canonical.metadata;
     mirrorOntoConversationLog(store,"UPDATE multiremi_conversation_log SET metadata=? WHERE id=?",[JSON.stringify(metadata),bridge.id]);
-    await requestJson(base,turnApiPath(store,firstReturn.id,"/cancel"),credentials.member);
+    await requestJson(base,turnApiPath(store,firstReturn.id,"/cancel"),credentials.owner);
     const replacement=store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(inboxReportBody(store,replacement,childTask.id)).toContain(`结论评论：${automaticComment.id}`);
     expect(selects.count()).toBe(1);
@@ -499,7 +506,7 @@ async function runSkippedManualWakeCancellationSnapshotCase(
     expect(selects.count()).toBe(1);
     expect((bridge().metadata.message_source as any).commentId).toBe(resultCommentId);
 
-    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.owner);
     const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
     expect(replacement.id).not.toBe(manual.id);
@@ -543,7 +550,7 @@ async function runSameIssueResultCommentParityCase(store: MultiremiStore): Promi
     expect(store.listSessionEvents(f.leaderSession.id)
       .filter((event) => event.kind === "message" && (event.metadata.message_source as any)?.taskId === delegated.id)).toHaveLength(1);
 
-    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.member);
+    await requestJson(base, turnApiPath(store, firstReturn.id, "/cancel"), credentials.owner);
     const replacement = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
     expect(replacement.id).not.toBe(firstReturn.id);
     expect(inboxReportBody(store, replacement, delegated.id)).toBe(expectedBody);
