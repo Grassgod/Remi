@@ -44,7 +44,7 @@ export function requestMessageBody(store: MultiremiStore, input: Record<string, 
     : mention?.[1] === "squad" ? store.getSquad(mention[2]!)?.leaderId : null);
   const replyTo = input.reply_to_id ?? input.parent_id ?? input.parentId;
   return { ...input, body_md: text, message_kind: input.message_kind ?? (replyTo ? "reply" : "request"),
-    to: input.to ?? (agentId ? { type: "agent", ref: agentId } : fallbackTo ?? { type: "none" }),
+    to: input.to ?? (agentId ? { type: "agent", ref: agentId } : fallbackTo ?? { type: "role", ref: input.chatSessionId || input.chat_session_id ? "relay" : "issue_owner" }),
     ...(replyTo ? { reply_to_id: replyTo } : {}),
     ...(input.attachmentIds ? { attachment_ids: input.attachmentIds } : {}) };
 }

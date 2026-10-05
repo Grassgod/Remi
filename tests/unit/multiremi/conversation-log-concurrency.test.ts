@@ -19,9 +19,9 @@ const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url
 const migrationId = "20260927_conversation_log";
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 
-async function runFour(backend: "sqlite" | "pg", target: string, operation: "migrate" | "append"): Promise<void> {
+async function runFour(backend: "sqlite" | "pg", target: string, operation: "migrate" | "append", sessionId = "ises_concurrent"): Promise<void> {
   const children = Array.from({ length: 4 }, () => Bun.spawn({
-    cmd: [process.execPath, worker, backend, target, operation, "ises_concurrent", "25"],
+    cmd: [process.execPath, worker, backend, target, operation, sessionId, "25"],
     env: { ...process.env, MULTIREMI_DATABASE_URL: backend === "pg" ? target : "" },
     stdout: "pipe", stderr: "pipe",
   }));
@@ -45,31 +45,25 @@ async function runFirstComments(backend: "sqlite" | "pg", target: string, sessio
   for (const result of results) expect(result.code, result.stderr).toBe(0);
 }
 
-function resetMigration(db: SqlDatabase): void {
-  db.exec("DROP TABLE multiremi_conversation_log; DROP TABLE multiremi_conversation_heads;");
-  db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [migrationId]);
-  db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260928_conversation_log_backfill"]);
-}
-
-function assertContiguous(db: SqlDatabase): void {
-  const rows = db.query("SELECT seq FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq ASC")
-    .all("ises_concurrent") as Array<{ seq: number }>;
+function assertContiguous(db: SqlDatabase, sessionId: string): void {
+  const rows = db.query("SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq>0 ORDER BY seq ASC")
+    .all(sessionId) as Array<{ seq: number }>;
   expect(rows.map((row) => Number(row.seq))).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
   const head = db.query("SELECT head_seq FROM multiremi_conversation_heads WHERE session_id = ?")
-    .get("ises_concurrent") as { head_seq: number };
+    .get(sessionId) as { head_seq: number };
   expect(Number(head.head_seq)).toBe(100);
 }
 
-async function withSqlite(run: (db: Database, path: string) => Promise<void>): Promise<void> {
+async function withSqlite(run: (db: Database, path: string) => Promise<void>, fresh = false): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mul426-sqlite-"));
   const path = join(dir, "test.sqlite");
   const db = openSqliteDatabase(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 30000");
-  new MultiremiStore(db);
+  if (!fresh) new MultiremiStore(db).ensureLocalWorkspace();
   try { await run(db, path); } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
-async function withPostgres(run: (db: PostgresSyncDatabase, url: string) => Promise<void>): Promise<void> {
+async function withPostgres(run: (db: PostgresSyncDatabase, url: string) => Promise<void>, fresh = false): Promise<void> {
   const name = `mul426_${process.pid}_${Math.floor(Math.random() * 1e8)}`;
   const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
   await admin.unsafe(`CREATE DATABASE ${name}`);
@@ -77,7 +71,7 @@ async function withPostgres(run: (db: PostgresSyncDatabase, url: string) => Prom
   url.pathname = `/${name}`;
   const db = new PostgresSyncDatabase(url.toString());
   try {
-    new MultiremiStore(db);
+    if (!fresh) new MultiremiStore(db).ensureLocalWorkspace();
     await run(db, url.toString());
   } finally {
     db.close();
@@ -94,29 +88,17 @@ async function verifyLegacyFirstWrites(db: SqlDatabase, backend: "sqlite" | "pg"
   const concurrent = store.createIssueSession(issue.id, { title: "Concurrent session" });
   const agent = store.createAgent({ name: "Legacy chat agent", provider: "codex", workspaceId: "local" });
   const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
-  const now = new Date().toISOString();
-  for (const session of [direct, renamed, concurrent]) {
-    db.run("DELETE FROM multiremi_session_events WHERE session_id = ?", [session.id]);
-    for (let seq = 1; seq <= 3; seq++) {
-      db.run(
-        "INSERT INTO multiremi_session_events (id, session_id, seq, author_type, kind, body, created_at) VALUES (?, ?, ?, 'system', 'system', ?, ?)",
-        [`sevt_legacy_${session.id}_${seq}`, session.id, seq, `legacy ${seq}`, now],
-      );
-    }
+  for (const session of [direct,renamed,concurrent]) {
+    for (let seq=1;seq<=3;seq++) store.createIssueComment(issue.id,{issueSessionId:session.id,body:`legacy ${seq}`,authorType:"system"});
   }
-  for (let seq = 1; seq <= 3; seq++) {
-    db.run("INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, sequence, created_at) VALUES (?, ?, 'system', ?, ?, ?)",
-      [`msg_legacy_${seq}`, chat.id, `old ${seq}`, seq, now]);
-  }
-  db.run("UPDATE multiremi_chat_sessions SET message_sequence = 3 WHERE id = ?", [chat.id]);
-  resetMigration(db);
+  for(let seq=1;seq<=3;seq++) db.transaction(()=>store.appendChatMessageWithinTransaction({chatSessionId:chat.id,role:"system",body:`old ${seq}`}))();
   const migrated = new MultiremiStore(db);
   const comment = migrated.createIssueComment(issue.id, { issueSessionId: direct.id, body: "new" });
   expect(migrated.getConversationLogEntryById(comment.id)?.seq).toBe(4);
   migrated.updateIssue(issue.id, { title: "Renamed legacy issue" });
   const afterRename = migrated.createIssueComment(issue.id, { issueSessionId: renamed.id, body: "after title" });
-  expect(migrated.getConversationLogEntryById(afterRename.id)?.seq).toBe(4);
-  expect(migrated.getConversationLogHead(renamed.id)?.headSeq).toBe(4);
+  expect(migrated.getConversationLogEntryById(afterRename.id)?.seq).toBe(5);
+  expect(migrated.getConversationLogHead(renamed.id)?.headSeq).toBe(5);
   const chatMessage = migrated.sendChatMessage(chat.id, { content: "continued chat" }).message;
   expect(migrated.getConversationLogEntryById(chatMessage.id)?.seq).toBe(4);
   migrated.resolveIssueComment(comment.id);
@@ -124,13 +106,12 @@ async function verifyLegacyFirstWrites(db: SqlDatabase, backend: "sqlite" | "pg"
   expect(migrated.listSessionEvents(direct.id, { sinceSeq: 2, toSeq: 4 }).map((event) => event.seq)).toEqual([3, 4]);
   expect(migrated.listSessionEvents(direct.id, { sinceSeq: 4, toSeq: 5 })[0]?.kind).toBe("thread_resolved");
   const app = createMultiremiApp({ store: migrated });
-  const response = await app.request(`/api/sessions/${direct.id}/messages`+`?since_seq=2&to_seq=5`);
+  const response = await app.request(`/api/sessions/${direct.id}/messages`+`?cursor=2`);
   expect(response.status).toBe(200);
-  const wire = await response.json() as Array<{ seq: number; kind: string }>;
-  expect(wire.map((event) => event.seq)).toEqual([3, 4, 5]);
-  expect(wire[2]?.kind).toBe("thread_resolved");
+  const wire = (await response.json()).messages as Array<{ seq: number; kind: string }>;
+  expect(wire.map((event) => event.seq)).toEqual([3, 4]);
   await runFirstComments(backend, target, concurrent.id);
-  expect(migrated.listSessionEvents(concurrent.id).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
+  expect(migrated.listSessionEvents(concurrent.id).map((event) => event.seq)).toEqual([1,2,3,4,5,6]);
 }
 
 function verifyNestedTransactions(db: SqlDatabase): void {
@@ -327,9 +308,9 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
 
 function rejectWrite(db: SqlDatabase, backend: "sqlite" | "pg", table: string, operation: "INSERT" | "UPDATE", condition: string): void {
   if (backend === "pg") {
-    db.run("CREATE FUNCTION reject_conversation_write() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'write rejected'; END; $$ LANGUAGE plpgsql");
+    db.run(`CREATE FUNCTION reject_conversation_write() RETURNS trigger AS $$ BEGIN IF ${condition} THEN RAISE EXCEPTION 'write rejected'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
     db.run(`CREATE TRIGGER reject_conversation_write BEFORE ${operation} ON ${table}
-      FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION reject_conversation_write()`);
+      FOR EACH ROW EXECUTE FUNCTION reject_conversation_write()`);
   } else {
     db.exec(`CREATE TRIGGER reject_conversation_write BEFORE ${operation} ON ${table}
       FOR EACH ROW WHEN ${condition} BEGIN SELECT RAISE(ABORT, 'write rejected'); END`);
@@ -340,12 +321,12 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const store = new MultiremiStore(db);
   const issue = store.createIssue({ title: "System rollback", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
-  rejectWrite(db, backend, "multiremi_conversation_log", "INSERT", "NEW.kind = 'system'");
+  rejectWrite(db, backend, "multiremi_conversation_log", "INSERT", "NEW.kind = 'message' AND NEW.sender_type = 'platform' AND (NEW.body_md = 'blocked' OR NEW.body_md LIKE '%Child%')");
   expect(() => store.createTaskFailureSystemComment(issue.id, session.id, "tsk_failure", "blocked"))
     .toThrow("write rejected");
   expect(store.listIssueComments(issue.id)).toEqual([]);
   expect(store.listSessionEvents(session.id)).toEqual([]);
-  expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "system")).toEqual([]);
+  expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message" && store.getMessage(entry.id)?.sender_type === "platform")).toEqual([]);
   expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'")
     .get(issue.id) as { n: number | string }).n)).toBe(0);
 
@@ -400,16 +381,16 @@ function verifyFinalReplyReference(db: SqlDatabase, backend: "sqlite" | "pg"): v
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
   store.startTask(task.id);
   store.completeTask(task.id, { output: "Final answer" });
-  const comment = store.listIssueComments(issue.id)[0]!;
+  const comment = store.listIssueComments(issue.id).find(comment=>comment.taskId===task.id)!;
   expect(store.findTurnEntry(task.id)?.metadata.final_entry_id).toBe(comment.id);
 
   const failed = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "retry", workspaceId: "local" });
   expect(store.claimTask(runtime.id)?.id).toBe(failed.id);
   store.startTask(failed.id);
-  rejectWrite(db, backend, "multiremi_issue_comments", "INSERT", "NEW.body = 'Blocked answer'");
+  rejectWrite(db, backend, "multiremi_conversation_log", "INSERT", "NEW.kind = 'message' AND NEW.body_md = 'Blocked answer'");
   store.completeTask(failed.id, { output: "Blocked answer" });
   expect(store.findTurnEntry(failed.id)?.metadata).toMatchObject({ status: "completed", final_entry_id: null });
-  expect(store.listIssueComments(issue.id)).toHaveLength(1);
+  expect(store.listIssueComments(issue.id).filter(comment=>comment.authorType==="agent")).toHaveLength(1);
 }
 
 // F1 (MUL-402 QA): `postAgentReplyComment` owns one transaction for the reply
@@ -468,23 +449,21 @@ function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "
   expect(reply.body).toBe("Committed answer");
   expect(store.findTurnEntry(committed.id)?.metadata.final_entry_id).toBe(reply.id);
 
-  // Reject only the reply's own card update; the terminal transaction writes
-  // `final_entry_id: null` and must still go through.
-  rejectWrite(db, backend, "multiremi_conversation_log", "UPDATE", backend === "pg"
-    ? "NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL"
-    : "NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL");
+  // The canonical reply pointer replaces the old turn-card JSON field.
+  rejectWrite(db, backend, "multiremi_turns", "UPDATE", "NEW.reply_message_id IS NOT NULL AND EXISTS (SELECT 1 FROM multiremi_conversation_log WHERE id = NEW.reply_message_id AND body_md = 'Rolled back answer')");
+  const before = store.listIssueComments(issue.id).map(comment=>comment.id);
   const emitted: string[] = [];
   const unsubscribe = store.onWorkspaceEvent((event) => emitted.push(event.type));
   try {
     const rejected = completeRound("Rolled back answer");
     expect(store.getTask(rejected.id)?.status).toBe("completed");
-    expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
+    expect(store.listIssueComments(issue.id).filter(comment=>comment.authorType==="agent").map(comment=>comment.id)).toEqual([reply.id]);
     // Count the session's message rows: a leaked reply shows up here whatever task_id its log row carries.
-    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message")
+    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message" && store.getMessage(entry.id)?.sender_type === "agent")
       .map((entry) => entry.id)).toEqual([reply.id]);
     expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
     expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
-      .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
+      .map((row) => JSON.parse((row as { data: string }).data).commentId).filter(id=>!before.includes(id))).toEqual([]);
     expect(emitted).not.toContain("comment:created");
   } finally { unsubscribe(); }
 }
@@ -502,7 +481,7 @@ function verifyLateReplyDispatchFailure(db: SqlDatabase, backend: "sqlite" | "pg
   try {
     const store = new MultiremiStore(db);
     const { issue, task, teammate } = startLeaderRound(store, "rt_reply_late_dispatch");
-    rejectWrite(db, backend, "multiremi_turn_execution_records", "INSERT", `NEW.agent_id = '${teammate.id}'`);
+    rejectWrite(db, backend, "multiremi_turns", "INSERT", `NEW.agent_id = '${teammate.id}'`);
     console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
     try {
       store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
@@ -543,8 +522,7 @@ function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
   const completed = store.getConversationLogEntryById(message.id)!;
   expect(completed.metadata).toMatchObject({ pending_agent_delivery: false, agent_delivery_task_id: null });
   expect(completed.revision).toBe(prepared.revision + 1);
-  expect(db.query("SELECT pending_agent_delivery, agent_delivery_task_id FROM multiremi_chat_messages WHERE id = ?")
-    .get(message.id)).toEqual({ pending_agent_delivery: 0, agent_delivery_task_id: null });
+  expect(store.getConversationLogEntryById(message.id)?.metadata).toMatchObject({pending_agent_delivery:false,agent_delivery_task_id:null});
 
   const discardedMessage = db.transaction(() => store.appendChatMessageWithinTransaction({
     chatSessionId: chat.id, role: "system", body: "discard me", pendingAgentDelivery: true,
@@ -556,8 +534,7 @@ function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
   expect(discarded.seq).toBe(beforeDiscard.seq);
   expect(discarded.revision).toBe(beforeDiscard.revision + 1);
   expect(discarded.metadata).toMatchObject({ pending_agent_delivery: false, agent_delivery_task_id: null });
-  expect(db.query("SELECT pending_agent_delivery, agent_delivery_task_id FROM multiremi_chat_messages WHERE id = ?")
-    .get(discardedMessage.id)).toEqual({ pending_agent_delivery: 0, agent_delivery_task_id: null });
+  expect(store.getConversationLogEntryById(discardedMessage.id)?.metadata).toMatchObject({pending_agent_delivery:false,agent_delivery_task_id:null});
 }
 
 function verifySteerTarget(db: SqlDatabase): void {
@@ -567,31 +544,32 @@ function verifySteerTarget(db: SqlDatabase): void {
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: "local" });
   store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "change" });
   const turn = store.findTurnEntry(task.id)!;
-  const steer = store.listConversationLogEntries(turn.session_id).find((entry) => entry.kind === "task_steer");
-  expect(steer?.metadata.target_seq).toBe(turn.seq);
+  const steer = store.listConversationLogEntries(turn.session_id).find((entry) => entry.kind === "message" && entry.metadata.steer_target_turn_id === store.getTurnForAttempt(task.id)!.id);
+  expect(steer?.body_md).toBe("change");
+  expect(steer ? store.getMessage(steer.id)?.to_agent_id : null).toBe(agent.id);
 }
 
 function verifyChatTurnTiming(db: SqlDatabase): void {
   const messageSequence = (id: string): number => Number((db.query(
-    "SELECT sequence FROM multiremi_chat_messages WHERE id = ?",
+    "SELECT seq AS sequence FROM multiremi_conversation_log WHERE id = ?",
   ).get(id) as { sequence: number | string }).sequence);
   const store = new MultiremiStore(db);
   const runtime = store.registerRuntime({ name: "Chat timing runtime", provider: "codex", workspaceId: "local" });
   const agent = store.createAgent({ name: "Chat timing agent", provider: "codex", workspaceId: "local" });
   const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
   const sent = store.sendChatMessage(chat.id, { content: "Complete me" });
-  expect(store.findTurnEntry(sent.task.id)).toBeNull();
+  expect(store.getTurnForAttempt(sent.task.id)?.status).toBe("pending");
   expect(store.claimTask(runtime.id)?.id).toBe(sent.task.id);
   store.startTask(sent.task.id);
-  expect(store.findTurnEntry(sent.task.id)).toBeNull();
-  store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "W10 system update");
+  expect(store.findTurnEntry(sent.task.id)?.metadata.status).toBe("running");
+  db.transaction(()=>store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "W10 system update"))();
   store.completeTask(sent.task.id, { output: "Completed answer" });
   const completedMessages = store.listChatMessages(chat.id);
   expect(completedMessages.map((message) => message.body)).toEqual(["Complete me", "W10 system update", "Completed answer"]);
   const assistant = completedMessages[2]!;
   const completedTurn = store.findTurnEntry(sent.task.id)!;
-  expect(completedTurn.id).toBe(assistant.id);
-  expect(completedTurn.seq).toBe(messageSequence(assistant.id));
+  expect(completedTurn.metadata.final_entry_id).toBe(assistant.id);
+  expect(completedTurn.seq).toBeLessThan(messageSequence(assistant.id));
   expect(completedTurn.metadata).toMatchObject({ status: "completed", final_reply_md: "Completed answer", elapsed_ms: expect.any(Number) });
 
   const failedChat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
@@ -603,13 +581,13 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
   const failedTurn = store.findTurnEntry(failing.task.id)!;
   const failedAssistant = store.listChatMessages(failedChat.id).find((message) => message.role === "assistant")!;
   expect(failedTurn.metadata.status).toBe("failed");
-  expect(failedTurn.id).toBe(failedAssistant.id);
-  expect(failedTurn.seq).toBe(messageSequence(failedAssistant.id));
+  expect(failedTurn.metadata.final_entry_id).toBe(failedAssistant.id);
+  expect(failedTurn.seq).toBeLessThan(messageSequence(failedAssistant.id));
 
   const cancelledChat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
   const cancelled = store.sendChatMessage(cancelledChat.id, { content: "Cancel me" });
   store.cancelTask(cancelled.task.id);
-  expect(store.findTurnEntry(cancelled.task.id)).toBeNull();
+  expect(store.findTurnEntry(cancelled.task.id)?.metadata.status).toBe("cancelled");
   expect(store.listChatMessages(cancelledChat.id).map((message) => message.body)).toEqual(["Cancel me"]);
 
   const retryChat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
@@ -617,10 +595,10 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
   expect(store.claimTask(runtime.id)?.id).toBe(initial.task.id);
   store.startTask(initial.task.id);
   store.failTask(initial.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow" });
-  const retry = store.listTasks().find((task) => task.parentTaskId === initial.task.id)!;
+  const retry = store.getTask(store.getTurnForAttempt(initial.task.id)!.current_attempt_id!)!;
   expect(retry).toBeDefined();
-  expect(store.findTurnEntry(initial.task.id)).toBeNull();
-  expect(store.findTurnEntry(retry.id)).toBeNull();
+  expect(retry.id).not.toBe(initial.task.id);
+  expect(store.findTurnEntry(initial.task.id)?.id).toBe(store.findTurnEntry(retry.id)?.id);
   expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
   store.startTask(retry.id);
   store.completeTask(retry.id, { output: "Retry answer" });
@@ -628,8 +606,8 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
   expect(retryTurns).toHaveLength(1);
   expect(retryTurns[0]?.task_id).toBe(retry.id);
   const retryAssistant = store.listChatMessages(retryChat.id).find((message) => message.role === "assistant")!;
-  expect(retryTurns[0]?.id).toBe(retryAssistant.id);
-  expect(retryTurns[0]?.seq).toBe(messageSequence(retryAssistant.id));
+  expect(retryTurns[0]?.metadata.final_entry_id).toBe(retryAssistant.id);
+  expect(retryTurns[0]?.seq).toBeLessThan(messageSequence(retryAssistant.id));
 }
 
 describe("conversation log multi-process allocation (MUL-405)", () => {
@@ -902,25 +880,26 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       expect(db.query("SELECT n FROM commit_label_case").all()).toEqual([]);
     });
   });
-  it("SQLite: cold migration continues legacy issue and chat sequences, including concurrent first writes", async () => {
+  it("SQLite: restart continues canonical issue and chat sequences, including concurrent first writes", async () => {
     await withSqlite((db, path) => verifyLegacyFirstWrites(db, "sqlite", path));
   }, 30_000);
-  it.skipIf(!pgAdminUrl)("Postgres: cold migration continues legacy issue and chat sequences, including concurrent first writes", async () => {
+  it.skipIf(!pgAdminUrl)("Postgres: restart continues canonical issue and chat sequences, including concurrent first writes", async () => {
     await withPostgres((db, url) => verifyLegacyFirstWrites(db, "pg", url));
   }, 30_000);
   it("SQLite: four processes cold-start the migration", async () => {
     await withSqlite(async (db, path) => {
-      resetMigration(db);
       await runFour("sqlite", path, "migrate");
       const row = db.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
-    });
+    }, true);
   }, 30_000);
   it("SQLite: four processes append without duplicate or missing seq", async () => {
     await withSqlite(async (db, path) => {
-      await runFour("sqlite", path, "append");
-      assertContiguous(db);
+      const store = new MultiremiStore(db);
+      const session = store.getOrCreateDefaultIssueSession(store.createIssue({title:"Concurrent",workspaceId:"local"}).id);
+      await runFour("sqlite", path, "append", session.id);
+      assertContiguous(db, session.id);
     });
   });
   // 30 s budget for the two cases below; their assertions are untouched.
@@ -945,17 +924,18 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   // a defect in MUL-405's lock, it gets its own issue and this budget reverts.
   it.skipIf(!pgAdminUrl)("Postgres: four processes cold-start the migration", async () => {
     await withPostgres(async (db, url) => {
-      resetMigration(db);
       await runFour("pg", url, "migrate");
       const row = db.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
-    });
+    }, true);
   }, 30_000);
   it.skipIf(!pgAdminUrl)("Postgres: four processes append without duplicate or missing seq", async () => {
     await withPostgres(async (db, url) => {
-      await runFour("pg", url, "append");
-      assertContiguous(db);
+      const store = new MultiremiStore(db);
+      const session = store.getOrCreateDefaultIssueSession(store.createIssue({title:"Concurrent",workspaceId:"local"}).id);
+      await runFour("pg", url, "append", session.id);
+      assertContiguous(db, session.id);
     });
   }, 30_000); // same migration-advisory-lock serialization; see the note above
   it.skipIf(!pgAdminUrl)("Postgres: rolls back a comment and its mirrored log row together", async () => {

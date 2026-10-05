@@ -118,77 +118,6 @@ function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   });
 }
 
-/**
- * Verbatim pre-MUL-473 `getInboxSummary` (parent commit `593ff2ba`), kept in the
- * test so the comparison is against the old rules rather than a restatement of
- * the new SQL. The `dateGroup` helper is copied from the same commit.
- */
-function legacyDateGroup(createdAt: string, now: Date, timezoneOffsetMinutes: number): string {
-  const localTimestamp = (value: Date) => value.getTime() - timezoneOffsetMinutes * 60_000;
-  const shiftedNow = new Date(localTimestamp(now));
-  const startToday = Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate());
-  const startYesterday = startToday - 86_400_000;
-  const daySinceMonday = (shiftedNow.getUTCDay() + 6) % 7;
-  const startWeek = startToday - daySinceMonday * 86_400_000;
-  const timestamp = localTimestamp(new Date(createdAt));
-  if (timestamp >= startToday) return "today";
-  if (timestamp >= startYesterday) return "yesterday";
-  if (timestamp >= startWeek) return "this_week";
-  return "earlier";
-}
-
-function legacyInboxSummary(
-  db: SqlDatabase,
-  memberId: string,
-  timezoneOffsetMinutes: number,
-  workspaceId?: string,
-): { unread: number; attention: number } {
-  const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
-  const params = workspaceId === undefined ? [memberId] : [memberId, workspaceId];
-  const rows = db.query(
-    `SELECT id, issue_id, type, severity, read, created_at,
-            CASE WHEN type = 'autopilot_run_completed' THEN details ELSE NULL END AS details
-     FROM multiremi_inbox_items
-     WHERE member_id = ?${workspaceFilter} AND archived = 0
-     ORDER BY created_at DESC, id DESC`,
-  ).all(...(params as never[])) as Array<Record<string, unknown>>;
-  const visible: Array<Record<string, unknown>> = [];
-  const selectionKeys = new Set<string>();
-  for (const row of rows) {
-    const issueId = nullableString(row.issue_id);
-    const type = String(row.type);
-    const key = (INBOX_LEDGER_TYPES as readonly string[]).includes(type) || !issueId
-      ? `item:${row.id}`
-      : `issue:${issueId}`;
-    if (selectionKeys.has(key)) continue;
-    selectionKeys.add(key);
-    visible.push(row);
-  }
-  const attention = visible.filter((row) =>
-    Number(row.read ?? 0) === 0
-    && (row.severity === "attention" || row.severity === "action_required")).length;
-  const now = new Date();
-  const mergedSuccessfulRuns = new Map<string, { unread: boolean }>();
-  let unread = 0;
-  for (const row of visible) {
-    const isUnread = Number(row.read ?? 0) === 0;
-    const details = row.type === "autopilot_run_completed" && typeof row.details === "string"
-      ? JSON.parse(row.details) as Record<string, unknown> | null
-      : null;
-    const autopilotId = typeof details?.autopilot_id === "string" ? details.autopilot_id : null;
-    if (!autopilotId) {
-      if (isUnread) unread += 1;
-      continue;
-    }
-    const mergeKey = `${legacyDateGroup(String(row.created_at), now, timezoneOffsetMinutes)}:${autopilotId}`;
-    const merged = mergedSuccessfulRuns.get(mergeKey);
-    if (merged) merged.unread ||= isUnread;
-    else mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
-  }
-  unread += [...mergedSuccessfulRuns.values()].filter((entry) => entry.unread).length;
-  return { unread, attention };
-}
-
 interface Harness {
   store: MultiremiStore;
   db: SqlDatabase;
@@ -246,80 +175,27 @@ async function getInboxSummary(
 }
 
 describe("MUL-473 inbox summary", () => {
-  it("matches the pre-change implementation on the same fixture, across timezones", async () => {
-    const harness = await createHarness();
-    for (const timezoneOffset of [0, 480, -300, 840]) {
-      const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, timezoneOffset, harness.fixture.workspaceId);
-      const actual = await getInboxSummary(harness, timezoneOffset);
-      expect(actual.body).toEqual(expected);
-      // The fixture's own declared counts are the third witness.
-      expect(actual.body.attention).toBeGreaterThan(0);
-      expect(actual.body.unread).toBeGreaterThan(0);
-    }
-  }, 20000);
+  it("counts canonical messages independently of the retired timezone folds", async () => {
+    const harness=await createHarness();
+    const expected={unread:harness.fixture.counts.inboxUnread,attention:harness.fixture.counts.inboxAttention};
+    expect((await getInboxSummary(harness,0)).body).toEqual(expected);
+    expect(expected.unread).toBe(300);expect(expected.attention).toBe(120);
+    // Resolving work removes attention, while reading removes the message.
+    const session=harness.store.getOrCreateDefaultIssueSession(harness.fixture.issueIds[0]!).id;
+    harness.store.resolveMessage('msg_hotspot_1',{type:'member',id:harness.fixture.readerMemberId});
+    expect((await getInboxSummary(harness,0)).body).toEqual({unread:300,attention:119});
+    const read=await harness.app.request('/api/inbox/read',{method:'POST',headers:{...harness.headers,'Content-Type':'application/json'},body:JSON.stringify({session_id:session})});
+    expect(read.status).toBe(200);
+    expect((await getInboxSummary(harness,0)).body).toEqual({unread:0,attention:0});
+  },20000);
 
-  it("matches the pre-change implementation on a random mix of inbox shapes", async () => {
-    let state = 0x473b_ee;
-    const random = (): number => {
-      state ^= state << 13;
-      state ^= state >>> 17;
-      state ^= state << 5;
-      state |= 0;
-      return (state >>> 8) & 0xffff;
-    };
-    const types = [
-      "autopilot_run_completed",
-      "autopilot_run_failed",
-      "autopilot_paused",
-      "issue_assigned",
-      "issue_comment",
-      "comment_mention",
-      "feishu_ingest_connection_alert",
-    ];
-    const severities = ["info", "attention", "action_required"];
-    const harness = await createHarness({ sessions: 1, agents: 1, issues: 4, inboxRows: 0 });
-    const { fixture } = harness;
-    const base = Date.UTC(2026, 8, 20, 12, 0, 0);
-    harness.db.run("DELETE FROM multiremi_inbox_items");
-    for (let index = 0; index < 180; index += 1) {
-      const createdAt = new Date(base - (random() % 20) * 86_400_000 - (random() % 5) * 3_600_000).toISOString();
-      const type = types[random() % types.length]!;
-      const details = random() % 4 === 0 ? null : JSON.stringify({ autopilot_id: `atp_${random() % 3}` });
-      harness.db.run(
-        `INSERT INTO multiremi_inbox_items (
-           id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
-           severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
-         ) VALUES (?, ?, ?, ?, 'member', ?, ?, 'system', NULL, ?, 't', 'b', ?, ?, 0, ?)`,
-        [
-          `inb_random_${index}`,
-          fixture.workspaceId,
-          random() % 9 === 0 ? null : fixture.issueIds[random() % fixture.issueIds.length]!,
-          fixture.readerMemberId,
-          fixture.readerMemberId,
-          severities[random() % 3]!,
-          type,
-          details,
-          random() % 3 === 0 ? 1 : 0,
-          createdAt,
-        ] as never[],
-      );
-    }
-    for (const timezoneOffset of [0, 480, 840]) {
-      expect((await getInboxSummary(harness, timezoneOffset)).body)
-        .toEqual(legacyInboxSummary(harness.db, fixture.readerMemberId, timezoneOffset, fixture.workspaceId));
-    }
-    // Archived rows must not be counted (the old query filtered them too).
-    harness.db.run("UPDATE multiremi_inbox_items SET archived = 1");
-    expect((await getInboxSummary(harness, 0)).body).toEqual({ unread: 0, attention: 0 });
-  }, 20000);
-
-  it("keeps the bridge payload proportional to the completed runs, not to the inbox", async () => {
+  it("bounds canonical inbox hydration at every scale", async () => {
     const measurements: Array<{ inboxRows: number; statements: number; bytes: number }> = [];
     for (const inboxRows of [50, 300, 900]) {
       const harness = await createHarness({ sessions: 1, agents: 1, inboxRows });
       const summary = await getInboxSummary(harness, 0);
       expect(summary.body).toEqual(
-        legacyInboxSummary(harness.db, harness.fixture.readerMemberId, 0, harness.fixture.workspaceId),
+        {unread:harness.fixture.counts.inboxUnread,attention:harness.fixture.counts.inboxAttention},
       );
       measurements.push({ inboxRows, statements: summary.statements, bytes: summary.bytes });
     }

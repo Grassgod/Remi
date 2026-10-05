@@ -70,7 +70,8 @@ describe("Chat task privacy across task APIs", () => {
     const { store, agent, app, bob, headers } = await setup();
     const ordinary = store.createTask({ agentId: agent.id, prompt: "Workspace work" });
     expect((await app.request(turnApiPath(store, ordinary.id), { headers: bob })).status).toBe(200);
-    expect((await app.request(attemptMessagesPath(store, ordinary.id), { method: "POST", headers: bob, body: JSON.stringify(requestMessageBody(store, { content: "Finish ordinary work" }, { type: "agent", ref: store.getTask(ordinary.id)!.agentId })) })).status).toBe(200);
+    // #6: retained orphan turns are read-only; new input names a real conversation.
+    expect((await app.request(attemptMessagesPath(store, ordinary.id), { method: "POST", headers: bob, body: JSON.stringify(requestMessageBody(store, { content: "Finish ordinary work" }, { type: "agent", ref: store.getTask(ordinary.id)!.agentId })) })).status).toBe(404);
     expect((await app.request(turnApiPath(store, ordinary.id, "/cancel"), { method: "POST", headers: bob })).status).toBe(200);
     const daemon = await store.createAccessToken({ name: "Daemon", type: "daemon", userId: "bob", workspaceId: "local" });
     expect((await app.request("/health", { headers: headers(daemon.token) })).status).toBe(200);

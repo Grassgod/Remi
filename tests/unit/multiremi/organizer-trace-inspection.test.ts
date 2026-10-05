@@ -37,13 +37,11 @@ describe("organizer trace inspection", () => {
       const app = createMultiremiApp({ store, authToken: "root-secret" });
       const response = await app.request(turnApiPath(store, task.id, "?attempts=true"), { headers: { Authorization: "Bearer root-secret" } });
       expect(response.status).toBe(200);
-      const { inspection } = await response.json();
-      expect(inspection).toMatchObject(counts.eventCount === null ? {
-        tool_call_count: 0, event_count: 0, message_type_histogram: [], last_message: null,
-      } : {
-        tool_call_count: counts.toolCallCount, event_count: counts.eventCount,
-        message_type_histogram: counts.typeHistogram,
-      });
+      // #7/#9: execution counters are returned on attempts and the dynamic turn card.
+      const detail=await response.json();expect(detail.turn.id).toBe(store.getTurnForAttempt(task.id)!.id);
+      expect(detail.attempts).toContainEqual(expect.objectContaining({id:task.id,event_count:counts.eventCount,tool_call_count:counts.toolCallCount}));
+      const card=store.listConversationLogEntries(task.issueSessionId!).find(entry=>entry.kind==='turn')!;
+      expect(card.metadata).toMatchObject({event_count:counts.eventCount,tool_call_count:counts.toolCallCount,type_histogram:counts.typeHistogram});
     });
   }
 

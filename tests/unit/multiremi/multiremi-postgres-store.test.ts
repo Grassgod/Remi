@@ -37,9 +37,10 @@ import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js";
+import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
@@ -279,6 +280,20 @@ if (!pgAvailable) {
   );
 }
 
+// #3: historical upgrades must start before S4 and cannot downgrade a live normalized database.
+async function withPreUnifiedPostgres(run:(db:PostgresSyncDatabase)=>void|Promise<void>):Promise<void>{
+  const admin=new Bun.SQL(PG_ADMIN_URL,{max:1});
+  const name=`mul508_legacy_${process.pid}_${crypto.randomUUID().replaceAll('-','')}`;
+  await admin.unsafe(`CREATE DATABASE ${name}`);
+  const historical=new PostgresSyncDatabase(pgDatabaseUrl(name));
+  try{
+    bootstrapPreUnifiedSchema(historical);
+    const at=new Date().toISOString();
+    historical.run("INSERT OR IGNORE INTO multiremi_workspaces(id,name,slug,created_at,updated_at) VALUES('local','Local','local',?,?)",[at,at]);
+    await run(historical);
+  }finally{historical.close();await admin.unsafe(`DROP DATABASE ${name} WITH(FORCE)`);await admin.end();}
+}
+
 describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
@@ -366,56 +381,41 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     }
   }, 30_000);
 
-  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
-    "writes the %s dependency exemption after commit (PG)",
-    (source) => {
-      const runtime = store.registerRuntime({
-        id: `rt_pg_exemption_${++wsCounter}`, name: `PG exemption ${source}`, provider: "claude",
-      });
-      const agent = store.createAgent({ name: `PG exemption ${source} ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-      const prerequisite = store.createIssue({ title: `PG prerequisite ${source}`, status: "in_progress" });
-      const issue = store.createIssue({ title: `PG earlier work ${source}`, status: "in_progress" });
-      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
-      if (source === "redispatch") store.cancelTask(previous.id);
-      if (source === "retry") {
-        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
-        store.startTask(previous.id);
-        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
-      }
-      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-      store.updateIssue(issue.id, { status: "backlog" });
-      const eventStates: boolean[] = [];
-      const stop = store.onWorkspaceEvent((event) => {
-        if (event.type === "activity:created"
-          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
-          eventStates.push(db.inTransaction);
-        }
-      });
-      db.resetTransactionDepthStats();
-      const task = store.createTask({
-        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
-        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
-        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
-        ...(source === "delegation_return" ? {
-          delegationId: `dlg_exemption_${wsCounter}`, delegatedByAgentId: agent.id, parentTaskId: previous.id,
-        } : {}),
-        ...(source === "parent_wakeup" ? { parentTaskId: previous.id } : {}),
-      });
-      stop();
-      expect(db.maxTransactionDepth).toBe(1);
-      // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
-      assertTransactionControl(`${source} exemption`);
-      expect(eventStates).toEqual([false]);
-      expect(store.getTask(task.id)?.status).toBe("queued");
-      const activities = store.listIssueActivity(issue.id).filter((row) => row.type === "dependency_gate_exempted");
-      expect(activities).toHaveLength(1);
-      expect(activities[0]!.data).toMatchObject({
-        source, taskId: task.id, task_id: task.id,
-        previousTaskId: previous.id, previous_task_id: previous.id,
-        unmet: [{ key: prerequisite.key }],
-      });
-    },
-  );
+  // #3/#9: old task-parent exemption rows are replaced by stable Turns and routed messages.
+  it("retries the same waiting Turn after commit without nested PG transactions", () => {
+    const runtime=store.registerRuntime({id:`rt_pg_retry_${++wsCounter}`,name:"PG retry",provider:"claude"});
+    const agent=store.createAgent({name:"PG retry",provider:"claude",runtimeId:runtime.id});
+    const issue=store.createIssue({title:"Earlier work",status:"in_progress"});
+    const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
+    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
+    store.createIssueDependency(issue.id,{dependsOnIssueId:blocker.id,type:"blocked_by"});
+    store.updateIssue(issue.id,{status:"backlog"});
+    const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db.inTransaction));
+    db.resetTransactionDepthStats();
+    const turn=store.retryTurn(store.getTurnForAttempt(previous.id)!.id);stop();
+    expect(db.maxTransactionDepth).toBe(1);assertTransactionControl("stable Turn retry");
+    expect(turn.id).toBe(previous.id);expect(store.listTurnAttempts(turn.id)).toHaveLength(2);
+    expect(states).toEqual([false]);expect(store.getTask(turn.current_attempt_id!)?.status).toBe("queued");
+    expect(store.listUnmetPrerequisites(issue.id)).toHaveLength(1);
+    store.cancelTurn(turn.id);
+  });
+
+  it("merges structural parent status wakes behind dependencies after commit (PG)",()=>{
+    const agent=store.createAgent({name:`PG parent wake ${++wsCounter}`,provider:"claude"});
+    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
+    const parent=store.createIssue({title:"Parent",status:"backlog",blockedBy:[blocker.id],assigneeType:"agent",assigneeId:agent.id});
+    const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db.inTransaction));
+    for(const status of ["done","cancelled"] as const){
+      const child=store.createIssue({title:status,parentIssueId:parent.id,status:"in_progress"});
+      db.resetTransactionDepthStats();store.updateIssue(child.id,{status});
+      expect(db.maxTransactionDepth).toBe(1);assertTransactionControl(`parent ${status}`);
+    }
+    stop();const tasks=store.listTasksForIssue(parent.id);expect(tasks).toHaveLength(1);
+    const reports=store.listMessages(tasks[0]!.issueSessionId!).filter(message=>message.message_kind==="status");
+    expect(reports).toHaveLength(2);expect(reports.every(message=>message.to_agent_id===agent.id&&message.wake_applied==="now")).toBe(true);
+    expect(states).toEqual([false]);expect(store.getIssue(parent.id)?.status).toBe("backlog");
+    store.cancelTurn(store.getTurnForAttempt(tasks[0]!.id)!.id);
+  });
 
   it("does not auto-claim a backlog issue with an active exempt round (PG)", () => {
     const runtime = store.registerRuntime({ id: `rt_pg_active_${++wsCounter}`, name: "Active exemption", provider: "claude" });
@@ -427,7 +427,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     const task = store.createTask({
       agentId: agent.id, issueId: issue.id, prompt: "existing continuation",
-      attempt: 2,
+      assignmentAuthorType: "system", wakeSource: "child_status",
     });
     db.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });
@@ -461,22 +461,30 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { agent_id: "agt_not_found", prompt: "blocked" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(unknownAgent.status).toBe(404);
+    expect(unknownAgent.status).toBe(400);
   });
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.
   it("moves legacy Chat ownership into Feishu topics and is idempotent", async () => {
-    seedLegacyChatIssueClassificationFixture(db);
+    // #3/#6: classify the actual historical schema in an isolated database,
+    // then verify the normalized model. Do not restore old columns in the
+    // already-migrated shared integration store.
+    const historicalDatabase = `${TEST_DB}_legacy`;
+    const admin = new Bun.SQL(PG_ADMIN_URL,{max:1});
+    await admin.unsafe(`CREATE DATABASE ${historicalDatabase}`);
+    const db = new PostgresSyncDatabase(pgDatabaseUrl(historicalDatabase));
+    try {
+    seedLegacyChatIssueClassificationFixture(db,false,bootstrapPreUnifiedSchema);
     seedLegacyChatWakeFixture(db);
     seedWakeInvariantMatrix(db);
     seedLegacyProactiveRetryMatrix(db);
-    const tokens = await mintLegacyWakeTokens(db);
-    assertLegacyChatWakeRollback(db);
-    await assertLegacyWakeTokens(db, tokens, true);
-    runMigrations(db);
+    const tokens = await mintLegacyWakeTokens(db,false);
+    assertLegacyChatWakeRollback(db,bootstrapPreUnifiedSchema);
+    await assertLegacyWakeTokens(db, tokens, true,false);
+    bootstrapPreUnifiedSchema(db);
     assertLegacyChatWakeSettlement(db);
-    runMigrations(db);
+    bootstrapPreUnifiedSchema(db);
     assertLegacyChatWakeSettlement(db);
     expect((db.query("PRAGMA table_info(multiremi_chat_sessions)").all() as Array<{ name: string }>).map(column => column.name)).not.toContain("issue_id");
     expect(db.query(`SELECT chat_session_id, issue_id FROM multiremi_feishu_bot_chat_bindings
@@ -488,10 +496,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages WHERE chat_session_id LIKE '%migration%' AND role IN ('user', 'assistant')").get().count)).toBe(8);
     expect(db.query("SELECT session_id, session_runtime_id, work_dir FROM multiremi_chat_sessions WHERE id = 'chat_web_migration'").get()).toEqual({ session_id: null, session_runtime_id: "rt_legacy", work_dir: "/work/keep" });
     for (const status of ["queued", "dispatched"]) {
-      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_turn_execution_records WHERE id = ?").get(`tsk_chat_migration_${status}`))
+      expect(db.query("SELECT issue_id, session_id, work_dir, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = ?").get(`tsk_chat_migration_${status}`))
         .toEqual({ issue_id: null, session_id: null, work_dir: "/work/keep", issue_session_id: null, issue_session_generation: null });
     }
-    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_turn_execution_records WHERE id = 'tsk_topic_migration_queued'").get())
+    expect(db.query("SELECT issue_id, issue_session_id, issue_session_generation FROM multiremi_tasks WHERE id = 'tsk_topic_migration_queued'").get())
       .toEqual({ issue_id: "iss_chat_migration", issue_session_id: null, issue_session_generation: null });
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
       const chatId = classificationChatId(entry);
@@ -532,7 +540,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         session_execution_fingerprint: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "legacy-fingerprint" : null,
         work_dir: "/work/keep", session_runtime_id: "rt_legacy",
       });
-      expect(db.query("SELECT issue_id, session_id FROM multiremi_turn_execution_records WHERE id = ?").get(`tsk_${chatId}`))
+      expect(db.query("SELECT issue_id, session_id FROM multiremi_tasks WHERE id = ?").get(`tsk_${chatId}`))
         .toEqual({ issue_id: entry.preserve ? issueId : null, session_id: entry.preserve && !entry.sharedPrivateBinding && entry.name !== "group_without_thread" ? "provider-task-legacy" : null });
       expect(db.query("SELECT role, pending_agent_delivery FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY role").all(chatId))
         .toEqual(entry.preserve
@@ -543,13 +551,20 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(db.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
         .toEqual(entry.preserve ? { enabled: 0 } : null);
     }
-    await assertLegacyWakeTokens(db, tokens);
+    await assertLegacyWakeTokens(db, tokens,false,false);
     assertLegacyProactiveRetryMatrix(db);
     assertWakeInvariantMatrix(db);
+    runMigrations(db);
+    const store = new MultiremiStore(db);
     assertCancelledLegacyWakesCannotRun(db, store);
     // The private destination must not reuse the retained group's machine/files.
     store.registerRuntime({ id: "rt_legacy", name: "Original machine", provider: "codex", workspaceId: "local" });
     const mixedChatId = "chat_classification_mixed_bindings";
+    // #3: complete the retained group lane before starting private work in the same Chat.
+    const groupTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId:mixedChatId,
+      issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
+    expect(groupTask).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/keep" });
+    store.cancelTask(groupTask.id);
     const privateTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
       runtimeId: "rt_legacy", prompt: "Private continuation" });
     expect(privateTask).toMatchObject({ issueId: null, sessionId: null, runtimeId: null, workDir: null });
@@ -560,15 +575,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(privateWire.runtime_id).toBe("");
     expect(privateWire.work_dir).toBeUndefined();
     expect(privateWire.prior_work_dir).toBeUndefined();
-    const groupTask = store.createTask({ agentId: "agt_chat_migration", chatSessionId: mixedChatId,
-      issueId: "iss_classification_mixed_bindings", prompt: "Group continuation" });
-    expect(groupTask).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/keep" });
     store.cancelTask(privateTask.id);
-    store.cancelTask(groupTask.id);
-    // The table is bootstrap schema, even after the one-time migration ledger exists.
-    db.exec("DROP TABLE multiremi_feishu_bot_issue_link_audit");
+    // #3: S4 reopens the retained audit and normalized execution rows.
     runMigrations(db);
-    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get().count)).toBe(0);
+    expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get().count)).toBeGreaterThan(0);
     db.run("DELETE FROM multiremi_feishu_messages WHERE message_id LIKE 'sync_%'");
     db.run("DELETE FROM multiremi_feishu_sources WHERE id LIKE 'fsrc_%'");
     // Keep the shared integration store empty for the remaining test cases.
@@ -577,6 +587,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.deleteIssue("iss_chat_migration");
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
+    } finally {
+      db.close();
+      await admin.unsafe(`DROP DATABASE ${historicalDatabase} WITH (FORCE)`);
+      await admin.end();
+    }
   }, 30_000);
 
   it("accepts a multi-session Issue package with retry, delegation and a same-daemon provider Runtime on Postgres", async () => {
@@ -593,8 +608,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
       const original = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "original" });
-      const retry = store.createTask({ agentId: leader.id, issueId: issue.id,
-        parentTaskId: original.id, prompt: "retry" });
+      // #3: retry preserves the Turn and allocates a new Attempt.
+      const retry = store.getTask(store.retryTurn(store.getTurnForAttempt(original.id)!.id).current_attempt_id!)!;
       const sibling = store.createTask({ agentId: leader.id, issueId: issue.id,
         issueSessionId: secondSession.id, prompt: "second session" });
       const delegated = store.createTask({ agentId: delegate.id, issueId: issue.id,
@@ -644,11 +659,17 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const sibling = store.createChatSession({ agentId: agent.id, title: "Sibling", workspaceId: "local" });
       db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
         [owner.id, chat.id, sibling.id]);
-      const good = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
-      const foreignRuntime = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "runtime" });
-      const foreignSubject = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: sibling.id, prompt: "subject" });
-      const foreignWorkspace = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "workspace" });
-      const unbound = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "unbound" });
+      // #3: finish each independent archival fixture before the next input.
+      const archiveTask = (input: Parameters<MultiremiStore['createTask']>[0]) => {
+        const task = store.createTask(input);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?", [task.id]);
+        return task;
+      };
+      const good = archiveTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
+      const foreignRuntime = archiveTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "runtime" });
+      const foreignSubject = archiveTask({ agentId: agent.id, workspaceId: "local", chatSessionId: sibling.id, prompt: "subject" });
+      const foreignWorkspace = archiveTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "workspace" });
+      const unbound = archiveTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "unbound" });
       for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id],
         [foreignSubject.id, owner.id], [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
         mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
@@ -1064,7 +1085,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getTaskWithAgent(first.taskId!)?.project?.id).toBe(firstProject.id);
     store.runAutopilot(rule.id, { triggerId: trigger.id });
     expect(store.listAutopilotRuns(rule.id)).toHaveLength(2);
-    db.run("UPDATE multiremi_autopilot_runs SET status = 'failed' WHERE id = ?", [first.id]);
+    mutateExecutionFixture(db,"UPDATE multiremi_turn_execution_records SET status='failed' WHERE id=?",[first.taskId]);
     store.advanceScheduledTargetRuns();
     const next = store.listAutopilotRuns(rule.id).find((run) => run.status === "running")!;
     expect(next.scheduleTarget?.id).toBe(secondProject.id);
@@ -1180,8 +1201,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "Build the PostgreSQL projection.",
     ]);
 
-    store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "First pending update.");
-    store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "Second pending update.");
+    db.transaction(()=>store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "First pending update."))();
+    db.transaction(()=>store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "Second pending update."))();
     const pending = store.preparePendingAgentIssueUpdatesForTask(chat.id, sent.task.id);
     expect(pending.omittedCount).toBe(0);
     expect(pending.messages.map((message) => message.body).sort()).toEqual([
@@ -1190,46 +1211,27 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ]);
   });
 
-  it("migrates legacy Chat sequence columns before creating the index", () => {
-    const workspaceId = freshWorkspace();
-    const agent = store.createAgent({ name: "PG legacy Chat", provider: "claude", workspaceId });
-    const chat = store.createChatSession({ agentId: agent.id, title: "Legacy sequences", workspaceId });
-    const timestamp = "2026-09-01T00:00:00.000Z";
-    for (const [id, createdAt] of [["legacy_seq_b", timestamp], ["legacy_seq_a", timestamp], ["legacy_seq_c", "2026-09-02T00:00:00.000Z"]]) {
-      db.run(
-        "INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, ?, ?, ?)",
-        [id, chat.id, "user", id, createdAt],
-      );
+  it("migrates legacy Chat sequence columns before creating the index",async()=>withPreUnifiedPostgres(db=>{
+    const at="2026-09-01T00:00:00.000Z";
+    db.run("INSERT INTO multiremi_agents(id,name,provider,created_at,updated_at) VALUES('agt_sequence','Legacy','codex',?,?)",[at,at]);
+    db.run("INSERT INTO multiremi_chat_sessions(id,agent_id,title,created_at,updated_at) VALUES('chat_sequence','agt_sequence','Legacy sequences',?,?)",[at,at]);
+    for(const [id,createdAt] of [["legacy_seq_b",at],["legacy_seq_a",at],["legacy_seq_c","2026-09-02T00:00:00.000Z"]]){
+      db.run("INSERT INTO multiremi_chat_messages(id,chat_session_id,role,body,created_at) VALUES(?,'chat_sequence','user',?,?)",[id,id,createdAt]);
     }
-    db.exec(`
-      DROP INDEX idx_multiremi_chat_messages_session_sequence;
-      ALTER TABLE multiremi_chat_messages DROP COLUMN sequence;
-      ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence;
-      DELETE FROM multiremi_schema_migrations WHERE id = '20260905_chat_message_sequence';
-    `);
-
-    // Upgrades boot a new process; do not reuse pre-DDL prepared statements.
-    db.close();
-    db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
-    store = new MultiremiStore(db);
-    expect(store.listChatMessages(chat.id).map(message => message.id)).toEqual([
-      "legacy_seq_a", "legacy_seq_b", "legacy_seq_c",
-    ]);
-    expect(db.query("SELECT message_sequence FROM multiremi_chat_sessions WHERE id = ?").get(chat.id))
-      .toEqual({ message_sequence: 3 });
-    expect(db.query("SELECT indexname FROM pg_indexes WHERE tablename = 'multiremi_chat_messages' AND indexname = ?")
-      .get("idx_multiremi_chat_messages_session_sequence")).not.toBeNull();
-
-    store.sendChatMessage(chat.id, { body: "After migration" });
+    db.exec("DROP INDEX idx_multiremi_chat_messages_session_sequence; ALTER TABLE multiremi_chat_messages DROP COLUMN sequence; ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence;");
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id='20260905_chat_message_sequence'");
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id='20260928_conversation_log_backfill'");
+    bootstrapPreUnifiedSchema(db);
+    expect(db.query("SELECT message_sequence FROM multiremi_chat_sessions WHERE id='chat_sequence'").get()).toEqual({message_sequence:3});
     runMigrations(db);
-    expect(db.query("SELECT body, sequence FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY sequence, id")
-      .all(chat.id)).toEqual([
-        { body: "legacy_seq_a", sequence: 1 },
-        { body: "legacy_seq_b", sequence: 2 },
-        { body: "legacy_seq_c", sequence: 3 },
-        { body: "After migration", sequence: 4 },
-      ]);
-  });
+    const migrated=new MultiremiStore(db);migrated.ensureLocalWorkspace();
+    migrated.createWorkspaceMember({workspaceId:"local",userId:"local",name:"Legacy owner",role:"owner"});
+    expect(migrated.listChatMessages('chat_sequence').map(message=>message.id)).toEqual(['legacy_seq_a','legacy_seq_b','legacy_seq_c']);
+    migrated.sendChatMessage('chat_sequence',{body:'After migration'});runMigrations(db);
+    expect(migrated.listMessages('chat_sequence').map(message=>({body:message.body_md,seq:message.seq}))).toEqual([
+      {body:'legacy_seq_a',seq:1},{body:'legacy_seq_b',seq:2},{body:'legacy_seq_c',seq:3},{body:'After migration',seq:4}]);
+    expect(db.query("SELECT indexname FROM pg_indexes WHERE tablename='multiremi_conversation_log' AND indexdef LIKE '%session_id%seq%'").all().length).toBeGreaterThan(0);
+  }),30_000);
 
   it("discovers Feishu senders and checks their live allowlist across Chat and task ancestry", async () => {
     const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
@@ -1254,7 +1256,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(senders[0]).toMatchObject({ open_id: "ou_pg_sender", union_id: "on_pg_sender", allowed: false });
       expect(store.listFeishuBotTaskReceiptMessageIds(workspaceId, inbound.taskId)).toEqual(["om_pg_1", "om_pg_2"]);
       expect(store.listFeishuBotTaskReceiptMessageIds("local", inbound.taskId)).toEqual([]);
-      const child = store.createTask({ agentId: agent.id, workspaceId, prompt: "Delegated request", parentTaskId: inbound.taskId });
+      const child = store.createTask({ agentId: agent.id, workspaceId, prompt: "Delegated request", parentTaskId: inbound.taskId, assignmentAuthorType:"system" });
       expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(true);
       store.setFeishuBotSenderAllowed(workspaceId, senders[0]!.id, true, "local");
       expect(store.isFeishuBotTaskIssueCreationRestricted(child.id)).toBe(false);
@@ -1453,11 +1455,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "multiremi_projects",
       "multiremi_agents",
       "multiremi_runtimes",
-      "multiremi_turn_execution_records",
+      "multiremi_turns",
+      "multiremi_turn_attempts",
       "multiremi_issue_sessions",
       "multiremi_session_participants",
-      "multiremi_session_events",
-      "multiremi_session_agent_lanes",
+      "multiremi_conversation_log",
+      "multiremi_session_lanes",
       "multiremi_session_results",
       "multiremi_workspace_members",
       "multiremi_access_tokens",
@@ -1511,7 +1514,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
   });
 
-  it("backfills session archive retry budgets on Postgres", () => {
+  it("backfills session archive retry budgets on Postgres", async () => withPreUnifiedPostgres(db => {
     const archiveId = `sar_pg_retry_budget_${process.pid}`;
     db.run(
       "DELETE FROM multiremi_schema_migrations WHERE id = ?",
@@ -1527,7 +1530,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       [archiveId, `iss_pg_retry_budget_${process.pid}`, "4".repeat(64), `${archiveId}/sessions.tar.gz`],
     );
 
-    runMigrations(db);
+    bootstrapPreUnifiedSchema(db);
 
     expect(db.query(
       `SELECT status, next_retry_at, retry_exhausted_at, retry_budget_base_attempt
@@ -1545,14 +1548,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       WHERE id = ?`, [archiveId]);
     db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?",
       ["20260826_session_archive_retry_budget"]);
-    runMigrations(db);
+    bootstrapPreUnifiedSchema(db);
     expect(db.query(
       "SELECT retry_exhausted_at, retry_budget_base_attempt FROM multiremi_session_archives WHERE id = ?",
     ).get(archiveId)).toEqual({ retry_exhausted_at: null, retry_budget_base_attempt: 6 });
-  });
+    runMigrations(db); // Verify the legacy upgrade can then enter S4.
+  }),30_000);
 
-  it("normalizes legacy SCM base URL paths and keeps one default per origin on Postgres", () => {
-    const workspaceId = freshWorkspace();
+  it("normalizes legacy SCM base URL paths and keeps one default per origin on Postgres", async () => withPreUnifiedPostgres(db => {
+    const workspaceId = "local";
     db.run(
       "DELETE FROM multiremi_schema_migrations WHERE id = ?",
       ["20260822_scm_connection_origins"],
@@ -1570,7 +1574,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       );
     }
 
-    runMigrations(db);
+    bootstrapPreUnifiedSchema(db);
 
     expect(db.query(
       `SELECT base_url, repository_scope, is_default
@@ -1588,13 +1592,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
        WHERE workspace_id = ? AND provider = 'github' AND is_default = 1`,
       [workspaceId],
     );
-    runMigrations(db);
+    bootstrapPreUnifiedSchema(db);
     const remainingDefaults = db.query(
       `SELECT COUNT(*) AS count FROM multiremi_scm_connections
        WHERE workspace_id = ? AND provider = 'github' AND is_default = 1`,
     ).get(workspaceId) as { count: number | string };
     expect(Number(remainingDefaults.count)).toBe(0);
-  });
+    runMigrations(db); // Verify the legacy upgrade can then enter S4.
+  }),30_000);
 
   it("registers daemon runtimes with models under one lifecycle transaction (PG)", () => {
     const ws = freshWorkspace();
@@ -2283,7 +2288,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(claimedIds).toHaveLength(independent ? 2 : 1);
     expect([first.id, second.id]).toContain(claimedIds[0]);
     expect([store.getTask(first.id)?.status, store.getTask(second.id)?.status].sort())
-      .toEqual(independent ? ["dispatched", "dispatched"] : ["dispatched", "queued"]);
+      .toEqual(["dispatched", "dispatched"]); // #3: one Agent/lane merges both requests into the same Turn.
 
     const firstClosed = waitForWorkerPhase(firstWorker, "closed");
     const secondClosed = waitForWorkerPhase(secondWorker, "closed");
@@ -2302,18 +2307,20 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const first = store.sendChatMessage(chat.id, { content: "first" });
     const second = store.sendChatMessage(chat.id, { content: "second" });
     expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
-    expect(JSON.stringify(store.buildTaskSessionProjection(first.task.id))).not.toContain("second");
+    expect(second.task.id).toBe(first.task.id);
+    expect(JSON.stringify(store.buildTaskSessionProjection(first.task.id))).toContain("second");
     expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     store.startTask(first.task.id);
     store.completeTask(first.task.id, { output: "answer", sessionId: "pg-chat-session", workDir: "/tmp/pg-chat-queue" });
     expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual(["first", "second", "answer"]);
     expect(store.getChatSession(chat.id)?.lastMessage?.content).toBe("answer");
+    const nextMessage = store.sendChatMessage(chat.id, {content:"third"});
     expect(store.claimTask(runtime.id)?.sessionId).toBe("pg-chat-session");
-    expect(store.buildTaskSessionProjection(second.task.id)?.mode).toBe("delta");
+    expect(store.buildTaskSessionProjection(nextMessage.task.id)?.mode).toBe("delta");
     store.updateChatSession(chat.id, { pinned: true, status: "archived" });
     expect(store.getChatSession(chat.id)?.pinned).toBe(true);
-    expect(store.getTask(second.task.id)?.status).toBe("cancelled");
+    expect(store.getTask(nextMessage.task.id)?.status).toBe("cancelled");
   });
 
   it("pool-claims unbound agents' tasks and stamps affinity (chat session + local directory)", () => {
@@ -3004,7 +3011,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.startTask(task.id);
     store.completeTask(task.id, { output: "后端共 119 个文件。" });
 
-    const comments = store.listIssueComments(issue.id);
+    const comments = store.listIssueComments(issue.id).filter(comment=>comment.authorType==="agent");
     expect(comments).toHaveLength(1);
     expect(comments[0]).toMatchObject({ authorType: "agent", authorId: agent.id, body: "后端共 119 个文件。" });
 
@@ -3193,24 +3200,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       body: "Intermediate PG report without a mention.",
     });
 
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      const [comment] = await observer`
-        SELECT body FROM multiremi_issue_comments WHERE id = ${fixture.report.id}
-      `;
-      if (comment?.body === "Intermediate PG report without a mention.") break;
-      await Bun.sleep(10);
-    }
-    const [edited] = await observer`
-      SELECT body FROM multiremi_issue_comments WHERE id = ${fixture.report.id}
-    `;
-    expect(edited?.body).toBe("Intermediate PG report without a mention.");
-
-    await blocker`
-      UPDATE multiremi_turn_execution_records
-      SET prompt = ${"Terminal PG report."}, trigger_comment_id = NULL, trigger_summary = NULL
-      WHERE id = ${fixture.explicitReturn.id}
-    `;
+    // ADR 0011: editing waits before its D write while this connection owns W.
+    const [beforeEdit] = await observer`SELECT body_md FROM multiremi_conversation_log WHERE id = ${fixture.report.id}`;
+    expect(beforeEdit?.body_md).toBe("Intermediate PG report.");
+    await blocker`UPDATE multiremi_turns
+      SET legacy_prompt = ${"Terminal PG report."}, trigger_comment_id = NULL, trigger_summary = NULL
+      WHERE id = ${store.getTurnForAttempt(fixture.explicitReturn.id)!.id}`;
     await blocker`COMMIT`;
     await completed;
     worker.terminate();
@@ -3234,7 +3229,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return { workspaceId, task };
   };
 
-  it("steer insert committed by a second connection blocks completion (PG steer barrier)", async () => {
+  it("#3: a concurrent interruption remains durable when the current Attempt completes (PG)", async () => {
     const { workspaceId, task } = createRunningSteerTask();
     const worker = new Worker(
       new URL("./fixtures/postgres-steer-race-worker.ts", import.meta.url).href,
@@ -3252,19 +3247,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
 
     await locked;
-    // completeTask contends on the same workspace lifecycle lock; once the
-    // steer transaction commits, its post-lock re-read must see the pending
-    // steer and refuse.
-    expect(() => store.completeTask(task.id, { output: "old answer" })).toThrow(TaskSteerPendingError);
+    // S4 completes the frozen Attempt; unread input remains in the lane.
+    expect(store.completeTask(task.id, { output: "old answer" }).status).toBe("completed");
     await committed;
     worker.terminate();
+    expect(store.getTaskStatus(task.id)).toBe("completed");
+    const turn = store.getTurnForAttempt(task.id)!;
+    expect(store.listMessages(turn.session_id).some(message => message.body_md === "race steer")).toBe(true);
 
-    expect(store.getTaskStatus(task.id)).toBe("running");
-    expect(store.listPendingTaskSteerMessages(task.id).map((m) => m.id)).toEqual([steerId]);
-
-    // Consuming lifts the barrier.
-    store.consumeTaskSteerMessages(task.id, [steerId]);
-    expect(store.completeTask(task.id, { output: "steered answer" }).status).toBe("completed");
   });
 
   it("completion committed by a second connection makes steer insert conflict (PG)", async () => {
@@ -3285,12 +3275,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     await locked;
     expect(() => store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "too late" }))
-      .toThrow(TaskSteerConflictError);
+      .toThrow("Steer target is terminal");
     await committed;
     worker.terminate();
 
     expect(store.getTaskStatus(task.id)).toBe("completed");
-    expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
+    expect(store.listMessages(store.getTurnForAttempt(task.id)!.session_id).filter(message=>message.body_md==="too late")).toHaveLength(0);
   });
 
   /**
@@ -3658,7 +3648,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(terminalReturn.status).toBe("queued");
     const terminalEntry = inboxReportEntry(store, terminalReturn, fixture.childTask.id);
     expect(terminalEntry.body_md).toContain("Final PG QA result after the explicit report was withdrawn.");
-    expect(terminalReturn.prompt).toBe(`读收件箱\n\n${terminalReturn.issueSessionId}:${terminalEntry.seq} (${terminalEntry.id})`);
+    expect(terminalReturn.prompt).toBe(terminalEntry.body_md); // #9: the canonical report body is the input.
   });
 
   /**

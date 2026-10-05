@@ -1,3 +1,4 @@
+import { inboxVisibilitySql, type InboxAccess } from './inbox-visibility.js';
 import type { SendMessageInput, UnifiedMessage, MultiremiTurn, MultiremiTurnAttempt } from '@multiremi/contracts/unified-model.js';
 import type { MultiremiWorkspaceMember } from '@multiremi/contracts/types.js';
 import type { StoreContext } from '../context.js';
@@ -14,14 +15,16 @@ import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
 import { IssueDecisionError } from '../repos/issues-repo.js';
 
-type InboxQuery = {limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
+type InboxQuery = {access?:InboxAccess;limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
   visibleMessage?:(message:Pick<UnifiedMessage,'id'|'session_id'|'reply_to_id'|'kind'|'task_id'|'metadata'>)=>boolean};
 type MessageVisibility = InboxQuery['visibleMessage'];
 
 export class InboxOperations {
   constructor(private ctx:StoreContext){}
   private transaction<T>(fn:(events:ReturnType<typeof createCommitEventQueue>)=>T):T {
-    const events=createCommitEventQueue();const result=this.ctx.db.transaction(()=>fn(events))();
+    const events=createCommitEventQueue();
+    const write=()=>fn(events);
+    const result=this.ctx.db.inTransaction?write():this.ctx.db.transaction(write)();
     afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return result;
   }
   listMessages(sessionId:string,input:{from?:number;to?:number;limit?:number;thread?:string;unread_by?:string;message_kind?:string}={}):UnifiedMessage[]{
@@ -102,6 +105,19 @@ export class InboxOperations {
       m.message_kind='decision' OR m.message_kind='request' AND m.sender_type='member'
       OR m.message_kind='status' AND ${json('lifecycle_event')} IN ('task_failed','task_cancelled')
       OR m.message_kind IN ('report','final') AND ${json('message_outcome')} IN ('failed','blocked','cancelled')) THEN 1 ELSE 0 END`;
+    if (input.access) {
+      const guard=inboxVisibilitySql(this.ctx.db,input.access);
+      const filtered=from+' AND '+guard.where;
+      const binds=[...params,...guard.params];
+      const counts=this.ctx.db.query(`${guard.cte} SELECT COUNT(*) AS unread_count,COALESCE(SUM(${attention}),0) AS attention_count ${filtered}`).get(...binds);
+      const n=Math.min(input.limit??100,1000),cursor=input.cursor;
+      const extra=cursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';
+      const rows=this.ctx.db.query(`${guard.cte} SELECT m.* ${filtered}${extra} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`)
+        .all(...binds,...(cursor?[cursor.created_at,cursor.created_at,cursor.id]:[]),n+1);
+      const page=rows.slice(0,n).map(messageFromRow);
+      return {items:page,unread_count:Number(counts.unread_count),attention_count:Number(counts.attention_count),
+        next_cursor:rows.length>n?{created_at:page.at(-1)!.created_at,id:page.at(-1)!.id}:null};
+    }
     let unread_count=0,attention_count=0;
     let countCursor:InboxQuery['cursor'];
     for(;;){
@@ -130,13 +146,13 @@ export class InboxOperations {
     const page=items.slice(0,n);
     return {items:page,unread_count,attention_count,next_cursor:items.length>n?{created_at:page.at(-1)!.created_at,id:page.at(-1)!.id}:null};
   }
-  private visibleReadSeq(type:'member'|'agent',readerId:string,sessionId:string,toSeq:number,visibleMessage:NonNullable<MessageVisibility>,scope?:string):number {
+  private visibleReadSeq(type:'member'|'agent',readerId:string,sessionId:string,toSeq:number,visibleMessage:NonNullable<MessageVisibility>,scope?:string,allMessages=false):number {
     const scopeSql=this.ctx.db.dialect==='postgres'?"COALESCE(metadata::jsonb ->> 'execution_scope','')":"COALESCE(json_extract(metadata,'$.execution_scope'),'')";
     let upper=toSeq;
     for(;;){
-      const rows=this.ctx.db.query(`SELECT id,seq,session_id,kind,task_id,reply_to_id,metadata FROM multiremi_conversation_log WHERE session_id=? AND ${type==='member'?'to_member_id':'to_agent_id'}=?
+      const rows=this.ctx.db.query(`SELECT id,seq,session_id,kind,task_id,reply_to_id,metadata FROM multiremi_conversation_log WHERE session_id=?${allMessages?'':` AND ${type==='member'?'to_member_id':'to_agent_id'}=?`}
         AND kind='message' AND visibility='shown' AND deleted_at IS NULL AND seq<=?${scope===undefined?'':` AND ${scopeSql}=?`} ORDER BY seq DESC LIMIT 1000`)
-        .all(sessionId,readerId,upper,...(scope===undefined?[]:[scope]));
+        .all(sessionId,...(allMessages?[]:[readerId]),upper,...(scope===undefined?[]:[scope]));
       const visible=rows.find(row=>visibleMessage({...row,metadata:JSON.parse(row.metadata??'{}')}));
       if(visible)return Number(visible.seq);
       if(rows.length<1000)return 0;
@@ -181,12 +197,16 @@ export class InboxOperations {
     if((session?.workspaceId??chat?.workspaceId??auto?.workspace_id??this.ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id)!==member.workspaceId)throw new Error('Inbox conversation belongs to another workspace');
     const head=this.ctx.conversationLog().getConversationLogHead(sessionId)?.headSeq??0;
     if(toSeq!==undefined&&(!Number.isSafeInteger(toSeq)||toSeq<0||toSeq>head))throw new Error('Inbox read cursor must be within the log');
-    const seq=visibleMessage?this.visibleReadSeq('member',member.id,sessionId,toSeq??head,visibleMessage):toSeq??head,at=nowIso();
+    const seq=visibleMessage?this.visibleReadSeq('member',member.id,sessionId,toSeq??head,visibleMessage,undefined,!!chat):toSeq??head,at=nowIso();
     if(visibleMessage&&!seq)return Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,member.id)?.cursor_seq??0);
     this.ctx.db.run(`INSERT INTO multiremi_session_lanes(session_id,reader_type,reader_id,execution_scope,cursor_seq,created_at,updated_at)
       VALUES(?,'member',?,'',?,?,?) ON CONFLICT(session_id,reader_type,reader_id,execution_scope)
       DO UPDATE SET cursor_seq=CASE WHEN multiremi_session_lanes.cursor_seq<excluded.cursor_seq THEN excluded.cursor_seq ELSE multiremi_session_lanes.cursor_seq END,updated_at=excluded.updated_at`,[sessionId,member.id,seq,at,at]);
-    return Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,member.id).cursor_seq);
+    const cursor=Number(this.ctx.db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id=?").get(sessionId,member.id).cursor_seq);
+    if(chat&&(chat.creatorId??'local')===(member.userId??member.id))this.ctx.db.run(`UPDATE multiremi_chat_sessions SET unread_since=NULL WHERE id=? AND NOT EXISTS (
+      SELECT 1 FROM multiremi_conversation_log WHERE session_id=? AND kind='message' AND sender_type<>'member'
+        AND visibility='shown' AND deleted_at IS NULL AND seq>?)`,[sessionId,sessionId,cursor]);
+    return cursor;
   }
   readAllMessageInbox(memberId:string,workspaceId:string,visible?:(sessionId:string)=>boolean,visibleMessage?:MessageVisibility):number {
     return this.transaction(()=>{
@@ -210,11 +230,25 @@ export class InboxOperations {
   getTurn(id:string):MultiremiTurn|null {
     const row=this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(id);return row?{...row,holds_workspace:!!row.holds_workspace} as MultiremiTurn:null;
   }
-  listTurns(input:{workspace_id:string;issue_id?:string;session_id?:string;agent_id?:string;status?:string;limit?:number;cursor?:{created_at:string;id:string}}):MultiremiTurn[]{
+  listTurns(input:{workspace_id:string;issue_id?:string;session_id?:string;agent_id?:string;status?:string;limit?:number;cursor?:{created_at:string;id:string};visibility?:{userId:string|null;admin:boolean;attemptId?:string}}):MultiremiTurn[]{
     const params:unknown[]=[input.workspace_id],conditions=['workspace_id=?'];
     for(const key of ['issue_id','session_id','agent_id','status'] as const)if(input[key]){conditions.push(`${key}=?`);params.push(input[key]);}
     if(input.cursor){conditions.push('(created_at<? OR created_at=? AND id<?)');params.push(input.cursor.created_at,input.cursor.created_at,input.cursor.id);}
-    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT id FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>this.getTurn(row.id)!);
+    if (input.visibility) {
+      const { userId, admin, attemptId } = input.visibility;
+      // Authorization belongs before LIMIT. Correlated guard reads stay in SQL
+      // rather than hydrating one Chat and Agent per candidate across PgBridge.
+      conditions.push(`(session_id NOT LIKE 'chat_%' OR EXISTS (SELECT 1 FROM multiremi_chat_sessions c WHERE c.id=multiremi_turns.session_id${attemptId?' AND multiremi_turns.current_attempt_id=?':userId?' AND c.creator_id=?':''}))`);
+      if (attemptId || userId) params.push(attemptId ?? userId);
+      if (userId && !admin) {
+        conditions.push(`(session_id NOT LIKE 'chat_%' OR EXISTS (SELECT 1 FROM multiremi_agents a WHERE a.id=multiremi_turns.agent_id AND (a.visibility<>'private' OR a.owner_id=?)))`);
+        params.push(userId);
+      }
+    }
+    // Lists never transfer historical input bodies through the synchronous PG
+    // bridge. Turn get --input remains the explicit full-input read.
+    const fields = 'id,session_id,seq,agent_id,execution_scope,status,wake_source,wake_seq,trigger_message_id,input_from_seq,input_to_seq,waiting_on_message_id,reply_message_id,wrap_up_requested_at,current_attempt_id,delegation_id,delegated_by_agent_id,delegation_return_turn_id,delegated_from_issue_session_id,delegation_skip_reason,continued_from_turn_id,holds_workspace,priority,requesting_user_name,requesting_user_profile_description,issue_id,workspace_id,created_at,started_at,ended_at,ended_reason';
+    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace} as MultiremiTurn));
   }
   listTurnAttempts(id:string):MultiremiTurnAttempt[]{
     return this.ctx.db.query('SELECT * FROM multiremi_turn_attempts WHERE turn_id=? ORDER BY attempt_no').all(id).map(row=>({...row,

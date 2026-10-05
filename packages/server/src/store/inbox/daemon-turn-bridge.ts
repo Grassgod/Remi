@@ -113,13 +113,17 @@ export class DaemonTurnBridge {
         const result=sendMessageWithinTransaction(this.ctx,{session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'member',ref:member.id},
           body_md:payload.body_md,message_kind:'decision',wake_requested:'now',dedupe_key:payload.dedupe_key,options:payload.options as DecisionOption[],
           metadata:{...(payload.metadata as object),human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},events);
+        // The RPC response itself delivers this message to the provider. A
+        // short timeout can acknowledge it before the next snapshot arrives.
+        this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',
+          [result.message.seq,result.message.seq,turn.current_attempt_id]);
         return {ok:true,message:result.message,message_id:result.message.id};
       }
       const message=getMessage(this.ctx,String(payload.message_id));if(!message||message.task_id!==turn.id||message.message_kind!=='decision')throw new Error('invalid_report');
       if(type==='turn.decision.expire'){
         if(!['timeout','cancelled'].includes(String(payload.status)))throw new Error('invalid_report');
         const key=message.metadata.human_request?'human_request':'decision_record';
-        patchDecisionRecord(this.ctx,message.id,key,{status:payload.status==='timeout'?'expired':'cancelled',responded_at:nowIso()},'pending');
+        patchDecisionRecord(this.ctx,message.id,key,{status:payload.status,responded_at:nowIso()},'pending');
         if(turn.waiting_on_message_id===message.id){this.ctx.db.run("UPDATE multiremi_turns SET status='running',waiting_on_message_id=NULL WHERE id=?",[turn.id]);if(turn.issue_id)deriveIssueStatusWithinTransaction(this.ctx,turn.issue_id,events);}
       }
       const current=getMessage(this.ctx,message.id)!;

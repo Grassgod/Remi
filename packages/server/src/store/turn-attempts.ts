@@ -78,6 +78,9 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
     delegation_id:row.delegation_id??null,delegated_by_agent_id:row.delegated_by_agent_id??null,
     turn_id:row.id,current_attempt_id:row.current_attempt_id,legacy_prompt:row.legacy_prompt,
   };
-  const body=String(row.legacy_prompt??'');const rendered=renderMarkdown(body);
+  // A Chat card represents the assistant outcome. Its old request text is
+  // already a separate human message and must not become assistant history.
+  const body = entry.session_id.startsWith('chat_') ? String(reply?.body_md ?? '') : String(row.legacy_prompt ?? '');
+  const rendered=renderMarkdown(body);
   return {...entry,visibility:entry.session_id.startsWith("chat_") && !["completed","failed","cancelled"].includes(row.status) ? "hidden" : entry.visibility,task_id:row.current_attempt_id,body_md:body,body_html:rendered.html,render_version:rendered.render_version,metadata};
 }

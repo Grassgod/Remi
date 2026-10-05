@@ -1,4 +1,4 @@
-import { attemptMessagesPath, requestMessageBody } from "./unified-test-paths.js";
+import { attemptMessagesPath, requestMessageBody, sentTask } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
@@ -14,7 +14,8 @@ afterEach(resetMultiremiTestEnv);
 
 function createRunningTask(store: MultiremiStore): MultiremiTask {
   const agent = store.createAgent({ name: "Steer Agent", provider: "claude" });
-  const task = store.createTask({ agentId: agent.id, prompt: "test" });
+  const issue=store.createIssue({title:"Steer input"});
+  const task = store.createTask({ agentId: agent.id, issueId:issue.id, prompt: "test" });
   store.registerRuntime({ id: "rt_steer", name: "steer-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
   const claimed = store.claimTask("rt_steer");
   expect(claimed?.id).toBe(task.id);
@@ -41,7 +42,7 @@ describe("task steer messages (store)", () => {
     const store = createStore();
     const task = createRunningTask(store);
     const a = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "first" });
-    const b = store.createTaskSteerMessage({ taskId: task.id, kind: "force_answer", content: "second" });
+    const b = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "second" });
 
     const consumed = store.consumeTaskSteerMessages(task.id, [a.id, b.id]);
     expect(consumed.map((m) => m.id).sort()).toEqual([a.id, b.id].sort());
@@ -58,173 +59,51 @@ describe("task steer messages (store)", () => {
 
     store.completeTask(task.id, { output: "done" });
     expect(() => store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "late" }))
-      .toThrow(/already completed/);
+      .toThrow(/terminal/);
     expect(() => store.createTaskSteerMessage({ taskId: "tsk_missing", kind: "steer", content: "x" }))
       .toThrow(/not found/);
   });
 
-  it("steer barrier: completeTask refuses while unconsumed steers exist, and steer-after-complete conflicts", () => {
-    const store = createStore();
-    const task = createRunningTask(store);
-
-    // Steer committed first → completion must not strand it.
-    const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "change direction" });
-    expect(() => store.completeTask(task.id, { output: "old answer" })).toThrow(TaskSteerPendingError);
-    expect(store.getTaskStatus(task.id)).toBe("running");
-
-    // Once the daemon consumed it, completion goes through.
-    store.consumeTaskSteerMessages(task.id, [message.id]);
-    expect(store.completeTask(task.id, { output: "steered answer" }).status).toBe("completed");
-
-    // Completion committed first → the steer insert must conflict (API maps this to 409).
-    expect(() => store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "too late" }))
-      .toThrow(/already completed/);
+  it("#3: completion keeps the interruption on the canonical message axis",()=>{
+    const store=createStore(),task=createRunningTask(store);
+    const message=store.createTaskSteerMessage({taskId:task.id,kind:"steer",content:"change direction"});
+    expect(store.completeTask(task.id,{output:"old answer"}).status).toBe("completed");
+    expect(store.getMessage(message.id)?.body_md).toBe(message.content);
+    expect(store.getTurnForAttempt(task.id)?.status).toBe("completed");
   });
 
-  it("appends an auditable session event for issue-session tasks", () => {
-    const store = createStore();
-    const runtime = store.registerRuntime({ id: "rt_steer_evt", name: "steer-evt", provider: "claude", workspaceId: "local", ownerId: "local" });
-    const agent = store.createAgent({ name: "Steer Session Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Steer audit" });
-    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
-    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
-    store.startTask(task.id);
-
-    const sessionId = store.getTask(task.id)?.issueSessionId;
-    expect(sessionId).toBeTruthy();
-    const message = store.createTaskSteerMessage({
-      taskId: task.id,
-      kind: "force_answer",
-      content: "先给结论",
-      authorType: "user",
-      authorId: "local",
-    });
-
-    const events = store.listSessionEvents(sessionId!);
-    const steerEvent = events.find((event) => event.kind === "task_steer");
-    expect(steerEvent).toBeTruthy();
-    expect(steerEvent?.body).toBe("先给结论");
-    expect(steerEvent?.taskId).toBe(task.id);
-    expect(steerEvent?.metadata).toMatchObject({ steer_id: message.id, steer_kind: "force_answer" });
+  it("#3/#9: force answer updates wrap-up state without appending a second steer record",()=>{
+    const store=createStore(),task=createRunningTask(store);
+    const turn=store.getTurnForAttempt(task.id)!;
+    const before=store.listMessages(turn.session_id).map(message=>message.id);
+    store.createTaskSteerMessage({taskId:task.id,kind:"force_answer",content:"先给结论"});
+    expect(store.getTurn(turn.id)?.wrap_up_requested_at).not.toBeNull();
+    expect(store.listMessages(turn.session_id).map(message=>message.id)).toEqual(before);
   });
+
 });
 
-describe("task steer API", () => {
-  it("accepts steer + force answer for live tasks, rejects terminal tasks", async () => {
-    const store = createStore();
-    const task = createRunningTask(store);
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
-
-    const created = await app.request(attemptMessagesPath(store, task.id), {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify(requestMessageBody(store, { content: "改用中文输出" }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
-    });
-    expect(created.status).toBe(200);
-    const createdBody = await created.json();
-    expect(createdBody.message).toMatchObject({ kind: "steer", content: "改用中文输出" });
-
-    // force_answer without content falls back to the default wrap-up directive.
-    const forced = await app.request(attemptMessagesPath(store, task.id), {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify(requestMessageBody(store, { force_answer: true }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
-    });
-    expect(forced.status).toBe(200);
-    expect((await forced.json()).message.kind).toBe("force_answer");
-
-    // Plain steer without content is a client error.
-    const empty = await app.request(attemptMessagesPath(store, task.id), {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify(requestMessageBody(store, {}, { type: "agent", ref: store.getTask(task.id)!.agentId })),
-    });
-    expect(empty.status).toBe(400);
-
-    const listed = await app.request(attemptMessagesPath(store, task.id), { headers: auth , });
-    expect(listed.status).toBe(200);
-    expect((await listed.json()).messages).toHaveLength(2);
-
-    // The steer barrier blocks completion until the daemon consumed them.
-    store.consumeTaskSteerMessages(task.id, store.listPendingTaskSteerMessages(task.id).map((m) => m.id));
-    store.completeTask(task.id, { output: "done" });
-    const late = await app.request(attemptMessagesPath(store, task.id), {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify(requestMessageBody(store, { content: "too late" }, { type: "agent", ref: store.getTask(task.id)!.agentId })),
-    });
-    expect(late.status).toBe(409);
-    expect((await late.json()).error).toMatch(/already completed/);
-  });
-
-  it("returns 409 when the task completes while the steer body is still streaming in", async () => {
-    const store = createStore();
-    const task = createRunningTask(store);
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-
-    // The route caches the task before reading the body; completing the task
-    // from inside the body stream reproduces the parse-window race exactly.
-    const encoder = new TextEncoder();
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        store.completeTask(task.id, { output: "finished first" });
-        controller.enqueue(encoder.encode(JSON.stringify({ body_md: "raced steer", to: { type: "agent", ref: task.agentId } })));
-        controller.close();
-      },
-    });
-    const raced = await app.request(attemptMessagesPath(store, task.id), {
-      method: "POST",
-      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
-      body,
-      // @ts-expect-error Bun supports half-duplex streaming request bodies
-      duplex: "half",
-    });
-    expect(raced.status).toBe(409);
-    expect((await raced.json()).error).toMatch(/already completed/);
-    expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
-  });
-
-  it("daemon complete returns non-retryable steer_pending while unconsumed steers exist", async () => {
-    const store = createStore();
-    const task = createRunningTask(store);
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
-
-    const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "pending" });
-    const refused = await reportFrame(store, "task.complete", { task_id: task.id, output: "old answer" });
-    expect(refused).toEqual({ ok: false, code: "steer_pending", retryable: false });
-    expect(store.getTaskStatus(task.id)).toBe("running");
-
-    const connection = await openRuntimeDownlinks(store, task.runtimeId!);
-    try {
-      expect(await connection.rpc("steer.consume", { task_id: task.id, steer_ids: [message.id] }))
-        .toMatchObject({ ok: true });
-    } finally { await connection.close(); }
-    const completed = await reportFrame(store, "task.complete", { task_id: task.id, output: "steered answer" });
-    expect(completed).toEqual({ ok: true });
-    expect(store.getTaskStatus(task.id)).toBe("completed");
-  });
-
-  it("serves pending steers to the daemon and marks them consumed", async () => {
-    const store = createStore();
-    const task = createRunningTask(store);
-    const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "switch" });
-    const connection = await openRuntimeDownlinks(store, task.runtimeId!);
-    try {
-      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer))
-        .toEqual([expect.objectContaining({ id: message.id })]);
-      const consume = await connection.rpc("steer.consume", { task_id: task.id, steer_ids: [message.id] });
-      expect(consume.ok).toBe(true);
-      expect(consume.consumed).toEqual([expect.objectContaining({ id: message.id })]);
-      connection.frames.length = 0;
-      await connection.kick();
-      expect(connection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0);
-      expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-    } finally { await connection.close(); }
+describe("canonical interruption API",()=>{
+  it("#3/#7/#9: running input interrupts; input after completion schedules another round",async()=>{
+    const store=createStore(),task=createRunningTask(store),app=createMultiremiApp({store,authToken:"root-secret"});
+    const headers={Authorization:"Bearer root-secret","Content-Type":"application/json"};
+    const send=(body:string)=>app.request(attemptMessagesPath(store,task.id),{method:"POST",headers,body:JSON.stringify(requestMessageBody(store,{body_md:body},{type:"agent",ref:task.agentId}))});
+    const response=await send("改用中文输出");
+    expect(response.status).toBe(200);
+    const data=await response.json();
+    expect(data.message).toMatchObject({message_kind:"request",body_md:"改用中文输出",wake_applied:"now",to_agent_id:task.agentId});
+    expect(data.turn_id).toBe(store.getTurnForAttempt(task.id)!.id);
+    expect(store.getTask(task.id)?.status).toBe("running");
+    expect((await send("   ")).status).toBe(400);
+    store.consumeTaskSteerMessages(task.id,[data.message.id]);
+    store.completeTask(task.id,{output:"done"});
+    const late=await send("next round");
+    expect(late.status).toBe(200);
+    expect(sentTask(store,await late.json()).status).toBe("queued");
   });
 });
-
+// #3/#7: old steer RPC/barrier cases move to canonical message input and turn
+// delivery confirmation. Dedicated retired-endpoint 410 tests remain separate.
 describe("steer worker helpers", () => {
   const steerMessage = (overrides: Partial<MultiremiTaskSteerMessage>): MultiremiTaskSteerMessage => ({
     id: "steer_x",

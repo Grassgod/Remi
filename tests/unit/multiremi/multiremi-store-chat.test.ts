@@ -27,7 +27,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
 
     // Preserve insertion order even when the database timestamp cannot break ties.
     (store as any).db.run(
-      "UPDATE multiremi_chat_messages SET created_at = ? WHERE chat_session_id = ?",
+      "UPDATE multiremi_conversation_log SET created_at = ? WHERE session_id = ? AND kind='message'",
       ["2026-09-05T00:00:00.000Z", session.id],
     );
 
@@ -92,14 +92,15 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       error: "Timed out during upgrade", failureReason: "timeout",
       sessionId: "legacy-issue-provider", workDir: "/tmp/private-chat",
     });
-    const retry = store.listTasks().find((task) => task.parentTaskId === sent.task.id)!;
+    const retry = store.getTask(store.getTurnForAttempt(sent.task.id)!.current_attempt_id!)!;
     expect(retry).toMatchObject({ chatSessionId: chat.id, issueId: null, issueSessionId: null, sessionId: null });
     const claimed = store.claimTask(runtime.id)!;
     expect(claimed.id).toBe(retry.id);
     expect(claimed.sessionId).toBeNull();
     expect(claimed.issue).toBeNull();
     expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("bootstrap");
-    expect(store.getTask(sent.task.id)?.issueId).toBe(issue.id);
+    // #3: both attempts project the stable turn's detached Issue association.
+    expect(store.getTask(sent.task.id)?.issueId).toBeNull();
   });
 
   it("scopes chat session HTTP routes to the current creator", async () => {
@@ -175,7 +176,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       chatSessionId: createdBody.id,
       body: "Use Go-compatible content",
       role: "user",
-      taskId: sentTask(store, sentBody).id,
+      taskId: null,
     });
     expect(store.getAttachment(attachment.id)?.chatMessageId).toBe(messagesBody[0].id);
     const log = await (await app.request(`/api/sessions/${createdBody.id}/log?before=10`, { headers: aliceAuthHeaders })).json();
@@ -185,7 +186,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     expect((await app.request(`/api/chat/sessions/${createdBody.id}/messages/page?limit=101`, { headers: aliceAuthHeaders })).status).toBe(404);
 
     const pendingAlice = await app.request("/api/turns?status=pending", { headers: aliceAuthHeaders });
-    expect((await pendingAlice.json()).turns.map((task: any) => task.chat_session_id)).toEqual([createdBody.id]);
+    expect((await pendingAlice.json()).turns.map((task: any) => task.session_id)).toEqual([createdBody.id]);
     const pendingBob = await app.request("/api/turns?status=pending", { headers: bobAuthHeaders });
     expect(await pendingBob.json()).toEqual({ turns: [], next_cursor: null });
 
@@ -199,13 +200,13 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       role: "assistant",
       body: "Done with chat",
       failureReason: null,
-      taskId: sentTask(store, sentBody).id,
+      taskId: store.getTurnForAttempt(sentTask(store, sentBody).id)!.id,
     });
     expect(terminalMessagesBody[1].elapsedMs).toBeGreaterThanOrEqual(0);
     expect((await app.request("/api/inbox/read", {
       method: "POST",
       headers: aliceAuthHeaders,
-    body: JSON.stringify({ session_id: createdBody.id }) })).status).toBe(204);
+    body: JSON.stringify({ session_id: createdBody.id }) })).status).toBe(200);
     const readDetail = await app.request(`/api/chat/sessions/${createdBody.id}`, { headers: aliceAuthHeaders });
     expect((await readDetail.json()).has_unread).toBe(false);
 
@@ -215,7 +216,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
       ["GET", `/api/sessions/${createdBody.id}/log`],
       ["POST", `/api/sessions/${createdBody.id}/messages`, { content: "Bob should not send" }],
       ["GET", `/api/sessions/${createdBody.id}/messages?unread_by=${store.getChatSession(createdBody.id)!.agentId}`],
-      ["POST", "/api/inbox/read"],
+      ["POST", "/api/inbox/read", { session_id: createdBody.id }],
       ["DELETE", `/api/chat/sessions/${createdBody.id}`],
       ["GET", `/api/multiremi/chats/${createdBody.id}`],
       ["PATCH", `/api/multiremi/chats/${createdBody.id}`, { title: "Bob Multiremi rename" }],
@@ -228,7 +229,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
         headers: body ? bobHeaders : bobAuthHeaders,
         body: body ? JSON.stringify(body) : undefined,
       });
-      expect(response.status).toBe(403);
+      expect(response.status, `${method} ${path}`).toBe(403);
       expect(await response.json()).toEqual({ error: "not your chat session" });
     }
 

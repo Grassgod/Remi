@@ -20,6 +20,7 @@ import type { MultiremiStore } from "@multiremi/store.js";
 export interface FirstScreenHotspotsFixtureOptions {
   /** Chats owned by the reader. The issue's bar is 50. */
   sessions?: number;
+  rankingCases?: boolean;
   /** Additional workspace Agents, each carrying a Skill with a body. */
   agents?: number;
   /** Unarchived inbox rows addressed to the reader. The issue's bar is 300. */
@@ -65,6 +66,7 @@ export interface FirstScreenHotspotsFixture {
   };
   issueIds: string[];
   taskIds: string[];
+  turnIds: string[];
   counts: {
     sessions: number;
     agents: number;
@@ -209,7 +211,7 @@ export function seedFirstScreenHotspotsFixture(
   const prioritizedSessionId = sessionIds[2] ?? rankingSessionId;
   let runningWinnerTaskId: string | null = null;
   let prioritizedWinnerTaskId: string | null = null;
-  if (sessionIds.length >= 3) {
+  if (sessionIds.length >= 3 && options.rankingCases !== false) {
     const runningTask = historicalTask(rankingSessionId, "running turn");
     for (let index = 0; index < 3; index += 1) {
       taskIds.push(historicalTask(rankingSessionId, `queued after running ${index}`).id);
@@ -253,47 +255,22 @@ export function seedFirstScreenHotspotsFixture(
     issueIds.push(issue.id);
   }
 
-  // 300 unarchived rows with a mixed shape: plain rows, ledger rows (which never
-  // merge by issue), read rows, and attention rows. The summary asserts on this
-  // exact mix, so it has to be pinned rather than random.
-  let attention = 0;
-  let unread = 0;
-  for (let index = 0; index < inboxRowCount; index += 1) {
-    const kind = index % 5;
-    const severity: "info" | "attention" = kind === 1 || kind === 3 ? "attention" : "info";
-    const read = kind === 2 || kind === 4;
-    const type = kind === 0
-      ? "autopilot_run_completed"
-      : kind === 1
-        ? "autopilot_paused"
-        : kind === 3
-          ? "issue_assigned"
-          : "issue_comment";
-    const details = type === "autopilot_run_completed"
-      ? { autopilot_id: `atp_hotspot_${index % 3}`, run_status: "completed" }
-      : { note: `row ${index}` };
-    run(
-      `INSERT INTO multiremi_inbox_items (
-         id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
-         severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
-       ) VALUES (?, ?, ?, ?, 'member', ?, ?, 'system', NULL, ?, ?, ?, ?, ?, 0, ?)`,
-      [
-        `inb_hotspot_${index}`,
-        WORKSPACE_ID,
-        issueIds[index % issueIds.length]!,
-        readerMemberId,
-        readerMemberId,
-        severity,
-        type,
-        `Hotspot inbox ${index}`,
-        "body",
-        JSON.stringify(details),
-        read ? 1 : 0,
-        stamp(index * 1000),
-      ],
-    );
-    if (!read && severity === "attention") attention += 1;
-    if (!read) unread += 1;
+  // #4: canonical unread messages replace the notification ledger. Keep the
+  // full 50/300/900-row scale and equally sized bodies at every scale.
+  let attention=0, unread=0;
+  if(inboxRowCount){
+    run('DELETE FROM multiremi_conversation_log WHERE to_member_id=?',[readerMemberId]);
+    const inboxSession=store.getOrCreateDefaultIssueSession(issueIds[0]!).id;
+    const head=store.getConversationLogHead(inboxSession)?.headSeq??0;
+    for(let index=0;index<inboxRowCount;index++){
+      const requiresAttention=index%5===1||index%5===3;
+      run(`INSERT INTO multiremi_conversation_log(session_id,seq,id,kind,visibility,sender_type,body_md,metadata,
+        message_kind,to_type,to_member_id,wake_requested,wake_applied,created_at,updated_at)
+        VALUES(?,?,?,'message','shown','platform','body',?,'status','member',?,'now','now',?,?)`,
+        [inboxSession,head+index+1,`msg_hotspot_${index}`,JSON.stringify({lifecycle_event:requiresAttention?'task_failed':'task_completed'}),readerMemberId,stamp(index*1000),stamp(index*1000)]);
+      unread++;if(requiresAttention)attention++;
+    }
+    run('UPDATE multiremi_conversation_heads SET head_seq=? WHERE session_id=?',[head+inboxRowCount,inboxSession]);
   }
 
   // Pin Chat ordering so `ORDER BY updated_at DESC` cannot depend on how fast the
@@ -341,6 +318,7 @@ export function seedFirstScreenHotspotsFixture(
     },
     issueIds,
     taskIds: uniqueTaskIds,
+    turnIds: uniqueTaskIds.map(id=>store.getTurnForAttempt(id)!.id),
     counts: {
       sessions: sessionCount,
       agents: agentCount,

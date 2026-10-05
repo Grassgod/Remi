@@ -14,17 +14,19 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 消息头在发送时冻结收件人。`source_turn_id` 验证发件轮的 agent 和工作区；`reply_to_id` 必须属于原对话。角色可能选择父单或委派来源对话。agent request 只有源为 Issue 轮、非旁支、目标在 Issue 上时才产生委派；符合条件的所有方向均为 `now / agent_dispatch`。self、不运行的收件人、依赖、来源和目标前置优先于派活规则。超过 `countDelegationPairHops` 的 `2L` 边界时消息保留，降为 `next_turn / pair_round_trip_limit`，不建或合并轮，说明通知和活动在同事务记录。L 默认 5，由 `MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT` 调整。
 
-用户 HTTP 发送会传入内部 `authorizeRecipient` 回调，在持有 workspace 锁且解析最终角色 agent 后、写消息之前执行访问检查。拒绝会回滚同事务上传的附件行，上传包装器清理文件。该回调不属于请求体或公共消息合约。提问答复进入 `answerMessageDecision` 后，permission/question response 先按原提问结构规范化并验证，再调用原子消费接口；无效结构不会消费请求或卡片 token。
+用户 HTTP 发送会传入内部 `authorizeRecipient` 回调，在持有 workspace 锁且解析最终角色 agent 后、写消息之前执行访问检查。拒绝会回滚同事务上传的附件行，上传包装器清理文件。该回调不属于请求体或公共消息合约。提问答复进入 `answerMessageDecision` 后，permission/question response 先按原提问结构规范化并验证，包括嵌套 AskUserQuestion；answers 按问题文本绑定。超时保持 timeout，外部取消保持 cancelled；答复、来源 Issue 推导和事件复用最外层事务，PG 不另开 savepoint。无效结构不会消费请求或卡片 token。
 
-平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。
+平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；完成路径只解析一次结论评论快照，重放沿用同一来源 ID。谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。
 
 [lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。取消或最终失败的轮会消费它的原触发消息，后续未读消息仍补铃；未读委派报告补铃时，其回程指针更新到承接消息的后继轮。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap。lane 的 `cursor_seq/cursor_offset` 表示当前 provider 会话的实际读取高水位；范围读和合法连续 `turn.input` 确认才推进它。完成、取消、补铃和扫描不改写该游标。新的 provider 会话接受冷 bootstrap 后清零，再按读取和完整 inline 连续确认抬高；准备和拒绝不清零。冷重试的输入范围从 0 开始，原始输入保留且折叠正文必须用新 attempt 重新读取。Runtime 删除和 daemon 退役只重置 provider 位置。`provider_cursor_seq` 单独记录 provider 续接/完成位置，`turn.input_to_seq` 记录业务轮消费边界。
 
 ## Store 消费接口
 
+轮控制保留同工作区父单负责人和活跃组长对组员的授权；不相关 agent 拒绝。retry 的审计和巡查消息使用 organizer 事务，事件只在最外层提交后发射；warm retry 保留 provider 缓存。
+
 类型及参数的事实来源为 [unified-model.ts](../../packages/contracts/src/unified-model.ts)、[InboxOperations](../../packages/server/src/store/inbox/operations.ts) 和 [Store facade](../../packages/server/src/store/store.ts)。HTTP/CLI 调用方负责鉴权、身份解析和参数校验；Store 同时校验消息源、收件人、对话与成员工作区边界。匿名旧领域评论允许 member/null，新用户入口应传入实际成员身份。
 
-消息列表和完整 turn input 从查询行直接批量投影，不再逐 ID 重新读取。HTTP 按页批量加载附件和反应。inbox 以有界候选页查正文，计数单独按对话和受保护的来源任务聚合；可见性缓存只在当前请求内使用，隐藏提问不计入未读和 attention 数。
+消息列表和完整 turn input 从查询行直接批量投影，不再逐 ID 重新读取。HTTP 按页批量加载附件和反应。inbox 在 SQL 中应用会话和受保护来源权限，分页与计数使用同一规则；可见性缓存只在当前请求内使用，隐藏提问不计入未读和 attention 数。
 
 `sendMessageWithinTransaction` 发射 `inbox:new` 索引刷新，`readMessageInbox` / `readAgentMessageInbox` 发射 `inbox:read`，全读发射 `inbox:batch-read`。统一索引事件的 payload 仅有 `{index_only:true}`；`emitWorkspaceEvent` 在最外层事务提交后才通知现有 workspace realtime/peer，回滚会丢弃。读写新的 inbox API 获取计数，不依赖旧 inbox_items。
 
@@ -44,9 +46,9 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## 状态与迁移
 
-[deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、负责人最后终态的顺序推导。建轮或随后合并的消息包含 human_sender 或 agent_dispatch 时，pending 为 todo，纯平台 pending 保持原状态。负责人最后一轮 completed/failed/cancelled 分别为 in_review/blocked/todo；无负责人时，不以其它 agent 的终态替代这条规则。尝试失败、lost、换机、重试不推导 Issue。领取只用已完成业务轮的输入边界淘汰已覆盖的旧叫醒；同轮 replacement 不参与这项淘汰。依赖闸门遵循 `MULTIREMI_DEPENDENCY_GATE`，成员通过服务端 force 标记绕过未满足依赖时，同事务保留 `dependency_force_started` 的成员、来源、评论/尝试和前置项审计。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。成员负责人在 member lane 收到 status，失败和阻塞仍显示 warning；无负责人父单保留状态消息及 skip 活动，终态告警仍送给订阅者。
+[deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、负责人最后终态的顺序推导。建轮或随后合并的消息包含 human_sender 或 agent_dispatch 时，pending 为 todo，纯平台 pending 保持原状态。负责人最后一轮 completed/failed/cancelled 分别为 in_review/blocked/todo；无负责人时，不以其它 agent 的终态替代这条规则。尝试失败、lost、换机、重试不推导 Issue。领取只用已完成业务轮的输入边界淘汰已覆盖的旧叫醒；同轮 replacement 不参与这项淘汰。依赖闸门遵循 `MULTIREMI_DEPENDENCY_GATE`，成员通过服务端 force 标记绕过未满足依赖时，同事务保留 `dependency_force_started` 的成员、来源、评论/尝试和前置项审计。人类的 issue_owner request 与实际 mention 由服务端产生该标记；普通直接 agent request 返回 dependencies_unmet/409，agent 来信降为 next_turn。结构性平台交差绕过依赖门禁，立即叫醒派活人；timer 自动化继续受门禁约束。审计失败回滚消息、轮、状态和事件。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。成员负责人在 member lane 收到 status，失败和阻塞仍显示 warning；无负责人父单保留状态消息及 skip 活动，终态告警仍送给订阅者。
 
-`20261005_separate_lane_provider_progress` 先保留旧 provider 检查点；`20261005_fold_agent_read_state` 再把 head 上的实际 seq/offset 搬到默认 agent lane，不把其它 scope 的检查点当成读取回执。`20261005_fold_decision_records` 将历史提问与决定的状态、选项和一次性令牌搬到消息，消息令牌使用部分唯一索引。领域消费者读取只投影新消息的 question/decision/member-inbox views。`20261005_attempt_input_receipts` 为 attempt 增加确认、正文读取和原始输入确认字段，并补齐历史公共 decision 的持久状态；`20261005_separate_lane_provider_progress` 分开 provider 续接位置；`20261005_attempt_counters_bigint` 将既有 PG attempts 的 event_count/tool_call_count 扩为 BIGINT，新库直接使用 BIGINT，保持 JavaScript 安全整数范围。SQLite 的整数行为不变。原提问、决定、插话表仍留作物理删除的备份窗口，但运行代码不读取它们。退役脚本 mul493 组同时列出 head.agent_read_state，执行前验证折叠迁移已完成。
+`20261005_separate_lane_provider_progress` 先保留旧 provider 检查点；`20261005_fold_agent_read_state` 再把 head 上的实际 seq/offset 搬到默认 agent lane，不把其它 scope 的检查点当成读取回执。`20261005_fold_decision_records` 将历史提问与决定的状态、选项和一次性令牌搬到消息，消息令牌使用部分唯一索引。领域消费者读取只投影新消息的 question/decision/member-inbox views。`20261005_attempt_input_receipts` 为 attempt 增加确认、正文读取和原始输入确认字段，并补齐历史公共 decision 的持久状态；`20261005_separate_lane_provider_progress` 分开 provider 续接位置；turn 列表在 authoritative turns 表保留 workspace/created_at/id 和 workspace/status/created_at/id 两个索引，权限条件在 LIMIT 前执行；列表不传 legacy_prompt，完整正文通过 get --input 读取。`20261005_attempt_counters_bigint` 将既有 PG attempts 的 event_count/tool_call_count 扩为 BIGINT，新库直接使用 BIGINT，保持 JavaScript 安全整数范围。SQLite 的整数行为不变。原提问、决定、插话表仍留作物理删除的备份窗口，但运行代码不读取它们。退役脚本 mul493 组同时列出 head.agent_read_state，执行前验证折叠迁移已完成。
 
 ## Producer 定位
 

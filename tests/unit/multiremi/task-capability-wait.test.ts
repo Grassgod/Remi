@@ -73,10 +73,10 @@ async function redispatchAsSupervisor(store: MultiremiStore, taskId: string, rea
   const response = await app.request(turnApiPath(store, taskId, "/retry"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ cold: true }),
+    body: JSON.stringify({ cold: true, reason }),
   });
-  return { response, replacement: response.status === 202
-    ? store.getTask((await response.json()).replacement_task.id) : null };
+  return { response, replacement: response.status === 200
+    ? store.getTask((await response.json()).turn.current_attempt_id) : null };
 }
 
 describe("queued task model capability waits", () => {
@@ -184,7 +184,8 @@ describe("queued task model capability waits", () => {
     });
     expect(reason).not.toContain("redispatch");
     expect(reason).toContain("remi agent update agt_chat --runtime rt_a");
-    expect(reason).toContain("remi chat message create cht_chat --content");
+    expect(reason).toContain("remi turn get tsk_chat --input --output json");
+    expect(reason).toContain("remi message send cht_chat --content-file");
   });
   it("keeps the grace period silent, then explains all rejected candidates without changing the task or model", () => {
     const { store, runtime, agent, task, now, fail } = fixture();
@@ -691,7 +692,7 @@ describe("queued task model capability waits", () => {
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
     const reason = store.getTask(task.id)!.waitReason!;
     expect(reason).toContain("等待任务落点：");
-    expect(reason).toContain("redispatch");
+    expect(reason).toContain("remi turn retry");
     // The frozen pin survives — the remedy is redispatch, not an automatic move.
     expect(store.getTask(task.id)).toMatchObject({ runtimeId: a.id, attempt: 2 });
     expect(store.claimTask(a.id)).toBeNull();
@@ -699,12 +700,9 @@ describe("queued task model capability waits", () => {
 
     // The suggested remedy really resolves it: the replacement has no frozen
     // pin, so the workspace machine can take it.
-    const redispatch = db!.transaction(() => (store as unknown as {
-      tasks: { redispatchTaskWithinTransaction(
-        id: string, childStatusChanges: unknown[], deferredEvents: { workspace: unknown[]; enqueuedTasks: unknown[] },
-      ): { replacement: { id: string } } };
-    }).tasks.redispatchTaskWithinTransaction(task.id, [], { workspace: [], enqueuedTasks: [] }))();
-    expect(store.claimTask(b.id)?.id).toBe(redispatch.replacement.id);
+    const retry=store.retryTurn(store.getTurnForAttempt(task.id)!.id,true);
+    expect(store.claimTask(b.id)?.id).toBe(retry.current_attempt_id!);
+
   });
 
   it("reports a placement conflict between a registered Agent binding and an unregistered workspace machine", () => {
@@ -749,16 +747,16 @@ describe("queued task model capability waits", () => {
     expect(reason).toStartWith("等待任务落点：");
     expect(reason).toContain("A");
     expect(reason).toContain("直接改绑会取消这条已冻结的任务");
-    const command = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+) --reason '([^']+)' --yes[\s\S]*?remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)/);
+    const command = reason.match(/remi turn retry ([a-zA-Z0-9_-]+) --cold --reason '([^']+)' --yes[\s\S]*?remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)/);
     expect(command).not.toBeNull();
     expect(command![1]).toBe(task.id);
     expect(command![3]).toBe(agent.id);
     expect(command![4]).toBe(a.id);
     const { response, replacement } = await redispatchAsSupervisor(store, task.id, command![2]!);
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     expect(replacement).not.toBeNull();
     expect(replacement!).toMatchObject({
-      prompt: task.prompt, parentTaskId: task.id, issueSessionId: side.id,
+      prompt: task.prompt, turn_id: store.getTurnForAttempt(task.id)!.id, issueSessionId: side.id,
       executionFingerprint: null,
     });
     store.updateAgent(agent.id, { runtimeId: a.id });
@@ -786,8 +784,8 @@ describe("queued task model capability waits", () => {
     const original = store.sendChatMessage(chat.id, { body: "I can't retry\n\n  keep inner spaces  \nwith its last line" });
     const task = original.task;
     for (let index = 0; index < 65; index++) {
-      const later = store.sendChatMessage(chat.id, { body: `later message ${index}` });
-      store.cancelTask(later.task.id);
+      store.sendMessage({session_id:chat.id,sender:{type:"member",id:store.listWorkspaceMembers("local").find(member=>member.userId==="alice")!.id},
+        message_kind:"request",body_md:`later message ${index}`,to:{type:"none"},wake_requested:"now"});
     }
     mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = 'chat-frozen-fp' WHERE id = ?", [task.id]);
     const now = Date.now();
@@ -796,11 +794,11 @@ describe("queued task model capability waits", () => {
     const reason = store.getTask(task.id)?.waitReason ?? "";
     expect(reason).toContain("直接改绑会取消这条已冻结的任务");
     expect(reason).not.toContain("remi task redispatch");
-    const command = reason.match(/remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)[\s\S]*?remi chat message list ([a-zA-Z0-9_-]+) --output json[\s\S]*?remi chat message create ([a-zA-Z0-9_-]+) --content-file/);
+    const command = reason.match(/remi agent update ([a-zA-Z0-9_-]+) --runtime ([a-zA-Z0-9_-]+)[\s\S]*?remi turn get ([a-zA-Z0-9_-]+) --input --output json[\s\S]*?remi message send ([a-zA-Z0-9_-]+) --content-file/);
     expect(command).not.toBeNull();
     expect(command![1]).toBe(agent.id);
     expect(command![2]).toBe(a.id);
-    expect(command![3]).toBe(chat.id);
+    expect(command![3]).toBe(store.getTurnForAttempt(task.id)!.id);
     expect(command![4]).toBe(chat.id);
     expect(reason).not.toContain("--content '");
 
@@ -817,15 +815,15 @@ describe("queued task model capability waits", () => {
       body: JSON.stringify({ cold: true }),
     });
     expect(denied.status).toBe(403);
-    expect((await denied.json()).error).toBe("forbidden");
+    expect((await denied.json()).error).toBe("not your chat session"); // #6: conversation privacy rejects before Turn control.
 
     const rebound = await app.request(`/api/multiremi/agents/${command![1]}`, {
       method: "PATCH", headers, body: JSON.stringify({ runtime_id: command![2] }),
     });
     expect(rebound.status).toBe(200);
     expect(store.getTask(task.id)?.status).toBe("cancelled");
-    const originalMessage = store.listChatMessagesFromLog(command![3]!)
-      .find((message) => message.role === "user" && message.taskId === task.id);
+    const originalMessage = store.listChatMessagesFromLog(chat.id)
+      .find((message) => message.id === store.getTurnForAttempt(task.id)!.trigger_message_id);
     expect(originalMessage?.body).toBe(original.message.body);
     const resent = await app.request(`/api/sessions/${command![4]}/messages`, {
       method: "POST", headers, body: JSON.stringify(requestMessageBody(store, { content: originalMessage!.body }, { type: "agent", ref: store.getChatSession(command![4])!.agentId })),
@@ -894,7 +892,7 @@ describe("queued task model capability waits", () => {
     const parent = store.createIssueSession(issue.id, { title: "Parent", holdsWorkspace: true });
     const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
     // A historical parent lane supplies the snapshot while Project routing now refuses A.
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider_session_id = 'seed-session' WHERE session_id = ? AND agent_id = ?", [a.id, parent.id, agent.id]);
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = ?, provider_session_id = 'seed-session' WHERE session_id = ? AND reader_type='agent' AND reader_id = ?", [a.id, parent.id, agent.id]);
     const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "work" });
     const now = Date.now();
@@ -1076,8 +1074,8 @@ describe("queued task model capability waits", () => {
                 const removeDedicated = reason.includes("取消") && reason.includes("独享设置")
                   && (option === "remove-dedicated" || !addDevice);
                 const rebind = reason.match(/remi agent update [a-zA-Z0-9_-]+ --runtime ([a-zA-Z0-9_-]+)/);
-                const redispatch = reason.match(/remi task redispatch ([a-zA-Z0-9_-]+)/);
-                const resend = reason.includes("remi chat message create");
+                const redispatch = reason.match(/remi turn retry ([a-zA-Z0-9_-]+) --cold/);
+                const resend = reason.includes("remi message send");
                 if (addDevice) store.createProjectDevice(project!.id, {
                   daemonId: addTarget === "B" || addTarget === b.daemonId ? b.daemonId! : a.daemonId!,
                 });
@@ -1091,13 +1089,14 @@ describe("queued task model capability waits", () => {
                   store.setAgentSupervisor(supervisor.id, true);
                   const patrol = store.createIssue({ title: "Patrol" });
                   const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "patrol" });
-                  replacement = store.performOrganizerAction({ supervisorTaskId: supervisorTask.id,
-                    supervisorAgentId: supervisor.id, targetTaskId: task.id, action: "redispatch", reason: "recover" }).replacementTask!;
+                  const retried=store.retryTurn(store.getTurnForAttempt(task.id)!.id,true);
+                  replacement=store.getTask(retried.current_attempt_id!)!;
+                  void supervisorTask;
                 }
                 if (rebind) store.updateAgent(agent.id, { runtimeId: rebind[1]! });
                 if (resend) {
                   expect(chat, coordinate).not.toBeNull();
-                  const original = store.listChatMessages(chat!.id).find((message) => message.taskId === task.id && message.role === "user");
+                  const original = store.listChatMessages(chat!.id).find((message) => message.id === store.getTurnForAttempt(task.id)!.trigger_message_id && message.role === "user");
                   expect(original, coordinate).toBeDefined();
                   replacement = store.sendChatMessage(chat!.id, { body: original!.body }).task;
                 }
@@ -1225,7 +1224,10 @@ describe("queued task model capability waits", () => {
       rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [] });
     const now = Date.now();
     for (let index = 0; index < 12; index++) {
-      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: `batch ${index}` });
+      // #3: distinct Sessions retain twelve pending Turns instead of merging a single lane.
+      const batchIssue=store.createIssue({title:`Batch ${index}`,projectId:project.id});
+      store.reportIssueWorkspace({issueId:batchIssue.id,runtimeId:runtimes[1]!.id,rootPath:`/tmp/${batchIssue.key}`,branchName:`agent/${batchIssue.key}`,status:"ready",repos:[]});
+      const task = store.createTask({ agentId: agent.id, issueId: batchIssue.id, prompt: `batch ${index}` });
       ageTask(task.id, GRACE_MS, now);
     }
     const query = spyOn(db!, "query");

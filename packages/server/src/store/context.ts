@@ -311,6 +311,8 @@ export interface IssuesSurface {
   getAttachment(id: string): MultiremiAttachment | null;
   createAttachment(input: CreateAttachmentInput): MultiremiAttachment;
   listAttachmentsForChatMessage(id: string): MultiremiAttachment[];
+  listAttachmentsForMessages(ids: string[]): Map<string, MultiremiAttachment[]>;
+  listAttachmentsForComment(id: string): MultiremiAttachment[];
   linkAttachmentsToComment(commentId:string,issueId:string,attachmentIds:string[]):void;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
@@ -724,6 +726,7 @@ export interface ConversationLogSurface {
   nextSeqWithinTransaction(sessionId: string): number;
   /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */
   appendWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  publishMessageWithinTransaction(sessionId: string, seq: number, existing: boolean): void;
   /** In-place update with `revision++` and the write hook; caller owns the transaction. */
   updateWithinTransaction(
     sessionId: string,
@@ -1588,7 +1591,7 @@ export class StoreContext {
     const rawRecipientId = cleanOptionalString(input.recipientId ?? input.memberId);
     if (recipientType !== "member" || !rawRecipientId) return null;
     const member = this.resolveWorkspaceMemberForNotification(workspaceId, rawRecipientId);
-    if (!member || member.archivedAt) return null;
+    if (!member || member.workspaceId !== workspaceId || member.archivedAt) return null;
     if (!input.bypassMute && this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
     const id=createId('inb');
     const events=createCommitEventQueue();

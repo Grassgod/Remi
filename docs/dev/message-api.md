@@ -10,7 +10,7 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 ## 身份与响应
 
-使用现有 Authorization 和工作区选择机制。人的 sender 从当前活跃成员解析；task token 的 sender 和 source_turn_id 从当前 attempt 解析。请求体不能指定 sender、source_turn_id、visibility 或执行权限。跨工作区资源不可见，Chat 保留创建人边界；精确绑定该 Chat 当前 attempt、agent 和工作区的 task capability 可读写本 Chat，即使令牌的用户是共享 Runtime owner。其他 Chat 和不相关任务仍拒绝。轮详情与 trace 还保留来源任务的可见性检查，Chat 轮只接受自身任务能力。
+使用现有 Authorization 和工作区选择机制。人的 sender 从当前活跃成员解析；task token 的 sender 和 source_turn_id 从当前 attempt 解析。普通凭据的请求体不能指定 sender、source_turn_id、visibility 或执行权限。无凭据的可信内部模式及 master token 沿用领域评论的显式 author 规则；普通 PAT/JWT 和 task token 仍以当前凭据为准。跨工作区资源不可见，Chat 保留创建人边界；精确绑定该 Chat 当前 attempt、agent 和工作区的 task capability 可读写本 Chat，即使令牌的用户是共享 Runtime owner。其他 Chat 和不相关任务仍拒绝。轮元数据沿工作区权限读取，private agent 的完整输入和 trace 仍按来源任务权限过滤。没有 Issue/Chat 来源的历史轮可以 list/get，只读对话不会因此获得新输入入口。已删除 Chat 的详情返回 403，列表过滤掉对应轮；Chat 轮只接受自身任务能力。
 
 发送到 agent 时，无论直接收件人还是角色解析后的最终 agent，都执行与旧任务派发一致的访问检查；拒绝会回滚消息、轮和附件。human request 及其答复沿用来源任务/agent 可见性，在 message 单条、列表、范围、inbox 和展示读取中一致过滤；答复被拒绝不会消费 pending 提问或恢复 awaiting_human 轮。共享 agent 的提问仍允许有权的活跃成员答复，不限于原收件人。
 
@@ -47,13 +47,13 @@ task token 在统一鉴权入口核对绑定的 attempt 是否仍是所属轮的
 }
 ```
 
-`message_kind` 为 request/reply/report/decision/status/final，缺省 request，有 reply_to_id 时缺省 reply。`to` 缺省 `{type:"none"}`；可用 agent/member/role，role 为 leader/parent_owner/delegator/issue_owner/relay。角色可能把消息写入父单或委派来源对话，应以返回的 message.session_id 为准。wake 为 now/next_turn/inbox_only，缺省 now；降级仍返回 200，使用 wake_applied/wake_reason 展示实际结果。六种降级原因见 [CLI 迁移说明](../cli-command-migration.md)。dedupe_key 在最终目标对话内唯一，重发返回同一消息与 delivery turn。
+`message_kind` 为 request/reply/report/decision/status/final，缺省 request，有 reply_to_id 时缺省 reply。`to` 缺省 `{type:"none"}`；可用 agent/member/role，role 为 leader/parent_owner/delegator/issue_owner/relay。角色可能把消息写入父单或委派来源对话，应以返回的 message.session_id 为准。wake 为 now/next_turn/inbox_only，缺省 now；降级仍返回 200，使用 wake_applied/wake_reason 展示实际结果。依赖未满足时，成员的 issue_owner request 或实际 rich mention 保留强制开工与 dependency_force_started 审计；直接指定 agent 的普通成员 request 返回 409。agent request 保留消息并降为 next_turn，内部结构性平台交差保留立即叫醒。六种降级原因见 [CLI 迁移说明](../cli-command-migration.md)。dedupe_key 在最终目标对话内唯一，重发返回同一消息与 delivery turn。
 
-decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，设置 `reply_to_id` 指向 decision，kind 为 reply；选择值放 `metadata.selected_options:[value]`，服务端验证选项并调用 answerMessageDecision。body_md 可为空。permission 的单个选择必须匹配 payload.options[].optionId，并规范化为 `response.option_id`；单题 question 的单个选择必须匹配该题选项 label，并规范化为 `response.answers:{问题:答案}`。单题正文答复也转为 answers。多题必须传 `response:{answers:{...}}`，包含每个问题的非空字符串答案；CLI 用 `message send <conversation> --reply-to <message> --response '{"answers":{"问题一":"答案一","问题二":"答案二"}}'`。permission 也可传 `--response '{"option_id":"allow_once"}'`；--response 与 --option 互斥。无效或不完整结构在消费请求前返回 400。既有 agent 裁决的 reason/overturn 也放 response。答复、原消息解决、恢复等待轮、活动及卡片更新在同一事务内；重复答复规则见下文。
+decision 可带 `options:[{label,value}]`。回答使用同一个发送端点，设置 `reply_to_id` 指向 decision，kind 为 reply；选择值放 `metadata.selected_options:[value]`，服务端验证选项并调用 answerMessageDecision。body_md 可为空。permission 的单个选择必须匹配 payload.options[].optionId，并规范化为 `response.option_id`；单题 question 的单个选择必须匹配该题选项 label，并规范化为 `response.answers:{问题:答案}`。单题正文答复也转为 answers。AskUserQuestion 的 `{field,question:{question,options}}` 嵌套结构与平铺题目均按实际问题文本生成 answers 的键。多题必须传 `response:{answers:{...}}`，包含每个问题的非空字符串答案；CLI 用 `message send <conversation> --reply-to <message> --response '{"answers":{"问题一":"答案一","问题二":"答案二"}}'`。permission 也可传 `--response '{"option_id":"allow_once"}'`；--response 与 --option 互斥。无效或不完整结构在消费请求前返回 400。既有 agent 裁决的 reason/overturn 也放 response。答复、原消息解决、恢复等待轮、活动及卡片更新在同一事务内；重复答复规则见下文。
 
-有显式 Issue 来源的 decision 保留成员改判行为：已 answered 的决定可由成员通过同一 reply 入口再次答复，每次追加 history、更新 answeredAt，并记录一条新 reply；source owner 收到答复通知，上次答复来自 agent 时 parent owner 另收到 decision_overturn，已有飞书卡片每次改判排一条 patch，并等待上一条发送结束，避免旧答案覆盖新答案。agent 仅可答 pending，withdrawn 返回 409。普通 decision 和 human request 答过后仍返回 409；卡片回调仍是一次性答复，重放不追加 history。
+Issue decision 没有显式 audience 时，先选人类负责人和订阅者，再回退到 creator、工作区 owner；显式 audience 不补送额外成员。有显式 Issue 来源的 decision 保留成员改判行为：已 answered 的决定可由成员通过同一 reply 入口再次答复，每次追加 history、更新 answeredAt，并记录一条新 reply；source owner 收到答复通知，上次答复来自 agent 时 parent owner 另收到 decision_overturn，已有飞书卡片每次改判排一条 patch，并等待上一条发送结束，避免旧答案覆盖新答案。agent 仅可答 pending，withdrawn 返回 409。普通 decision 和 human request 答过后仍返回 409；卡片回调仍是一次性答复，重放不追加 history。
 
-正文或附件至少有一种。上传为 multipart：`message` 是发送体的 JSON 字符串，重复 `file` 字段为 File；文件类型/20MB 上限沿用 Chat 验证。已有附件使用 `attachment_ids`，必须可访问、同工作区且未绑定另一条消息。文件和元数据随发送失败回滚；幂等重发不会留下多余上传文件。decision 回答不接受附件。
+正文或附件至少有一种。上传为 multipart：`message` 是发送体的 JSON 字符串，重复 `file` 字段为 File；文件类型、单文件 20 MiB 和单次最多 10 个文件沿用 Chat 验证；超限返回 413，空文件名沿用 Chat 错误文案。已有附件使用 `attachment_ids`，必须可访问、同工作区且未绑定另一条消息。消息的附件 sidecar 按提交顺序投影，Chat 的飞书附件 outbox 与消息在同一事务创建；文件和元数据随发送失败回滚；幂等重发不会留下多余上传文件。decision 回答不接受附件。
 
 附件绑定到最终目标的 Issue 或 Chat；auto_* 对话本身不接受附件，需在关联的 Issue 或 Chat 上传。
 
@@ -85,10 +85,10 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 | `GET /api/turns/:id` | `input=true`、`attempts=true`，默认均不展开 | `{turn,input?,attempts?}` |
 | `POST /api/turns/:id/cancel` | `{}` | `{turn}`；丢弃本轮已绑定输入并取消，已终态幂等 |
 | `POST /api/turns/:id/wrap-up` | `{}` | `{turn}`；仅 running/awaiting_human，设置 wrap_up_requested_at |
-| `POST /api/turns/:id/retry` | `{cold?:boolean}` | `{turn}`；原 turn.id，新 current_attempt_id，cold 清续接缓存 |
+| `POST /api/turns/:id/retry` | `{cold?:boolean,reason?:string}` | `{turn,organizer_action,comment_id}`；原 turn.id，新 current_attempt_id，cold 清续接缓存 |
 | `GET /api/turns/:id/trace` | `attempt_id` 缺省 current_attempt_id；`after_seq`、`limit` 沿用 TraceReader 协议 | `{turn_id,attempt_id,...TraceReadResult}` |
 
-input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 要求带 organizer:supervisor scope 的当前 supervisor task 凭证，旁支会话不能重试；不满足返回 403。retry 不新增轮、不改变 Issue、不补造用户消息；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留。
+input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 接受带 organizer:supervisor scope 的当前 supervisor task 凭证，也接受同工作区组长或父单负责人对组员轮的控制；旁支会话不能重试，其他跨 agent 操作返回 403。retry 沿用 organizer 的 report_only/act 设置、巡查评论和审计，提交后发布事件；返回同一 turn、新 attempt，以及 organizer_action/comment_id。cold=false 保留 provider 缓存，cold=true 清缓存。cancel/wrap-up 同样允许这些相关控制者。retry 不新增轮、不改变 Issue；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留；runtime/all 角色提供此入口，ui 角色继续返回 421。
 
 AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/api/agents/:id/tasks`（含 native 对应端点）同批返回 `turn_id`。该字段直接来自 execution read projection 的 canonical turn 映射，不额外逐条查询。全局任务日志使用 `/api/turns/:turn_id/trace?attempt_id=:id`，历史 attempt 也保留所属 turn_id，不可把两类 ID 互换。
 

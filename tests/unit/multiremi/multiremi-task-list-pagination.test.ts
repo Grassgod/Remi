@@ -103,9 +103,9 @@ describe("Task list pagination", () => {
     // The cursor is the full `(created_at, id)` sort key; a created_at-only
     // cursor would drop or duplicate rows in this fixture.
     // The root token is the no-identity admin path, so every task is visible here.
-    const { store, app, entries, root } = await fixture(10, 100);
+    const { store, app, entries, root } = await fixture(10, 0);
     const all = entries.map((entry) => entry.id);
-    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = '2026-09-21T00:00:00.000Z'");
+    db!.run("UPDATE multiremi_turns SET created_at = '2026-09-21T00:00:00.000Z'");
     const collected: string[] = [];
     let cursor: string | null = null;
     for (let request = 0; request < 6; request += 1) {
@@ -119,20 +119,21 @@ describe("Task list pagination", () => {
     expect([...collected].sort()).toEqual([...all].sort());
   });
 
-  it("caps limit and falls back to the default for absent or invalid values", async () => {
-    const { app, root } = await fixture(12, 100);
-    expect((await page(app, "?limit=9999", root)).limit).toBe(500);
-    expect((await page(app, "", root)).limit).toBe(100);
-    for (const query of ["?limit=0", "?limit=-3", "?limit=abc", "?limit="]) {
-      expect((await page(app, query, root)).limit, query).toBe(100);
-    }
-    // A fractional limit is floored by the shared optional-int parser.
-    expect((await page(app, "?limit=2.9", root)).turns).toHaveLength(2);
-  });
+  it("accepts the canonical maximum and rejects malformed pagination inputs", async () => {
+    const {app,root}=await fixture(520,0);
+    const capped=await page(app,'?limit=500',root);
+    expect(capped.turns).toHaveLength(500);expect(capped.next_cursor).toBeString();
+    expect((await page(app,'',root)).turns).toHaveLength(100);
+    for(const query of ['?limit=9999','?limit=invalid','?limit=-1','?limit=1.5','?cursor=invalid'])
+      expect((await app.request(`/api/turns${query}`,{headers:root})).status).toBe(400);
+  },15000);
 
   it("returns an empty page and no next offset past the end of the authorized set", async () => {
     const { app, reader, visible } = await fixture(10, 5);
-    const body = await page(app, "?limit=5&offset=100", reader);
+    const first=await page(app,"?limit=500",reader);
+    const last=first.turns.at(-1)!;
+    const cursor=Buffer.from(JSON.stringify({created_at:last.created_at,id:last.id})).toString("base64url");
+    const body = await page(app, `?limit=5&cursor=${cursor}`, reader);
     expect(body.turns).toEqual([]);
     expect((body.next_cursor !== null)).toBe(false);
     expect(body.next_cursor).toBeNull();
@@ -260,8 +261,7 @@ describe("Task list pagination", () => {
         workspaceId: invisible ? "ws_other" : "local",
       });
       // Strictly decreasing created_at, so insertion index === scan position.
-      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ? WHERE id = ?", [
-        new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
+      db!.run("UPDATE multiremi_turns SET created_at = ? WHERE id = ?", [
         new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
         task.id,
       ]);
@@ -308,7 +308,7 @@ describe("Task list pagination", () => {
     // The two-phase fetch must not reorder, duplicate or drop rows: the page
     // order is `created_at DESC, id DESC` and hydration reads by id, which does
     // not preserve that order on its own.
-    const { app, store, root } = await fixture(12, 100);
+    const { app, store, root } = await fixture(12, 0);
     const reference = store.listTasks().map((task) => task.id);
     const collected: string[] = [];
     let cursor: string | null = null;
@@ -316,12 +316,12 @@ describe("Task list pagination", () => {
       const response = await app.request("/api/turns"+`?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers: root });
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        turns: Array<{ id: string; createdAt: string }>;
+        turns: Array<{ id: string; created_at: string }>;
         next_cursor: string | null;
           };
       collected.push(...body.turns.map((task) => task.id));
       // Within one page the rows come back in the same order the scan produced.
-      const createdAts = body.turns.map((task) => task.createdAt);
+      const createdAts = body.turns.map((task) => task.created_at);
       expect([...createdAts].sort().reverse()).toEqual(createdAts);
       if (!(body.next_cursor !== null)) break;
       cursor = body.next_cursor;
@@ -331,7 +331,7 @@ describe("Task list pagination", () => {
   });
 
   it("omits heavy fields from list entries while the detail route keeps them", async () => {
-    const { store, app, entries, root } = await fixture(3, 100);
+    const { store, app, entries, root } = await fixture(3, 0);
     const list = await page(app, "?limit=3", root);
     expect(list.turns[0]).toBeDefined();
     const entryKeys = Object.keys(list.turns[0]!);
@@ -347,15 +347,15 @@ describe("Task list pagination", () => {
       expect(entryKeys, field).not.toContain(field);
     }
     // Identity and status fields the CLI table renders must survive the trim.
-    for (const field of ["id", "agentId", "status", "workspaceId", "createdAt", "waitReason"]) {
+    for (const field of ["id", "agent_id", "status", "workspace_id", "created_at", "current_attempt_id"]) {
       expect(entryKeys, field).toContain(field);
     }
 
-    const detailResponse = await app.request(turnApiPath(store, entries[0]!.id), { headers: root });
+    const detailResponse = await app.request(turnApiPath(store, entries[0]!.id,"?input=true&attempts=true"), { headers: root });
     expect(detailResponse.status).toBe(200);
-    const detail = (await detailResponse.json()) as { task: Record<string, unknown> };
-    for (const field of ["prompt", "result", "usage", "pluginSnapshot", "executionFingerprint"]) {
-      expect(Object.keys(detail.task), field).toContain(field);
-    }
+    const detail=await detailResponse.json();
+    expect(detail.input.messages[0].body_md).toBe('Task 0');
+    for(const field of ['usage','plugin_snapshot','execution_fingerprint'])expect(Object.keys(detail.attempts[0]),field).toContain(field);
+
   });
 });

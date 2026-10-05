@@ -14,9 +14,17 @@ export function normalizeHumanResponse(request: MultiremiTaskHumanRequest, respo
     return { ...response, option_id: value };
   }
   const questions = request.payload.questions;
-  if (!Array.isArray(questions) || !questions.length || questions.some(q => !q || typeof q !== 'object'
-    || typeof (q as Record<string, unknown>).question !== 'string' || !(q as Record<string, unknown>).question)) invalid();
-  const questionRows = questions as Array<{ question: string; options?: Array<{ label?: string }> }>;
+  if (!Array.isArray(questions) || !questions.length) invalid();
+  // ACP elicitation carries {field, question:{question, options}}, while
+  // AskUserQuestion's direct payload carries the question object itself.
+  const questionRows = (questions as unknown[]).map(row => {
+    if (!row || typeof row !== 'object') return invalid();
+    const record = row as Record<string, unknown>;
+    const value = typeof record.question === 'object' && record.question !== null
+      ? record.question as Record<string, unknown> : record;
+    if (typeof value.question !== 'string' || !value.question.trim()) return invalid();
+    return value as { question: string; options?: Array<{ label?: string }> };
+  });
   let answers = response.answers;
   if (answers === undefined && questionRows.length === 1 && Array.isArray(selected) && selected.length === 1) {
     const question = questionRows[0]!;

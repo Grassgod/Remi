@@ -956,7 +956,7 @@ describe("Multiremi API — agent plugins", () => {
     });
     const app = createMultiremiApp({ store });
 
-    const response = await app.request(taskRequestPath(store, {  }), {
+    const response = await app.request(taskRequestPath(store, {issueId:store.createIssue({title:"Dispatch fixture",workspaceId:"local"}).id}), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, {
@@ -1023,9 +1023,9 @@ describe("Multiremi API — agent plugins", () => {
     const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed).toMatchObject({
-      id: task.id,
-      executionFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-      pluginSnapshot: [{
+      attempt_id: task.id,
+      execution_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      plugin_snapshot: [{
         bindingId: binding.id,
         pluginId: plugin.id,
         versionId: plugin.activeVersionId,

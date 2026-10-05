@@ -331,17 +331,20 @@ export class FeishuBotRepo {
   isTaskIssueCreationRestricted(taskId: string): boolean {
     return Boolean(this.ctx.db.query(
       `WITH RECURSIVE lineage AS (
-         SELECT id, parent_task_id, chat_session_id FROM multiremi_turn_execution_records WHERE id = ?
+         SELECT t.id, t.workspace_id, t.session_id AS chat_session_id FROM multiremi_turns t
+         JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id = ?
          UNION
-         SELECT p.id, p.parent_task_id, p.chat_session_id FROM multiremi_turn_execution_records p
-         JOIN lineage child ON p.id = child.parent_task_id
+         SELECT p.id, p.workspace_id, p.session_id AS chat_session_id FROM multiremi_turns p
+         JOIN multiremi_conversation_log request ON request.task_id=p.id
+         JOIN lineage child ON child.workspace_id=p.workspace_id
+           AND (${this.ctx.db.dialect === 'postgres' ? "request.metadata::jsonb->>'delivery_turn_id'" : "json_extract(request.metadata,'$.delivery_turn_id')"})=child.id
        )
        SELECT 1 AS restricted FROM multiremi_feishu_bot_deliveries d
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
        JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id
        LEFT JOIN multiremi_feishu_bot_senders s ON s.id = d.sender_id
        WHERE c.sender_access_policy = 'allowlist' AND d.sender_recorded = 1
-         AND (d.task_id IN (SELECT id FROM lineage)
+         AND (d.task_id IN (SELECT a.id FROM multiremi_turn_attempts a JOIN lineage l ON l.id=a.turn_id)
            OR b.chat_session_id IN (SELECT chat_session_id FROM lineage))
          AND (s.id IS NULL OR s.allowed = 0)
        LIMIT 1`,
@@ -766,13 +769,6 @@ export class FeishuBotRepo {
         const error = chatAttachmentValidationError(input.filename, Number(input.sizeBytes));
         if (error) throw new Error(error);
       }
-      const config = this.getConfig(task.workspaceId);
-      const binding = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_chat_bindings
-        WHERE chat_session_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 1`)
-        .get(session.id, session.workspaceId) as Row | null;
-      if (binding && (!config?.enabled || binding.app_id !== config.appId)) {
-        throw new Error("Feishu bot is unavailable for this Chat");
-      }
       // Policy extension point: evaluate future workspace Chat delivery policy
       // before creating either the assistant message or outbound rows.
       const message = this.ctx.chat().appendChatMessageWithinTransaction({ chatSessionId: session.id,
@@ -780,6 +776,26 @@ export class FeishuBotRepo {
       const attachments = inputs.map(input => this.ctx.issues().createAttachment({ ...input,
         workspaceId: session.workspaceId, chatSessionId: session.id, chatMessageId: message.id,
         uploaderType: "agent", uploaderId: task.agentId }));
+      const deliveryIds = this.registerChatAttachmentDeliveriesWithinTransaction(taskId, message.id, attachments, body);
+      return { message, attachments, delivery_ids: deliveryIds };
+    })();
+    return result;
+  }
+
+  /** Register files on the already committed-to-write canonical message. */
+  registerChatAttachmentDeliveriesWithinTransaction(taskId: string, messageId: string,
+    attachments: MultiremiAttachment[], body: string): string[] {
+    if (!this.ctx.db.inTransaction) throw new Error('Chat attachment outbox requires a transaction');
+    const task = this.ctx.tasks().getTask(taskId);
+    const session = task?.chatSessionId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
+    if (!task || !session || task.workspaceId !== session.workspaceId) throw new Error('current task is not a Chat task');
+      const config = this.getConfig(task.workspaceId);
+      const binding = this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_chat_bindings
+        WHERE chat_session_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(session.id, session.workspaceId) as Row | null;
+      if (binding && (!config?.enabled || binding.app_id !== config.appId)) {
+        throw new Error("Feishu bot is unavailable for this Chat");
+      }
       const deliveryIds: string[] = [];
       if (binding) {
         if (!binding.chat_id) throw new Error("Feishu Chat has no destination");
@@ -799,11 +815,9 @@ export class FeishuBotRepo {
           bindingId: String(binding.id), chatId: String(binding.chat_id), threadId: cleanOptionalString(binding.thread_id),
           replyToMessageId: cleanOptionalString(binding.reply_to_message_id), deliveries };
         if (this.canWriteOutbound()) this.writeAttachmentDeliveriesWithinTransaction(task.workspaceId, operation);
-        else this.deferOutboundOperation(task.workspaceId, message.id, operation);
+        else this.deferOutboundOperation(task.workspaceId, messageId, operation);
       }
-      return { message, attachments, delivery_ids: deliveryIds };
-    })();
-    return result;
+      return deliveryIds;
   }
 
   /**
@@ -1004,14 +1018,12 @@ export class FeishuBotRepo {
       }
 
       const now = nowIso();
-      const messageId = createId("msg");
-      this.ctx.chat().appendChatMessageWithinTransaction({
-        id: messageId,
-        chatSessionId,
-        taskId: task.id,
-        role: "user",
-        body: text,
-        createdAt: now,
+      // Creating a canonical turn already writes its incoming request. Reuse
+      // that message for transport and sidecars instead of duplicating it.
+      const trigger = !steered ? this.ctx.db.query('SELECT t.trigger_message_id FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?').get(task.id)?.trigger_message_id : null;
+      const messageId = trigger ?? createId("msg");
+      if(!trigger) this.ctx.chat().appendChatMessageWithinTransaction({
+        id: messageId, chatSessionId, taskId: task.id, role: "user", body: text, createdAt: now,
       });
       for (const attachmentId of attachmentIds) {
         this.ctx.db.run(`UPDATE multiremi_attachments SET chat_session_id = ?, chat_message_id = ?

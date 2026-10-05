@@ -210,31 +210,14 @@ describe("Organizer supervisor privilege layer", () => {
       headers: headers(supervisorToken.token),
     });
     expect(inspectionResponse.status).toBe(200);
-    const inspection = (await inspectionResponse.json()).inspection;
-    expect(inspection).toMatchObject({
-      id: fixture.targetTask.id,
-      agent_id: fixture.targetAgent.id,
-      issue_id: fixture.targetIssue.id,
-      runtime_id: fixture.runtime.id,
-      progress_summary: "Indexing repository",
-      progress_step: 2,
-      progress_total: 5,
-      last_message: { seq: 2 },
-      message_type_histogram: [
-        { type: "tool_call", tool: "exec_command", count: 1 },
-        { type: "assistant", tool: null, count: 1 },
-      ],
-      human_requests: {
-        counts: { pending: 1, responded: 0, timeout: 0, cancelled: 0 },
-        latest: { kind: "question", status: "pending" },
-      },
-      runtime: { id: fixture.runtime.id, status: "online", online: true },
-      agent: { id: fixture.targetAgent.id, name: "Worker", supervisor: false },
-      issue: { id: fixture.targetIssue.id },
-    });
-    expect(JSON.stringify(inspection)).not.toContain("TOP SECRET");
-    expect(JSON.stringify(inspection)).not.toContain("private command");
-    expect(JSON.stringify(inspection)).not.toContain("private output");
+    // #7: turn metadata and attempts replace the retired task inspection DTO.
+    const inspection = await inspectionResponse.json();
+    expect(inspection.turn).toMatchObject({id:fixture.store.getTurnForAttempt(fixture.targetTask.id)!.id,
+      agent_id:fixture.targetAgent.id,issue_id:fixture.targetIssue.id,status:'awaiting_human'});
+    expect(inspection.attempts).toHaveLength(1);
+    expect(inspection.attempts[0]).toMatchObject({id:fixture.targetTask.id,runtime_id:fixture.runtime.id,
+      progress_summary:'Indexing repository',progress_step:2,progress_total:5});
+    for(const secret of ['TOP SECRET','private command','private output'])expect(JSON.stringify(inspection.attempts)).not.toContain(secret);
 
     const globalList = await fixture.app.request("/api/turns", {
       headers: headers(supervisorToken.token),
@@ -247,11 +230,11 @@ describe("Organizer supervisor privilege layer", () => {
     ]));
     // MUL-357 trims `prompt` from list entries, so the same cross-task content
     // parity is asserted on the detail route, which keeps the full shape.
-    const targetDetail = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id), {
+    const targetDetail = await fixture.app.request(turnApiPath(fixture.store, fixture.targetTask.id,"?input=true"), {
       headers: headers(supervisorToken.token),
     });
     expect(targetDetail.status).toBe(200);
-    expect(JSON.stringify((await targetDetail.json()).task)).toContain("TOP SECRET target prompt");
+    expect(JSON.stringify((await targetDetail.json()).input)).toContain("TOP SECRET target prompt");
 
     const normalList = await fixture.app.request("/api/turns", {
       headers: headers(normalTaskToken.token),
@@ -264,7 +247,7 @@ describe("Organizer supervisor privilege layer", () => {
       headers: headers(normalTaskToken.token),
     });
     expect(normalCrossRead.status).toBe(200);
-    expect(JSON.stringify(await normalCrossRead.json())).not.toContain("inspect tasks");
+    expect(JSON.stringify((await normalCrossRead.json()).attempts)).not.toContain("inspect tasks");
   });
 
   it("keeps redispatch restrictions while allowing baseline actions in report_only", async () => {
@@ -392,7 +375,7 @@ describe("Organizer supervisor privilege layer", () => {
       expect(fixture.store.listOrganizerActionsForTask(task.id)).toHaveLength(0);
     }
     expect(fixture.store.listOrganizerActionsForTask(fixture.targetTask.id)).toHaveLength(0);
-    expect(fixture.store.listIssueComments(fixture.patrolIssue.id)).toHaveLength(0);
+    expect(fixture.store.listIssueComments(fixture.patrolIssue.id).filter(comment=>comment.body.startsWith("Organizer action:"))).toHaveLength(0);
     const selfRedispatch = await fixture.app.request(turnApiPath(fixture.store, fixture.supervisorTask.id, "/retry"), {
       method: "POST", headers: headers(token.token), body: JSON.stringify({ cold: true }),
     });
@@ -453,12 +436,12 @@ describe("Organizer supervisor privilege layer", () => {
     expect(comment.body).toContain("Organizer action: force_answer");
     expect(comment.body).toContain("Criterion: No semantic progress for 20 minutes");
     expect(comment.body).toContain(steeredBody.organizer_action.id);
-    const disclosure = fixture.store.listInboxItems(fixture.owner.id).find((item) =>
-      item.type === "organizer_action" && item.issueId === fixture.patrolIssue.id
+    const disclosure = fixture.store.listMessageInbox(fixture.owner.id,"local").items.find((item) =>
+      (item.metadata.inbox_item as any)?.type === "organizer_action" && item.session_id === fixture.supervisorTask.issueSessionId
     );
     expect(disclosure).toBeDefined();
-    expect(disclosure!.severity).toBe("attention");
-    expect(disclosure!.body).toContain(steeredBody.organizer_action.id);
+    expect((disclosure!.metadata.inbox_item as any)?.severity).toBe("attention");
+    expect(disclosure!.body_md).toContain(steeredBody.organizer_action.id);
 
     const cancelIssue = fixture.store.createIssue({ title: "Cancel target", workspaceId: "local" });
     const cancelTask = fixture.store.createTask({
@@ -501,20 +484,16 @@ describe("Organizer supervisor privilege layer", () => {
     expect(redispatched.status).toBe(200);
     const redispatchedBody = await redispatched.json();
     expect(redispatchedBody.organizer_action).toMatchObject({ action: "redispatch" });
-    expect(redispatchedBody.cancelled_task.status).toBe("cancelled");
-    expect(redispatchedBody.replacement_task).toMatchObject({
-      agentId: fixture.targetAgent.id,
-      issueId: redispatchIssue.id,
-      parentTaskId: redispatchTask.id,
-      continuedFromTaskId: continuedFromTask.id,
-      status: "queued",
-      attempt: 2,
-    });
-    expect(redispatchedBody.organizer_action.replacementTaskId).toBe(redispatchedBody.replacement_task.id);
+    expect(fixture.store.getTask(redispatchTask.id)?.status).toBe('cancelled');
+    expect(redispatchedBody.turn).toMatchObject({id:fixture.store.getTurnForAttempt(redispatchTask.id)!.id,
+      agent_id:fixture.targetAgent.id,issue_id:redispatchIssue.id,status:'running'});
+    const replacement=fixture.store.getTask(redispatchedBody.turn.current_attempt_id)!;
+    expect(replacement).toMatchObject({parentTaskId:redispatchTask.id,status:'queued',attempt:2});
+    expect(redispatchedBody.organizer_action.replacementTaskId).toBe(replacement.id);
     expect(fixture.store.listOrganizerActionsForTask(redispatchTask.id)).toHaveLength(1);
     const redispatchComment = fixture.store.listIssueComments(fixture.patrolIssue.id).at(-1)!;
     expect(redispatchComment.body).toContain("Organizer action: redispatch");
-    expect(redispatchComment.body).toContain(`Replacement task: ${redispatchedBody.replacement_task.id}`);
+    expect(redispatchComment.body).toContain(`Replacement task: ${replacement.id}`);
   });
 
   it("does not broadcast the organizer audit comment when the transaction rolls back", async () => {
@@ -559,7 +538,7 @@ describe("Organizer supervisor privilege layer", () => {
 
     expect(threw).toBe(true);
     // The transaction rolled back: no audit comment, the target still queued.
-    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("queued");
+    expect(fixture.store.getTurnForAttempt(fixture.targetTask.id)?.status).toBe("awaiting_human");
     expect(events.filter((event) => event.type === "comment:created")).toHaveLength(0);
   });
 
@@ -603,7 +582,7 @@ describe("Organizer supervisor privilege layer", () => {
 
     // Rolled back: the target task is still queued and every outbound event is
     // zero — no phantom comment, activity or status patch.
-    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("queued");
+    expect(fixture.store.getTurnForAttempt(fixture.targetTask.id)?.status).toBe("awaiting_human");
     expect(events.filter((event) => event.type === "comment:created")).toHaveLength(0);
     expect(events.filter((event) => event.type === "activity:created")).toHaveLength(0);
     expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(0);
@@ -617,6 +596,8 @@ describe("Organizer supervisor privilege layer", () => {
     // The cancel moves the Issue in_progress -> todo, so the status patch is a
     // real change and its post-commit emission is observable.
     fixture.store.updateIssue(fixture.targetIssue.id, { status: "in_progress" });
+    db!.run("UPDATE multiremi_issues SET assignee_type='agent',assignee_id=? WHERE id=?",[fixture.targetAgent.id,fixture.targetIssue.id]);
+    db!.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[fixture.store.getTurnForAttempt(fixture.targetTask.id)!.id]);
     const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
     const unsubscribe = fixture.store.onWorkspaceEvent((event) => {
       const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
@@ -703,13 +684,7 @@ describe("Organizer supervisor privilege layer", () => {
       delegatedByAgentId: leader.id,
     });
     const supervisorToken = await fixture.store.createTaskAccessToken(delegatedSupervisorTask, "owner");
-    const originalEnsure = fixture.store.ensureDelegationWakeupWithinTransaction.bind(fixture.store);
-    let ensureObservedInTransaction: boolean | null = null;
     const enqueueTransactionStates: boolean[] = [];
-    fixture.store.ensureDelegationWakeupWithinTransaction = ((input, childStatusChanges, deferredEvents) => {
-      ensureObservedInTransaction = db!.inTransaction;
-      return originalEnsure(input, childStatusChanges, deferredEvents);
-    }) as typeof fixture.store.ensureDelegationWakeupWithinTransaction;
     const unsubscribe = fixture.store.onTaskEnqueued((task) => {
       if (task.agentId === leader.id) {
         enqueueTransactionStates.push(db!.inTransaction);
@@ -724,19 +699,16 @@ describe("Organizer supervisor privilege layer", () => {
       });
       expect(response.status).toBe(200);
     } finally {
-      fixture.store.ensureDelegationWakeupWithinTransaction = originalEnsure;
       unsubscribe();
     }
 
-    expect(ensureObservedInTransaction).not.toBeNull();
-    expect(Boolean(ensureObservedInTransaction)).toBeTrue();
+    // #9: the patrol comment itself is addressed to the delegator.
+    const report=fixture.store.listMessages(delegatedSupervisorTask.issueSessionId!).find(message=>
+      message.body_md.startsWith('Organizer action:') && message.to_agent_id===leader.id);
+    expect(report).toMatchObject({message_kind:'report',wake_applied:'now',
+      task_id:fixture.store.getTurnForAttempt(delegatedSupervisorTask.id)!.id});
     expect(enqueueTransactionStates).toEqual([false]);
-    expect(fixture.store.listTasksForIssue(delegatedIssue.id).find((task) =>
-      task.agentId === leader.id && task.parentTaskId === delegatedSupervisorTask.id
-    )).toBeDefined();
-    expect(fixture.store.listIssueActivity(delegatedIssue.id).some((activity) =>
-      activity.type === "delegation_return_triggered"
-      && (activity.data as Record<string, unknown>).sourceTaskId === delegatedSupervisorTask.id
-    )).toBeTrue();
+    expect(fixture.store.listTasksForIssue(delegatedIssue.id).find(task=>task.agentId===leader.id)?.parentTaskId).toBeNull();
+
   });
 });

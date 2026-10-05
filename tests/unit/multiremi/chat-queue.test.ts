@@ -18,35 +18,20 @@ function setup() {
 const jsonHeaders = { "Content-Type": "application/json" };
 
 describe("Chat queues", () => {
-  it("claims same-millisecond inputs FIFO and refreshes provider affinity after the preceding turn", () => {
-    const { store, agent, runtime, chat } = setup();
-    const otherRuntime = store.registerRuntime({ name: "Other runtime", provider: "codex", maxConcurrency: 4 });
-    const first = store.sendChatMessage(chat.id, { content: "first input" });
-    const second = store.sendChatMessage(chat.id, { content: "later input" });
-    const third = store.sendChatMessage(chat.id, { content: "third input" });
-    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE chat_session_id = ?", [first.task.createdAt, chat.id]);
-    expect(first.queued).toBe(false);
-    expect(second.queued).toBe(true);
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
-    expect(store.listQueuedChatTasks(chat.id).map((entry) => entry.task_id)).toEqual([second.task.id, third.task.id]);
-    const projection = JSON.stringify(store.buildTaskSessionProjection(first.task.id));
-    expect(projection).not.toContain("later input");
-    expect(projection).not.toContain("third input");
-    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
-    expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.claimTask(otherRuntime.id)).toBeNull();
-    store.startTask(first.task.id);
-    store.completeTask(first.task.id, { output: "first answer", sessionId: "first-provider-session", workDir: "/tmp/first-chat" });
-    expect(store.claimTask(otherRuntime.id)).toBeNull();
-    const claimed = store.claimTask(runtime.id)!;
-    expect(claimed.id).toBe(second.task.id);
-    expect(claimed.sessionId).toBe("first-provider-session");
-    expect(claimed.workDir).toBe("/tmp/first-chat");
-    expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("delta");
-    expect(JSON.stringify(store.buildTaskSessionProjection(claimed.id))).not.toContain("third input");
-    store.startTask(second.task.id);
-    store.completeTask(second.task.id, { output: "second answer", sessionId: "second-provider-session" });
-    expect(store.claimTask(runtime.id)?.sessionId).toBe("second-provider-session");
+  it("merges same-millisecond pending inputs in message order and resumes the next round", () => {
+    const {store,agent,runtime,chat}=setup();
+    const first=store.sendChatMessage(chat.id,{content:"first input"});
+    const second=store.sendChatMessage(chat.id,{content:"later input"});
+    const third=store.sendChatMessage(chat.id,{content:"third input"});
+    expect(second.task.id).toBe(first.task.id); expect(third.task.id).toBe(first.task.id);
+    expect(store.listChatMessages(chat.id).map(message=>message.body)).toEqual(["first input","later input","third input"]);
+    expect(store.listConversationLogEntries(chat.id).filter(entry=>entry.kind==="turn")).toHaveLength(1);
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id); expect(store.claimTask(runtime.id)).toBeNull();
+    store.buildTaskSessionProjection(first.task.id);store.startTask(first.task.id);
+    store.completeTask(first.task.id,{output:"first answer",sessionId:"first-provider-session",workDir:"/tmp/first-chat"});
+    const next=store.sendChatMessage(chat.id,{content:"next round"});
+    const claimed=store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(next.task.id);expect(claimed.sessionId).toBe("first-provider-session");expect(claimed.workDir).toBe("/tmp/first-chat");
     expect(store.getAgent(agent.id)?.maxConcurrentTasks).toBe(4);
   });
 
@@ -62,12 +47,13 @@ describe("Chat queues", () => {
     const queued = store.sendChatMessage(chat.id, { content: "after retry" });
     mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = NULL WHERE id = ?", [next.task.id]);
     store.failTask(next.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow", sessionId: "unsafe-session" });
-    const retry = store.listTasks().find((task) => task.parentTaskId === next.task.id)!;
+    const retry = store.getTask(store.getTurnForAttempt(next.task.id)!.current_attempt_id!)!;
     expect(retry).toBeDefined();
     expect(retry.executionFingerprint).toBeNull();
     expect(retry.sessionId).toBeNull();
     expect(store.getPendingChatTask(chat.id)?.id).toBe(retry.id);
-    expect(store.listQueuedChatTasks(chat.id).map((task) => task.task_id)).toEqual([queued.task.id]);
+    expect(queued.task.id).toBe(next.task.id);
+    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
     const claimed = store.claimTask(runtime.id)!;
     expect(claimed.id).toBe(retry.id);
     expect(claimed.sessionId).toBeNull();
@@ -75,51 +61,9 @@ describe("Chat queues", () => {
     expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("bootstrap");
   });
 
-  it("interrupts a pending retry when prioritizing the next user input", () => {
-    const { store, runtime, chat } = setup();
-    const first = store.sendChatMessage(chat.id, { content: "original" });
-    store.claimTask(runtime.id);
-    store.startTask(first.task.id);
-    const followUp = store.sendChatMessage(chat.id, { content: "urgent" });
-    store.failTask(first.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow" });
-    const retry = store.listTasks().find((task) => task.parentTaskId === first.task.id)!;
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(retry.id);
-    expect(store.prioritizeQueuedChatTask(chat.id, followUp.task.id)).toEqual({ task_id: followUp.task.id, active_task_id: retry.id });
-    expect(store.getTask(retry.id)?.status).toBe("cancelled");
-    expect(store.getTask(retry.id)?.prompt).toBe("original");
-    expect(store.listChatMessages(chat.id).find((message) => message.id === first.message.id)?.body).toBe("original");
-    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
-    expect(store.claimTask(runtime.id)?.id).toBe(followUp.task.id);
-  });
-
-  it("edits pending input atomically, cancels removed inputs, and prioritizes on the server", () => {
-    const { store, runtime, chat } = setup();
-    const first = store.sendChatMessage(chat.id, { content: "first" });
-    const second = store.sendChatMessage(chat.id, { content: "second" });
-    const third = store.sendChatMessage(chat.id, { content: "third" });
-    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
-    store.startTask(first.task.id);
-    store.appendTaskMessages(first.task.id, [{ type: "text", content: "Partial output" }]);
-    const edited = store.updateQueuedChatTask(chat.id, second.task.id, "  revised second  ");
-    expect(edited).toMatchObject({ task_id: second.task.id, content: "revised second", attachment_ids: [] });
-    expect(store.getTask(second.task.id)?.prompt).toBe("revised second");
-    expect(store.listChatMessages(chat.id).find((entry) => entry.id === second.message.id)?.body).toBe("revised second");
-    expect(() => store.updateQueuedChatTask(chat.id, first.task.id, "cannot change running")).toThrow("no longer queued");
-    const events: string[] = [];
-    store.onTaskEvent(({ type, task }) => { if (type === "task:cancelled") events.push(task.id); });
-    expect(store.prioritizeQueuedChatTask(chat.id, third.task.id)).toEqual({ task_id: third.task.id, active_task_id: first.task.id });
-    expect(store.getTask(first.task.id)?.status).toBe("cancelled");
-    expect(store.listTaskMessages(first.task.id)[0]?.content).toBe("Partial output");
-    expect(events).toEqual([first.task.id]);
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(third.task.id);
-    expect(store.listPendingChatTasks().map((task) => task.id)).toEqual([third.task.id]);
-    store.removeQueuedChatTasks(chat.id, second.task.id);
-    expect(store.getTask(second.task.id)?.status).toBe("cancelled");
-    expect(store.getTask(second.task.id)?.prompt).toBe("revised second");
-    expect(store.listChatMessages(chat.id).some((entry) => entry.id === second.message.id)).toBe(false);
-    expect(store.claimTask(runtime.id)?.id).toBe(third.task.id);
-    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
-  });
+  // #3: per-input task priority/edit/delete operations retired with merged turns.
+  // Canonical message ownership, edits, deletion and resend FIFO are covered
+  // below on SQLite and PostgreSQL through the public message API.
 
   it("preserves explicit runtime and session input on tasks created outside Chat messages", () => {
     const { store, agent, runtime, chat } = setup();
@@ -151,7 +95,7 @@ describe("Chat queues", () => {
       store.startTask(sent.task.id);
       store.completeTask(sent.task.id, { output: `answer ${index}`, sessionId: `session-${index}` });
     }
-    expect(store.getChatSession(chat.id)?.unreadCount).toBe(2);
+    expect(store.getChatSession(chat.id)?.unreadCount).toBe(1);
     expect(store.getChatSession(chat.id)?.lastMessage).toMatchObject({ content: "answer 1", role: "assistant" });
     store.markChatSessionRead(chat.id);
     expect(store.getChatSession(chat.id)?.unreadCount).toBe(0);
@@ -276,10 +220,8 @@ describe("Chat queues", () => {
       });
     });
     expect(store.deleteChatSession(chat.id)).toBe(true);
-    expect(observed).toEqual([
-      { deleted: true, statuses: ["cancelled", "cancelled"] },
-      { deleted: true, statuses: ["cancelled", "cancelled"] },
-    ]);
+    expect(second.task.id).toBe(first.task.id);
+    expect(observed).toEqual([{deleted:true,statuses:["cancelled","cancelled"]}]);
     expect(store.getTask(second.task.id)?.chatSessionId).toBe(chat.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(() => store.sendChatMessage(chat.id, { content: "late" })).toThrow("Chat session not found");
@@ -293,9 +235,9 @@ describe("Chat queues", () => {
     store.startTask(first.task.id);
     store.completeTask(first.task.id, { output: "answer", sessionId: "ordered-session" });
     const answer = store.listChatMessages(chat.id)[1]!;
-    db!.run("UPDATE multiremi_chat_messages SET id = ? WHERE id = ?", ["msg_z_first", first.message.id]);
-    db!.run("UPDATE multiremi_chat_messages SET id = ? WHERE id = ?", ["msg_a_answer", answer.id]);
-    db!.run("UPDATE multiremi_chat_messages SET created_at = ? WHERE chat_session_id = ?", [first.message.createdAt, chat.id]);
+    db!.run("UPDATE multiremi_conversation_log SET id = ? WHERE id = ?", ["msg_z_first", first.message.id]);
+    db!.run("UPDATE multiremi_conversation_log SET id = ? WHERE id = ?", ["msg_a_answer", answer.id]);
+    db!.run("UPDATE multiremi_conversation_log SET created_at = ? WHERE session_id = ?", [first.message.createdAt, chat.id]);
     expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual(["first", "answer"]);
     expect(store.getChatSession(chat.id)?.lastMessage?.content).toBe("answer");
     const app = createMultiremiApp({ store });
@@ -303,21 +245,15 @@ describe("Chat queues", () => {
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
   });
 
-  it("migrates legacy Chat order once and continues the sequence after reopening", () => {
-    const { chat } = setup();
-    db!.run("INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, 'user', 'legacy user', ?)", ["msg_z_legacy", chat.id, "2026-01-01T00:00:00.000Z"]);
-    db!.run("INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, 'assistant', 'legacy answer', ?)", ["msg_a_legacy", chat.id, "2026-01-01T00:00:00.001Z"]);
-    db!.run("DELETE FROM multiremi_schema_migrations WHERE id = '20260905_chat_message_sequence'");
-    db!.run("DROP INDEX idx_multiremi_chat_messages_session_sequence");
-    db!.run("ALTER TABLE multiremi_chat_messages DROP COLUMN sequence");
-    db!.run("ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence");
-    const migrated = new MultiremiStore(db!);
-    expect(migrated.listChatMessages(chat.id).map((message) => message.body)).toEqual(["legacy user", "legacy answer"]);
-    expect(migrated.getChatSession(chat.id)?.lastMessage?.content).toBe("legacy answer");
-    migrated.sendChatMessage(chat.id, { content: "new input" });
-    expect(db!.query("SELECT sequence FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY sequence").all(chat.id)).toEqual([{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }]);
-    const reopened = new MultiremiStore(db!);
-    expect(reopened.listChatMessages(chat.id).map((message) => message.body)).toEqual(["legacy user", "legacy answer", "new input"]);
+  it("continues canonical Chat sequence after reopening", () => {
+    const {store,agent,chat}=setup();
+    for(const [role,body] of [["user","legacy user"],["assistant","legacy answer"]] as const) store.sendMessage({session_id:chat.id,sender:role==="assistant"?{type:"agent",id:agent.id}:{type:"member",id:"mem_local_local"},to:{type:"none"},body_md:body,message_kind:role==="assistant"?"reply":"request",wake_requested:"inbox_only"});
+    const migrated=new MultiremiStore(db!);
+    expect(migrated.listChatMessages(chat.id).map(message=>message.body)).toEqual(["legacy user","legacy answer"]);
+    migrated.sendChatMessage(chat.id,{content:"new input"});
+    const rows=db!.query("SELECT seq FROM multiremi_conversation_log WHERE session_id=? AND kind='message' ORDER BY seq").all(chat.id) as {seq:number}[];
+    expect(rows.map(row=>row.seq)).toEqual([1,2,3]);
+    expect(new MultiremiStore(db!).listChatMessages(chat.id).map(message=>message.body)).toEqual(["legacy user","legacy answer","new input"]);
   });
 
   it("uses workspace headers for Chat requests and preserves explicit workspace precedence", async () => {

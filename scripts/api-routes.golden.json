@@ -12154,7 +12154,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -12199,7 +12199,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -12245,7 +12245,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 3,
+            "revision": 2,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -14176,7 +14176,7 @@
             },
             "execution_scope": ""
           },
-          "revision": 3,
+          "revision": 2,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": null,
@@ -20669,7 +20669,7 @@
               "reactions": [],
               "attachments": []
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null
@@ -20714,7 +20714,7 @@
           }
         ],
         "head_seq": 4,
-        "log_version": 7,
+        "log_version": 6,
         "has_more_before": false,
         "has_more_after": false,
         "prev_entry_created_at": null
@@ -20774,7 +20774,7 @@
             "metadata": {
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -21086,6 +21086,7 @@
             "status": "pending",
             "wake_source": "platform_to_owner",
             "wake_seq": 1,
+            "trigger_message_id": "cmt_yy6thkeq1n3e",
             "input_from_seq": null,
             "input_to_seq": null,
             "waiting_on_message_id": null,
@@ -21104,24 +21105,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_95b5dwter7av",
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot {{title}}",
             "created_at": "<timestamp>",
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_yy6thkeq1n3e",
-            "trigger_summary": "Snapshot {{title}}",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_bbo9f1dxazyr",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_yy6thkeq1n3e"
+            "legacy_prompt": null
           },
           {
             "id": "tsk_8rcx9z88woyu",
@@ -21132,6 +21120,7 @@
             "status": "pending",
             "wake_source": "platform_to_owner",
             "wake_seq": 1,
+            "trigger_message_id": "cmt_r4ic9doizq3q",
             "input_from_seq": null,
             "input_to_seq": null,
             "waiting_on_message_id": null,
@@ -21150,24 +21139,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_58aij4tcn1m0",
             "workspace_id": "local",
-            "legacy_prompt": "snapshot run",
             "created_at": "<timestamp>",
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_r4ic9doizq3q",
-            "trigger_summary": "snapshot run",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_8rcx9z88woyu",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_r4ic9doizq3q"
+            "legacy_prompt": null
           },
           {
             "id": "tsk_1ut6x0i244sp",
@@ -21178,6 +21154,7 @@
             "status": "pending",
             "wake_source": "human_sender",
             "wake_seq": 1,
+            "trigger_message_id": "msg_aunci5sv8e5p",
             "input_from_seq": null,
             "input_to_seq": null,
             "waiting_on_message_id": null,
@@ -21196,24 +21173,11 @@
             "requesting_user_profile_description": null,
             "issue_id": null,
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot chat message",
             "created_at": "<timestamp>",
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": null,
-            "trigger_comment_id": null,
-            "trigger_summary": null,
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": null,
-            "assignment_source_event_id": null,
-            "chat_queue_order": 1,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "msg_aunci5sv8e5p"
+            "legacy_prompt": null
           },
           {
             "id": "tsk_lnktpkuv95wd",
@@ -21224,6 +21188,7 @@
             "status": "awaiting_human",
             "wake_source": "human_sender",
             "wake_seq": 6,
+            "trigger_message_id": "cmt_mz6wv4q14dqz",
             "input_from_seq": null,
             "input_to_seq": null,
             "waiting_on_message_id": "hrq_snapshot_waiting",
@@ -21242,24 +21207,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_snapshot",
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot comment body",
             "created_at": "<timestamp>",
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_mz6wv4q14dqz",
-            "trigger_summary": "Snapshot comment body",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_lnktpkuv95wd",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_mz6wv4q14dqz"
+            "legacy_prompt": null
           },
           {
             "id": "tsk_snapshot",
@@ -21270,6 +21222,7 @@
             "status": "completed",
             "wake_source": "human_sender",
             "wake_seq": 1,
+            "trigger_message_id": "cmt_5nc7q2rsknx9",
             "input_from_seq": 0,
             "input_to_seq": 1,
             "waiting_on_message_id": "hrq_snapshot",
@@ -21288,24 +21241,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_snapshot",
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot prompt",
             "created_at": "<timestamp>",
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_5nc7q2rsknx9",
-            "trigger_summary": "Snapshot prompt",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_snapshot",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_5nc7q2rsknx9"
+            "legacy_prompt": null
           }
         ],
         "next_cursor": null
@@ -25905,7 +25845,7 @@
           "metadata": {
             "execution_scope": ""
           },
-          "revision": 2,
+          "revision": 1,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": null,
@@ -25952,7 +25892,7 @@
             "metadata": {
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -25998,7 +25938,7 @@
           "metadata": {
             "execution_scope": ""
           },
-          "revision": 2,
+          "revision": 1,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": null,
@@ -26042,7 +25982,7 @@
           "metadata": {
             "execution_scope": ""
           },
-          "revision": 3,
+          "revision": 2,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": null,
@@ -26082,11 +26022,11 @@
           "render_version": "md-a9442f26e49a14bc",
           "resolved_at": "<timestamp>",
           "resolved_by_type": "member",
-          "resolved_by_id": "mem_local_local",
+          "resolved_by_id": "local",
           "metadata": {
             "execution_scope": ""
           },
-          "revision": 4,
+          "revision": 3,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": null,
@@ -26107,7 +26047,7 @@
             "commentId": "msg_jez2ujdp6d5n",
             "workspaceId": "local",
             "actorType": "member",
-            "actorId": "mem_local_local",
+            "actorId": "local",
             "emoji": "+1",
             "createdAt": "<timestamp>"
           }
@@ -26145,11 +26085,11 @@
           "render_version": "md-a9442f26e49a14bc",
           "resolved_at": "<timestamp>",
           "resolved_by_type": "member",
-          "resolved_by_id": "mem_local_local",
+          "resolved_by_id": "local",
           "metadata": {
             "execution_scope": ""
           },
-          "revision": 5,
+          "revision": 4,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "deleted_at": "<timestamp>",
@@ -26160,7 +26100,7 @@
               "commentId": "msg_jez2ujdp6d5n",
               "workspaceId": "local",
               "actorType": "member",
-              "actorId": "mem_local_local",
+              "actorId": "local",
               "emoji": "+1",
               "createdAt": "<timestamp>"
             }
@@ -26210,7 +26150,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -26255,7 +26195,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 2,
+            "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -26301,7 +26241,7 @@
               },
               "execution_scope": ""
             },
-            "revision": 3,
+            "revision": 2,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "deleted_at": null,
@@ -26349,6 +26289,7 @@
             "status": "awaiting_human",
             "wake_source": "human_sender",
             "wake_seq": 6,
+            "trigger_message_id": "cmt_mz6wv4q14dqz",
             "input_from_seq": null,
             "input_to_seq": null,
             "waiting_on_message_id": "hrq_snapshot_waiting",
@@ -26367,24 +26308,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_snapshot",
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot comment body",
             "created_at": "<timestamp>",
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_mz6wv4q14dqz",
-            "trigger_summary": "Snapshot comment body",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_lnktpkuv95wd",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_mz6wv4q14dqz"
+            "legacy_prompt": null
           },
           {
             "id": "tsk_snapshot",
@@ -26395,6 +26323,7 @@
             "status": "completed",
             "wake_source": "human_sender",
             "wake_seq": 1,
+            "trigger_message_id": "cmt_5nc7q2rsknx9",
             "input_from_seq": 0,
             "input_to_seq": 1,
             "waiting_on_message_id": "hrq_snapshot",
@@ -26413,24 +26342,11 @@
             "requesting_user_profile_description": null,
             "issue_id": "iss_snapshot",
             "workspace_id": "local",
-            "legacy_prompt": "Snapshot prompt",
             "created_at": "<timestamp>",
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "runtime_workspace_id": null,
-            "task_kind": "direct",
-            "issue_session_generation": 1,
-            "trigger_comment_id": "cmt_5nc7q2rsknx9",
-            "trigger_summary": "Snapshot prompt",
-            "max_attempts": 3,
-            "issue_creation_restricted": 0,
-            "assignment_event_id": "tsk_snapshot",
-            "assignment_source_event_id": null,
-            "chat_queue_order": 0,
-            "bound_issue_log_to_seq": null,
-            "bound_issue_log_delivered_seq": null,
-            "trigger_message_id": "cmt_5nc7q2rsknx9"
+            "legacy_prompt": null
           }
         ],
         "next_cursor": null
@@ -26522,7 +26438,7 @@
                 "execution_scope": "",
                 "delivery_turn_id": "tsk_snapshot"
               },
-              "revision": 3,
+              "revision": 2,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "deleted_at": null,
@@ -26671,7 +26587,7 @@
       "path": "/api/turns/tsk_snapshot/retry",
       "status": 403,
       "body": {
-        "error": "supervisor task credential required",
+        "error": "supervisor or related controller task credential required",
         "code": "organizer_supervisor_required"
       }
     },

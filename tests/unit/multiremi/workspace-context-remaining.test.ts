@@ -140,46 +140,34 @@ describe("remaining workspace authorization", () => {
     expect(firstPage.status).toBe(200);
     const first = await firstPage.json();
     expect(first.items).toHaveLength(1);
-    expect(first.has_more).toBe(true);
+    expect(first.next_cursor).not.toBeNull();
     const secondPage = await app.request("/api/inbox"+`?limit=1&cursor=${encodeURIComponent(first.next_cursor)}`, { headers });
     expect(secondPage.status).toBe(200);
     const second = await secondPage.json();
     expect(second.items).toHaveLength(1);
-    expect(second.has_more).toBe(false);
+    expect(second.next_cursor).toBeNull();
     expect([...first.items, ...second.items].map((item: { id: string }) => item.id).sort()).toEqual(expectedIds);
     const summary = await app.request("/api/inbox", { headers });
     expect(summary.status).toBe(200);
-    expect(await summary.json()).toEqual({ unread: 2, attention: 0 });
+    expect((await summary.json()).unread_count).toBe(2);
     const count = await app.request("/api/inbox", { headers });
     expect(count.status).toBe(200);
-    expect(await count.json()).toEqual({ count: 2 });
+    expect((await count.json()).unread_count).toBe(2);
     const denied = await app.request("/api/inbox/read", { method: "POST", headers , body: JSON.stringify({ session_id: store.getMessage(old.id)?.session_id ?? old.id }) });
     expect(denied.status).toBe(404);
   });
 
-  for (const action of ["mark-all-read", "archive-all", "archive-all-read", "archive-completed"]) {
-    it(`keeps old workspace notifications unchanged during ${action} after a member moves`, async () => {
-      const { app, store, headers, old, selected } = await setupMovedInboxMember();
-      const all = [old, ...selected];
-      if (action === "archive-all-read") {
-        for (const item of all) store.markInboxItemRead(item.id);
-      }
-      if (action === "archive-completed") {
-        for (const item of all) store.updateIssue(item.issueId!, { status: "done" });
-      }
-      const previous = store.getInboxItem(old.id);
-      const response = await app.request(`/api/inbox/${action}`, { method: "POST", headers });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ count: 2 });
-      expect(store.getInboxItem(old.id)).toEqual(previous);
-      for (const item of selected) {
-        expect(store.getInboxItem(item.id)).toMatchObject({ read: true, archived: action !== "mark-all-read" });
-      }
-      const count = await app.request("/api/inbox", { headers });
-      expect(count.status).toBe(200);
-      expect(await count.json()).toEqual({ count: 0 });
-    });
-  }
+  // #4: notification archival and bulk-cleanup no longer exist. Read-all is
+  // a per-reader cursor operation and must preserve the other workspace.
+  it("keeps old workspace messages unread when reading all in the selected workspace",async()=>{
+    const {app,store,headers,old,selected}=await setupMovedInboxMember();
+    const previous=store.getInboxItem(old.id);
+    const response=await app.request("/api/inbox/read",{method:"POST",headers,body:JSON.stringify({all:true})});
+    expect(response.status).toBe(200);
+    expect(store.getInboxItem(old.id)).toEqual(previous);
+    for(const item of selected)expect(store.getInboxItem(item.id)?.read).toBe(true);
+    expect((await (await app.request("/api/inbox",{headers})).json()).unread_count).toBe(0);
+  });
 
   it("resolves a legacy local user's membership inside the selected team", async () => {
     const store = createStore();
@@ -255,24 +243,25 @@ describe("remaining workspace authorization", () => {
     const { store, workspace, foreign, other, app, headers } = await setup();
     const victim = seedInbox(store, foreign.id, other.id);
     const selectedHeaders = { ...headers, "X-Workspace-ID": workspace.id };
-    for (const path of ["/api/inbox"+`?memberId=${victim.member.id}`, `/api/inbox?member_id=${victim.member.id}`]) {
+    for (const path of ["/api/inbox"+`?member_id=${victim.member.id}`, `/api/inbox?member_id=${victim.member.id}`]) {
       expect((await app.request(path, { headers: selectedHeaders })).status).toBe(404);
     }
-    for (const prefix of ["/api/inbox", "/api/inbox"]) {
-      for (const action of ["read", "archive"]) {
-        expect((await app.request(`${prefix}/${victim.item.id}/${action}`, { method: "POST", headers: selectedHeaders })).status).toBe(404);
-      }
-    }
+    // #4: cursor operations replace per-notification archive/read actions.
+    const forged = await app.request(`/api/inbox/read?member_id=${victim.member.id}`, {
+      method: "POST", headers: selectedHeaders,
+      body: JSON.stringify({session_id:store.getMessage(victim.item.id)!.session_id}),
+    });
+    expect(forged.status).toBe(404);
     expect(store.countUnreadInboxItems(victim.member.id)).toBe(1);
     expect(store.listInboxItems(victim.member.id)).toHaveLength(1);
   });
 
-  it("rejects selecting another workspace's own notification and preserves repeated archive", async () => {
+  it("rejects another workspace conversation and keeps repeated cursor reads idempotent", async () => {
     const { store, user, first, workspace, app, headers } = await setup();
     const inbox = seedInbox(store, first.id, user.id);
-    expect((await app.request("/api/inbox/read", { method: "POST", headers: { ...headers, "X-Workspace-ID": workspace.id } , body: JSON.stringify({ session_id: store.getMessage(inbox.item.id)?.session_id ?? inbox.item.id }) })).status).toBe(404);
+    expect((await app.request("/api/inbox/read", { method: "POST", headers: { ...headers, "X-Workspace-ID": workspace.id } , body: JSON.stringify({ session_id: store.getMessage(inbox.item.id)?.session_id ?? inbox.item.id }) })).status).toBe(400);
     for (const path of ["/api/inbox/read", "/api/inbox/read"]) {
-      expect((await app.request(path, { method: "POST", headers: { ...headers, "X-Workspace-ID": first.id } })).status).toBe(200);
+      expect((await app.request(path, { method: "POST", headers: { ...headers, "X-Workspace-ID": first.id }, body:JSON.stringify({session_id:store.getMessage(inbox.item.id)!.session_id}) })).status).toBe(200);
     }
   });
 
@@ -286,7 +275,7 @@ describe("remaining workspace authorization", () => {
     }
   });
 
-  it("lets task credentials use their owner's inbox only in the bound workspace", async () => {
+  it("keeps task credentials on the agent inbox and in the bound workspace", async () => {
     const { store, user, first, workspace, app, headers } = await setup();
     const inbox = seedInbox(store, workspace.id, user.id);
     const otherInbox = seedInbox(store, first.id, user.id);
@@ -296,8 +285,9 @@ describe("remaining workspace authorization", () => {
     const taskHeaders = { ...headers, Authorization: `Bearer ${token}`, "X-Workspace-ID": workspace.id };
     const listed = await app.request("/api/inbox", { headers: taskHeaders });
     expect(listed.status).toBe(200);
-    expect((await listed.json()).items.map((item: { id: string }) => item.id)).toEqual([inbox.item.id]);
+    expect((await listed.json()).items.map((item: { id: string }) => item.id)).not.toContain(inbox.item.id);
     expect((await app.request("/api/inbox/read", { method: "POST", headers: taskHeaders , body: JSON.stringify({ session_id: store.getMessage(inbox.item.id)?.session_id ?? inbox.item.id }) })).status).toBe(200);
+    expect(store.countUnreadInboxItems(inbox.member.id)).toBe(1);
     const escapedHeaders = { ...taskHeaders, "X-Workspace-ID": first.id };
     expect((await app.request("/api/inbox", { headers: escapedHeaders })).status).toBe(404);
     expect((await app.request("/api/inbox/read", { method: "POST", headers: escapedHeaders , body: JSON.stringify({ session_id: store.getMessage(otherInbox.item.id)?.session_id ?? otherInbox.item.id }) })).status).toBe(404);
@@ -308,12 +298,13 @@ describe("remaining workspace authorization", () => {
     const { store, workspace, other, app, headers } = await setup();
     store.createWorkspaceMember({ workspaceId: workspace.id, userId: other.id, name: "Other member" });
     const victim = seedInbox(store, workspace.id, other.id);
-    for (const prefix of ["/api/inbox", "/api/inbox"]) {
-      const response = await app.request(`${prefix}/${victim.item.id}/read`, { method: "POST", headers: { ...headers, "X-Workspace-ID": workspace.id } });
-      expect(response.status).toBe(404);
-    }
+    const response = await app.request(`/api/inbox/read?member_id=${victim.member.id}`, {
+      method: "POST", headers: { ...headers, "X-Workspace-ID": workspace.id },
+      body:JSON.stringify({session_id:store.getMessage(victim.item.id)!.session_id}),
+    });
+    expect(response.status).toBe(404);
     expect(store.countUnreadInboxItems(victim.member.id)).toBe(1);
-    const master = await app.request("/api/inbox/read", { method: "POST", headers: { Authorization: "Bearer root-secret" } , body: JSON.stringify({ session_id: store.getMessage(victim.item.id)?.session_id ?? victim.item.id }) });
+    const master = await app.request(`/api/inbox/read?member_id=${victim.member.id}`, { method: "POST", headers: { Authorization: "Bearer root-secret", "X-Workspace-ID": workspace.id } , body: JSON.stringify({ session_id: store.getMessage(victim.item.id)?.session_id ?? victim.item.id }) });
     expect(master.status).toBe(200);
     expect(store.countUnreadInboxItems(victim.member.id)).toBe(0);
   });

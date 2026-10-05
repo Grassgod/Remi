@@ -51,7 +51,7 @@ try {
   const golden = {
     name: "MUL-385 issue detail first-screen responses",
     capturedAt: "<timestamp>",
-    source: "pre-optimization implementation (parent commit of agent/MUL-385)",
+    source: "MUL-508 canonical Turn/message projection; original fixture scale and SQL budgets",
     fixture: {
       issueId: fixture.issueId,
       issueKey: fixture.issueKey,

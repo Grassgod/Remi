@@ -1,3 +1,5 @@
+import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
+import type { SqlDatabase } from '@multiremi/store/db/postgres.js';
 import { attemptMessagesPath } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
@@ -6,7 +8,7 @@ import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { uploadedAttachmentPath, uploadRoot } from "@multiremi/api/helpers/uploads.js";
 import { FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER } from "@multiremi/contracts/types.js";
 import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
-import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
+import { resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 
 let previousKey: string | undefined;
 beforeEach(() => {
@@ -20,8 +22,12 @@ afterEach(() => {
   resetMultiremiTestEnv();
 });
 
+pendingTurnBackendTests("Chat attachment transport", backendFixture => {
+let db: SqlDatabase;
 async function fixture() {
-  const store = createLocalStore();
+  const current = backendFixture();
+  const store = current.store;
+  db = current.db;
   const agent = store.createAgent({ name: "Attachments", provider: "codex", workspaceId: "local" });
   store.registerRuntime({ id: "rt_files", name: "Files", provider: "codex", workspaceId: "local", daemonId: "files-daemon" });
   store.heartbeatRuntime("rt_files", { supportsFeishuBotConfig: true });
@@ -56,7 +62,7 @@ function sendForm(files: File[], content = "") {
   return form;
 }
 
-describe("Chat attachment transport", () => {
+
   it("links inbound bytes before claim, serves CJK filenames to only that Chat task, and retains active steer attachments", async () => {
     const f = await fixture();
     const response = await f.upload();
@@ -156,8 +162,8 @@ describe("Chat attachment transport", () => {
     const disallowed = await send([new File(["ok"], "ok.html"), new File(["source"], "repo.ts")]);
     expect(disallowed.status).toBe(400);
     expect((await disallowed.json()).error).toContain("not allowed");
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get()).toEqual({ n: 0 });
-    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get()).toEqual({ n: 0 });
+    expect(Number(db!.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get().n)).toBe(0);
+    expect(Number(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get().n)).toBe(0);
     expect(existsSync(uploadRoot()) ? readdirSync(uploadRoot(), { recursive: true }) : []).toHaveLength(0);
     expect((await send([new File(["x"], "x.html")], "MASTER")).status).toBe(403);
     const nonChat = f.store.createTask({ agentId: f.agent.id, prompt: "issue task" });
@@ -180,8 +186,8 @@ describe("Chat attachment transport", () => {
         // Bun 1.3.14's multipart parser drops empty File.name. The API must
         // identify its field number; the CLI still reports the local filename.
         expect((await response.json()).error).toBe(`Attachment file #${files.length} is empty (0 bytes)`);
-        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get()).toEqual({ n: 0 });
-        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get()).toEqual({ n: 0 });
+        expect(Number(db!.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get().n)).toBe(0);
+        expect(Number(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get().n)).toBe(0);
         expect(f.store.listChatMessages(submitted.chatSessionId).filter(message => message.role === "assistant")).toHaveLength(0);
         expect(existsSync(uploadRoot()) ? readdirSync(uploadRoot(), { recursive: true }) : []).toHaveLength(0);
       }
@@ -192,7 +198,7 @@ describe("Chat attachment transport", () => {
     const f = await fixture();
     const session = f.store.createChatSession({ agentId: f.agent.id, creatorId: "local" });
     const task = f.store.createTask({ agentId: f.agent.id, chatSessionId: session.id, prompt: "attachment" });
-    const message = f.store.appendChatMessageWithinTransaction({ chatSessionId: session.id, taskId: task.id, role: "user", body: "" });
+    const message = db!.transaction(() => f.store.appendChatMessageWithinTransaction({ chatSessionId: session.id, taskId: task.id, role: "user", body: "" }))();
     const attachment = f.store.createAttachment({ filename: "web.pdf", url: "/api/attachments/att_web/content", chatSessionId: session.id, chatMessageId: message.id });
     expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(task.id)!).chat_message_attachments)
       .toMatchObject([{ id: attachment.id, filename: "web.pdf" }]);

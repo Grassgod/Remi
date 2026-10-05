@@ -36,13 +36,8 @@ describe("Side session delegation boundary", () => {
     });
 
     expect(store.listTasksForIssue(issue.id).map((task) => task.id)).toEqual([sideTask.id]);
-    expect(store.listIssueActivity(issue.id).find((activity) => activity.type === "comment_mention_skipped")?.data)
-      .toMatchObject({
-        reason: "side_session_delegation_blocked",
-        commentId: comment.id,
-        sourceTaskId: sideTask.id,
-        agentId: teammate.id,
-      });
+    expect(store.getMessage(comment.id)).toMatchObject({wake_applied:"next_turn",wake_reason:"source_side_session",to_agent_id:teammate.id,task_id:store.getTurnForAttempt(sideTask.id)!.id});
+
   });
 
   it("also blocks deferred squad mentions from a side task posted into the main session", () => {
@@ -58,8 +53,8 @@ describe("Side session delegation boundary", () => {
 
     expect(repo.dispatchDeferredAgentCommentMentions(comment.id)).toEqual([]);
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
-    expect(store.listIssueActivity(issue.id).find((activity) => activity.type === "comment_mention_skipped")?.data)
-      .toMatchObject({ reason: "side_session_delegation_blocked", commentId: comment.id });
+    expect(store.getMessage(comment.id)?.wake_reason).toBe("self");
+
   });
 
   it.each(["snapshot", "follow"] as const)("still dispatches human rich mentions in a %s side session", (inheritMode) => {
@@ -105,7 +100,7 @@ describe("Side session delegation boundary", () => {
       issueSessionId: main.id,
       parentTaskId: sideTask.id,
       prompt: "Bypass delegation metadata.",
-    })).toThrow("Agent delegation is not allowed from side sessions");
+    })).toThrow("source_side_session");
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
   });
 
@@ -125,8 +120,11 @@ describe("Side session delegation boundary", () => {
             prompt: "Dispatch another task.",
           })),
         });
-        expect(response.status).toBe(403);
-        expect(await response.json()).toEqual({ error: "Agent delegation is not allowed from side sessions" });
+        expect(response.status).toBe(200);
+        const data=await response.json();
+        expect(data.message.wake_applied).toBe(targetAgentId===sideTask.agentId?"inbox_only":"next_turn");
+        expect(data.message.wake_reason).toBe(targetAgentId===sideTask.agentId?"self":"source_side_session");
+        expect(data.turn_id).toBeUndefined();
       }
     }
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
@@ -163,8 +161,8 @@ describe("Side session delegation boundary", () => {
         headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
         body: JSON.stringify(requestMessageBody(store, { agentId: leader.id, prompt: "Start another copy of me." }, { type: "role", ref: "issue_owner" })),
       });
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: "Agent delegation is not allowed from side sessions" });
+      expect(response.status).toBe(200);
+      expect((await response.json()).message.wake_reason).toBe("self");
     }
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
   });
@@ -223,8 +221,13 @@ describe("Side session delegation boundary", () => {
         headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
         body: JSON.stringify(request.body),
       });
-      expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: "Agent delegation is not allowed from side sessions" });
+      if(request.path.endsWith("/messages")){
+        expect(response.status).toBe(200);
+        expect((await response.json()).turn_id).toBeUndefined();
+      }else{
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({error:"Agent delegation is not allowed from side sessions"});
+      }
       expect(store.getIssue(issue.id)).toEqual(before);
       expect(store.getTask(sideTask.id)?.status).toBe("running");
       expect(store.listTasksForIssue(issue.id).map((task) => task.id)).toEqual([sideTask.id]);
@@ -366,9 +369,10 @@ describe("Side session delegation boundary", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(sideTask.id);
     store.startTask(sideTask.id);
     store.failTask(sideTask.id, { error: "Runtime disconnected", failureReason: "runtime_recovery" });
-    const retried = store.listTasksForIssue(issue.id).find((task) => task.parentTaskId === sideTask.id);
+    const retried = store.getTask(store.getTurnForAttempt(sideTask.id)!.current_attempt_id!)!;
+    expect(retried.id).not.toBe(sideTask.id);
+    expect(store.getTurnForAttempt(retried.id)?.id).toBe(store.getTurnForAttempt(sideTask.id)?.id);
     expect(retried).toMatchObject({
-      parentTaskId: sideTask.id,
       agentId: sideTask.agentId,
       issueSessionId: side.id,
       delegatedByAgentId: null,

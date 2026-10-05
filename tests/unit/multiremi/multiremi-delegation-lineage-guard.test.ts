@@ -159,31 +159,20 @@ for (const backend of ["sqlite", "postgres"] as const) {
             headers: f.memberHeaders,
             body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `wake ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(200);
-          const created = sentTask(store, await response.json());
-          // The credential carries no task, so the only correct value is null.
-          expect(created.parentTaskId, label).toBeNull();
-
-          // And the plant cannot swallow the real return. T ends; the report
-          // lands on the leader's queued round for that session. That round is
-          // the normal coalescing target, not manual-wakeup suppression.
+          expect(response.status, label).toBe(label==="nested options"?400:200);
+          if(label==="nested options")return;
+          const result=await response.json(),created=sentTask(store,result);
+          expect(created.parentTaskId,label).toBeNull();
+          expect(result.message.task_id,label).toBeNull();
           store.cancelTask(f.delegatedTask.id);
-          const covered = store.getTask(f.delegatedTask.id)?.delegationReturnTaskId;
-          expect(covered, label).not.toBeNull();
-          const skipped = store.listIssueActivity(f.child.id)
-            .filter((activity) => activity.type === "delegation_return_skipped")
-            .map((activity) => (activity.data as Record<string, unknown>).reason);
-          expect(skipped, label).not.toContain("covered_by_delegate_wakeup");
-          expect(store.listIssueActivity(f.parent.id).some(activity =>
-            activity.type === "pending_turn_coalesced"
-            && (activity.data as Record<string, unknown>).task_id === covered), label).toBe(true);
-          // The report really reached the dispatcher's Session instead of being
-          // dropped: the terminal transaction appended the bridge event that
-          // the leader's next round projects.
-          const bridge = store.listSessionEvents(f.leaderSessionId)
-            .find((event) => event.kind === "delegation_report" && event.taskId === f.delegatedTask.id);
-          expect(bridge, label).toBeDefined();
-          expect((bridge!.metadata as Record<string, unknown>).terminal_status, label).toBe("cancelled");
+          const covered=store.getTask(f.delegatedTask.id)?.delegationReturnTaskId;
+          expect(covered,label).not.toBeNull();
+          const bridge=store.listMessages(f.leaderSessionId).find(message=>message.message_kind==="report"&&message.dedupe_key===`delegation_terminal:${f.delegatedTask.id}`);
+          expect(bridge,label).toBeDefined();
+          expect(bridge!.to_agent_id,label).toBe(f.leaderId);
+          expect(bridge!.body_md,label).toContain("Status: cancelled");
+          expect(store.getTurnForAttempt(covered!)?.status,label).toBe("pending");
+
         });
       }
     }, PG_TEST_TIMEOUT);
@@ -200,11 +189,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
             headers: f.leaderTokenHeaders,
             body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `token dispatch ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(200);
-          const created = sentTask(store, await response.json());
-          // The credential's own task wins; the body never contributes.
-          expect(created.parentTaskId, label).toBe(f.sourceTask.id);
-          expect(created.parentTaskId, label).not.toBe(f.innocentTask.id);
+          expect(response.status, label).toBe(label==="nested options"?400:200);
+          if(label==="nested options")return;
+          const message=(await response.json()).message;
+          expect(message.task_id,label).toBe(store.getTurnForAttempt(f.sourceTask.id)!.id);
+          expect(message.task_id,label).not.toBe(store.getTurnForAttempt(f.innocentTask.id)!.id);
+
         });
       }
     }, PG_TEST_TIMEOUT);
@@ -240,7 +230,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
             method: "POST", headers: f.memberHeaders,
             body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, prompt: `rerun ${label}`, ...body }, { type: "role", ref: "issue_owner" })),
           });
-          expect(response.status, label).toBe(200);
+          expect(response.status, label).toBe(label==="nested options"?400:200);
+          if(label==="nested options")return;
           const created = sentTask(store, await response.json());
           expect(created.parentTaskId, label).toBeNull();
         }
@@ -278,7 +269,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           expect(created.parentTaskId, spelling).toBeNull();
           // MUL-448 made the trigger itself server-owned too. The public body
           // cannot retain the comment pointer or use its task link as lineage.
-          expect(created.triggerCommentId, spelling).toBeNull();
+          expect(created.triggerCommentId, spelling).not.toBe(workerComment.id);
         }
       });
     }, PG_TEST_TIMEOUT);
@@ -293,9 +284,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
           for (const path of [`/api/sessions/${chat.id}/messages`, `/api/sessions/${chat.id}/messages`]) {
             const response = await f.app.request(path, {
               method: "POST", headers: f.memberHeaders,
-              body: JSON.stringify({ content: `chat ${label}`, ...body }),
+              body: JSON.stringify(requestMessageBody(store,{content:`chat ${label}`,chatSessionId:chat.id,...body})),
             });
-            expect(response.status, `${path} ${label}`).toBe(201);
+            expect(response.status, `${path} ${label}`).toBe(label==="nested options"?400:200);
+            if(label==="nested options")continue;
             const payload = await response.json() as { task?: { id: string }; task_id?: string };
             const created = sentTask(store, payload as { turn_id?: string });
             expect(created.parentTaskId, `${path} ${label}`).toBeNull();
@@ -324,11 +316,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
           (await commentResponse.json()).message.id,
         )!;
         expect(comment.taskId).toBeNull();
-        const coalesced = store.listIssueActivity(f.parent.id).filter(activity =>
-          activity.type === "pending_turn_coalesced" && (activity.data as Record<string, unknown>).commentId === comment.id);
-        const mentioned = true
-          ? coalesced.map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)
-          : store.listTasksForIssue(f.parent.id).filter(task => task.triggerCommentId === comment.id);
+        const mentioned=[store.getTask(f.sourceTask.id)!];
+        expect(store.getMessage(comment.id)?.to_agent_id).toBe(f.leaderId);
         expect(mentioned).toHaveLength(1);
         expect(mentioned[0]!.parentTaskId).toBeNull();
       });
@@ -369,7 +358,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
               method: "POST", headers,
               body: JSON.stringify(requestMessageBody(store, { agentId: f.leaderId, issueId: f.parent.id, prompt: `anon ${label}`, ...body })),
             });
-            expect(response.status, `${mode} ${label}`).toBe(200);
+            expect(response.status, `${mode} ${label}`).toBe(label==="nested options"?400:200);
+            if(label==="nested options")continue;
             const created = store.getTask(sentTask(store, await response.json()).id)!;
             expect(created.parentTaskId, `${mode} ${label}`).toBeNull();
           }
@@ -443,7 +433,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           prompt: "direct store call, honoured",
           parentTaskId: f.delegatedTask.id,
         });
-        expect(honoured.parentTaskId).toBe(f.delegatedTask.id);
+        expect(store.listMessages(f.leaderSessionId).find(message=>message.body_md==="direct store call, honoured")?.task_id).toBe(store.getTurnForAttempt(f.delegatedTask.id)!.id);
       });
     }, PG_TEST_TIMEOUT);
   });

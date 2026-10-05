@@ -13,7 +13,7 @@ async function setup() {
   }
   const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
   const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
-  const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local", visibility: "workspace" });
   const issue = store.createIssue({ title: "Team issue", workspaceId: "local", createdBy: "alice" });
   const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
   const privateTask = store.sendChatMessage(chat.id, { content: "PRIVATE_CHAT_PROMPT" }).task;

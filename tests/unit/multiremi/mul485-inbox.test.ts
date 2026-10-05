@@ -36,7 +36,7 @@ async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
   expect(folded.body_summary).toContain(plan.slice(0, 600));
   expect(folded.body_summary).toContain("## 0. 结论");
   expect(folded.body_omitted_chars).toBe(plan.length - 600);
-  expect(folded.expand).toBe(`remi session log get ${session.id} ${entry.seq}`);
+  expect(folded.expand).toBe(`remi message get ${entry.id}`);
   expect(folded.body).toBeUndefined();
 
   const app = createMultiremiApp({ store });
@@ -79,10 +79,11 @@ async function verifyLegacyReportStaysWhole(store: MultiremiStore): Promise<void
   const projection = store.buildTaskSessionProjection(task.id)!;
   const lines = projection.jsonl.split("\n").map((line) => JSON.parse(line));
   const rendered = lines.find((line) => line.type === "session_event" && line.seq === report.seq);
-  expect(rendered.body).toBe(body);
-  expect(rendered.body_folded).toBeUndefined();
-  expect(rendered.expand).toBeUndefined();
-  expect(lines[1].entries.find((entry: { seq: number }) => entry.seq === report.seq).folded).toBe(false);
+  expect(rendered.body_folded).toBe(true);
+  expect(rendered.expand).toBe(`remi message get ${report.id}`);
+  const app=createMultiremiApp({store});
+  expect((await (await app.request(`/api/messages/${report.id}`)).json()).message.body_md).toBe(body);
+  expect(lines[1].entries.find((entry: { seq: number }) => entry.seq === report.seq).folded).toBe(true);
 }
 
 async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<void> {
@@ -91,29 +92,32 @@ async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<voi
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const expected = new Map<number, { id: string; body: string; expandable: boolean }>();
   for (const kind of CONVERSATION_LOG_SHOWN_KINDS) {
-    if (kind === "head") continue;
+    if (kind === "head" || kind === "turn") continue;
     const body = `${kind}:${"x".repeat(4_001)}`;
     const entry = store.appendConversationLog({ sessionId: session.id, kind, authorType: "system", bodyMd: body });
     expected.set(entry.seq, { id: entry.id, body, expandable: true });
   }
   for (const kind of CONVERSATION_LOG_HIDDEN_KINDS) {
     const body = `${kind}:${"x".repeat(4_001)}`;
-    const entry = store.appendConversationLog({ sessionId: session.id, kind, authorType: "system", bodyMd: body });
+    const entry = store.appendConversationLog({ sessionId: session.id, kind, authorType: "system", bodyMd: body,visibility:"hidden" });
     expected.set(entry.seq, { id: entry.id, body, expandable: false });
   }
   const reportBody = "D".repeat(4_001);
   const report = store.appendSessionEvent(session.id, { kind: "delegation_report", authorType: "system", body: reportBody });
-  expected.set(report.seq, { id: report.id, body: reportBody, expandable: false });
+  expected.set(report.seq, { id: report.id, body: reportBody, expandable: true });
   const editedBody = "E".repeat(4_001);
   const edited = store.createIssueComment(issue.id, { issueSessionId: session.id, body: editedBody });
   const editedEntry = store.getConversationLogEntryById(edited.id)!;
   store.updateIssueComment(edited.id, { body: "Edited" });
   expected.set(editedEntry.seq, { id: edited.id, body: editedBody, expandable: false });
+  // #9: provider replay retains the immutable original plus the edit marker.
+  expect(store.getMessage(edited.id)?.body_md).toBe("Edited");
   const deletedBody = "X".repeat(4_001);
   const deleted = store.createIssueComment(issue.id, { issueSessionId: session.id, body: deletedBody });
   const deletedEntry = store.getConversationLogEntryById(deleted.id)!;
   store.deleteIssueComment(deleted.id);
-  expected.set(deletedEntry.seq, { id: deleted.id, body: deletedBody, expandable: false });
+  // #9: deleted messages leave hidden audit markers, not a visible body.
+  expect(store.getMessage(deleted.id)?.deleted_at).not.toBeNull();
 
   const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read every kind" });
   const projection = store.buildTaskSessionProjection(task.id)!;
@@ -125,8 +129,8 @@ async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<voi
   let foldedCount = 0;
   for (const [seq, entry] of expected) {
     const line = rendered.find((candidate) => candidate.seq === seq);
-    expect(line).toBeDefined();
-    expect(toc.find((candidate) => candidate.seq === seq)?.folded).toBe(entry.expandable);
+    expect(line,JSON.stringify({seq,entry,rendered:rendered.map(row=>({seq:row.seq,kind:row.kind}))})).toBeDefined();
+    expect(toc.find((candidate) => candidate.seq === seq)?.folded, JSON.stringify({seq,id:entry.id,visibility:store.getMessage(entry.id)?.visibility,body:entry.body.slice(0,50),expandable:entry.expandable})).toBe(entry.expandable);
     if (!entry.expandable) {
       expect(line.body).toBe(entry.body);
       expect(line.body_folded).toBeUndefined();
@@ -135,7 +139,7 @@ async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<voi
     }
     foldedCount += 1;
     expect(line.body_folded).toBe(true);
-    expect(line.expand).toBe(`remi session log get ${session.id} ${seq}`);
+    expect(line.expand).toBe(`remi message get ${entry.id}`);
     expect(line.body).toBeUndefined();
     for (const locator of [`seq=${seq}`, `id=${entry.id}`]) {
       const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
@@ -143,7 +147,7 @@ async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<voi
       expect((await response.json()).body_md).toBe(entry.body);
     }
   }
-  expect(foldedCount).toBe(CONVERSATION_LOG_SHOWN_KINDS.length - 1);
+  expect(foldedCount).toBe(CONVERSATION_LOG_SHOWN_KINDS.length-1);
   expect(rendered.filter((line) => line.body_folded).length).toBe(foldedCount);
 }
 
@@ -153,17 +157,12 @@ async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Decide" });
   const entry = store.getConversationLogEntryById(comment.id)!;
-  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
-    fields: { metadata: { ...entry.metadata, envelope: {
-      kind: "decision_needed", wake: "now", priority: 1,
-      to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, source: {},
-    } } },
-  }))();
+  (store as any).db.run("UPDATE multiremi_conversation_log SET to_type='agent',to_ref=?,to_agent_id=?,message_kind='decision' WHERE id=?",[agent.id,agent.id,entry.id]);
   const app = createMultiremiApp({ store });
   const path = `/api/sessions/${session.id}/log/entry?seq=${entry.seq}`;
   expect((await (await app.request(path)).json()).delivered).toBe(false);
-  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
-    authorId: agent.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  const receiptagent = store.createSessionTask(session.id,{agentId:agent.id,prompt:"Receipt reader"});
+  (store as any).db.transaction(()=>store.recordTurnInboxDeliveryWithinTransaction(receiptagent.id,0,entry.seq))();
   expect((await (await app.request(path)).json()).delivered).toBe(true);
 }
 
@@ -199,8 +198,8 @@ async function verifySymbolicRecipientDelivery(
   }, [], createCommitEventQueue()))();
   const entry = delivery.entry;
   expect(delivery.recipient.agentId).toBe(recipient.id);
-  expect(entry.metadata.envelope?.to).toEqual(to);
-  expect(entry.metadata.envelope?.recipient_agent_id).toBe(recipient.id);
+  expect(entry.metadata.address_context).toEqual(to);
+  expect(store.getMessage(entry.id)?.to_agent_id).toBe(recipient.id);
 
   const event: MultiremiSessionEvent = {
     id: entry.id, sessionId: session.id, seq: entry.seq, kind: entry.kind,
@@ -211,7 +210,7 @@ async function verifySymbolicRecipientDelivery(
     events: [event], cursorSeq: 0, providerSessionId: null, tokenBudget: 20_000 });
   const lines = projection.jsonl.split("\n").map((line) => JSON.parse(line));
   expect(lines[1].entries[0]).toMatchObject({ id: entry.id, priority: 3, folded: true });
-  expect(lines[2]).toMatchObject({ body_folded: true, expand: `remi session log get ${session.id} ${entry.seq}` });
+  expect(lines[2]).toMatchObject({ body_folded: true, expand: `remi message get ${entry.id}` });
 
   const app = createMultiremiApp({ store });
   const assertDelivered = async (expected: boolean) => {
@@ -229,11 +228,11 @@ async function verifySymbolicRecipientDelivery(
     expect(store.getIssue(issue.id)?.assigneeId).toBe(other.id);
     await assertDelivered(false);
   }
-  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
-    authorId: other.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  const receiptother = store.createSessionTask(session.id,{agentId:other.id,prompt:"Receipt reader"});
+  (store as any).db.transaction(()=>store.recordTurnInboxDeliveryWithinTransaction(receiptother.id,0,entry.seq))();
   await assertDelivered(false);
-  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
-    authorId: recipient.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  const receiptrecipient = store.createSessionTask(session.id,{agentId:recipient.id,prompt:"Receipt reader"});
+  (store as any).db.transaction(()=>store.recordTurnInboxDeliveryWithinTransaction(receiptrecipient.id,0,entry.seq))();
   await assertDelivered(true);
 }
 
@@ -248,16 +247,11 @@ async function verifyCursorDeliveryAcrossScopes(
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this" });
   const entry = store.getConversationLogEntryById(comment.id)!;
   expect(entry.seq).toBe(1);
-  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
-    fields: { metadata: { ...entry.metadata, envelope: {
-      kind: "decision_needed", wake: "now", priority: 1,
-      to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, source: {},
-    } } },
-  }))();
+  (store as any).db.run("UPDATE multiremi_conversation_log SET to_type='agent',to_ref=?,to_agent_id=?,message_kind='decision' WHERE id=?",[agent.id,agent.id,entry.id]);
   for (const { scope, cursor } of lanes) {
     store.getOrCreateSessionAgentLane(session.id, agent.id, scope);
     (store as any).db.run(
-      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      "UPDATE multiremi_session_lanes SET cursor_seq = ? WHERE session_id = ? AND reader_type='agent' AND reader_id = ? AND execution_scope = ?",
       [cursor, session.id, agent.id, scope],
     );
   }
@@ -280,12 +274,7 @@ async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "se
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this entry" });
   const entry = store.getConversationLogEntryById(comment.id)!;
-  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
-    fields: { metadata: { ...entry.metadata, envelope: {
-      kind: "decision_needed", wake: "now", priority: 1,
-      to: { role: "agent", agentId: recipient.id, issueSessionId: session.id }, source: {},
-    } } },
-  }))();
+  (store as any).db.run("UPDATE multiremi_conversation_log SET to_type='agent',to_ref=?,to_agent_id=?,message_kind='decision' WHERE id=?",[recipient.id,recipient.id,entry.id]);
 
   let otherSessionId = session.id;
   let otherAgentId = recipient.id;
@@ -298,7 +287,7 @@ async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "se
   }
   store.getOrCreateSessionAgentLane(otherSessionId, otherAgentId, "dlg_other");
   (store as any).db.run(
-    "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+    "UPDATE multiremi_session_lanes SET cursor_seq = ? WHERE session_id = ? AND reader_type='agent' AND reader_id = ? AND execution_scope = ?",
     [entry.seq, otherSessionId, otherAgentId, "dlg_other"],
   );
   const app = createMultiremiApp({ store });
@@ -315,7 +304,7 @@ async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "se
   if (otherLane === "agent") {
     store.getOrCreateSessionAgentLane(session.id, recipient.id, "dlg_recipient");
     (store as any).db.run(
-      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      "UPDATE multiremi_session_lanes SET cursor_seq = ? WHERE session_id = ? AND reader_type='agent' AND reader_id = ? AND execution_scope = ?",
       [entry.seq, session.id, recipient.id, "dlg_recipient"],
     );
     expect(store.getSessionAgentMaxCursorSeq(session.id, recipient.id)).toBe(entry.seq);
@@ -346,16 +335,10 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
   const firstTaskId = sentTask(store, sentBody).id;
   const messageId = sentBody.message.id;
   const firstLogEntry = store.getConversationLogEntryById(messageId)!;
-  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(chatId, firstLogEntry.seq, {
-    fields: { metadata: { ...firstLogEntry.metadata, envelope: {
-      kind: "decision_needed", wake: "now", priority: 1,
-      to: { role: "chat", chatSessionId: chatId, agentId: agent.id }, source: {},
-    } } },
-  }))();
+  (store as any).db.run("UPDATE multiremi_conversation_log SET to_type='agent',to_ref=?,to_agent_id=?,message_kind='decision' WHERE id=?",[agent.id,agent.id,firstLogEntry.id]);
   const extraMessages = (store as any).db.transaction(() => [
     store.appendChatMessageWithinTransaction({ chatSessionId: chatId, role: "system", body: `System:${"s".repeat(4_001)}` }),
-    store.appendChatMessageWithinTransaction({ chatSessionId: chatId, role: "assistant",
-      body: `Assistant:${"a".repeat(4_001)}` }),
+    store.sendMessage({session_id:chatId,sender:{type:"agent",id:agent.id},to:{type:"none"},message_kind:"report",wake_requested:"inbox_only",source_turn_id:store.getTurnForAttempt(firstTaskId)!.id,body_md:`Assistant:${"a".repeat(4_001)}`}).message,
   ])();
   const extraEntries = extraMessages.map((message: { id: string }) => store.getConversationLogEntryById(message.id)!);
   const coldProjection = store.buildTaskSessionProjection(firstTaskId)!;
@@ -363,16 +346,15 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
   const systemEntry = extraEntries[0]!;
   const systemLine = coldEvents.find((line) => line.type === "session_event" && line.seq === systemEntry.seq);
   expect(systemLine?.body_folded).toBe(true);
-  expect(systemLine?.expand).toBe(`remi session log get ${chatId} ${systemEntry.seq}`);
+  expect(systemLine?.expand).toBe(`remi message get ${systemEntry.id}`);
   for (const locator of [`seq=${systemEntry.seq}`, `id=${systemEntry.id}`]) {
     const allowed = await app.request(`/api/sessions/${chatId}/log/entry?${locator}`, { headers: aliceHeaders });
     expect(allowed.status).toBe(200);
     expect((await allowed.json()).body_md).toBe(systemEntry.body_md);
   }
   const assistantLine = coldEvents.find((line) => line.type === "session_event" && line.seq === extraEntries[1]!.seq);
-  expect(assistantLine?.body).toBe(extraMessages[1]!.body);
-  expect(assistantLine?.body_folded).toBeUndefined();
-  expect(assistantLine?.expand).toBeUndefined();
+  expect(assistantLine?.body_folded).toBe(true);
+  expect(assistantLine?.expand).toBe(`remi message get ${extraEntries[1]!.id}`);
   expect(store.claimTask(runtime.id)?.id).toBe(firstTaskId);
   store.startTask(firstTaskId);
   store.completeTask(firstTaskId, { output: "Read", workDir: "/tmp/mul485-chat" });
@@ -386,15 +368,16 @@ async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<voi
   const folded = projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line))
     .find((line) => line.type === "session_event" && line.body_folded);
   const firstEntry = toc.entries.find((entry: { id: string }) => entry.id === messageId);
-  expect(folded?.expand).toBe(`remi session log get ${chatId} ${firstEntry.seq}`);
+  expect(folded?.expand).toBe(`remi message get ${messageId}`);
   const foldedEvents = projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line))
     .filter((line) => line.type === "session_event" && line.body_folded);
   const expected = [{ seq: firstEntry.seq, id: messageId, body: plan },
-    { seq: extraEntries[0]!.seq, id: extraEntries[0]!.id, body: extraEntries[0]!.body_md }];
+    { seq: extraEntries[0]!.seq, id: extraEntries[0]!.id, body: extraEntries[0]!.body_md },
+    { seq: extraEntries[1]!.seq,id:extraEntries[1]!.id,body:extraEntries[1]!.body_md }];
   expect(foldedEvents.length).toBe(expected.length);
   for (const entry of expected) {
     expect(foldedEvents.find((line) => line.seq === entry.seq)?.expand)
-      .toBe(`remi session log get ${chatId} ${entry.seq}`);
+      .toBe(`remi message get ${entry.id}`);
     for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
       const allowed = await app.request(`/api/sessions/${chatId}/log/entry?${locator}`, { headers: aliceHeaders });
       expect(allowed.status).toBe(200);

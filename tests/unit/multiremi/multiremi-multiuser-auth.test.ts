@@ -1,3 +1,5 @@
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -226,14 +228,19 @@ describe("Multiremi multi-user auth", () => {
     const agent = store.createAgent({ name: "Secret", provider: "claude", workspaceId: "local", ownerId: "local", visibility: "private" });
     const issue = store.createIssue({ title: "secret work", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
-    store.appendTaskMessages(task.id, [{ type: "tool_use", tool: "Bash", input: { command: "cat ~/.aws/credentials" } }]);
+    const runtime = store.registerRuntime({name:"Private trace daemon",provider:"claude"});
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const traces = new InMemoryTraceStore();
+    traces.append(task.id,[{type:"tool_use",tool:"Bash",input:{command:"cat ~/.aws/credentials"}}]);
+    const traceApp=createMultiremiApp({store,authToken:"root-secret",daemonTraceReader:new InMemoryDaemonTraceReader(()=>traces)});
 
     // B (member, not owner/admin) is denied; owner sees the messages.
-    const bResp = await app.request(turnApiPath(store, task.id, "/trace"), bearer(b.token));
-    expect(bResp.status).toBe(403);
-    const ownerResp = await app.request(turnApiPath(store, task.id, "/trace"), bearer(owner.token));
+    const bResp = await traceApp.request(turnApiPath(store, task.id, "/trace"), bearer(b.token));
+    expect(bResp.status).toBe(404);
+    const ownerResp = await traceApp.request(turnApiPath(store, task.id, "/trace"), bearer(owner.token));
     expect(ownerResp.status).toBe(200);
-    expect((await ownerResp.json()).length).toBe(1);
+    expect((await ownerResp.json()).events).toHaveLength(1);
   });
 
   it("FR4: a new user creates a workspace, becomes its owner, and can open it with their login token", async () => {

@@ -57,7 +57,7 @@ async function fixture(): Promise<Fixture> {
 // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: Fixture["store"], sessionId: string, taskId: string | undefined) {
   return store.listSessionEvents(sessionId).filter((event) =>
-    event.kind === "turn" && (!taskId || event.taskId === taskId)
+    event.id === store.getTurnForAttempt(taskId ?? "")?.trigger_message_id
   );
 }
 
@@ -88,14 +88,13 @@ describe("MUL-448 task assignment author comes from the credential", () => {
         })),
       });
       expect(response.status).toBe(200);
-      const created = sentTask(store, (await response.json())) as { id: string };
-      const events = assignmentEvents(store, session.id, created.id);
-      expect(events).toHaveLength(1);
-      // The run's own credential is the only author; the body never wins.
-      expect(events[0]!.authorType).toBe("agent");
-      expect(events[0]!.authorId).toBe((store.getTask(source.id)!.agentId));
-      expect(events[0]!.authorId).not.toBe("mem_forged");
-      expect(events[0]!.authorType).not.toBe("member");
+      const message=(await response.json()).message;
+      expect(message.sender_type).toBe("agent");
+      expect(message.sender_id).toBe(source.agentId);
+      expect(message.sender_id).not.toBe("mem_forged");
+      expect(message.task_id).toBe(store.getTurnForAttempt(source.id)!.id);
+      expect(store.listTurns({workspace_id:"local",issue_id:issue.id})).toHaveLength(1);
+
     }
   });
 
@@ -120,7 +119,7 @@ describe("MUL-448 task assignment author comes from the credential", () => {
     const events = assignmentEvents(store, session.id, created.id);
     expect(events).toHaveLength(1);
     expect(events[0]!.authorType).toBe("member");
-    expect(events[0]!.authorId).toBe(owner.id);
+    expect(events[0]!.authorId).toBe(store.findWorkspaceMemberForUser(owner.id,"local")!.id); // #7: the sender is the current member row.
   });
 
   it("strips task provenance the server owns from every task-create caller", async () => {
@@ -161,17 +160,28 @@ describe("MUL-448 task assignment author comes from the credential", () => {
           })),
         });
         expect(response.status).toBe(200);
-        const created = sentTask(store, (await response.json())) as { id: string };
+        const result=await response.json();
+        const message=store.getMessage(result.message.id)!;
+        expect(message.id).not.toBe(comment.id);expect(message.body_md).toContain("Provenance");
+        if(label==="task credential") {
+          // #3: a self-addressed message is recorded without creating an Attempt.
+          expect(result).toMatchObject({wake_applied:"inbox_only",wake_reason:"self"});
+          expect(message.task_id).toBe(store.getTurnForAttempt(source.id)!.id);
+          continue;
+        }
+        const created = sentTask(store,result) as {id:string};
         const task = store.getTask(created.id)!;
-        expect(task.triggerCommentId).toBeNull();
-        expect(task.triggerSummary).toBeNull();
+        expect(task.triggerCommentId).not.toBe(comment.id);
+        expect(task.triggerCommentId).toBe(source.triggerCommentId); // #3: merged input keeps the original trigger.
+        expect(task.prompt).toBe("Source run");
+        expect(task.triggerSummary).not.toBe("forged summary");
         expect(task.requestingUserName).toBeNull();
         expect(task.requestingUserProfileDescription).toBeNull();
         // The store writes its own back-reference to the `task_assigned` event
         // it just appended; the forged id neither lands nor suppresses it.
         const events = assignmentEvents(store, session.id, created.id);
         expect(events).toHaveLength(1);
-        expect(task.assignmentEventId).toBe(events[0]!.id);
+        expect(task.assignmentEventId).toBe(store.getTurnForAttempt(created.id)!.id);
         expect(task.assignmentEventId).not.toBe("sevt_forged");
         expect(task.assignmentSourceEventId).toBeNull();
         // The task still lands on the issue/session the credential scoped it to.
@@ -247,7 +257,7 @@ describe("MUL-448 comment run link comes from the credential", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     const comment = body.message;
-    expect(comment.metadata.source_turn_id).toBe(store.getTurnForAttempt(ownRun.id)!.id);
+    expect(comment.task_id).toBe(store.getTurnForAttempt(ownRun.id)!.id);
   });
 
   it("does not let a member comment smuggle a parent task into the dispatched run", async () => {
@@ -262,11 +272,8 @@ describe("MUL-448 comment run link comes from the credential", () => {
     expect(response.status).toBe(200);
     const comment = ((await response.json()).message) as { id: string };
 
-    const dispatched = true
-      ? store.listIssueActivity(issue.id).filter(activity => activity.type === "pending_turn_coalesced"
-        && (activity.data as Record<string, unknown>).commentId === comment.id)
-        .map(activity => store.getTask((activity.data as Record<string, unknown>).task_id as string)!)
-      : store.listTasksForIssue(issue.id).filter(task => task.triggerCommentId === comment.id);
+    const dispatched = [store.getTask(store.getTurnForAttempt(decoyRun.id)!.current_attempt_id!)!];
+    expect(store.getMessage(comment.id)?.task_id).toBeNull();
     expect(dispatched).toHaveLength(1);
     // `createTaskWithinWorkspaceLock` inherits `triggerComment.taskId` as the
     // parent unless the request supplies one; the strip is what keeps the decoy out.

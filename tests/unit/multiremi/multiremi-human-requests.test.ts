@@ -28,7 +28,7 @@ describe("task human requests (store)", () => {
       ownerId: "local",
     });
     const agent = store.createAgent({ name: "Issue Flow Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Verify task-driven issue states", status: "in_review" });
+    const issue = store.createIssue({ title: "Verify task-driven issue states", assigneeType:"agent", assigneeId:agent.id, status: "in_review" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Implement it" });
 
     expect(store.getIssue(issue.id)?.status).toBe("todo");
@@ -51,6 +51,7 @@ describe("task human requests (store)", () => {
     });
     expect(store.getIssue(issue.id)?.status).toBe("in_progress");
 
+    store.buildTaskSessionProjection(task.id);
     store.completeTask(task.id, { output: "Ready for acceptance" });
     expect(store.getIssue(issue.id)?.status).toBe("in_review");
 
@@ -127,7 +128,7 @@ describe("task human requests (store)", () => {
       ownerId: "local",
     });
     const agent = store.createAgent({ name: "Review Failure Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Review failure" });
+    const issue = store.createIssue({ title: "Review failure", assigneeType:"agent", assigneeId:agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Try it" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -139,18 +140,19 @@ describe("task human requests (store)", () => {
     expect(store.getIssue(issue.id)?.status).toBe("blocked");
   });
 
-  it("derives issue state from sibling tasks when one task is cancelled", () => {
+  it("merges pending owner inputs and cancels the shared turn", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Parallel Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Parallel work" });
+    const issue = store.createIssue({ title: "Parallel work", assigneeType:"agent", assigneeId:agent.id });
     const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Second" });
 
+    expect(second.id).toBe(first.id);
     store.cancelTask(first.id);
-    expect(store.getTask(second.id)?.status).toBe("queued");
+    expect(store.getTask(second.id)?.status).toBe("cancelled");
     expect(store.getIssue(issue.id)?.status).toBe("todo");
 
-    store.cancelTask(second.id);
+    expect(()=>store.cancelTask(second.id)).toThrow("terminal");
     expect(store.getIssue(issue.id)?.status).toBe("todo");
   });
 
@@ -158,7 +160,7 @@ describe("task human requests (store)", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Cancel runtime", provider: "claude" });
     const agent = store.createAgent({ name: "Cancel Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Cancel execution only" });
+    const issue = store.createIssue({ title: "Cancel execution only", assigneeType:"agent", assigneeId:agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Start" });
 
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);

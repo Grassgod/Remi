@@ -1,4 +1,4 @@
-import { requestMessageBody, taskRequestPath, mutateExecutionFixture } from "./unified-test-paths.js";
+import { requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { refreshPreNativeCodexSnapshots } from "@multiremi/relay/discovery.js";
@@ -114,11 +114,11 @@ describe("Codex native model membership through API and dispatch", () => {
       store.onTaskEvent(({ type, task }) => { if (type === "task:dispatch") dispatches.push(task.id); });
       await discover();
 
-      const created = await app.request(taskRequestPath(store, {  }), { method: "POST", headers,
+      const created = await app.request(taskRequestPath(store, {issueId:store.createIssue({title:"Dispatch fixture",workspaceId:"local"}).id}), { method: "POST", headers,
         body: JSON.stringify(requestMessageBody(store, { agentId: saved.id, prompt: "Must retain requested model", priority: 100 })),
       });
       expect(created.status).toBe(200);
-      const { task: waiting } = await created.json();
+      const waiting = sentTask(store,await created.json());
       expect(store.runtimeCanRunAgent(runtime, saved)).toBe(false);
       const emptyClaim = await taskOfferResponse(store, runtime.id);
       expect(emptyClaim.status).toBe(200);

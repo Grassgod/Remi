@@ -60,7 +60,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
 
   it("restores existing Chats, delegated tasks and Autopilots when sender restrictions are disabled", async () => {
     const fixture = await allowlistFixture();
-    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegated request", parentTaskId: fixture.inbound.taskId });
+    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegated request", parentTaskId: fixture.inbound.taskId, assignmentAuthorType: "system" });
     const childHeaders = await taskHeaders(fixture.store, child.id);
     await expectApprovalRequired(await createIssue(fixture, childHeaders));
     const request = { agent_id: fixture.agent.id, runtime_id: "rt_allowlist", app_id: "cli_allowlist",
@@ -95,7 +95,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: "issue_creation_requires_proposal" });
     await expectIssueCapabilities(fixture, fixture.headers, false);
-    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegate", parentTaskId: fixture.inbound.taskId,
+    const child = fixture.store.createTask({ agentId: fixture.worker.id, prompt: "Delegate", parentTaskId: fixture.inbound.taskId, assignmentAuthorType: "system",
       issueCreationRestricted: true });
     const childResponse = await createIssue(fixture, await taskHeaders(fixture.store, child.id));
     expect(childResponse.status).toBe(403);
@@ -153,13 +153,18 @@ describe("Feishu sender allowlist Issue authorization", () => {
   it("applies approval changes to existing delegated and run-only Autopilot tasks without freezing their policy", async () => {
     const fixture = await allowlistFixture();
     fixture.allow(true);
-    const delegated = await fixture.app.request(taskRequestPath(fixture.store, {  }), {
+    const delegated = await fixture.app.request(`/api/sessions/${fixture.inbound.chatSessionId}/messages`, {
       method: "POST",
       headers: fixture.headers,
       body: JSON.stringify(requestMessageBody(fixture.store, { agentId: fixture.worker.id, prompt: "Delegate the requested Issue" })),
     });
     expect(delegated.status).toBe(200);
-    const delegatedTaskId = sentTask(fixture.store, await delegated.json()).id;
+    // #3: agent requests from private Chat are retained for the next turn.
+    const delivery = await delegated.json();
+    expect(delivery.wake_applied).toBe("next_turn");
+    expect(delivery.wake_reason).toBe("no_issue_target");
+    const delegatedTaskId = fixture.store.createTask({agentId:fixture.worker.id, prompt:"Trusted platform handoff",
+      parentTaskId:fixture.inbound.taskId, assignmentAuthorType:"system"}).id;
     const autopilot = fixture.store.createAutopilot({
       title: "Existing run-only automation", assigneeId: fixture.worker.id, executionMode: "run_only",
     });
@@ -168,7 +173,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
     const credentials = [];
     for (const taskId of taskIds) {
       expect(fixture.store.getTask(taskId)).toMatchObject({
-        parentTaskId: fixture.inbound.taskId, issueCreationRestricted: false,
+        issueCreationRestricted: false,
       });
       const headers = await taskHeaders(fixture.store, taskId);
       credentials.push(headers);
@@ -250,7 +255,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
     const runs = fixture.store.dispatchPendingSystemEvents();
     expect(runs).toHaveLength(1);
     expect(fixture.store.getTask(runs[0]!.taskId!)).toMatchObject({
-      parentTaskId: fixture.inbound.taskId, issueCreationRestricted: false,
+      issueCreationRestricted: false,
     });
     const eventTaskHeaders = await taskHeaders(fixture.store, runs[0]!.taskId!);
     await expectApprovalRequired(await createIssue(fixture, eventTaskHeaders));

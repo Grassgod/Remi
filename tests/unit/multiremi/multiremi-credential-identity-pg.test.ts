@@ -114,7 +114,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
   // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
   function assignmentEvents(sessionId: string, taskId: string) {
     return store.listSessionEvents(sessionId)
-      .filter((event) => event.kind === "turn" && event.taskId === taskId);
+      .filter((event) => event.id === taskId);
   }
 
   it("B1: a member's forged X-Agent-ID loses to the credential", async () => {
@@ -129,11 +129,11 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
       body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG session task" })),
     });
     expect(taskResponse.status).toBe(200);
-    const taskId = sentTask(store, await taskResponse.json()).id;
+    const taskId = (await taskResponse.json()).message.id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("member");
-    expect(assigned[0]!.authorId).toBe(fixture.ownerId);
+    expect(store.getWorkspaceMember(assigned[0]!.authorId!)?.userId).toBe(fixture.ownerId);
 
     const sessionsPath = "/api/issues/" + issue.id + "/sessions";
     const sessionResponse = await fixture.app.request(sessionsPath, {
@@ -173,10 +173,13 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     };
     const tokenResponse = await fixture.app.request(sessionTasksPath, {
       method: "POST", headers: tokenHeaders,
-      body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG token session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG token session task" })),
     });
-    expect(tokenResponse.status).toBe(201);
-    const tokenTaskId = ((await tokenResponse.json()) as any).id as string;
+    expect(tokenResponse.status).toBe(200);
+    const tokenResult = await tokenResponse.json();
+    expect(tokenResult.wake_applied).toBe("inbox_only");
+    expect(tokenResult.wake_reason).toBe("self");
+    const tokenTaskId = tokenResult.message.id;
     const tokenAssigned = assignmentEvents(session.id, tokenTaskId);
     expect(tokenAssigned).toHaveLength(1);
     expect(tokenAssigned[0]!.authorType).toBe("agent");
@@ -281,7 +284,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
       },
     );
     expect(response.status).toBe(200);
-    const taskId = sentTask(store, await response.json()).id;
+    const taskId = (await response.json()).message.id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("agent");

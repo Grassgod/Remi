@@ -9,6 +9,13 @@ afterEach(resetMultiremiTestEnv);
 // The answered-window cases pin "now" so created_at / answered_at are ordered.
 afterEach(() => setSystemTime());
 
+// #1/#4: the decision itself addresses its first human recipient; additional
+// audiences receive canonical status messages rather than duplicate ledger rows.
+function decisionInbox(store:MultiremiStore,memberId:string){
+  return store.listMessageInbox(memberId,"local").items.filter(message=>
+    message.message_kind==='decision' || (message.metadata.inbox_item as any)?.type==='decision_requested');
+}
+
 async function exerciseDecisions(store: MultiremiStore): Promise<void> {
   store.ensureLocalWorkspace();
   const member = store.findWorkspaceMemberForUser("local", "local")!;
@@ -53,7 +60,7 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect(parentInbox).toContain(first.id);
     expect(parentInbox).toContain(second.id);
     expect(store.getTask(ownerTask.id)!.prompt).toBe(ownerTask.prompt);
-    expect(store.listInboxItems(member.id).filter((item) => item.type === "decision_requested")).toHaveLength(0);
+    expect(decisionInbox(store,member.id)).toHaveLength(0);
 
     const answerPath = `/api/sessions/${store.getMessage(first.id)!.session_id}/messages`;
     for (const token of [sourceToken.token, foreignToken.token]) {
@@ -72,7 +79,7 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
         answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
     });
     expect(inboxReportBody(store, sourceTask)).toContain(`decision:${first.id}`);
-    expect(store.listTasksForIssue(source.id).filter(task => task.status === "queued")).toHaveLength(1);
+    expect(store.getTurnForAttempt(sourceTask.id)).toMatchObject({status:"awaiting_human",current_attempt_id:sourceTask.id,waiting_on_message_id:second.id});
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_answered" && entry.actorType === "agent")).toBe(true);
     expect(store.listIssueActivity(source.id).some((entry) => entry.type === "decision_received")).toBe(true);
 
@@ -98,9 +105,9 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect((await request(`/api/sessions/${store.getMessage(prod.id)!.session_id}/messages`, ownerToken.token, {
       reply_to_id: prod.id, body_md: "yes", response: { reason: "r", overturn: "o" },
     })).status).toBe(403);
-    const items = store.listInboxItems(member.id).filter((item) => item.type === "decision_requested");
+    const items = decisionInbox(store,member.id);
     expect(items).toHaveLength(2);
-    expect(items.every((item) => item.severity === "action")).toBe(true);
+    expect(items.every(item => item.message_kind=== "decision" || (item.metadata.inbox_item as any)?.severity=== "action")).toBe(true);
     expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_escalated")).toBe(true);
 
     const criteriaPending = await create(source.id, sourceToken.token, "criteria", "Acceptance terms");
@@ -174,7 +181,7 @@ function decisionApi(store: MultiremiStore): DecisionApi {
       const credential = (await store.verifyAccessToken(token))!;
       const actor = credential.type === "task"
         ? { type: "agent" as const, id: credential.agentId!, taskId: credential.taskId }
-        : { type: "member" as const, id: store.findWorkspaceMemberForUser(credential.workspaceId!, credential.userId!)!.id, taskId: null };
+        : { type: "member" as const, id: store.findWorkspaceMemberForUser(credential.userId!, credential.workspaceId!)!.id, taskId: null };
       return store.createIssueDecision(issueId, input, actor);
     },
     // `app.request` is overloaded and returns a bare Response when the init is
@@ -345,7 +352,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
   const eventTypes: string[] = [];
   const unsubscribe = store.onWorkspaceEvent((event) => eventTypes.push(event.type));
   const decisionRequested = (member: { id: string }, issueId: string) =>
-    store.listInboxItems(member.id).filter((item) => item.type === "decision_requested" && item.issueId === issueId);
+    decisionInbox(store,member.id).filter(message=>store.getIssueSession(message.session_id)?.issueId===issueId);
   try {
     // Case 1, the exact QA probe: member PAT raises production_change on a
     // childless issue with no assignee and no subscribers.
@@ -357,8 +364,8 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     expect(escalated.status).toBe("escalated");
     const creatorItems = decisionRequested(creator, probe.id);
     expect(creatorItems).toHaveLength(1);
-    expect(creatorItems[0]!.severity).toBe("action");
-    expect(creatorItems[0]!.details).toMatchObject({ kind: "production_change" });
+    expect(creatorItems[0]!.message_kind).toBe("decision");
+    expect(creatorItems[0]!.metadata.decision_record).toMatchObject({ kind: "production_change",status:"escalated" });
     expect(eventTypes.filter((type) => type === "inbox:new").length).toBeGreaterThanOrEqual(1);
     expect(decisionRequested(workspaceOwner, probe.id)).toHaveLength(0);
     expect(decisionRequested(bystander, probe.id)).toHaveLength(0);
@@ -382,7 +389,8 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     });
     expect(archivedEscalated.status).toBe("escalated");
     expect(decisionRequested(workspaceOwner, archivedIssue.id)).toHaveLength(1);
-    expect(decisionRequested(archivedCreator, archivedIssue.id)).toHaveLength(0);
+    expect(store.listMessages(store.getOrCreateDefaultIssueSession(archivedIssue.id).id)
+      .filter(message=>message.to_member_id===archivedCreator.id)).toHaveLength(0);
 
     // Case 3: an explicit member subscriber suppresses the fallback entirely.
     const subscribed = store.createIssue({ title: "Fallback subscribed issue", createdBy: creator.id });

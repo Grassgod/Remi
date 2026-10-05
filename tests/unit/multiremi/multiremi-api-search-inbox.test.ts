@@ -277,23 +277,22 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const commented = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestMessageBody(store, { authorType: "member", authorId: alice.id, body: "Can you check this?" }, { type: "role", ref: "issue_owner" })),
+      body: JSON.stringify(requestMessageBody(store, { authorType: "member", authorId: alice.id, body: "Can you check this?" }, { type: "member", ref: bob.id })),
     });
     expect(commented.status).toBe(200);
 
-    const inbox = await app.request("/api/inbox"+`?memberId=${encodeURIComponent(bob.id)}`);
+    const inbox = await app.request("/api/inbox"+`?member_id=${encodeURIComponent(bob.id)}`);
     const inboxBody = await inbox.json();
     expect(inboxBody.unread_count).toBe(1);
-    expect(inboxBody.items[0].issue.key).toBe(issue.key);
-
-    const read = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: store.getMessage(inboxBody.items[0].id)?.session_id ?? inboxBody.items[0].id }) });
-    expect((await read.json()).item.read).toBe(true);
-
-    const archived = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: store.getMessage(inboxBody.items[0].id)?.session_id ?? inboxBody.items[0].id }) });
-    expect((await archived.json()).item.archived).toBe(true);
-
-    const afterArchive = await app.request("/api/inbox"+`?memberId=${encodeURIComponent(bob.id)}`);
-    expect((await afterArchive.json()).items).toHaveLength(0);
+    const message = inboxBody.items[0];
+    expect(message).toMatchObject({ session_id: store.getOrCreateDefaultIssueSession(issue.id).id, to_member_id: bob.id });
+    const readInput = { session_id: message.session_id, to_seq: message.seq };
+    const read = await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST", body: JSON.stringify(readInput) });
+    expect((await read.json()).cursor_seq).toBeGreaterThanOrEqual(message.seq);
+    const again = await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST", body: JSON.stringify(readInput) });
+    expect((await again.json()).cursor_seq).toBeGreaterThanOrEqual(message.seq);
+    const afterRead = await app.request(`/api/inbox?member_id=${bob.id}`);
+    expect((await afterRead.json()).unread_count).toBe(0);
   });
 
   // Regression (MUL-38): the web client authenticates as a USER id, but inbox
@@ -314,17 +313,17 @@ describe("Multiremi API — pins, search, and inbox", () => {
 
     // A user id must find the same rows instead of silently matching nothing.
     const byUserId = await app.request("/api/inbox?member_id=user-rev");
-    const items = await byUserId.json();
+    const { items } = await byUserId.json();
     expect(items).toHaveLength(1);
-    expect(items[0].type).toBe("comment_created");
+    expect(items[0].metadata.inbox_item.type).toBe("comment_created");
 
     const count = await app.request("/api/inbox"+`?member_id=user-rev`);
-    expect((await count.json()).count).toBe(1);
+    expect((await count.json()).unread_count).toBe(1);
 
-    const markAll = await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ all: true }) });
-    expect((await markAll.json()).count).toBe(1);
+    const markAll = await app.request("/api/inbox/read?member_id=user-rev", { method: "POST" , body: JSON.stringify({ all: true }) });
+    expect((await markAll.json()).conversations_read).toBe(1);
     const afterRead = await app.request("/api/inbox"+`?member_id=user-rev`);
-    expect((await afterRead.json()).count).toBe(0);
+    expect((await afterRead.json()).unread_count).toBe(0);
   });
 
   it("paginates the compat inbox and returns grouped counts without loading every item", async () => {
@@ -347,7 +346,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(first.items).toHaveLength(2);
     expect((first.next_cursor !== null)).toBe(true);
     expect(first.next_cursor).toBeTruthy();
-    expect(first.items.every((item: any) => item.issue?.title)).toBe(true);
+    expect(first.items.every((item: any) => item.session_id.startsWith("ises_") && item.metadata.inbox_item.type === "comment_created")).toBe(true);
 
     const secondResponse = await app.request(
       "/api/inbox"+`?member_id=user-page&limit=2&cursor=${encodeURIComponent(first.next_cursor)}`,
@@ -360,7 +359,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
 
     const summaryResponse = await app.request("/api/inbox"+`?member_id=user-page&timezone_offset=-480`);
     expect(summaryResponse.status).toBe(200);
-    expect(await summaryResponse.json()).toEqual({ unread: 3, attention: 0 });
+    expect(await summaryResponse.json()).toMatchObject({ unread_count: 3, attention_count: 0 });
   });
 
   it("does not project or count a parent moved outside the notification workspace", async () => {
@@ -424,12 +423,10 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const inboxResponse = await app.request("/api/inbox"+`?workspace_id=${workspaceA.id}`, { headers });
     expect(inboxResponse.status).toBe(200);
     const inbox = await inboxResponse.json();
-    const notification = inbox.items.find((item: any) => item.issue_id === child.id);
-    expect(notification).toMatchObject({
-      issue_parent_id: null,
-      issue_parent_key: null,
-      issue_parent_title: null,
-    });
+    const notification = inbox.items.find((item: any) => item.session_id === store.getOrCreateDefaultIssueSession(child.id).id);
+    expect(notification).toBeDefined();
+    expect(JSON.stringify(notification)).not.toContain(parent.title);
+    expect(notification.issue_parent_id).toBeUndefined();
 
     const directParent = await app.request(`/api/issues/${parent.id}?workspace_id=${workspaceB.id}`, { headers });
     expect(directParent.status).toBe(404);
@@ -457,10 +454,9 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const response = await app.request("/api/inbox"+`?member_id=${encodeURIComponent(reviewer.id)}`);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.items.find((item: any) => item.issue_id === child.id)).toMatchObject({
-      issue_parent_id: null,
-      issue_parent_key: null,
-      issue_parent_title: null,
-    });
+    const message = body.items.find((item: any) => item.session_id === store.getOrCreateDefaultIssueSession(child.id).id);
+    expect(message).toBeDefined();
+    expect(message.issue_parent_id).toBeUndefined();
+    expect(JSON.stringify(message)).not.toContain(parent.title);
   });
 });

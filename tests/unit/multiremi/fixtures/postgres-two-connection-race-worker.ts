@@ -23,7 +23,7 @@ interface RaceInput {
   prerequisiteId: string;
   agentId?: string;
   barrierPath: string;
-  role: "force" | "comment" | "rerun" | "auto";
+  role: "force" | "comment" | "rerun" | "owner_request" | "auto";
 }
 
 self.onmessage = async (message: MessageEvent<RaceInput>) => {
@@ -64,13 +64,13 @@ self.onmessage = async (message: MessageEvent<RaceInput>) => {
       });
       responseStatus = response.status;
       if (response.status !== 200) throw new Error(`unexpected comment response ${response.status}`);
-    } else if (role === "rerun") {
+    } else if (role === "rerun" || role === "owner_request") {
       if (!agentId) throw new Error("rerun role requires agentId");
       const app = createMultiremiApp({ store });
       const response = await app.request(`/api/sessions/${store.getOrCreateDefaultIssueSession(issueId).id}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ body_md: "Concurrent rerun", message_kind: "request", to: { type: "agent", ref: agentId } }),
+        body: JSON.stringify({ body_md: "Concurrent rerun", message_kind: "request", to: role === "owner_request" ? { type: "role", ref: "issue_owner" } : { type: "agent", ref: agentId } }),
       });
       responseStatus = response.status;
       if (response.status !== 200) throw new Error(`unexpected rerun response ${response.status}`);

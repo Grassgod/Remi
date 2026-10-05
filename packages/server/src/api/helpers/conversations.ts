@@ -1,14 +1,14 @@
 import type { Context } from "hono";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { denyCurrentUserWorkspaceAccess, loadChatSessionForCurrentUser, canCurrentUserAccessChatTask, canUserViewTaskMessages, createTaskAuthMemo } from "./auth-guards.js";
-import { currentTaskAccessToken, currentWorkspaceMember, currentRequestUserId } from "../wire/context.js";
+import { currentTaskAccessToken, currentWorkspaceMember, currentRequestUserId, hasVerifiedRequestIdentity } from "../wire/context.js";
 import type { SendMessageInput } from "@multiremi/contracts/unified-model.js";
 import type { TaskVisibilitySubject, TaskAuthMemo } from "./auth-guards.js";
 
 export function canAccessConversationTask(c: Context, store: MultiremiStore, task: TaskVisibilitySubject, memo?: TaskAuthMemo): boolean {
   if (task.chatSessionId) {
     const token = currentTaskAccessToken(c);
-    if (token && store.getTurnForAttempt(task.id)?.current_attempt_id !== token.taskId) return false;
+    if (token && task.id !== token.taskId) return false;
     return canCurrentUserAccessChatTask(c, store, task, memo);
   }
   return canUserViewTaskMessages(store, currentRequestUserId(c), task, memo);
@@ -140,6 +140,7 @@ export function messageActor(c: Context, store: MultiremiStore, workspaceId: str
     return { type: "agent", id: agent.id };
   }
   const member = currentWorkspaceMember(c, store, workspaceId);
+  if (!member && !hasVerifiedRequestIdentity(c)) return { type: "platform", id: null };
   return member && !member.archivedAt ? { type: "member", id: member.id }
     : c.json({ error: "active workspace member required" }, 403);
 }

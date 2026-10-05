@@ -151,7 +151,7 @@ describe("MUL-457 parent done grant", () => {
     });
     expect(forgedByAgent.status).toBe(200);
     const agentComment = await forgedByAgent.json();
-    const storedAgentComment = store.getIssueComment(agentComment.id ?? agentComment.comment?.id);
+    const storedAgentComment = store.getIssueComment(agentComment.message.id);
     expect(storedAgentComment).toMatchObject({ authorType: "agent", authorId: other.id });
     const afterAgentForgery = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
@@ -174,7 +174,7 @@ describe("MUL-457 parent done grant", () => {
     });
     expect(forgedByMember.status).toBe(200);
     const memberComment = await forgedByMember.json();
-    const storedMemberComment = store.getIssueComment(memberComment.id ?? memberComment.comment?.id);
+    const storedMemberComment = store.getIssueComment(memberComment.message.id);
     expect(storedMemberComment).toMatchObject({ authorType: "member", authorId: "local" });
     const afterMemberForgery = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),

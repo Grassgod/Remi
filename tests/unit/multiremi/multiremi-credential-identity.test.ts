@@ -64,7 +64,7 @@ async function fixture(): Promise<Fixture> {
 /** The `turn` events one task wrote into its Issue Session. */
 // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: MultiremiStore, sessionId: string, taskId: string) {
-  return store.listSessionEvents(sessionId).filter((event) => event.kind === "turn" && event.taskId === taskId);
+  return store.listSessionEvents(sessionId).filter((event) => event.id === taskId);
 }
 
 describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
@@ -80,11 +80,11 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
       body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Member session task" }, { type: "role", ref: "issue_owner" })),
     });
     expect(taskResponse.status).toBe(200);
-    const taskId = (await taskResponse.json()).id as string;
+    const taskId = (await taskResponse.json()).message.id as string;
     const assigned = assignmentEvents(store, session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("member");
-    expect(assigned[0]!.authorId).toBe(ownerId);
+    expect(assigned[0]!.authorId).toBe(store.findWorkspaceMemberForUser(ownerId,"local")!.id); // #7: canonical sender_id identifies the credential’s member row.
     expect(assigned[0]!.authorId).not.toBe(otherAgentId);
 
     // Session creation: createdByType/Id come from the credential.
@@ -165,7 +165,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
       body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Token session task" }, { type: "role", ref: "issue_owner" })),
     });
     expect(response.status).toBe(200);
-    const taskId = (await response.json()).id as string;
+    const taskId = (await response.json()).message.id as string;
     const assigned = assignmentEvents(store, session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("agent");
@@ -372,7 +372,7 @@ describe("MUL-448 anonymous compatibility mode keeps main's behaviour", () => {
         body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: `Anon session task (${label})` }, { type: "role", ref: "issue_owner" })),
       });
       expect(response.status, label).toBe(200);
-      const taskId = (await response.json()).id as string;
+      const taskId = (await response.json()).message.id as string;
       const assigned = assignmentEvents(store, session.id, taskId);
       expect(assigned, label).toHaveLength(1);
       // Historical behaviour: the header is the caller's self-declared identity.

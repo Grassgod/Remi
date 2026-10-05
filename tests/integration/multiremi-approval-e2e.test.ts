@@ -1,7 +1,7 @@
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openHotspotDatabase } from "../fixtures/multiremi/first-screen-hotspots-database.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,8 @@ import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTaskHumanRequest, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 
-let db: Database | null = null;
+let db: SqlDatabase | null = null;
+let database: Awaited<ReturnType<typeof openHotspotDatabase>> | null = null;
 let workDir: string | null = null;
 let activeHarness: Harness | null = null;
 let activeServer: ReturnType<typeof startMultiremiServer> | null = null;
@@ -29,8 +30,8 @@ afterEach(async () => {
     activeHarness = null;
     activeServer?.stop(true);
     activeServer = null;
-    db?.close();
-    db = null;
+    await database?.dispose();
+    database=null;db = null;
     if (workDir) {
       rmSync(workDir, { recursive: true, force: true });
       workDir = null;
@@ -117,7 +118,8 @@ async function startHarness(options: {
   withElicitation?: boolean;
   approvalMode?: "ask" | "auto";
 } = {}): Promise<Harness> {
-  db = openSqliteDatabase(":memory:");
+  database=await openHotspotDatabase();
+  db=database.db;
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
@@ -163,6 +165,15 @@ async function startHarness(options: {
         return chatId === task.id ? streamedText : "";
       },
       async *sendStream() {
+        // #11: a provider follows the offered range hint before responding.
+        // Unattended offers also contain folded timer/status context.
+        const current = store.getTurnForAttempt(task.id)!;
+        const credential = await store.createTaskAccessToken(store.getTask(task.id)!, "local");
+        const input = await fetch(`${baseUrl}/api/sessions/${current.session_id}/messages?from=0&to=${store.getConversationLogHead(current.session_id)!.headSeq}`, {
+          headers: { Authorization: `Bearer ${credential.token}` },
+        });
+        expect(input.status).toBe(200);
+        await input.text();
         yield { sessionUpdate: "agent_thought_chunk", content: [{ type: "text", text: "About to run a tool" }] } as any;
         // Block exactly like a real ACP agent: the stream does not advance
         // until the permission promise resolves.
@@ -195,6 +206,7 @@ async function startHarness(options: {
     approvalMode: options.approvalMode ?? "ask",
     humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? 60_000,
     unattendedHumanRequestTimeoutMs: options.unattendedHumanRequestTimeoutMs,
+    taskDrainTimeoutMs: 1000,
     providerFactory,
   });
 
@@ -239,7 +251,7 @@ describe("Multiremi approval routing e2e", () => {
     expect(h.store.getTaskHumanRequest(pending.id)?.status).toBe("cancelled");
     await expect(fetch(`${h.baseUrl}/api/health`)).rejects.toThrow();
     await stopHarness(h);
-  });
+  }, 30_000);
 
   it("routes a permission request to a human and honors the approval", async () => {
     const h = await startHarness();
@@ -283,7 +295,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("routes AskUserQuestion to a human and folds answers back", async () => {
     const h = await startHarness({ withElicitation: true });
@@ -322,7 +334,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("routes AskUserQuestion in auto approval mode while tools remain auto-approved", async () => {
     const h = await startHarness({ withElicitation: true, approvalMode: "auto" });
@@ -343,7 +355,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("expires an unanswered permission request and denies conservatively", async () => {
     const h = await startHarness({ humanRequestTimeoutMs: 500 });
@@ -361,7 +373,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("uses the shorter timeout for unattended permission requests", async () => {
     const h = await startHarness({
@@ -381,7 +393,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("keeps the attended timeout when the unattended timeout is shorter", async () => {
     const h = await startHarness({
@@ -402,7 +414,7 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 
   it("honors the unattended timeout environment override for questions", async () => {
     process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS = "100";
@@ -425,5 +437,5 @@ describe("Multiremi approval routing e2e", () => {
     } finally {
       await stopHarness(h);
     }
-  });
+  }, 30_000);
 });

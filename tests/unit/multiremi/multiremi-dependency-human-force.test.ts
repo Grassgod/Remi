@@ -84,7 +84,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
 
     const tasks = fixture.store.listTasksForIssue(fixture.issueId);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.triggerCommentId).toBe(comment.id);
+    expect(fixture.store.getTurnForAttempt(tasks[0]!.id)?.trigger_message_id).toBe(comment.id);
     expect(tasks[0]!.prompt).toContain("unfinished prerequisites");
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
     const activities = forceActivities(fixture.store, fixture.issueId);
@@ -207,11 +207,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     });
     expect(spoofedComment.status).toBe(200);
     const { message: persisted } = await spoofedComment.json();
-    expect(fixture.store.getIssueComment(persisted.id)).toMatchObject({
-      authorType: "agent",
-      authorId: leader.id,
-      taskId: sourceTask.id,
-    });
+    expect(persisted).toMatchObject({sender_type:"agent",sender_id:leader.id,task_id:sourceTask.id,wake_applied:"inbox_only",wake_reason:"self"});
 
     const mention = await fixture.app.request(issueMessagesPath(fixture.store, sourceIssue.id), {
       method: "POST",
@@ -219,18 +215,15 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       body: JSON.stringify(requestMessageBody(fixture.store, { body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }, { type: "role", ref: "issue_owner" })),
     });
     expect(mention.status).toBe(200);
-    const mentionId = (await mention.json()).message.id;
-    expect(fixture.store.listIssueActivity(sourceIssue.id)
-      .find((entry) => entry.type === "comment_mention_skipped" && (entry.data as any)?.commentId === mentionId)?.data)
-      .toMatchObject({ reason: "dependencies_unmet", agentId: teammate.id });
+    expect(await mention.json()).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet",message:{to_agent_id:teammate.id}});
 
     const rerun = await fixture.app.request(issueMessagesPath(fixture.store, sourceIssue.id), {
       method: "POST",
       headers: taskHeaders,
-      body: JSON.stringify(requestMessageBody(fixture.store, { agent_id: fixture.agentId, dependencyForce: { source: "rerun", actorMemberId: fixture.memberUserId } }, { type: "role", ref: "issue_owner" })),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body_md:"Agent rerun request",agent_id: fixture.agentId, dependencyForce: { source: "rerun", actorMemberId: fixture.memberUserId } }, { type: "role", ref: "issue_owner" })),
     });
-    expect(rerun.status).toBe(409);
-    expect(await rerun.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(rerun.status).toBe(200);
+    expect(await rerun.json()).toMatchObject({ wake_applied:"next_turn",wake_reason:"dependencies_unmet" });
 
     const taskCreate = await fixture.app.request(taskRequestPath(fixture.store, { issueId: sourceIssue.id }), {
       method: "POST",
@@ -242,8 +235,8 @@ describe("MUL-458 human dependency force (SQLite)", () => {
         dependencyForce: { source: "comment", actorMemberId: fixture.memberUserId },
       })),
     });
-    expect(taskCreate.status).toBe(409);
-    expect(await taskCreate.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(taskCreate.status).toBe(200);
+    expect(await taskCreate.json()).toMatchObject({ wake_applied:"next_turn",wake_reason:"dependencies_unmet" });
     expect(fixture.store.listTasksForIssue(sourceIssue.id)).toHaveLength(1);
     expect(forceActivities(fixture.store, sourceIssue.id)).toHaveLength(0);
     expect(fixture.store.getIssue(sourceIssue.id)?.status).toBe("backlog");
@@ -280,9 +273,9 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       });
       expect(response.status).toBe(200);
     }
-    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(true ? 1 : 3);
-    expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(true ? 2 : 0);
+    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(1);
+    expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "turn_merged"))
+      .toHaveLength(2);
     expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
   });
@@ -339,7 +332,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
         body: JSON.stringify(requestMessageBody(fixture.store, { body: "This comment remains durable" }, { type: "role", ref: "issue_owner" })),
       });
       expect(response.status).toBe(400);
-      expect(fixture.store.listIssueComments(fixture.issueId).some((comment) => comment.body === "This comment remains durable")).toBe(true);
+      expect(fixture.store.listIssueComments(fixture.issueId).some((comment) => comment.body === "This comment remains durable")).toBe(false);
       expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("backlog");
       expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(0);
       expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(0);

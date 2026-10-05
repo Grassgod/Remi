@@ -57,17 +57,12 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const response = await app.request(`/api/turns?issue=${issue.id}`, { headers });
     expect(response.status).toBe(200);
     const tasks = (await response.json()).turns;
-    expect(tasks.find((task: { id: string }) => task.id === second.id)).toMatchObject({
-      holds_workspace: true,
-      queue_blocker: {
-        task_id: first.id,
-        agent_id: firstAgent.id,
-        agent_name: "Builder",
-        issue_session_id: firstSession.id,
-        issue_session_title: "Implementation",
-        reason: "session",
-      },
-    });
+    // #3/#7: the second request merges into the first lane's turn.
+    expect(second.id).toBe(first.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({id:store.getTurnForAttempt(first.id)!.id,
+      current_attempt_id:first.id,session_id:firstSession.id,status:'running',holds_workspace:true});
+
   });
 
   it("serves original daemon register and deregister endpoints", async () => {
@@ -313,7 +308,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const legacyTask = store.createTask({ agentId: legacyAgent.id, prompt: "legacy runtime task" });
     const legacyClaim = await taskOfferResponse(store, legacyRuntimeId);
     expect(legacyClaim.status).toBe(200);
-    expect((await legacyClaim.json()).task.id).toBe(legacyTask.id);
+    expect((await legacyClaim.json()).task.attempt_id).toBe(legacyTask.id);
     expect(store.getTask(legacyTask.id)?.runtimeId).toBe(legacyRuntimeId);
     expect(store.getAgent(legacyAgent.id)?.runtimeId).toBe(legacyRuntimeId);
 
@@ -1116,7 +1111,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
 
     const rerun = await app.request(issueMessagesPath(store, issue.id), { method: "POST" , body: JSON.stringify(requestMessageBody(store, { body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })) });
     expect(rerun.status).toBe(200);
-    expect((await rerun.json()).issue_id).toBe(issue.id);
+    expect(store.getTurn((await rerun.json()).turn_id)?.issue_id).toBe(issue.id);
 
     const subscribe = await app.request(`/api/issues/${issue.id}/subscribe`, {
       method: "POST",
@@ -1139,7 +1134,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
 
     const claimed = await taskOfferResponse(store, runtime.id);
     const claimedBody = await claimed.json();
-    expect(claimedBody.task.id).toBe(task.id);
+    expect(claimedBody.task.attempt_id).toBe(task.id);
     expect(pendingTaskWireSnapshot(store, runtime.id).some((item: any) =>
       item.id === task.id && item.workspace_id === "local" && item.status === "dispatched"
     )).toBe(true);
@@ -1160,24 +1155,27 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(startedBody.waitReason).toBeUndefined();
     store.appendTaskMessages(task.id, [{ type: "assistant", content: "compat done" }]);
     const taskPrefix = task.id.slice(0, 8);
-    expect((await (await app.request(turnApiPath(store, taskPrefix, "/trace"))).json())[0].content).toBe("compat done");
+    const trace = await app.request(turnApiPath(store, taskPrefix, "/trace"));
+    expect(trace.status).toBe(200);
+    expect(await trace.json()).toMatchObject({ turn_id: task.id, attempt_id: task.id, events: [], state: "unreachable", reason: "daemon_unreachable" });
+    expect(store.listTaskMessages(task.id)[0]?.content).toBe("compat done");
 
     const gc = await reportFrame(store, "gc.check_issue", { issue_id: issue.key }, { runtimeId: runtime.id });
     expect(gc.updated_at).toBeString();
 
     const scopedTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Cancel scoped" });
     const issueScopedCancel = await app.request(turnApiPath(store, scopedTask.id.slice(0, 8), "/cancel"), { method: "POST" });
-    const issueScopedCancelBody = await issueScopedCancel.json();
+    const issueScopedCancelBody = (await issueScopedCancel.json()).turn;
     expect(issueScopedCancelBody.status).toBe("cancelled");
-    expect(issueScopedCancelBody.completed_at).toBeString();
-    expect(issueScopedCancelBody.result).toBeNull();
+    expect(issueScopedCancelBody.ended_at).toBeString();
+    expect(issueScopedCancelBody.reply_message_id).toBeNull();
 
     const cancelledByTaskId = await app.request(turnApiPath(store, task.id, "/cancel"), { method: "POST" });
     expect(cancelledByTaskId.status).toBe(200);
-    const cancelledByTaskIdBody = await cancelledByTaskId.json();
+    const cancelledByTaskIdBody = (await cancelledByTaskId.json()).turn;
     expect(cancelledByTaskIdBody.status).toBe("cancelled");
-    expect(cancelledByTaskIdBody.completed_at).toBeString();
-    expect(cancelledByTaskIdBody.result).toBeNull();
+    expect(cancelledByTaskIdBody.ended_at).toBeString();
+    expect(cancelledByTaskIdBody.reply_message_id).toBeNull();
   });
 
   it("serves upstream client compatibility endpoints for env, billing, lark, chat, and batched children", async () => {
@@ -1483,7 +1481,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(autopilotDetailBody.autopilot.projectId).toBeUndefined();
 
     const claim = await taskOfferResponse(store, runtime.id);
-    expect((await claim.json()).task.id).toBe(task.id);
+    expect((await claim.json()).task.attempt_id).toBe(task.id);
     await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
     // Dashboard rollups are snake_case on the wire (MUL-92): the frontend zod

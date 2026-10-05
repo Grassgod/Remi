@@ -131,7 +131,7 @@ describe("authenticated issue mutation actors", () => {
         method: "POST", headers, body: JSON.stringify({ actor_type: "agent", actor_id: "trusted-agent" }),
       });
       expect(resolved.status).toBe(200);
-      expect(await resolved.json()).toMatchObject({ resolved_by_type: entry.expectedType, resolved_by_id: entry.expectedId });
+      expect((await resolved.json()).message).toMatchObject({ resolved_by_type: entry.expectedType, resolved_by_id: entry.expectedId });
       const form = new FormData();
       form.set("file", new File(["note"], `note-${index}.txt`));
       form.set("issue_id", issue.id);
@@ -160,7 +160,7 @@ describe("authenticated issue mutation actors", () => {
       method: "POST", headers: headers[0],
     });
     expect(response.status).toBe(200);
-    expect((await response.json()).message).toMatchObject({ resolved_by_type: "member", resolved_by_id: members[0]!.id });
+    expect((await response.json()).message).toMatchObject({ resolved_by_type: "member", resolved_by_id: users[0]!.id });
     for (const prefix of ["/api", "/api/multiremi"]) {
       const thread = store.createIssueComment(issue.id, { body: "Another thread", authorType: "member", authorId: users[0]!.id });
       const forged = await app.request(`/api/messages/${thread.id}/resolve`, {
@@ -170,7 +170,7 @@ describe("authenticated issue mutation actors", () => {
       expect(forged.status).toBe(200);
       const body = await forged.json();
       const resolved = body.message;
-      expect(resolved.resolved_by_id).toBe(members[1]!.id);
+      expect(resolved.resolved_by_id).toBe(users[1]!.id);
       expect(resolved.resolvedByType ?? resolved.resolved_by_type).toBe("member");
     }
   });
@@ -223,7 +223,7 @@ describe("authenticated issue mutation actors", () => {
       const firstBody = await first.json();
       const firstReaction = messageReaction ? firstBody.reactions[0] : firstBody;
       expect(firstReaction).toMatchObject(messageReaction
-        ? { actorType: "member", actorId: members[0]!.id }
+        ? { actorType: "member", actorId: users[0]!.id }
         : { actor_type: "member", actor_id: users[0]!.id });
       const second = await app.request(endpoint, {
         method: "POST", headers: { ...headers[1], "X-Agent-ID": "forged-agent" },
@@ -233,7 +233,7 @@ describe("authenticated issue mutation actors", () => {
       const secondBody = await second.json();
       const secondReaction = messageReaction ? secondBody.reactions.find((r: any) => r.actorId !== firstReaction.actorId) : secondBody;
       expect(secondReaction).toMatchObject(messageReaction
-        ? { actorType: "member", actorId: members[1]!.id }
+        ? { actorType: "member", actorId: users[1]!.id }
         : { actor_type: "member", actor_id: users[1]!.id });
       expect(secondReaction.id).not.toBe(firstReaction.id);
       const removed = await app.request(endpoint, {

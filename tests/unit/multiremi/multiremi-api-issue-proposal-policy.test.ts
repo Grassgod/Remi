@@ -36,7 +36,7 @@ describe("agent Issue proposal policy", () => {
     expect(ordinary.status).toBe(201);
     expect((await ordinary.json()).title).toBe("Delegated child remains supported");
 
-    const delegated = await fixture.app.request(taskRequestPath(fixture.store, {  }), {
+    const delegated = await fixture.app.request(issueMessagesPath(fixture.store, fixture.current.id), {
       method: "POST",
       headers: fixture.ordinaryHeaders,
       body: JSON.stringify(requestMessageBody(fixture.store, { agentId: fixture.worker.id, prompt: "ordinary delegation" })),
@@ -44,8 +44,7 @@ describe("agent Issue proposal policy", () => {
     expect(delegated.status).toBe(200);
     const delegatedTask = sentTask(fixture.store, await delegated.json());
     expect(fixture.store.getTask(delegatedTask.id)).toMatchObject({
-      parentTaskId: fixture.ordinaryTask.id,
-      issueCreationRestricted: false,
+            issueCreationRestricted: false,
     });
     const delegatedCredential = await fixture.store.createTaskAccessToken(
       fixture.store.getTask(delegatedTask.id)!,
@@ -150,7 +149,7 @@ describe("agent Issue proposal policy", () => {
   it("carries the restriction through task, Session, squad, and run-only Autopilot delegation", async () => {
     const fixture = await policyFixture();
 
-    const generic = await fixture.app.request(taskRequestPath(fixture.store, {  }), {
+    const generic = await fixture.app.request(issueMessagesPath(fixture.store, fixture.current.id), {
       method: "POST",
       headers: fixture.restrictedHeaders,
       body: JSON.stringify(requestMessageBody(fixture.store, { agentId: fixture.worker.id, prompt: "generic delegated work" })),
@@ -169,7 +168,7 @@ describe("agent Issue proposal policy", () => {
       },
     );
     expect(session.status).toBe(200);
-    const sessionTaskId = (await session.json() as { id: string }).id;
+    const sessionTaskId = sentTask(fixture.store, await session.json()).id;
     await expectRestrictedTaskCannotCreateIssue(fixture, sessionTaskId, "Session delegation");
 
     const squad = fixture.store.createSquad({
@@ -201,7 +200,7 @@ describe("agent Issue proposal policy", () => {
     });
     expect(squadComment.status).toBe(200);
     const squadTask = fixture.store.listTasksForIssue(squadIssue.id)
-      .find((task) => task.parentTaskId === squadSource.id && task.agentId === fixture.worker.id);
+      .find((task) => task.agentId === fixture.worker.id);
     expect(squadTask).toBeDefined();
     await expectRestrictedTaskCannotCreateIssue(fixture, squadTask!.id, "squad mention delegation");
 
@@ -255,7 +254,7 @@ describe("agent Issue proposal policy", () => {
       const agentId = String(rawAgent.id);
       expect(fixture.store.getAgent(agentId)?.issueCreationRequiresProposal, label).toBe(true);
 
-      const delegated = await fixture.app.request(taskRequestPath(fixture.store, {  }), {
+      const delegated = await fixture.app.request(issueMessagesPath(fixture.store, fixture.current.id), {
         method: "POST",
         headers: fixture.restrictedHeaders,
         body: JSON.stringify(requestMessageBody(fixture.store, { agentId, prompt: `${label} delegated work` })),
@@ -587,7 +586,11 @@ async function expectRestrictedTaskCannotCreateIssue(
 ): Promise<void> {
   const task = fixture.store.getTask(taskId)!;
   expect(task.issueCreationRestricted, label).toBe(expectSnapshot);
-  if (expectParent) expect(task.parentTaskId, label).toBeString();
+  if (expectParent) {
+    // #3/#9: lineage is the triggering message's source Turn.
+    const turn = fixture.store.getTurnForAttempt(task.id)!;
+    expect(fixture.store.getMessage(turn.trigger_message_id!)?.task_id, label).toBeString();
+  }
   const credential = await fixture.store.createTaskAccessToken(task, "local");
   const before = fixture.store.listIssues({ workspaceId: "local" }).length;
   const response = await fixture.app.request("/api/issues", {

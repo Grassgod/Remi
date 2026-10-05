@@ -80,7 +80,8 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     expect(capabilities.data.commands.find((command: any) => command.id === "turn.retry")?.allowed).toBe(true);
     const before = f.snapshot();
     for (const credential of [f.pat.token, "access-master", normal.token]) {
-      const result = await f.request(`/api/turns/${target.turn.id}/retry`, "POST", {}, credential);
+      f.store.updateWorkspace("local", {settings:{...f.store.getWorkspace("local")!.settings,organizer:{mode:"act"}}});
+    const result = await f.request(`/api/turns/${target.turn.id}/retry`, "POST", {}, credential);
       expect(result.status).toBe(403); expect(result.data.code).toBe("organizer_supervisor_required");
       expect(f.snapshot()).toEqual(before);
     }
@@ -101,6 +102,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     f.db.run("UPDATE multiremi_issue_sessions SET inherit_mode='summary' WHERE id=?", [sourceSession.id]);
     expect((await f.request(`/api/turns/${target.turn.id}/retry`, "POST", {}, token.token)).status).toBe(403);
     f.db.run("UPDATE multiremi_issue_sessions SET inherit_mode='none' WHERE id=?", [sourceSession.id]);
+    f.store.updateWorkspace("local", {settings:{...f.store.getWorkspace("local")!.settings,organizer:{mode:"act"}}});
     const result = await f.request(`/api/turns/${target.turn.id}/retry`, "POST", { cold: true }, token.token);
     expect(result.status).toBe(200); expect(result.data.turn.id).toBe(target.turn.id);
     expect(result.data.turn.current_attempt_id).not.toBe(target.task.id);

@@ -105,7 +105,7 @@ export async function captureFirstScreenHotspotGolden(source: string): Promise<F
         skillBodyBytes: fixture.counts.skillBodyBytes,
       },
       chatPendingTasks: normalizeFirstScreenHotspotResponse(
-        await get("/api/turns?status=pending"),
+        await get("/api/turns?status=pending&limit=500"),
         fixture,
       ),
       issuesMyAssignee: normalizeFirstScreenHotspotResponse(
@@ -140,7 +140,7 @@ if (import.meta.main) {
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(golden, null, 2)}\n`);
   console.log(`wrote ${outPath}`);
-  console.log(`pending-tasks: ${(golden.chatPendingTasks as { tasks: unknown[] }).tasks.length} tasks`);
+  console.log(`pending-tasks: ${(golden.chatPendingTasks as { turns: unknown[] }).turns.length} tasks`);
   for (const key of ["issuesMyAssignee", "issuesByMemberRowId", "issuesByAgentName"] as const) {
     const body = golden[key] as { issues: unknown[]; total: number };
     console.log(`${key}: ${body.issues.length} issues, total=${body.total}`);

@@ -360,9 +360,11 @@ export function compatibilityInboxScope(
   // Inbox rows use member ids. Resolve only inside the selected workspace,
   // and never let a human/task credential select another member's inbox.
   // Keep the workspace in the scope: a moved member can retain older inbox rows.
-  const exact = store.getWorkspaceMember(raw);
-  const member = (exact?.workspaceId === workspaceId ? exact : null)
-    ?? store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === raw)
+  const own=currentWorkspaceMember(c,store,workspaceId);
+  const exact=requested ? store.getWorkspaceMember(raw) ?? (raw===userId||raw===own?.userId ? own : null) : own;
+  const member=(exact?.workspaceId===workspaceId ? exact : null)
+    ?? (own?.userId===raw ? own : null)
+    ?? (requested ? store.listWorkspaceMembers(workspaceId).find(candidate=>candidate.userId===raw) : null)
     ?? exact;
   if (member && (member.workspaceId !== workspaceId
     || (userId && member.userId !== userId))) {
@@ -384,7 +386,7 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
     return c.json({ error: "runtime not found" }, 404);
   }
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (token?.type !== "task" && userId && (userId !== "local" || humanPat || !token) && !currentWorkspaceMember(c, store, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
@@ -647,7 +649,7 @@ export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  if (userId && (userId !== "local" || humanPat || !token) && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (token?.type !== "task" && userId && (userId !== "local" || humanPat || !token) && !currentWorkspaceMember(c, store, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;

@@ -196,23 +196,15 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       source: "mention", agentId: leader.id, assigneeDispatched: true,
     });
 
-    const rerun = await fixture("jwt", "rerun");
-    const override = store.createAgent({ name: `PG override ${counter}`, provider: "claude", visibility: "workspace" });
-    expect((await rerun.app.request(issueMessagesPath(rerun.store, rerun.issue.id), {
-      method: "POST", headers: rerun.headers, body: JSON.stringify(requestMessageBody(rerun.store, { agent_id: override.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
-    })).status).toBe(200);
-    expect(store.listTasksForIssue(rerun.issue.id)[0]!.agentId).toBe(override.id);
-    expect(forces(rerun.issue.id)[0]!.data).toMatchObject({ source: "rerun", assigneeDispatched: false });
-
     const repeated = await fixture("pat", "repeated");
     for (const body of ["one", "two", "three"]) {
       expect((await repeated.app.request(issueMessagesPath(repeated.store, repeated.issue.id), {
         method: "POST", headers: repeated.headers, body: JSON.stringify(requestMessageBody(repeated.store, { body }, { type: "role", ref: "issue_owner" })),
       })).status).toBe(200);
     }
-    expect(store.listTasksForIssue(repeated.issue.id)).toHaveLength(true ? 1 : 3);
-    expect(store.listIssueActivity(repeated.issue.id).filter(activity => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(true ? 2 : 0);
+    expect(store.listTasksForIssue(repeated.issue.id)).toHaveLength(1);
+    expect(store.listIssueActivity(repeated.issue.id).filter(activity => activity.type === "turn_merged"))
+      .toHaveLength(2);
     expect(forces(repeated.issue.id)).toHaveLength(1);
 
     const parentCase = await fixture("pat", "parent");
@@ -242,6 +234,17 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     }
   });
 
+  it("retains the unresolved member rerun override conflict", async () => {
+    const rerun = await fixture("jwt", "rerun");
+    const override = store.createAgent({ name: `PG override ${counter}`, provider: "claude", visibility: "workspace" });
+    expect((await rerun.app.request(issueMessagesPath(rerun.store, rerun.issue.id), {
+      method: "POST", headers: rerun.headers, body: JSON.stringify(requestMessageBody(rerun.store, { agent_id: override.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
+    expect(store.listTasksForIssue(rerun.issue.id)[0]!.agentId).toBe(override.id);
+    expect(forces(rerun.issue.id)[0]!.data).toMatchObject({ source: "rerun", assigneeDispatched: false });
+
+  });
+
   it("rejects task identity and strips both public force marker spellings on PG", async () => {
     const f = await fixture("pat", "identity");
     const leader = store.createAgent({ name: `PG leader ${counter}`, provider: "claude", visibility: "workspace" });
@@ -261,29 +264,27 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       body: JSON.stringify(requestMessageBody(store, { body: "Pretend member", author_type: "member", author_id: f.userId }, { type: "role", ref: "issue_owner" })),
     });
     expect(spoofed.status).toBe(200);
-    const commentId = ((await spoofed.json()) as { id: string }).id;
-    expect(store.getIssueComment(commentId)).toMatchObject({ authorType: "agent", authorId: leader.id, taskId: source.id });
+    expect((await spoofed.json()).message).toMatchObject({sender_type:"agent",sender_id:leader.id,task_id:source.id});
 
     const mention = await f.app.request(issueMessagesPath(store, sourceIssue.id), {
       method: "POST", headers: taskHeaders,
       body: JSON.stringify(requestMessageBody(store, { body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }, { type: "role", ref: "issue_owner" })),
     });
     expect(mention.status).toBe(200);
-    expect(store.listIssueActivity(sourceIssue.id).some((entry) =>
-      entry.type === "comment_mention_skipped" && (entry.data as any)?.reason === "dependencies_unmet")).toBe(true);
+    expect(await mention.json()).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet"});
 
     const agentRerun = await f.app.request(issueMessagesPath(store, sourceIssue.id), {
       method: "POST", headers: taskHeaders, body: JSON.stringify(requestMessageBody(store, { agent_id: leader.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(agentRerun.status).toBe(409);
-    expect(await agentRerun.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(agentRerun.status).toBe(200);
+    expect(await agentRerun.json()).toMatchObject({wake_applied:"inbox_only",wake_reason:"self"});
 
     const agentCreate = await f.app.request(taskRequestPath(store, { issueId: sourceIssue.id }), {
       method: "POST", headers: taskHeaders,
       body: JSON.stringify(requestMessageBody(store, { agentId: teammate.id, issueId: sourceIssue.id, prompt: "Delegate" })),
     });
-    expect(agentCreate.status).toBe(409);
-    expect(await agentCreate.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(agentCreate.status).toBe(200);
+    expect(await agentCreate.json()).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet"});
     expect(store.listTasksForIssue(sourceIssue.id)).toHaveLength(1);
     expect(forces(sourceIssue.id)).toHaveLength(0);
 
@@ -321,7 +322,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       expect(store.getIssue(f.issue.id)?.status).toBe("backlog");
       expect(store.listTasksForIssue(f.issue.id)).toHaveLength(0);
       expect(forces(f.issue.id)).toHaveLength(0);
-      expect(store.listIssueComments(f.issue.id).some((comment) => comment.body === "Durable PG comment")).toBe(true);
+      expect(store.listIssueComments(f.issue.id).some((comment) => comment.body === "Durable PG comment")).toBe(false);
     } finally {
       injected.mockRestore();
     }
@@ -331,7 +332,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     issueId: string,
     prerequisiteId: string,
     agentId: string,
-    roles: Array<"comment" | "rerun" | "auto">,
+    roles: Array<"comment" | "owner_request" | "auto">,
   ): Promise<WorkerResult[]> {
     const barrierDir = mkdtempSync(join(tmpdir(), "mul458b-two-connection-"));
     const barrierPath = join(barrierDir, "go");
@@ -340,6 +341,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       const worker = new Worker(workerUrl, { type: "module" });
       const ready = workerPhase(worker, "ready");
       const done = workerPhase<WorkerResult>(worker, "done");
+      // A ready-stage failure also rejects done; handle it until both are awaited.
+      void done.catch(() => {});
       worker.postMessage({
         databaseUrl: pgDatabaseUrl(TEST_DB), issueId, prerequisiteId, agentId, barrierPath, role,
       });
@@ -355,14 +358,14 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     }
   }
 
-  it("serializes concurrent human comment and rerun across two PG connections", async () => {
+  it("serializes concurrent human comments and explicit owner requests across two PG connections", async () => {
     const f = await fixture("pat", "race-comment-rerun");
-    const results = await runRace(f.issue.id, f.prerequisite.id, f.agent.id, ["comment", "rerun"]);
+    const results = await runRace(f.issue.id, f.prerequisite.id, f.agent.id, ["comment", "owner_request"]);
     expect(results.map((result) => result.responseStatus).sort()).toEqual([200, 200]);
     expect(results.every((result) => result.maxTransactionDepth === 1)).toBe(true);
     const tasks = store.listTasksForIssue(f.issue.id);
-    const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "pending_turn_coalesced");
-    expect(merges.length).toBeLessThanOrEqual(true ? 1 : 0);
+    const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "turn_merged");
+    expect(merges.length).toBeLessThanOrEqual(1);
     expect(tasks).toHaveLength(2 - merges.length);
     expect(tasks.some((task) => task.status === "cancelled")).toBe(false);
     expect(forces(f.issue.id)).toHaveLength(1);
@@ -379,9 +382,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const forceCount = forces(f.issue.id).length;
     const autoCount = store.listIssueActivity(f.issue.id)
       .filter((entry) => entry.type === "dependency_auto_started").length;
-    expect(forceCount + autoCount).toBe(1);
-    const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "pending_turn_coalesced");
-    expect(merges).toHaveLength(true ? autoCount : 0);
+    expect(forceCount + autoCount, JSON.stringify(store.listIssueActivity(f.issue.id))).toBe(1);
+    const merges = store.listIssueActivity(f.issue.id).filter(entry => entry.type === "turn_merged");
+    expect(merges).toHaveLength(autoCount);
     expect(tasks).toHaveLength(1 + autoCount - merges.length);
     expect(store.getIssue(f.issue.id)?.status).toBe("todo");
   });

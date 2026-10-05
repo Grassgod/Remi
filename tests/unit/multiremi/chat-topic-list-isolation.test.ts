@@ -43,11 +43,11 @@ describe("Chat list isolation from Feishu Issue topics", () => {
         if (!Array.isArray(body)) expect(body.total).toBe(1);
       }
     }
-    const pending = await app.request("/api/turns?status=pending", { headers });
+    const pending = await app.request(`/api/turns?status=pending&session_id=${privateChat.id}`, { headers });
     expect(pending.status).toBe(200);
-    expect((await pending.json()).turns).toEqual([
-      { task_id: privateTask.id, status: "queued", chat_session_id: privateChat.id },
-    ]);
+    const rows=(await pending.json()).turns;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({id:store.getTurnForAttempt(privateTask.id)!.id,current_attempt_id:privateTask.id,status:"pending",session_id:privateChat.id});
     // Internal topic auditing and direct topic transport access still work.
     expect(store.listChatSessions("local", { creatorId: "local" }).map((session) => session.id)).toContain(topic.id);
     expect((await app.request(`/api/chat/sessions/${topic.id}`, { headers })).status).toBe(200);
@@ -85,11 +85,11 @@ describe("Chat list isolation from Feishu Issue topics", () => {
         expect(sessions.map((session: { id: string }) => session.id)).toEqual([webChat.id]);
       }
     }
-    const pending = await app.request("/api/turns?status=pending", { headers });
+    const pending = await app.request(`/api/turns?status=pending&session_id=${webChat.id}`, { headers });
     expect(pending.status).toBe(200);
-    expect((await pending.json()).turns).toEqual([
-      { task_id: webTask.id, status: "queued", chat_session_id: webChat.id },
-    ]);
+    const turns=(await pending.json()).turns;
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({id:store.getTurnForAttempt(webTask.id)!.id,current_attempt_id:webTask.id,status:"pending",session_id:webChat.id});
     // Feishu transport itself keeps working: the binding still resolves and the
     // connector's own task was queued against the hidden Chat.
     expect(store.getTask(feishu.taskId)?.chatSessionId).toBe(feishu.chat.id);

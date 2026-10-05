@@ -173,13 +173,13 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     store.createIssueComment(issue.id, { authorType: "member", authorId: alice.id, body: "Ping Bob" });
     const camelInbox = await app.request(`/api/inbox?memberId=${encodeURIComponent(bob.id)}`);
     expect((await camelInbox.json()).items).toEqual([]);
-    expect((await (await app.request("/api/inbox"+`?memberId=${encodeURIComponent(bob.id)}`)).json()).unread_count).toBe(0);
+    expect((await (await app.request("/api/inbox"+`?member_id=local`)).json()).unread_count).toBe(0);
     const inbox = await app.request(`/api/inbox?member_id=${encodeURIComponent(bob.id)}`);
     const inboxBody = await inbox.json();
     expect(inboxBody.items[0].to_member_id).toBe(bob.id);
     expect((await (await app.request("/api/inbox"+`?member_id=${encodeURIComponent(bob.id)}`)).json()).unread_count).toBe(1);
-    expect((await (await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
-    expect((await (await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
+    expect((await (await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
+    expect((await (await app.request(`/api/inbox/read?member_id=${bob.id}`, { method: "POST" , body: JSON.stringify({ all: true }) })).json()).conversations_read).toBe(1);
     expect((await app.request(`/api/chat/sessions/${chatBody.id}`, { method: "DELETE" })).status).toBe(204);
 
     expect((await app.request(`/api/skills/${skill.id}/files/${fileBody.id}`, { method: "DELETE" })).status).toBe(204);
@@ -259,7 +259,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
       body: "{",
     });
     expect(invalidCommentCreate.status).toBe(400);
-    expect(await invalidCommentCreate.json()).toEqual({ error: "invalid request body" });
+    expect(await invalidCommentCreate.json()).toEqual({ error: "invalid JSON body" });
 
     const emptyCommentCreate = await app.request(issueMessagesPath(store, issue.id), {
       method: "POST",
@@ -267,7 +267,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
       body: JSON.stringify(requestMessageBody(store, { content: "" }, { type: "role", ref: "issue_owner" })),
     });
     expect(emptyCommentCreate.status).toBe(400);
-    expect(await emptyCommentCreate.json()).toEqual({ error: "content is required" });
+    expect(await emptyCommentCreate.json()).toEqual({ error: "message content is required" });
 
     const resolved = await app.request(`/api/messages/${rootBody.message.id}/resolve`, {
       method: "POST",
@@ -293,8 +293,9 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     expect(compatibilityResolvedBody.resolvedByType).toBeUndefined();
 
     const invalidReplyResolve = await app.request(`/api/messages/${replyBody.message.id}/resolve`, { method: "POST" });
-    expect(invalidReplyResolve.status).toBe(400);
-    expect(await invalidReplyResolve.json()).toEqual({ error: "only root comments can be resolved" });
+    // #9: resolve applies to a canonical ordinary message, including replies.
+    expect(invalidReplyResolve.status).toBe(200);
+    expect((await invalidReplyResolve.json()).message.resolved_at).toBeString();
 
     const issueReaction = await app.request(`/api/multiremi/issues/${issue.id}/reactions`, {
       method: "POST",
@@ -368,7 +369,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
       body: "{",
     });
     expect(invalidCommentReaction.status).toBe(400);
-    expect(await invalidCommentReaction.json()).toEqual({ error: "invalid request body" });
+    expect(await invalidCommentReaction.json()).toEqual({ error: "invalid JSON body" });
     const missingCommentEmoji = await app.request(`/api/messages/${replyBody.message.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -429,11 +430,12 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
 
     const deleteTarget = store.createIssueComment(issue.id, { body: "Compatibility delete target" });
     const compatibilityDeleted = await app.request(`/api/messages/${deleteTarget.id}`, { method: "DELETE" });
-    expect(compatibilityDeleted.status).toBe(204);
-    expect(await compatibilityDeleted.text()).toBe("");
+    expect(compatibilityDeleted.status).toBe(200);
+    // #7: unified deletion returns the soft-deleted canonical message.
+    expect((await compatibilityDeleted.json()).message.deleted_at).toBeString();
     const missingDelete = await app.request(`/api/messages/${deleteTarget.id}`, { method: "DELETE" });
-    expect(missingDelete.status).toBe(404);
-    expect(await missingDelete.json()).toEqual({ error: "comment not found" });
+    expect(missingDelete.status).toBe(200); // #7: canonical soft deletion is idempotent.
+    expect((await missingDelete.json()).message.id).toBe(deleteTarget.id);
 
     const deleted = await app.request(`/api/messages/${replyBody.message.id}`, { method: "DELETE" });
     expect(deleted.status).toBe(200);

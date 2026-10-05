@@ -45,20 +45,28 @@ interface Call { label: string; path: string; method: string; body?: unknown; he
 describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", () => {
   it("returns the same 409 code and unmet prerequisites for session tasks and other gate entries", async () => {
     const { store, agent, dependent, prereq } = parked();
+    const requester = store.createAgent({name: "Other requester", provider: "claude"});
+    const sourceIssue = store.createIssue({title: "Source work"});
+    const source = store.createTask({agentId: requester.id, issueId: sourceIssue.id, prompt: "Request delegated work"});
+    const credential = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
     const app = createMultiremiApp({ store });
     const session = store.getOrCreateDefaultIssueSession(dependent.id);
     for (const call of [
       { path: `/api/sessions/${session.id}/messages`, body: { agent_id: agent.id, prompt: "start" } },
       { path: issueMessagesPath(store, dependent.id), body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
-      { path: issueMessagesPath(store, dependent.id), body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { "X-Agent-ID": agent.id } },
+      { path: issueMessagesPath(store, dependent.id), body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { Authorization: `Bearer ${credential.token}` } },
     ]) {
       const response = await app.request(call.path, {
         method: "POST", headers: { "content-type": "application/json", ...call.headers }, body: JSON.stringify(call.path.endsWith("/messages") ? requestMessageBody(store, call.body as Record<string, any>) : call.body),
       });
-      expect(response.status).toBe(409);
-      const payload = await response.json() as { code: string; unmet: Array<{ key: string }> };
-      expect(payload.code).toBe("dependencies_unmet");
-      expect(payload.unmet).toMatchObject([{ key: prereq.key }]);
+      const payload = await response.json();
+      if(call.headers?.Authorization) {
+        // #2: agent requests remain recorded and downgrade to next_turn.
+        expect(response.status).toBe(200);expect(payload).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet"});expect(payload.turn_id).toBeUndefined();
+      } else {
+        expect(response.status).toBe(409);expect(payload.code).toBe("dependencies_unmet");
+        expect(payload.unmet).toMatchObject([{key:prereq.key}]);
+      }
     }
     const response = await app.request(`/api/issues/${dependent.id}`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "todo" }),
@@ -70,6 +78,10 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
   });
   it("maps every waiting-issue entry point to 4xx with a code", async () => {
     const { store, agent, prereq, dependent, other } = parked();
+    const requester = store.createAgent({name: "Other requester", provider: "claude"});
+    const sourceIssue = store.createIssue({title: "Source work"});
+    const source = store.createTask({agentId: requester.id, issueId: sourceIssue.id, prompt: "Request delegated work"});
+    const credential = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
     const app = createMultiremiApp({ store });
     const session = store.getOrCreateDefaultIssueSession(dependent.id);
 
@@ -83,7 +95,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       // Task creation funnels.
       { label: "task create", path: issueMessagesPath(store, dependent.id), method: "POST", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
       { label: "session task create", path: `/api/sessions/${session.id}/messages`, method: "POST", body: { agent_id: agent.id, prompt: "start" } },
-      { label: "rerun", path: issueMessagesPath(store, dependent.id), method: "POST", body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { "X-Agent-ID": agent.id } },
+      { label: "rerun", path: issueMessagesPath(store, dependent.id), method: "POST", body: { agent_id: agent.id, prompt: "Continue Issue work" }, headers: { Authorization: `Bearer ${credential.token}` } },
       // Batch reports per-row skips rather than failing the whole request.
       { label: "native batch", path: "/api/multiremi/issues/batch-update", method: "POST", body: { issueIds: [dependent.id], updates: { status: "todo" } } },
       { label: "compat batch", path: "/api/issues/batch-update", method: "POST", body: { issue_ids: [dependent.id], updates: { status: "todo" } } },
@@ -109,7 +121,8 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
         headers: { "content-type": "application/json", ...call.headers },
         ...(call.body ? { body: JSON.stringify(call.path.endsWith("/messages") ? requestMessageBody(store, call.body as Record<string, any>) : call.body) } : {}),
       });
-      const payload = await response.json().catch(() => ({})) as { code?: string; error?: string; updated?: number; skipped?: unknown[] };
+      const payload = await response.json().catch(() => ({}));
+      if(call.label==="rerun") {expect(response.status).toBe(200);expect(payload).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet"});expect(payload.turn_id).toBeUndefined();}
       rows.push({ label: call.label, status: response.status, code: payload.code ?? "" });
     }
 
@@ -133,7 +146,6 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       ["native create ancestor", 409, "dependency_on_ancestor"],
       ["native dependency cycle", 409, "dependency_cycle"],
       ["native dependency unknown target", 400, ""],
-      ["rerun", 409, "dependencies_unmet"],
       ["session task create", 409, "dependencies_unmet"],
       ["task create", 409, "dependencies_unmet"],
     ].sort());

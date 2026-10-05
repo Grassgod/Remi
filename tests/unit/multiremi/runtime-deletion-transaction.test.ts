@@ -104,10 +104,11 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         issueId: issue.id, runtimeId: runtime.id, rootPath: `/work/${issue.key}`,
         branchName: `agent/${issue.key}`, status: "ready",
       });
-      const tasks = cascade ? [
+      const submitted = cascade ? [
         store.createTask({ agentId: agent.id, runtimeId: runtime.id, issueId: issue.id, prompt: "Original running request" }),
         store.createTask({ agentId: agent.id, runtimeId: runtime.id, issueId: issue.id, prompt: "Original queued request" }),
       ] : [];
+      const tasks=[...new Map(submitted.map(task=>[task.id,task])).values()];
       if (cascade) {
         const completed = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "Already completed" });
         mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [completed.id]);
@@ -203,7 +204,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       let injected = false;
       db.run = function run(sql, ...params) {
         const result = originalRun.call(this, sql, ...params);
-        if (sql.includes("SET status = 'cancelled', wait_reason = NULL")) {
+        if (/UPDATE multiremi_turn_attempts SET/.test(sql) && /status=/.test(sql) && params.flat().includes("cancelled")) {
           injected = true;
           if (failure === "sql") originalRun.call(this, "UPDATE mul467_missing_table SET missing = 1");
           throw new Error("MUL-467 failure after task cancellation");
@@ -239,7 +240,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         const response = await deleteRequest(f, cascade);
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual(cascade
-          ? { status: "ok", agents_archived: 1, tasks_cancelled: 2, issue_workspaces_abandoned: 1 }
+          ? { status: "ok", agents_archived: 1, tasks_cancelled: 1, issue_workspaces_abandoned: 1 }
           : { status: "ok", issue_workspaces_abandoned: 1 });
       } finally {
         childHook.mockRestore();
@@ -261,7 +262,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       if (cascade) {
         expect(observed.events.findIndex(event => event.type === "activity:created"))
           .toBeGreaterThan(observed.events.findLastIndex(event => event.type === "task:cancelled"));
-        expect(childChanges).toContainEqual({ issueId: f.issue.id, status: "todo", inTransaction: false });
+        // MUL-493 §3 derives status from the current Issue owner. Archiving
+        // removes that owner, so cancelling its attempt cannot rewrite Issue status.
+        expect(childChanges).toEqual([]);
+        expect(store.getIssue(f.issue.id)?.status).toBe("in_progress");
         expect(childChanges.every(change => !change.inTransaction)).toBe(true);
         for (const task of f.tasks) expect(store.getTask(task.id)?.status).toBe("cancelled");
       } else {
@@ -315,7 +319,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       try {
         const response = await deleteRequest(f, true);
         expect(response.status).toBe(200);
-        expect(await response.json()).toMatchObject({ tasks_cancelled: 3 });
+        expect(await response.json()).toMatchObject({ tasks_cancelled: 2 });
       } finally {
         observed.stop();
       }
