@@ -3,6 +3,7 @@ import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
 import { UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
+import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
 import { foldDecisionRecords } from './inbox/decision-migration.js';
 import { createDecisionReadProjections } from "./inbox/decision-records.js";
 import { foldAgentReadState } from "./inbox/lane-migration.js";
@@ -71,12 +72,14 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
   // is a no-op). It releases on throw as well as on return, so a failed
   // migration cannot strand it.
   advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
+    const reportDir = resolveMigrationReportDirectory();
+    prepareMigrationReportDirectory(reportDir);
     const tables=existingTableNames(db);
     if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
-      writeUnifiedModelReport(process.env.MULTIREMI_MIGRATION_REPORT_DIR??'reports/migrations','before',collectUnifiedBeforeReport(db));
+      writeUnifiedModelReport(reportDir,'before',collectUnifiedBeforeReport(db));
       throw new UnifiedModelPreflightError(checks);
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));

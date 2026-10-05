@@ -32,6 +32,18 @@ function splitSection(readme: string): string {
 }
 
 describe("application compose stack", () => {
+  test("both production topologies mount the default migration report HOME for each API role", () => {
+    for (const file of ["compose.application.yml", "compose.platform.yml"]) {
+      const stack = parse(readFileSync(resolve(repoRoot, "deploy/docker", file), "utf8"));
+      for (const name of ["api", "api-runtime"]) {
+        const service = stack.services[name];
+        expect(service.environment.HOME).toBe("/srv/multiremi");
+        expect(service.volumes).toContain("${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi");
+      }
+    }
+    expect(apiDockerfile).toContain("WORKDIR /app");
+  });
+
   test("ships no ingestion service, profile, or endpoint registry", () => {
     // The sidecar is retired. Anything left behind here — a service, a profile
     // to enable it, an endpoint name to point at it — would be config that

@@ -63,11 +63,13 @@
 
    脚本产出 `platform.pgdump`、`api-home.tar.gz`、`restore-list.txt` 与 `SHA256SUMS`。URL 必须来自环境，不放在命令行；失败诊断保存为权限受限文件，不能直接贴到 Issue。恢复时用 pg_restore 先恢复到隔离空库，再校验业务记录与 api-home。
 4. 授权负责人启动 updater drain；核对所有运行任务与 outbox 排空。四项启动预检分别检查 awaiting_human、未消费 steer、running 回填组、running/dispatched 任务。必须完成等待人工答复的处理，不能通过删行绕过门禁。
-5. updater 切换正式镜像，API 启动执行单事务迁移。读取 `reports/migrations/20261004_unified_message_turn_lane-before.json` 和 `-after.json`。预检失败时打印具体名称与数量，按旧镜像回滚；事务中途失败时模型改写回滚。报告目录通过 `MULTIREMI_MIGRATION_REPORT_DIR` 配置，默认 `reports/migrations`；切换时指定 api-home 持久卷内目录并使用相同路径运行对账。重启不会重新执行旧结构的 DDL。
+5. updater 切换正式镜像，API 启动执行单事务迁移。报告默认写入 `$HOME/reports/migrations`，生产 `compose.application.yml` / `compose.platform.yml` 的 `api` 与 `api-runtime` 均为 `/srv/multiremi/reports/migrations`，位于 `REMI_HOME_DIR:/srv/multiremi` 持久卷内。读取其中的 `20261004_unified_message_turn_lane-before.json` 和 `-after.json`。预检失败时打印具体名称与数量，按旧镜像回滚；事务中途失败时模型改写回滚。`MULTIREMI_MIGRATION_REPORT_DIR` 可覆盖默认目录，运维应写在 `api.env`，不写在 updater 管理的 `application.env`；对账必须使用同一路径。重启不会重新执行旧结构的 DDL。
+
+   切换前由 Remi-CC 检查数据卷归属 `REMI_RUNTIME_UID:GID`，尤其旧报告目录不能是 root 所有。启动会在任何 schema 改写前验证目录创建、文件写入和原子 rename；不满足时明确拒绝，不能靠自动重启修复错误挂载。仓库配置已核对；209 实际挂载与权限本任务未连接核对，需负责人批准后由 Remi-CC 在副本演练及生产窗口确认。
 6. 只读运行对账，记录 counts、mismatches、各会话 head 和游标。迁移前报告用于核对 attempt 身份及链分组；日常对账不再要求人的 cursor 等于当前 head。
 
    ```bash
-   bun run scripts/reconcile-unified-model.ts --postgres-env MULTIREMI_DATABASE_URL --before reports/migrations/20261004_unified_message_turn_lane-before.json --out reports/migrations/unified-model-reconciliation.json
+   bun run scripts/reconcile-unified-model.ts --postgres-env MULTIREMI_DATABASE_URL --before /srv/multiremi/reports/migrations/20261004_unified_message_turn_lane-before.json --out /srv/multiremi/reports/migrations/unified-model-reconciliation.json
    ```
 
    SQLite 副本改用 `--sqlite /path/to/copy.db`。命令不创建 Store，不跑迁移；SQLite 以 readonly 打开，PG 使用 repeatable-read 只读事务。身份与迁移初始数量核对只能在切换后、恢复写入前执行；平台恢复写入后使用不带 `--before` 的日常完整性检查。
