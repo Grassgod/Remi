@@ -82,8 +82,10 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   else if(input.to.type==='role'){
     if(input.to.ref==='issue_owner')owner(issue);
     else if(input.to.ref==='parent_owner'){
-      targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;owner(targetIssue);
-      if(targetIssue)sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
+      targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
+      if(!targetIssue||targetIssue.workspaceId!==workspaceId)throw new Error('Parent issue not found');
+      owner(targetIssue);
+      sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
     } else if(input.to.ref==='delegator'){
       const dispatch=source?.trigger_message_id?getMessage(ctx,source.trigger_message_id):null;
       const origin=dispatch?.task_id?ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(dispatch.task_id):null;
@@ -98,6 +100,15 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
         WHERE m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL ORDER BY s.id LIMIT 1`).get(input.sender.id,workspaceId);
       recipientType='agent';recipientId=squad?.leader_id??null;
     } else if(input.to.ref==='relay'){recipientType='agent';recipientId=originalChat?.agentId??null;}
+  }
+  if(sessionId!==input.session_id||input.to.type==='role'&&input.to.ref==='parent_owner'){
+    const finalSession=ctx.issueSessions().getIssueSession(sessionId);
+    const finalChat=ctx.chat().getChatSession(sessionId);
+    const finalWorkspace=finalSession?.workspaceId??finalChat?.workspaceId
+      ??ctx.db.query('SELECT workspace_id FROM multiremi_autopilots WHERE session_id=?').get(sessionId)?.workspace_id
+      ??ctx.db.query('SELECT workspace_id FROM multiremi_conversation_heads WHERE session_id=?').get(sessionId)?.workspace_id;
+    if(finalWorkspace!==workspaceId||targetIssue&&targetIssue.workspaceId!==workspaceId
+      ||finalSession&&ctx.issues().getIssue(finalSession.issueId)?.workspaceId!==workspaceId)throw new Error('Message conversation not found');
   }
   const targetAgent=recipientType==='agent'&&recipientId?ctx.agents().getAgent(recipientId):null;
   const member=recipientType==='member'&&recipientId?ctx.workspaces().getWorkspaceMember(recipientId):null;

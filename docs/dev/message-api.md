@@ -16,9 +16,11 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 
 没有来源轮的普通成员 decision，其选项和结构化 response 答复按会话权限可见。`metadata.human_response` 本身不代表私有 task 来源；答复关联的原提问有来源任务时仍沿来源鉴权，受保护来源无法解析时仍隐藏。
 
-消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用现有 `/api/attachments/:id/file`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
+消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用 `/api/attachments/:id/download`，内联内容使用 `/api/attachments/:id/content`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、重复回答和非法轮状态 409。
 
-网页 `/ws` 的 log 冷回放、补洞、entry 与 patch 使用同一来源规则与字段脱除；无权行仅发送序号和版本的隐藏标记，具体协议见[浏览器实时 v2](realtime-v2.md)。
+task token 在统一鉴权入口核对绑定的 attempt 是否仍是所属轮的 current_attempt_id，并核对 agent 和工作区；替换 attempt 时在同一事务撤销旧 token，旧 token 的所有入口返回 401。parent_owner 只解析同工作区父单；最终会话或 Issue 不属于发送工作区时拒绝并回滚全部写入。
+
+网页 `/ws` 的 log 冷回放、补洞、entry 与 patch 使用同一来源规则与字段脱除；Chat 会话、WS 订阅和附件都要求创建人仍可访问该 agent。auto_* 和 auto_orphan_inbox_* 的订阅沿用 HTTP 工作区成员边界。每批 WS 投影重新检查会话权限；无权行仅发送序号和版本的隐藏标记，具体协议见[浏览器实时 v2](realtime-v2.md)。
 
 ## Message
 
@@ -30,7 +32,7 @@ MUL-508 的分支接口，由 [unified router](../../packages/server/src/api/rou
 | `GET /api/messages/:id` | 无 | `{message}`，可读 tombstone |
 | `PATCH /api/messages/:id` | `{body_md}` | `{message}`；仅原发送人，已消费或部分消费拒绝 |
 | `DELETE /api/messages/:id` | 无 | `{message}`；同样仅原发送人、未消费；重复删除幂等 |
-| `POST /api/messages/:id/resolve` | `{resolved:true}`，缺省 true | `{message}`，false 取消解决 |
+| `POST /api/messages/:id/resolve` | `{resolved:true}`，缺省 true | `{message}`，false 取消解决；decision、human request/response 返回 409，必须走答复状态机 |
 | `POST /api/messages/:id/reactions` | `{emoji,remove?:boolean}` | `{reactions}`；当前身份，增加及移除幂等 |
 
 发送示例：
@@ -67,7 +69,7 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 | `POST /api/inbox/read` | `{session_id,to_seq?}` | `{session_id,cursor_seq}` |
 | 同上，全部已读 | `{all:true}`，与 session_id/to_seq 互斥 | `{conversations_read}` |
 
-人的收件箱只查当前成员，task token 查当前 agent，不能代查其他身份。items 是所有可见对话中发给自己的未读消息，按 created_at/id 降序，cursor 是服务端返回的 opaque 字符串。计数覆盖所有可见对话，不随分页变化。attention 为 priority<=2 且未解决的未读消息；解决不会自动标读。已读游标只前进，不越过 log head，缺省推进至该对话当前 head。read-all 只改变当前身份的可见对话。agent lane 按 execution_scope 分别读取。
+人的收件箱只查当前成员，task token 查当前 agent，不能代查其他身份。items 是所有可见对话中发给自己的未读消息，按 created_at/id 降序，cursor 是服务端返回的 opaque 字符串。计数覆盖所有可见消息，不随分页变化，使用与 items 相同的逐行来源及 decision 工作区关系规则。attention 为非 inbox_only 且未解决的 decision、成员 request、失败/取消状态或失败/阻塞/取消结果；解决不会自动标读。已读游标只前进，不越过 log head；to_seq 和缺省已读只推进到上界内发给当前身份的最后一条可见消息。read-all 对只有隐藏行的会话不计数、不推进游标。agent lane 按 execution_scope 分别读取。
 
 统一消息提交后发射工作区级 `inbox:new`；单对话已读发射 `inbox:read`，全部已读发射 `inbox:batch-read`，人的入口和 agent 入口均覆盖。新增索引事件只带 `payload:{index_only:true}`，不包含私有正文、会话标识或客户端计数。S5 应据事件重新查询新 inbox 缓存；无需订阅某一会话 log，也不要从事件猜计数。它们经 Store 的最外层 after-commit 和现有 realtime fanout/peer 通道发送，同工作区其他标签页可收到；回滚与幂等发送不发新增消息事件。旧通知生产者的既有 `inbox:new` payload 仍然存在。
 
@@ -84,7 +86,7 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 | `POST /api/turns/:id/retry` | `{cold?:boolean}` | `{turn}`；原 turn.id，新 current_attempt_id，cold 清续接缓存 |
 | `GET /api/turns/:id/trace` | `attempt_id` 缺省 current_attempt_id；`after_seq`、`limit` 沿用 TraceReader 协议 | `{turn_id,attempt_id,...TraceReadResult}` |
 
-input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 不新增轮、不改变 Issue、不补造用户消息；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留。
+input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 要求带 organizer:supervisor scope 的当前 supervisor task 凭证，旁支会话不能重试；不满足返回 403。retry 不新增轮、不改变 Issue、不补造用户消息；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留。
 
 AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/api/agents/:id/tasks`（含 native 对应端点）同批返回 `turn_id`。该字段直接来自 execution read projection 的 canonical turn 映射，不额外逐条查询。全局任务日志使用 `/api/turns/:turn_id/trace?attempt_id=:id`，历史 attempt 也保留所属 turn_id，不可把两类 ID 互换。
 

@@ -10595,7 +10595,7 @@
               "json",
               "jsonl"
             ],
-            "allowed": true
+            "allowed": false
           },
           {
             "id": "turn.trace.read",
@@ -26321,7 +26321,7 @@
       "status": 200,
       "body": {
         "session_id": "ise_snapshot",
-        "cursor_seq": 7
+        "cursor_seq": 0
       }
     },
     {
@@ -26669,9 +26669,10 @@
       "key": "unified-messages-inbox-turns#014 POST /api/turns/:id/retry",
       "route": "POST /api/turns/:id/retry",
       "path": "/api/turns/tsk_snapshot/retry",
-      "status": 409,
+      "status": 403,
       "body": {
-        "error": "A completed or cancelled turn cannot be retried"
+        "error": "supervisor task credential required",
+        "code": "organizer_supervisor_required"
       }
     },
     {

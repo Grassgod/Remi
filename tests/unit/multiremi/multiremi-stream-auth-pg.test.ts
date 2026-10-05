@@ -155,13 +155,14 @@ describe("MUL-438 stream auth SQL, executed through the read pool", () => {
       const strangerRow = await pool.queryOne<any>(LOG_STREAM_FACTS_SQL, ["stranger", session.id, "stranger", session.id]);
       expect(logFactsFromRow(strangerRow)?.requesterIsMember).toBe(false);
 
-      // log: a chat session is its creator's, and membership is irrelevant
+      // Chat facts include the creator's agent access as well as membership.
       const chatRow = await pool.queryOne<any>(LOG_STREAM_FACTS_SQL, ["member", chat.id, "member", chat.id]);
       expect(logFactsFromRow(chatRow)).toEqual({
         kind: "chat",
         workspaceId,
         creatorId: "creator",
         requesterIsMember: true,
+        requesterCanAccessAgent: true,
       });
       expect(decideLogSubscription({ userId: "member", workspaceId }, logFactsFromRow(chatRow)))
         .toEqual({ ok: false, code: "forbidden" });

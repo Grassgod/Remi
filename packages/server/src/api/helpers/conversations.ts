@@ -16,8 +16,20 @@ export function canAccessConversationTask(c: Context, store: MultiremiStore, tas
 
 /** Memo lives for one request and caches only this caller's source-task checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
-  const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>();
+  const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>();
   return (entry: ConversationVisibilityEntry): boolean => {
+    const decision = conversationEntryDecision(entry,
+      id => store.getMessage(id),
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
+    if (decision === null) return false;
+    if (decision) {
+      if (!decision.id) return false;
+      if (!decisions.has(decision.id)) {
+        const session = store.getIssueSession(decision.session_id ?? "");
+        decisions.set(decision.id, !!session && !!store.getIssueDecision(session.issueId, decision.id));
+      }
+      if (!decisions.get(decision.id)) return false;
+    }
     const sourceId = conversationEntrySource(entry,
       id => store.getMessage(id),
       seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
@@ -33,12 +45,31 @@ export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
 }
 
 export interface ConversationVisibilityEntry {
+  id?: string;
   kind: string;
   task_id: string | null;
   session_id?: string;
   reply_to_id?: string | null;
   parent_id?: string | null;
   metadata: Record<string, any>;
+}
+
+/** Replies and mutation markers inherit the Issue decision's relation checks. */
+export function conversationEntryDecision(
+  entry: ConversationVisibilityEntry,
+  reply: (id: string) => ConversationVisibilityEntry | null | undefined,
+  target: (seq: number) => ConversationVisibilityEntry | null | undefined,
+  depth = 0,
+): ConversationVisibilityEntry | null | undefined {
+  if (depth > 4) return null;
+  if (entry.metadata.decision_record?.source_issue_id || entry.metadata.source_issue_id) return entry;
+  if (!entry.metadata.human_response && !Number.isSafeInteger(entry.metadata.target_seq)
+    && typeof entry.metadata.message_id !== "string") return undefined;
+  const replyId = entry.reply_to_id ?? entry.parent_id
+    ?? (typeof entry.metadata.message_id === "string" ? entry.metadata.message_id : null);
+  const related = Number.isSafeInteger(entry.metadata.target_seq) ? target(entry.metadata.target_seq)
+    : replyId ? reply(replyId) : null;
+  return related ? conversationEntryDecision(related, reply, target, depth + 1) : undefined;
 }
 
 /** undefined is unrestricted; null is a protected row with no resolvable source. */
@@ -65,6 +96,10 @@ export function conversationEntrySource(
   // Edit/delete and lifecycle markers can contain the protected row's body.
   if (Number.isSafeInteger(entry.metadata.target_seq)) {
     const row = target(entry.metadata.target_seq);
+    return row ? conversationEntrySource(row, reply, target, depth + 1) : null;
+  }
+  if (typeof entry.metadata.message_id === "string") {
+    const row = reply(entry.metadata.message_id);
     return row ? conversationEntrySource(row, reply, target, depth + 1) : null;
   }
   return undefined;

@@ -3,6 +3,7 @@
 // scoping), and may this user reach this workspace/agent/attachment. `deny*` helpers return a
 // ready-made Response when access is refused and null when it is allowed.
 import type { Context } from "hono";
+import { conversationEntryVisibility } from "./conversations.js";
 import { resolveRequestWorkspaceId } from "./workspace-context.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { daemonRuntimeId } from "@multiremi/store/helpers.js";
@@ -675,10 +676,23 @@ export function loadChatSessionForCurrentUser(
   if ((session.creatorId ?? "local") !== currentRequestUserId(c)) {
     return c.json({ error: "not your chat session" }, 403);
   }
-  if (options.requireAgentAccess !== false && !canCurrentUserAccessChatSessionAgent(c, store, session)) {
+  if (!canUserAccessChatSessionFacts(currentRequestUserId(c), {
+    creatorId: session.creatorId ?? "local", requesterIsMember: true,
+    requesterCanAccessAgent: options.requireAgentAccess === false || canCurrentUserAccessChatSessionAgent(c, store, session),
+  })) {
     return c.json({ error: "you do not have access to this agent" }, 403);
   }
   return { session };
+}
+
+/** HTTP and log subscriptions share the creator, membership and agent boundary. */
+export function canUserAccessChatSessionFacts(userId: string | null, facts: {
+  creatorId: string | null;
+  requesterIsMember: boolean;
+  requesterCanAccessAgent?: boolean;
+}): boolean {
+  return (facts.creatorId ?? "local") === (userId ?? "local")
+    && (userId == null || facts.requesterIsMember) && facts.requesterCanAccessAgent === true;
 }
 
 export function canCurrentUserAccessChatSessionAgent(
@@ -695,6 +709,9 @@ export function canCurrentUserAccessChatSessionAgent(
 // comment, and free-standing attachments are scoped to the attachment workspace.
 // Returns a denial Response when access is forbidden, or null when allowed.
 export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
+  const messageId = attachment.commentId ?? attachment.chatMessageId;
+  const message = messageId ? store.getMessage(messageId) : null;
+  if (message && !conversationEntryVisibility(c, store)(message)) return c.json({ error: "attachment not available" }, 404);
   // Inbound files are private staging objects until submit atomically links them
   // to their Chat. Workspace membership must not expose an unlinked private file.
   if (attachment.uploaderType === "daemon" && !attachment.chatSessionId
@@ -708,10 +725,12 @@ export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachme
       if ((c.req.method === "GET" || c.req.method === "HEAD")
         && task?.chatSessionId === attachment.chatSessionId
         && task.workspaceId === attachment.workspaceId
-        && token.workspaceId === attachment.workspaceId) return null;
+        && token.workspaceId === attachment.workspaceId
+        && token.agentId === task.agentId
+        && store.getTurnForAttempt(task.id)?.current_attempt_id === token.taskId) return null;
       return c.json({ error: "attachment not available" }, 404);
     }
-    const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
+    const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId);
     return loaded instanceof Response ? loaded : null;
   }
   if (attachment.commentId) {

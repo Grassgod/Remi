@@ -32,6 +32,8 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
   const attemptNo=Number(db.query("SELECT COALESCE(MAX(attempt_no),0)+1 AS next_no FROM multiremi_turn_attempts WHERE turn_id=?").get(turnId).next_no);
   db.run(`UPDATE multiremi_turn_attempts SET status=?,failure_reason=?,ended_at=COALESCE(ended_at,?),updated_at=? WHERE id=?`,
     [input.previousStatus,input.reason,now,now,previous.id]);
+  db.run("UPDATE multiremi_access_tokens SET revoked_at=? WHERE type='task' AND task_id=? AND revoked_at IS NULL",
+    [now,previous.id]);
   const carry=["runtime_id","provider","session_id","work_dir","plugin_snapshot","codex_profile","claude_profile",
     "execution_fingerprint","execution_model","execution_thinking_level","fallback_switched","switch_reason",
     "projection_degrade_level"];

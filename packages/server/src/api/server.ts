@@ -673,6 +673,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       const header = c.req.header("Authorization") ?? "";
       const rawToken = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
       const accessToken = rawToken ? await store.verifyAccessToken(rawToken) : null;
+      if (!accessToken && rawToken.startsWith("mat_")) return c.json({ error: "unauthorized" }, 401);
       if (accessToken) {
         if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(c.req.raw)) {
           return c.json({ error: "forbidden for daemon token" }, 403);

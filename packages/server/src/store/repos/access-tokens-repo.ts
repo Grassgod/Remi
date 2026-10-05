@@ -287,6 +287,10 @@ export class AccessTokensRepo {
     // must not disagree because the clock moved between them.
     const nowMs = Date.now();
     if (!accessTokenIsValid(accessToken, nowMs)) return null;
+    if (accessToken.type === "task" && !this.db.query(`SELECT 1 FROM multiremi_turns t
+      JOIN multiremi_turn_attempts a ON a.turn_id=t.id AND a.id=t.current_attempt_id
+      WHERE a.id=? AND t.agent_id=? AND t.workspace_id=?`).get(
+      accessToken.taskId, accessToken.agentId, accessToken.workspaceId)) return null;
     // The row read above is the one whose hash, type, revocation and expiry were just checked, and
     // the only write since is this `last_used_at` stamp — which the returned value does not carry
     // a stale copy of because `lastUsedAt` is not part of the validation. Re-reading it cost one

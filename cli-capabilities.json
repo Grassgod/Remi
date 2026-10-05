@@ -8765,7 +8765,6 @@
       "command": "remi turn retry",
       "aliases": [],
       "auth": [
-        "human",
         "task"
       ],
       "capability": "turn.retry",

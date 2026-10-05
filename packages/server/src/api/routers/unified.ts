@@ -10,6 +10,7 @@ import { currentTaskAccessToken } from "../wire/context.js";
 import { parseTraceWindow } from "../trace/request.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { supervisorTaskIdentity } from "../helpers/organizer.js";
 
 class InputError extends Error {}
 function number(value: unknown, fallback?: number): number | undefined {
@@ -236,13 +237,15 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (boolean(input.all, false)) {
         if (input.session_id != null || input.to_seq != null) throw new InputError("all cannot be combined with session_id or to_seq");
         const visible = (id: string) => !(loadConversation(c, store, id) instanceof Response);
-        return { conversations_read: scope.type === "member" ? store.readAllMessageInbox(scope.readerId, scope.workspaceId, visible) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, undefined, undefined, visible) };
+        const visibleMessage = conversationEntryVisibility(c, store);
+        return { conversations_read: scope.type === "member" ? store.readAllMessageInbox(scope.readerId, scope.workspaceId, visible, visibleMessage) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, undefined, undefined, visible, visibleMessage) };
       }
       if (typeof input.session_id !== "string") throw new InputError("session_id is required");
       const conversation = loadConversation(c, store, input.session_id);
       if (conversation instanceof Response || conversation.workspaceId !== scope.workspaceId) throw new InputError("conversation not found");
       const seq = number(input.to_seq);
-      return { session_id: input.session_id, cursor_seq: scope.type === "member" ? store.readMessageInbox(scope.readerId, input.session_id, seq) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, input.session_id, seq) };
+      const visibleMessage = conversationEntryVisibility(c, store);
+      return { session_id: input.session_id, cursor_seq: scope.type === "member" ? store.readMessageInbox(scope.readerId, input.session_id, seq, visibleMessage) : store.readAgentMessageInbox(scope.readerId, scope.workspaceId, input.session_id, seq, undefined, visibleMessage) };
     });
   });
 
@@ -296,7 +299,12 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const turn = loadTurn(c);
     if (turn instanceof Response) return turn;
     const token = currentTaskAccessToken(c);
-    if (token && token.agentId !== turn.agent_id) return c.json({ error: "only this turn's agent may control it" }, 403);
+    if (operation === "retry") {
+      const supervisor = supervisorTaskIdentity(c, store);
+      if (!supervisor) return c.json({ error: "supervisor task credential required", code: "organizer_supervisor_required" }, 403);
+      const sourceSession = supervisor.task.issueSessionId ? store.getIssueSession(supervisor.task.issueSessionId) : null;
+      if (sourceSession && sourceSession.inheritMode !== "none") return c.json({ error: "Agent delegation is not allowed from side sessions" }, 403);
+    } else if (token && token.agentId !== turn.agent_id) return c.json({ error: "only this turn's agent may control it" }, 403);
     return action(c, async () => {
       const input = await body(c);
       return { turn: operation === "cancel" ? store.cancelTurn(turn.id) : operation === "wrap-up" ? store.wrapUpTurn(turn.id) : store.retryTurn(turn.id, boolean(input.cold, false)) };
