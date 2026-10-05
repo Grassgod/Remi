@@ -36,6 +36,10 @@ API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime
 
 Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，列表等运行卡片首次查询结束再显现，避免卡片插入造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 
+评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
+
+客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
+
 ## 一次任务读取与更新
 
 ```text

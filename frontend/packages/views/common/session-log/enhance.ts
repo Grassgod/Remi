@@ -9,6 +9,7 @@
  * - a copy button on every code block;
  * - a live Mermaid diagram, or a sandboxed HTML preview, where a fence asked
  *   for one.
+ * - a file card inside the server's statically reserved 40px slot.
  *
  * Everything this module does has to be **height-neutral**: the row it runs in
  * has already been positioned by `useAnchoredReveal`, and its height is what
@@ -31,6 +32,7 @@
  */
 
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { isAllowedFileCardHref } from "@multiremi/ui/markdown";
 
 /** Preview kinds the list renders inside a fixed-height slot. */
 export type EntryPreviewKind = "mermaid" | "html";
@@ -45,6 +47,20 @@ export interface EntryPreviewSlot {
   heightPx: number;
 }
 
+export interface EntryFileCardSlot {
+  kind: "fileCard";
+  element: HTMLElement;
+  href: string;
+  filename: string;
+  allowed: boolean;
+  heightPx: number;
+}
+
+export type EntryEnhancementSlot = EntryPreviewSlot | EntryFileCardSlot;
+
+// Re-running also restores removed preview blocks and releases old listeners.
+const activeEnhancements = new WeakMap<HTMLElement, () => void>();
+
 export interface EnhanceEntryHtmlOptions {
   /** The same markdown `body_html` was rendered from. */
   markdown: string;
@@ -58,7 +74,7 @@ export interface EnhanceEntryHtmlOptions {
 
 export interface EnhancedEntryHtml {
   /** Slots to portal previews into. Empty when the row has no such fence. */
-  slots: EntryPreviewSlot[];
+  slots: EntryEnhancementSlot[];
   /** Reverts the mutations this call made. Safe to call more than once. */
   dispose(): void;
 }
@@ -269,6 +285,7 @@ export function enhanceEntryHtml(
   container: HTMLElement,
   options: EnhanceEntryHtmlOptions,
 ): EnhancedEntryHtml {
+  activeEnhancements.get(container)?.();
   const document = container.ownerDocument;
   const write = options.writeClipboard
     ?? (async (text: string) => {
@@ -276,20 +293,25 @@ export function enhanceEntryHtml(
     });
 
   const disposers: Array<() => void> = [];
-  // A re-run (the body changed) must replace the previous wrapper rather than
-  // stack a second one inside it. Skipping this is how a row grows a button per
-  // render — the exact drift this contract exists to prevent.
-  for (const stale of [...container.querySelectorAll(`[${CODE_BLOCK_ATTR}]`)]) {
-    const pre = stale.querySelector("pre");
-    if (pre) stale.replaceWith(pre);
-    else stale.remove();
-  }
-
   const blocks = [...container.querySelectorAll("pre")].filter(
-    (pre): pre is HTMLPreElement => pre instanceof HTMLPreElement,
+    (pre): pre is HTMLPreElement => pre instanceof HTMLPreElement && !pre.closest('div[data-type="fileCard"]'),
   );
   const fences = matchFences(blocks, parseFences(options.markdown));
-  const slots: EntryPreviewSlot[] = [];
+  const slots: EntryEnhancementSlot[] = [];
+
+  const cards = [...container.querySelectorAll<HTMLElement>('div[data-type="fileCard"]')]
+    .filter(card => !card.parentElement?.closest('div[data-type="fileCard"]'));
+  for (const card of cards) {
+    const href = card.getAttribute("data-href") ?? "";
+    const filename = card.getAttribute("data-filename") ?? "";
+    const originalChildren = [...card.childNodes];
+    const slot = document.createElement("div");
+    slot.setAttribute(PREVIEW_SLOT_ATTR, "fileCard");
+    card.replaceChildren(slot);
+    disposers.push(() => card.replaceChildren(...originalChildren));
+    slots.push({ kind: "fileCard", element: slot, href, filename,
+      allowed: isAllowedFileCardHref(href), heightPx: card.getBoundingClientRect().height });
+  }
 
   for (const [index, block] of blocks.entries()) {
     const fence = fences[index] ?? null;
@@ -350,12 +372,15 @@ export function enhanceEntryHtml(
   }
 
   let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    for (const undo of [...disposers].reverse()) undo();
+    if (activeEnhancements.get(container) === dispose) activeEnhancements.delete(container);
+  };
+  activeEnhancements.set(container, dispose);
   return {
     slots,
-    dispose: () => {
-      if (disposed) return;
-      disposed = true;
-      for (const dispose of [...disposers].reverse()) dispose();
-    },
+    dispose,
   };
 }

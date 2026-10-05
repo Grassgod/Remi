@@ -154,18 +154,22 @@ export function AttachmentList({
   content,
   className,
   onRemove,
+  dedupe = "file",
 }: {
   attachments?: Attachment[];
   content?: string;
   className?: string;
   onRemove?: (attachmentId: string) => void;
+  /** Comments hide duplicate uploads; chat keeps distinct URLs even for matching metadata. */
+  dedupe?: "file" | "url";
 }) {
   if (!attachments?.length) return null;
-  // Skip attachments whose URL is already referenced in the markdown content,
-  // and duplicates of the same file (same name/type/size) that are referenced.
+  // Always skip inline URLs. Only the default comment mode also hides matching
+  // name/type/size uploads; those fields cannot identify a distinct chat file.
   const standalone = content
     ? attachments.filter((a) => {
         if (content.includes(a.url)) return false;
+        if (dedupe === "url") return true;
         // Dedup: if another attachment with the same file identity is already
         // inline in the content, this is a duplicate upload — skip it.
         const hasSiblingInContent = attachments.some(
@@ -523,6 +527,7 @@ function CommentCardImpl({
           <>
             <div className="text-sm leading-relaxed text-foreground/85">
               <EntryHtml html={bodyHtml ?? null} markdown={entry.content ?? ""}
+                attachments={entry.attachments}
                 fallback={<ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />} />
             </div>
             <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5" />
