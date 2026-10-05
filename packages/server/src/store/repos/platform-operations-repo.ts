@@ -71,8 +71,11 @@ export class PlatformOperationsRepo {
   constructor(private readonly db: SqlDatabase) {}
 
   getState(): PlatformStateRecord {
-    this.ensureState();
-    const row = this.db.query("SELECT * FROM multiremi_platform_state WHERE id = 'platform'").get() as Row;
+    let row = this.db.query("SELECT * FROM multiremi_platform_state WHERE id = 'platform'").get() as Row | null;
+    if (!row) {
+      this.ensureState();
+      row = this.db.query("SELECT * FROM multiremi_platform_state WHERE id = 'platform'").get() as Row;
+    }
     return toState(row);
   }
 
@@ -153,15 +156,14 @@ export class PlatformOperationsRepo {
     recentReleases?: MultiremiPlatformRelease[];
     services?: MultiremiPlatformService[];
   }): PlatformStateRecord {
-    this.ensureState();
     const current = this.getState();
     const now = nowIso();
-    this.db.run(
+    const row = this.db.query(
       `UPDATE multiremi_platform_state
        SET driver = ?, current_release = ?, latest_release = ?, recent_releases = ?, services = ?,
            updater_heartbeat_at = ?, updated_at = ?
-       WHERE id = 'platform'`,
-      [
+       WHERE id = 'platform' RETURNING *`,
+    ).get(
         input.driver,
         toJson(input.currentRelease === undefined ? current.currentRelease : input.currentRelease),
         toJson(input.latestRelease === undefined ? current.latestRelease : input.latestRelease),
@@ -169,9 +171,8 @@ export class PlatformOperationsRepo {
         toJson(input.services ?? current.services),
         now,
         now,
-      ],
-    );
-    return this.getState();
+    ) as Row;
+    return toState(row);
   }
 
   create(input: CreatePlatformOperationInput, requestedBy: string): MultiremiPlatformOperation {
