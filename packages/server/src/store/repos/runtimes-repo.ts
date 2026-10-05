@@ -1642,7 +1642,9 @@ export class RuntimesRepo {
     if (!target) return [];
 
     const runtimesByDaemon = new Map<string, MultiremiRuntime[]>();
-    for (const runtime of this.listRuntimes()) {
+    // Reconciliation reads identity/liveness/version, never task usage, models or groups.
+    const snapshot = this.runtimeCliReleaseSnapshot();
+    for (const runtime of snapshot.runtimes) {
       const daemonKey = runtime.daemonId?.trim();
       if (runtime.status !== "online" || runtime.runtimeMode !== "local" || !daemonKey) continue;
       const group = runtimesByDaemon.get(daemonKey) ?? [];
@@ -1658,10 +1660,7 @@ export class RuntimesRepo {
         return current ? compareReleaseVersionParts(current, target.parts) >= 0 : false;
       })) continue;
 
-      const previous = runtimes.flatMap((runtime) => this.ctx.db.query(
-        `SELECT status, target_version FROM multiremi_runtime_update_requests
-         WHERE runtime_id = ? AND scope = 'cli'`,
-      ).all(runtime.id) as Array<{ status?: string; target_version?: string }>);
+      const previous = runtimes.flatMap(runtime => snapshot.previous.filter(request => request.runtime_id === runtime.id));
       if (previous.some((request) => {
         const version = parseReleaseVersion(request.target_version);
         return version ? compareReleaseVersionParts(version, target.parts) === 0 : false;
@@ -1679,6 +1678,22 @@ export class RuntimesRepo {
       }));
     }
     return queued;
+  }
+
+  runtimeCliReleaseReconciliationKey(targetVersion: string): string {
+    const snapshot = this.runtimeCliReleaseSnapshot();
+    return JSON.stringify([targetVersion, snapshot.runtimes.map(runtime => [runtime.id, runtime.provider,
+      runtime.daemonId, runtime.status, runtime.runtimeMode, runtimeCliVersion(runtime), runtimeLaunchOwner(runtime)]),
+      snapshot.previous]);
+  }
+
+  private runtimeCliReleaseSnapshot() {
+    const rows = this.ctx.db.query(`SELECT id, provider, daemon_id, runtime_mode, status, metadata, last_heartbeat_at
+      FROM multiremi_runtimes ORDER BY id`).all() as Row[];
+    const previous = this.ctx.db.query(`SELECT DISTINCT runtime_id, status, target_version
+      FROM multiremi_runtime_update_requests WHERE scope = 'cli'
+      ORDER BY runtime_id, status, target_version`).all() as Array<{ runtime_id: string; status: string; target_version: string | null }>;
+    return { runtimes: rows.map(row => withRuntimeLiveness(toRuntime(row))), previous };
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string, input: CreateRuntimeLocalSkillListInput = {}): MultiremiRuntimeLocalSkillListRequest {

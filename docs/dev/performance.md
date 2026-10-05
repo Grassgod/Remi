@@ -499,9 +499,14 @@ bun run tests/integration/zero-jump-session-log-check.ts
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-store-issues.test.ts tests/unit/multiremi/multiremi-api-issues.test.ts` | 列表、搜索及 API 行为；功能测试不是性能基线。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-api-search-inbox.test.ts` | 收件箱游标、摘要和原有读/归档契约；不产出性能数据。 |
 | 仓库根 | `bun run --preload ./tests/setup/hermetic-env.ts tests/manual/bench-first-screen-hotspots-pr2.ts --out <path>` | inbox 摘要、附件内容（完整响应与条件请求）、workspace Runtime 列表的同口径 dbq、db、过桥字节及响应字节。显式 `MULTIREMI_TEST_POSTGRES_URL` 启用真实 PG，否则使用 SQLite；PG 失败不回落。摘要按全部未归档 selection 聚合，附件 `/content` 在鉴权后比较 id ETag；三条上传路径统一排他创建，使用完整 UUID id，碰撞最多重试三次，失败只清理本次创建的文件。Runtime usage/group/model 各一次批量读，两条列表查询固定按 `updated_at DESC, id DESC` 排序。基线与 golden 复现见 `reports/performance/MUL-473-pr2-first-screen-hotspots.md`。 |
+| 仓库根 | `env -u MULTIREMI_TOKEN bun run tests/manual/bench-mul395-s9-5.ts --out <path>` | S9-5 Chat 列表、Runtime/执行组/模型列表和 updater heartbeat；必须显式配置一次性 PG，失败不回落 SQLite。250 Chats、10 runtimes，`MUL395_TASKS` 控制历史任务规模；实际桥计数、最大单回复字节和连续 timer 的不可让出区间逐轮留样。sample 0 是各路由首读，随后预热 5 次、正式 20 次；usage 缓存跨路由共享。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-postgres-store.test.ts` | SQL 翻译和真实 PG store 契约；`MULTIREMI_TEST_POSTGRES_URL` 指向可创建临时数据库的测试实例，**本地/Agent 会话必须显式设置，否则集成部分整片静默 skip**（CI 在 `release-build-check.yml` 的 backend suite 步骤显式声明），不可达时跳过并打印原因，须记录 skipped。 |
 | 仓库根 | `MULTIREMI_TEST_POSTGRES_URL=postgres://… bun test tests/unit/multiremi/multiremi-task-list-postgres.test.ts` | MUL-357 的 PG 侧证据：迁移的两个分页索引真的建出且 `indexdef` 与 `ORDER BY created_at DESC, id DESC` 匹配、`EXPLAIN (ANALYZE)` 不出现 Seq Scan/全量 Sort、`?`→`$n` 的 status/游标/limit 绑定顺序、分页走遍后与未分页集合一致。UNSET 时默认落到 `postgres://multimira:multimira@localhost:5432/postgres`（即 CI service container），不可达时跳过并打印原因，须记录 skipped。 |
 | `frontend/packages/core` | `bun run test issues/queries.test.ts issues/ws-updaters.test.ts realtime/sync/tasks.test.ts realtime/use-realtime-sync.test.ts` | 查询、精确缓存更新、实时排序/去重与刷新语义。 |
+
+S9-5 的 Chat API 列表在 SQL 排除 transport 会话，批量读取 agent 的权限所需字段；不改变 store 列表的默认选择或用户侧响应。PG Runtime 列表与单条读取共享 settled-token 缓存，单条 SQL 返回全部 runtime 的计数、已结束任务版本和未结束任务 usage，版本变化时才返回已结束任务 usage。SQLite 保留原扫描。token 使用原 JS parser；总数超过安全整数范围时列表退回原扫描，避免加法顺序改变字段值。缓存首读、失效和大量未结束任务的回包仍可能随任务规模增长，因此不能把稳定缓存下的数字当作所有请求的上界。
+
+Updater heartbeat 保留每次状态写入与活动发版检查；未到检查时点时跳过重复的自动更新检查。CLI 对齐使用 app 内的成功指纹，包含当前版本、daemon 身份/有效在线状态/CLI 版本/launch owner 和 CLI 请求记录；相同版本下新 daemon 或请求状态变化仍会执行对齐，发版活动期间不执行。对齐只读这些字段，不再附带 runtime usage、models、groups。首读、到点检查和创建 CLI 请求的费用独立报告，见 `reports/performance/MUL-395-s9-5-{A,B,C}.md`。
 | `frontend/packages/views` | `bun run test common/task-transcript/build-timeline.test.ts common/task-transcript/agent-transcript-dialog.test.tsx` | 工具配对、子 agent 展示、终态和弹窗交互。 |
 | `frontend/packages/core` / `frontend/packages/views` | 分别运行 `bun run test inbox/mutations.test.tsx` / `bun run test inbox/components/inbox-page.test.tsx` | 分页缓存 mutation、追加页、选择与折叠条目操作。 |
 

@@ -3435,6 +3435,10 @@ runMigrations(this.db);
     return this.runtimes.reconcileRuntimeCliRelease(targetVersion);
   }
 
+  runtimeCliReleaseReconciliationKey(targetVersion: string): string {
+    return this.runtimes.runtimeCliReleaseReconciliationKey(targetVersion);
+  }
+
   getRuntimeUpdateRequest(runtimeId: string, requestId: string): MultiremiRuntimeUpdateRequest | null {
     return this.runtimes.getRuntimeUpdateRequest(runtimeId, requestId);
   }
