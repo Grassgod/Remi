@@ -5,6 +5,55 @@
 ## 切换顺序
 
 1. 发布负责人集成时，将 `packages/contracts/src/daemon-protocol.ts` 的 `DAEMON_MIN_CLI_VERSION` 从 `999.0.0-unreleased-mul507` 替换为第一个包含 MUL-507 的正式版本，并同步协议说明；`0.2.86` 留给 MUL-496 补丁。确认占位值已移除、版本门与正式 tag 一致、目标版本全部集成，按集成时有效的发布门禁验证正式 main 提交。当前 release-build-check 已停用，不等待该检查；保留 Developer context 与相关定向测试证据，正式发布门禁由发布负责人核对。
+
+   目前保留占位值，不猜测正式版号。版号确定后，在仓库根目录将以下命令的 `<正式版本，不带 v>` 换成已批准的版本再执行。命令只填写协议常量及协议说明，不改 package 版本、不打 tag、不发布；正常发版仍由发布负责人执行。
+
+   ```bash
+   MUL493_RELEASE_VERSION='<正式版本，不带 v>' python3 - <<'PY'
+   import os, re
+   from pathlib import Path
+   version = os.environ['MUL493_RELEASE_VERSION']
+   assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), '需要稳定 SemVer，不带 v'
+   assert version not in ('0.2.86', '999.0.0'), '不得使用保留版号或占位版号'
+   edits = {
+       'packages/contracts/src/daemon-protocol.ts': (
+           'export const DAEMON_MIN_CLI_VERSION = "999.0.0-unreleased-mul507";',
+           f'export const DAEMON_MIN_CLI_VERSION = "{version}";'),
+       'docs/daemon-protocol-v2.md': (
+           '当前 `DAEMON_MIN_CLI_VERSION` 为明显的未发布占位值 `999.0.0-unreleased-mul507`。',
+           f'当前 `DAEMON_MIN_CLI_VERSION` 为首个包含 MUL-507 的正式版本 `{version}`。'),
+   }
+   prepared = []
+   for name, (old, new) in edits.items():
+       path = Path(name)
+       text = path.read_text()
+       assert text.count(old) == 1, f'{name}: 原值已变，请人工核对'
+       prepared.append((path, text.replace(old, new)))
+   for path, text in prepared:
+       path.write_text(text)
+   PY
+   ```
+
+   同一提交还需将常量上方的 `RELEASE PLACEHOLDER` 注释改为正式版门槛说明，并将 [协议说明 §7.4b](../daemon-protocol-v2.md#74b-daemon_min_cli_version-与载荷发布版本) 的后续占位提醒改为实际 tag 和目标 main SHA 的核对要求。此步骤的替换示例可保留作操作说明；检查占位是否残留应针对常量赋值和协议当前值，不能把手册示例误判成仍在使用占位。
+
+   测试无需批量换字符串：接入成功的夹具从 `DAEMON_MIN_CLI_VERSION` 导入，旧版拒绝用例保留原版号。复核并定向运行以下文件：
+
+   | 文件 | 必须保持的检查 |
+   |---|---|
+   | `tests/unit/daemon/daemon-protocol.test.ts` | 最低版本和更高版本可接入；旧 fleet 版本拒绝 |
+   | `tests/unit/daemon/daemon-protocol-client.test.ts` | reject 后等待升级，不认领任务；welcome 后正常运行 |
+   | `tests/unit/multiremi/runtime-protocol.test.ts` | 版本守卫、升级状态、正式版本接入 |
+   | `tests/unit/multiremi/daemon-task-offers.test.ts` | 使用最低版本的握手及 offer 仍可执行 |
+
+   ```bash
+   bun run test tests/unit/daemon/daemon-protocol.test.ts tests/unit/daemon/daemon-protocol-client.test.ts tests/unit/multiremi/runtime-protocol.test.ts tests/unit/multiremi/daemon-task-offers.test.ts
+   bunx tsc --noEmit
+   npm run docs:test
+   npm run docs:check
+   git diff --check
+   ```
+
+   若正式版号不高于拒绝用例中的旧版号，停止填写并核对发布方案，不放宽断言。发布前核对 `package.json`、正式 tag、Release 资产、常量及目标 main SHA；此处定向检查不替代发布负责人确认的发版门禁。
 2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。
 3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
 
