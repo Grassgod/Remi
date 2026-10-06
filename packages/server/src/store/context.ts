@@ -479,6 +479,7 @@ export interface AnalyticsSurface {
 }
 
 export interface WorkspacesSurface {
+  getUserRoleInWorkspace(userId: string | null | undefined, workspaceId: string): string | null;
   getUser(id: string): MultiremiUser | null;
   getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null;
   /** MUL-412: the users-table row a Feishu open_id belongs to, if any. */
@@ -838,6 +839,7 @@ export interface IssueSessionsSurface {
 }
 
 export interface RuntimesSurface {
+  isDaemonRetired(workspaceId: string, daemonId: string): boolean;
   getRuntimeCodexProfile(id: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntimeExecutionProfile(id: string, provider: string): import("@multiremi/contracts/codex-profile").RuntimeCodexProfile | null;
   getRuntime(id: string): MultiremiRuntime | null;

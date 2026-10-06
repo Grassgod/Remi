@@ -317,13 +317,13 @@ export class AgentsSkillsRepo {
         const rt = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
           [newRuntimeId, now, String(row.id)],
         );
       } else {
         // Session/other pin: the old session is void — re-pool it.
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
           [now, String(row.id)],
         );
       }

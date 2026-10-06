@@ -1124,6 +1124,7 @@ describe("Multiremi API — daemon endpoints", () => {
 
     const failingTask = store.createTask({ agentId: agent.id, prompt: "fail me" });
     expect(store.claimTask(runtime.id)?.id).toBe(failingTask.id);
+    store.recordTaskOffered(failingTask.id, runtime.id);
     const fail = await reportFrame(store, "task.fail", { task_id: failingTask.id, error: "boom",
         failure_reason: "codex_semantic_inactivity",
         session_id: "sess-fail",
@@ -1144,6 +1145,7 @@ describe("Multiremi API — daemon endpoints", () => {
 
     const camelReasonTask = store.createTask({ agentId: agent.id, prompt: "camel reason should not work" });
     expect(store.claimTask(runtime.id)?.id).toBe(camelReasonTask.id);
+    store.recordTaskOffered(camelReasonTask.id, runtime.id);
     const camelReasonFail = await reportFrame(store, "task.fail", { task_id: camelReasonTask.id, error: "camel boom", failureReason: "codex_semantic_inactivity" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(camelReasonFail.ok).toBe(true);
     const camelReasonBody = daemonTaskWireResponse(store.getTask(camelReasonTask.id)!);

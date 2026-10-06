@@ -711,7 +711,7 @@ export class DaemonRetirementRepo {
         ).changes;
         queuedTasksRequeued = this.ctx.db.run(
           `UPDATE multiremi_tasks
-           SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ?
+           SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ?
            WHERE runtime_id IN (${placeholders}) AND status = 'queued'`,
           [now, ...runtimeIds],
         ).changes;
