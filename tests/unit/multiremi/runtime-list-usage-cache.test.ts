@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
@@ -102,10 +102,31 @@ test("runtime list/detail uses canonical facts across repeated reads, revisions,
   } finally { await database.dispose(); }
 });
 
-test("unchanged open usage has bounded bridge bytes and mutations remain immediately visible", async () => {
-  const database = await openHotspotDatabase();
-  const db = database.db, store = new MultiremiStore(db);
-  try {
+describe("runtime list open-usage fixture", () => {
+  let database: Awaited<ReturnType<typeof openHotspotDatabase>> | undefined;
+  let db: SqlDatabase;
+  let store: MultiremiStore;
+  const disposeFixture = async () => {
+    const resource = database;
+    database = undefined;
+    await resource?.dispose();
+  };
+
+  // Creating a disposable PG database and installing the full platform schema
+  // is fixture setup, independent of the list/read and mutation checks below.
+  beforeAll(async () => {
+    try {
+      database = await openHotspotDatabase();
+      db = database.db;
+      store = new MultiremiStore(db);
+    } catch (error) {
+      await disposeFixture();
+      throw error;
+    }
+  });
+  afterAll(disposeFixture);
+
+  test("unchanged open usage has bounded bridge bytes and mutations remain immediately visible", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "open usage golden", provider: "codex" });
     for (let i = 0; i < 10; i++) store.registerRuntime({ id: `rt_open_${i}`, name: `open ${i}`, provider: "codex", maxConcurrency: 32 });
@@ -142,7 +163,7 @@ test("unchanged open usage has bounded bridge bytes and mutations remain immedia
     db.run("DELETE FROM multiremi_turn_attempts WHERE id = 'tsk_open_5'"); compare();
     db.run("DELETE FROM multiremi_turn_attempts WHERE runtime_id = 'rt_open_6'"); compare();
     if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
-  } finally { await database.dispose(); }
+  });
 });
 
 test("native telemetry rejects unsafe counts and scalar totals preserve large safe integers", async () => {
