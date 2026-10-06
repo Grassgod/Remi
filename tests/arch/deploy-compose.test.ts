@@ -20,6 +20,7 @@ const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.appl
 const envExample = readFileSync(resolve(repoRoot, "deploy/docker/application.env.example"), "utf8");
 const apiEnvExample = readFileSync(resolve(repoRoot, "deploy/docker/api.env.example"), "utf8");
 const apiDockerfile = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.api"), "utf8");
+const webDockerfile = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.web"), "utf8");
 const splitUpstream = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-upstream.conf"), "utf8");
 const splitLocations = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-locations.conf"), "utf8");
 const deployReadme = readFileSync(resolve(repoRoot, "deploy/README.md"), "utf8");
@@ -32,6 +33,17 @@ function splitSection(readme: string): string {
 }
 
 describe("application compose stack", () => {
+  test("keeps the SSR API URL in the Web runtime stage on the shared app network", () => {
+    // The runtime starts from a fresh Node image and cannot inherit the build ENV.
+    const runtime = webDockerfile.split(/^FROM .+ AS runtime\s*$/mu)[1]?.split(/^FROM /mu)[0];
+    expect(runtime).toBeDefined();
+    expect(runtime!).toMatch(/^ARG REMOTE_API_URL=http:\/\/api:6120$/mu);
+    expect(runtime!).toMatch(/^ENV REMOTE_API_URL=\$REMOTE_API_URL$/mu);
+    expect(compose.services.api!.environment.MULTIREMI_PORT).toBe(6120);
+    expect(compose.services.api!.networks).toContain("app");
+    expect(compose.services.web!.networks).toContain("app");
+  });
+
   test("ships no ingestion service, profile, or endpoint registry", () => {
     // The sidecar is retired. Anything left behind here — a service, a profile
     // to enable it, an endpoint name to point at it — would be config that
