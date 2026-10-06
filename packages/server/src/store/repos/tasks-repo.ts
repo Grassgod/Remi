@@ -4848,6 +4848,13 @@ ${placementAfter.sql}
         if(input.turnInputToSeq!==undefined){
           const offered=this.ctx.db.query('SELECT projection_to_seq FROM multiremi_turn_attempts WHERE id=?').get(taskId)?.projection_to_seq??0;
           if(turn.current_attempt_id!==taskId||input.turnInputToSeq>offered||input.turnInputToSeq<Number(turn.input_to_seq??0))throw new Error('stale_attempt');
+          const scopeSql=this.ctx.db.dialect==='postgres'?"COALESCE(metadata::jsonb->>'execution_scope','')":"COALESCE(json_extract(metadata,'$.execution_scope'),'')";
+          // Offered interrupts must finish in this turn; unoffered input is re-rung after it ends.
+          const pending=this.ctx.db.query(`SELECT 1 FROM multiremi_conversation_log WHERE session_id=?
+            AND kind='message' AND visibility='shown' AND deleted_at IS NULL AND to_agent_id=?
+            AND wake_applied='now' AND seq>? AND seq<=? AND ${scopeSql}=? LIMIT 1`)
+            .get(turn.session_id,turn.agent_id,input.turnInputToSeq,offered,turn.execution_scope);
+          if(pending)throw new Error('turn_input_pending');
           assertOfferedInputRead(this.ctx,turn,input.turnInputToSeq);
           acknowledgeInput(this.ctx,turn.id,Number(turn.input_to_seq??0),input.turnInputToSeq,false);
           acknowledgeAttemptInput(this.ctx,turn,input.turnInputToSeq);

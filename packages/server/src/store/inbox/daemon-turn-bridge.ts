@@ -28,9 +28,9 @@ const invalidTurnReports=new Set([
   'Source turn does not belong to the sender workspace',
   'Message sender belongs to another workspace','Message recipient belongs to another workspace',
 ]);
-function turnRejectionCode(error:unknown,attemptId:string,runtimeId:string):'stale_attempt'|'input_gap'|'invalid_report'|null {
+function turnRejectionCode(error:unknown,attemptId:string,runtimeId:string):'stale_attempt'|'input_gap'|'turn_input_pending'|'invalid_report'|null {
   if(!(error instanceof Error))return null;
-  if(error.message==='stale_attempt'||error.message==='input_gap')return error.message;
+  if(error.message==='stale_attempt'||error.message==='input_gap'||error.message==='turn_input_pending')return error.message;
   if(invalidTurnReports.has(error.message)
     ||error.message===`Task not found or terminal: ${attemptId}`
     ||error.message===`Runtime not found: ${runtimeId}`
@@ -177,7 +177,7 @@ export class DaemonTurnBridge {
       }
       const code=turnRejectionCode(error,p.attempt_id,scope.runtimeId);
       if(code===null)throw error;
-      return {ok:false,code:code==='stale_attempt'?'stale_attempt':'invalid_report',retryable:false};
+      return {ok:false,code:code==='input_gap'?'invalid_report':code,retryable:false};
     }
   }
 }

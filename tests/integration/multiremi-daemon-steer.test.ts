@@ -221,10 +221,12 @@ describe("Bun Multiremi daemon steering", () => {
     const prompts: string[] = [];
     let steerId = "";
     let conflicts = 0;
-    const originalComplete = store.completeTaskFromDaemon.bind(store);
-    const complete = spyOn(store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+    const originalComplete = store.completeTask.bind(store);
+    const complete = spyOn(store, "completeTask").mockImplementation((id, input, authority) => {
       if (id === task.id && !steerId) {
         steerId = store.createTaskSteerMessage({ taskId: id, kind: "steer", content: "Include the final directive" }).id;
+        store.getDaemonTurnBridge().snapshot({ runtimeId: authority!.runtimeId, daemonId: authority!.daemonId,
+          workspaceId: authority!.workspaceId }, new Set([id]));
         conflicts++;
       }
       return originalComplete(id, input, authority);
