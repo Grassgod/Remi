@@ -1,6 +1,6 @@
 import { turnCompletion } from "../../fixtures/turn-report.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import type { Database } from "bun:sqlite";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
@@ -27,14 +27,13 @@ async function readInput(h: DaemonProtocolHarness, id: string) {
     .toMatchObject({ ok: true, input_to_seq: input.input_to_seq });
 }
 
-function usageState(db: Database, taskId: string) {
+function usageState(db: SqlDatabase, taskId: string) {
   const tables = ["multiremi_usage_runs", "multiremi_usage_units", "multiremi_usage_unit_receipts",
     "multiremi_usage_task_scopes", "multiremi_usage_run_scopes", "multiremi_usage_legacy_audit",
     "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources"];
-  return { task: db.query("SELECT * FROM multiremi_tasks WHERE id=?").get(taskId) as Record<string, unknown>,
+  return { task: db.query("SELECT * FROM multiremi_turn_attempts WHERE id=?").get(taskId) as Record<string, unknown>,
     ledger: Object.fromEntries(tables.map(table => [table,
-      db.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
-        ? db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY rowid`).all(taskId) : []])) };
+      db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY ${table === "multiremi_usage_runs" || table === "multiremi_usage_run_scopes" ? "run_id" : table === "multiremi_usage_units" || table === "multiremi_usage_unit_receipts" ? "run_id, unit_id" : table === "multiremi_usage_legacy_versions" ? "source_version" : "task_id"}`).all(taskId)])) };
 }
 
 describe("v2 report reconciliation with real sockets and DB", () => {
@@ -118,7 +117,8 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           expect(usageChanges.get(t.id)).toBe(2);
           // A server restart may checkpoint the accepted old source at a newer
           // revision. Replay stability is checked around each Store call above.
-          expect(h.db.query(`SELECT COUNT(*) AS units,SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens
+          expect(h.db.query(`SELECT CAST(COUNT(*) AS INTEGER) AS units,
+            CAST(SUM(input_tokens) AS INTEGER) AS input_tokens,CAST(SUM(output_tokens) AS INTEGER) AS output_tokens
             FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'`).get(t.id)).toEqual({ units: 2, input_tokens: 12, output_tokens: 5 });
           const entries = h.ledger.filter(entry => entry.partition === t.id && entry.seq !== null);
           entries.forEach(entry => arrived.add(`${t.id}:${entry.seq}`));
