@@ -176,9 +176,9 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let entry;
   if(existing){
     if(existing.to_agent_id&&existing.to_agent_id!==recipientId)throw new Error('A routed message cannot change recipient');
-    ctx.db.run(`UPDATE multiremi_conversation_log SET to_type=?,to_ref=?,to_agent_id=?,to_member_id=?,message_kind=?,
+    ctx.db.run(`UPDATE multiremi_conversation_log SET to_type=?,to_ref=?,to_agent_id=?,to_member_id=?,message_kind=?,reply_to_id=?,
       wake_requested=?,wake_applied=?,wake_reason=?,dedupe_key=?,options=?,task_id=COALESCE(?,task_id) WHERE id=?`,
-      [header.to_type,header.to_ref,header.to_agent_id,header.to_member_id,header.message_kind,header.wake_requested,header.wake_applied,header.wake_reason,
+      [header.to_type,header.to_ref,header.to_agent_id,header.to_member_id,header.message_kind,header.reply_to_id,header.wake_requested,header.wake_applied,header.wake_reason,
         header.dedupe_key,header.options?JSON.stringify(header.options):null,source?.id??null,existing.id]);
     ctx.conversationLog().updateConversationLogWithinTransaction(sessionId,existing.seq,{deferEmit:true,fields:{metadata:{...existing.metadata,...metadata,pending_completion:false}}});
     ctx.db.run("UPDATE multiremi_conversation_log SET visibility='shown' WHERE id=?",[existing.id]);
