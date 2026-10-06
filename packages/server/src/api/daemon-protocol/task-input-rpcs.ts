@@ -30,7 +30,7 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
       if (type === "turn.decision.expire" && p.status !== "cancelled" && p.status !== "timeout") return denied();
       const result = await turns.rpc(type as DaemonTurnRpc, p, { runtimeId: frame.rt!, daemonId: session.daemonId,
         workspaceId: store.getRuntimeLite(frame.rt!)!.workspaceId ?? "local" });
-      kick(frame.rt!);
+      if (result.ok === true) kick(frame.rt!);
       return result;
     });
   }
