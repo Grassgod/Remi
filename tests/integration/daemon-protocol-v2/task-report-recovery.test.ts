@@ -1,6 +1,6 @@
+import { turnCompletion } from "../../fixtures/turn-report.js";
 import { expect, spyOn, test } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
-import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 for (const confirmed of [false, true]) {
@@ -35,7 +35,7 @@ for (const confirmed of [false, true]) {
           socket.close(4001);
           return false;
         }
-        if (frame.t === "task.complete" && !droppedCompletionAck) {
+        if (frame.t === "turn.complete" && !droppedCompletionAck) {
           const session = harness.sessions.at(-1)!;
           const sendReply = session.sendReply.bind(session);
           replies.push(spyOn(session, "sendReply").mockImplementation((re, payload) => {
@@ -89,15 +89,15 @@ for (const confirmed of [false, true]) {
       expect(runs).toBe(1);
       expect(h.store.getTask(task.id)?.result).toBe("synthetic answer");
       expect(h.effectiveLedger.filter(entry => entry.type === "task.start" && entry.partition === task.id)).toHaveLength(1);
-      expect(h.effectiveLedger.filter(entry => entry.type === "task.complete" && entry.partition === task.id)).toHaveLength(1);
-      expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === task.id)).toHaveLength(2);
+      expect(h.effectiveLedger.filter(entry => entry.type === "turn.complete" && entry.partition === task.id)).toHaveLength(1);
+      expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === task.id)).toHaveLength(2);
       expect(h.store.listIssueComments(issue.id)).toEqual(comments);
       expect(comments.filter(comment => comment.body === "synthetic answer")).toHaveLength(1);
       expect(h.store.listSessionEvents(session)).toEqual(events);
       expect(h.store.getTask(task.id)!.attempt).toBe(attempts);
       expect(h.store.listWorkspaceAgentRunCounts()).toEqual(counters);
       expect(cards.filter(id => id === task.id)).toHaveLength(1);
-      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
+      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toHaveLength(1);
       await waitFor(() => h.store.getPlatformDrainStatus().ready, "recovery opens drain gate", 5_000);
       expect(h.store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 0, ready: true });
     } finally {
@@ -108,7 +108,7 @@ for (const confirmed of [false, true]) {
   }, 15_000);
 }
 
-test("a new Issue envelope during offer recovery runs once in a separate turn", async () => {
+test("a new Issue message during offer recovery is consumed in the same turn", async () => {
   let finish!: () => void;
   const finishing = new Promise<void>(resolve => { finish = resolve; });
   let droppedAcceptance = false;
@@ -117,12 +117,13 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
   const prompts: string[] = [];
   const h = await DaemonProtocolHarness.create({ outboxBackoffMs: [5], daemonOptions: { maxConcurrency: 1 },
     providerFactory: () => {
-      const turn = ++providers;
-      const text = turn === 1 ? "first turn answer" : "new input answer";
+      ++providers;
+      let text = "first turn answer";
       return {
         async *sendStream(message) {
           prompts.push(message);
-          if (turn === 1) await finishing;
+          text = message.includes("New input must be consumed by recovered turn") ? "new input answer" : "first turn answer";
+          if (prompts.length === 1) await finishing;
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text }] } as any;
         },
         getLastResponse: () => ({ text, sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
@@ -165,9 +166,10 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     "real Issue offer disconnect and requeue", 5_000);
     const oldTask = h.store.getTask(oldTaskId)!;
     const oldBound = h.store.getBoundIssueLogToSeq(oldTaskId);
-    const oldOffer = h.received.find(frame => frame.t === "task.offer" && frame.p.id === oldTaskId)!;
+    const oldOffer = h.received.find(frame => frame.t === "task.offer" && frame.p.attempt_id === oldTaskId)!;
     const deliveredTo = oldOffer.p.session_projection.to_seq;
-    const next = send("New input must receive its own turn", "new-input");
+    const next = send("New input must be consumed by recovered turn", "new-input");
+    expect(next.task?.id).toBe(oldTaskId);
     expect(next.entry.seq).toBeGreaterThan(deliveredTo);
     expect(h.store.getTask(oldTaskId)).toMatchObject({ prompt: oldTask.prompt,
       triggerCommentId: oldTask.triggerCommentId });
@@ -178,36 +180,26 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "running", "old Issue turn recovered", 5_000);
     finish();
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "completed"
-      && h.store.listTasksForIssue(issue.id).some(task => task.id !== oldTaskId)
       && h.daemon.outboxStats()?.pending === 0,
-    "unread envelope re-rings a distinct task", 5_000);
-    // The server's capacity snapshot still includes the old active task until
-    // the next real heartbeat; advance its timer without changing DB state.
-    h.clock.advance(15_000);
-    // The production offer pump retains its wall-clock disconnect cooldown.
-    await waitFor(() => h.store.getTask(oldTaskId)?.status === "completed"
-      && h.store.listTasksForIssue(issue.id).some(task => task.id !== oldTaskId && task.status === "completed")
-      && h.daemon.outboxStats()?.pending === 0, "new envelope gets a separately completed turn", DAEMON_OFFER_COOLDOWN_MS + 5_000);
+    "recovered turn consumes its interrupt and completes", 5_000);
     const tasks = h.store.listTasksForIssue(issue.id);
-    expect(tasks).toHaveLength(2);
-    const newTask = tasks.find(task => task.id !== oldTaskId)!;
-    expect(h.store.getTask(oldTaskId)?.result).toBe("first turn answer");
-    expect(newTask.result).toBe("new input answer");
-    const newOffer = h.received.find(frame => frame.t === "task.offer" && frame.p.id === newTask.id)!;
-    expect(newOffer.p.session_projection.to_seq).toBeGreaterThanOrEqual(next.entry.seq);
-    expect(newOffer.p.session_projection.jsonl).toContain(next.entry.body_md);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.result).toBe("new input answer");
+    expect(h.received.filter(frame => frame.t === "turn.message" && frame.p.message.id === next.entry.id)).toHaveLength(1);
+    expect(h.store.getTurnForAttempt(oldTaskId)?.input_to_seq).toBeGreaterThanOrEqual(next.entry.seq);
+    expect(h.ledger.some(entry => entry.type === "turn.input" && entry.frame.p.input_to_seq >= next.entry.seq)).toBe(true);
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain(next.entry.body_md);
-    expect(providers).toBe(2);
+    expect(providers).toBe(1);
     for (const task of tasks) {
-      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
-      expect(h.effectiveLedger.filter(entry => entry.type === "task.complete" && entry.partition === task.id)).toHaveLength(1);
+      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toHaveLength(1);
+      expect(h.effectiveLedger.filter(entry => entry.type === "turn.complete" && entry.partition === task.id)).toHaveLength(1);
     }
   } finally {
     finish();
     await h.dispose();
   }
-}, DAEMON_OFFER_COOLDOWN_MS + 15_000);
+}, 15_000);
 
 test("duplicate completion does not repeat delegation wakeups, comments or counters", async () => {
   const h = await DaemonProtocolHarness.create({ outboxBackoffMs: [5] });
@@ -231,16 +223,20 @@ test("duplicate completion does not repeat delegation wakeups, comments or count
     const finished = h.store.getTask(task.id)!;
     expect(finished.delegationReturnTaskId).toBeString();
     const returned = h.store.getTask(finished.delegationReturnTaskId!)!;
-    expect(returned).toMatchObject({ agentId: leader.id, parentTaskId: task.id });
+    expect(returned).toMatchObject({ agentId: leader.id, parentTaskId: null });
+    expect(h.store.getMessage(returned.triggerCommentId!)?.metadata.message_source).toMatchObject({ taskId: task.id });
+    expect(h.store.getTurnForAttempt(task.id)?.delegation_return_turn_id).toBe(h.store.getTurnForAttempt(returned.id)?.id);
     const comments = h.store.listIssueComments(child.id);
     const sessionEvents = h.store.listSessionEvents(source.issueSessionId!);
     const tasks = h.store.listTasks().map(task => ({ id: task.id, attempt: task.attempt, status: task.status }));
     const activity = h.store.listIssueActivity(parent.id);
     const counters = h.store.listWorkspaceAgentRunCounts();
-    expect(sessionEvents.filter(event => event.kind === "delegation_report" && event.taskId === task.id)).toHaveLength(1);
+    const reports = h.store.listMessages(source.issueSessionId!).filter(message => message.dedupe_key === `delegation_terminal:${task.id}`);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.metadata.message_source).toMatchObject({ taskId: task.id });
     for (const seq of [100_000, 100_001]) {
-      await expect(h.client.event({ t: "task.complete", seq, rt: runtimeId,
-        p: { task_id: task.id, output: "fixture" } })).resolves.toMatchObject({ ok: true });
+      await expect(h.client.event({ t: "turn.complete", seq, rt: runtimeId,
+        p: turnCompletion(h.store, task.id, "fixture", {  }) })).resolves.toMatchObject({ ok: true });
     }
     expect(h.store.listIssueComments(child.id)).toEqual(comments);
     expect(h.store.listSessionEvents(source.issueSessionId!)).toEqual(sessionEvents);
@@ -307,10 +303,9 @@ for (const replacement of ["cancelled", "assigned elsewhere"] as const) {
       await waitFor(() => h.ledger.some(entry => entry.type === "task.start" && entry.partition === task.id), "late start reaches server", 5_000);
       if (replacement === "assigned elsewhere") await expect(h.client.event({ t: "task.start", seq: 99_999, rt: runtimeId,
         p: { task_id: reportTaskId } })).rejects.toMatchObject({ code: "authority_revoked", retryable: false });
-      const completion = h.client.event({ t: "task.complete", seq: 100_000, rt: runtimeId,
-        p: { task_id: reportTaskId, output: "late result" } });
-      if (replacement === "assigned elsewhere") await expect(completion).rejects.toMatchObject({ code: "authority_revoked", retryable: false });
-      else await expect(completion).resolves.toMatchObject({ ok: true });
+      const completion = h.client.event({ t: "turn.complete", seq: 100_000, rt: runtimeId,
+        p: turnCompletion(h.store, reportTaskId, "late result", {  }) });
+      await expect(completion).rejects.toMatchObject({ code: replacement === "assigned elsewhere" ? "stale_attempt" : "invalid_report", retryable: false });
       expect(h.store.getTask(reportTaskId)).toMatchObject({
         status: authoritative.status, runtimeId: authoritative.runtimeId,
         startedAt: authoritative.startedAt, result: authoritative.result, completedAt: authoritative.completedAt,
@@ -373,11 +368,18 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
       await waitFor(() => h.client.connectionState() === "connected", "welcome while start remains unsent", 5_000);
     }
     expect(h.ledger.filter(entry => entry.partition === task.id && entry.type === "task.start")).toHaveLength(0);
+    if (terminalReport === "complete") {
+      const offer = h.received.find(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)!.p;
+      expect(await h.client.rpc("turn.input", { turn_id: offer.turn_id, attempt_id: task.id,
+        input_to_seq: offer.input_to_seq, message_ids: offer.input_messages.map((message: { id: string }) => message.id) }, runtimeId))
+        .toEqual({ ok: true, input_to_seq: offer.input_to_seq });
+    }
     const expected = terminalReport === "complete"
       ? { status: "completed", result: "accepted completion" }
       : { status: "failed", error: "synthetic provider failure" };
-    await expect(h.client.event({ t: `task.${terminalReport}`, seq: 100_000, rt: runtimeId,
-      p: { task_id: task.id, ...(terminalReport === "complete" ? { output: "accepted completion" } : { error: "synthetic provider failure" }) } })).resolves.toMatchObject({ ok: true });
+    await expect(h.client.event({ t: terminalReport === "complete" ? "turn.complete" : "task.fail", seq: 100_000, rt: runtimeId,
+      p: terminalReport === "complete" ? turnCompletion(h.store, task.id, "accepted completion")
+        : { task_id: task.id, error: "synthetic provider failure" } })).resolves.toMatchObject({ ok: true });
     expect(h.store.getTask(task.id)).toMatchObject(expected);
     terminalSent = true;
     // Expire the unsent start exchange through the harness's clock; the real
@@ -390,9 +392,9 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
     expect(runs).toBe(1);
     // The ledger observes state writes for complete; fail is asserted directly
     // against its persisted terminal row, and neither report reruns the provider.
-    if (terminalReport === "complete") expect(h.effectiveLedger.filter(entry => entry.partition === task.id && entry.type === "task.complete")).toHaveLength(1);
+    if (terminalReport === "complete") expect(h.effectiveLedger.filter(entry => entry.partition === task.id && entry.type === "turn.complete")).toHaveLength(1);
     expect(h.store.getTask(task.id)).toMatchObject(expected);
-    expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
+    expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toHaveLength(1);
     if (!accepted) {
       await waitFor(() => h.store.getPlatformDrainStatus().ready, "terminal recovery opens drain gate", 5_000);
       expect(h.store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 0, ready: true });

@@ -41,12 +41,13 @@ function turnRejectionCode(error:unknown,attemptId:string,runtimeId:string):'sta
 export class DaemonTurnBridge {
   constructor(private ctx:StoreContext){}
   private transaction<T>(fn:(events:CommitEventQueue)=>T):T {const events=createCommitEventQueue();const result=this.ctx.db.transaction(()=>fn(events))();afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return result;}
-  private authorized(turnId:string,attemptId:string,scope:DaemonTurnScope,terminal=false):any {
+  private authorized(turnId:string,attemptId:string,scope:DaemonTurnScope,terminal=false,sentInput=false):any {
     this.ctx.lockWorkspaceRuntimeLifecycle(scope.workspaceId);
-    const row=this.ctx.db.query('SELECT t.*,a.runtime_id,a.status AS attempt_status,a.projection_to_seq AS offered_to FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE t.id=? AND a.id=?').get(turnId,attemptId);
+    const row=this.ctx.db.query('SELECT t.*,a.runtime_id,a.status AS attempt_status,a.offered_at,a.projection_to_seq AS offered_to FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE t.id=? AND a.id=?').get(turnId,attemptId);
     const runtime=this.ctx.runtimes().getRuntime(scope.runtimeId);
     if(!row||row.current_attempt_id!==attemptId||row.workspace_id!==scope.workspaceId||row.runtime_id!==scope.runtimeId||runtime?.daemonId!==scope.daemonId
-      ||!terminal&&!['running','awaiting_human'].includes(row.status))throw new Error('stale_attempt');
+      ||!terminal&&!['running','awaiting_human'].includes(row.status)
+        &&!(sentInput&&row.status==='pending'&&row.offered_at&&['offered','accepted'].includes(row.attempt_status)))throw new Error('stale_attempt');
     lockLane(this.ctx,row.session_id,row.agent_id,row.execution_scope);return row;
   }
   private messages(sessionId:string,from:number,to:number):UnifiedMessage[]{return this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND seq<=? AND kind='message' AND deleted_at IS NULL AND visibility='shown' ORDER BY seq").all(sessionId,from,to).map(row=>getMessage(this.ctx,row.id)!);}
@@ -107,7 +108,7 @@ export class DaemonTurnBridge {
   }
   rpc(type:DaemonTurnRpc,payload:Record<string,unknown>,scope:DaemonTurnScope):Record<string,unknown> {
     try{return this.transaction(events=>{
-      const turn=this.authorized(String(payload.turn_id),String(payload.attempt_id),scope);
+      const turn=this.authorized(String(payload.turn_id),String(payload.attempt_id),scope,false,type==='turn.input');
       if(type==='turn.input'){
         const to=Number(payload.input_to_seq),from=this.cursor(turn);
         if(!Number.isSafeInteger(to)||to<0||to>Number(turn.offered_to??0)||!Array.isArray(payload.message_ids))throw new Error('input_gap');
