@@ -39,7 +39,6 @@ import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
 import {
   computeAppReadyMs,
-  computeWaves,
   computeFirstRealMs,
   computeJumps,
   computeReadyWindow,
@@ -70,6 +69,7 @@ import {
 import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
+import { computeInFlightWaves, preRevealWaveFailure } from "./zero-jump-waves";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const WEB_APP_DIR = join(REPO_ROOT, "frontend", "apps", "web");
@@ -300,7 +300,7 @@ interface RoundResult extends RenderMeasurement {
   preRevealOptional: string[];
   cardSamples?: Array<{ t: number; height: number; contentHeight: number; textLength: number; state: string | null; scrollTop: number; anchorTop: number | null }>;
   preRevealWaves: number | null;
-  preRevealWaveRows: ReturnType<typeof computeWaves>["rows"];
+  preRevealWaveRows: ReturnType<typeof computeInFlightWaves>["rows"];
   preRevealWaveChain: number[];
   waveGate: "blocking" | "record-only";
   attachmentReads: Record<string, number>;
@@ -762,7 +762,7 @@ async function runRound(input: {
   const revealAt = result.revealDispatchMs;
   const preReveal = revealAt === null ? [] : result.requests.filter(request => request.startMs < revealAt);
   result.preRevealOptional = result.fetchPhases.filter(request => /\/(active-task|subscribers|resources)$/.test(request.path) && (request.state !== "ready" || request.fresh !== "1")).map(request => request.path);
-  const waves = computeWaves(preReveal.map((request, index) => ({ ...request, index })));
+  const waves = computeInFlightWaves(preReveal.map((request, index) => ({ ...request, index })));
   result.preRevealWaves = revealAt === null ? null : waves.serialDepth;
   result.preRevealWaveRows = waves.rows;
   result.preRevealWaveChain = waves.chain;
@@ -807,7 +807,7 @@ async function runRound(input: {
       ? "cache-miss agent card changed its reserved slot / anchor or was not observed" : null,
     result.anchorVisibleMs !== result.readyMs ? `anchorVisibleMs ${result.anchorVisibleMs} != readyMs ${result.readyMs}` : null,
     result.preRevealOptional.length ? `optional before reveal: ${result.preRevealOptional.join(", ")}` : null,
-    result.waveGate === "blocking" && (result.preRevealWaves ?? 99) > 2 ? `pre-reveal waves: ${result.preRevealWaves}` : null,
+    preRevealWaveFailure(result.waveGate, result.preRevealWaves),
     Object.values(result.attachmentReads).some(count => count > 1) ? `duplicate attachment content: ${JSON.stringify(result.attachmentReads)}` : null,
   ].filter(Boolean);
   if (failures.length) result.error = [result.error, ...failures].filter(Boolean).join("; ");
