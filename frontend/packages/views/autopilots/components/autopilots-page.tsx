@@ -137,7 +137,7 @@ function AutopilotRow({ autopilot }: { autopilot: Autopilot }) {
   const StatusIcon = visual.icon;
 
   return (
-    <div className="group/row flex flex-col gap-2 border-b px-4 py-3 text-sm transition-colors hover:bg-accent/40 sm:h-11 sm:flex-row sm:items-center sm:gap-2 sm:border-b-0 sm:px-5 sm:py-0">
+    <div data-perf-item="autopilot" data-perf-key={autopilot.id} className="group/row flex flex-col gap-2 border-b px-4 py-3 text-sm transition-colors hover:bg-accent/40 sm:h-11 sm:flex-row sm:items-center sm:gap-2 sm:border-b-0 sm:px-5 sm:py-0">
       <AppLink
         href={wsPaths.autopilotDetail(autopilot.id)}
         className="flex min-w-0 items-center gap-2 sm:flex-1"

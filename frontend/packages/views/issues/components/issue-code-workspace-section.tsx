@@ -12,13 +12,15 @@ import { capitalize, shortDaemonId, splitRuntimeName } from "../../runtimes/comp
 export function IssueCodeWorkspaceSection({
   issueId,
   issueKind,
+  enabled = true,
 }: {
   issueId: string;
   issueKind?: "execution" | "intake";
+  enabled?: boolean;
 }) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
-  const { data: workspace } = useQuery(issueWorkspaceOptions(issueId));
+  const { data: workspace } = useQuery({ ...issueWorkspaceOptions(issueId), enabled });
   if (!workspace) return null;
 
   const statusLabel = t(($) => $.detail.workspace_status[workspace.status]);

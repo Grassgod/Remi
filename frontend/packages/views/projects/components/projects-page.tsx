@@ -149,7 +149,7 @@ function ProjectCard({
   );
 
   return (
-    <article className="group flex min-h-36 flex-col rounded-md border bg-card transition-colors hover:bg-accent/20">
+    <article data-perf-item="project" data-perf-key={project.id} className="group flex min-h-36 flex-col rounded-md border bg-card transition-colors hover:bg-accent/20">
       <div className="flex items-start gap-3 p-3">
         <ProjectIcon project={project} size="md" />
         <div className="min-w-0 flex-1">
@@ -208,7 +208,7 @@ function ProjectCompactRow({
   );
 
   return (
-    <div className={cn(COMPACT_GRID, "group min-h-12 items-center gap-3 border-b px-4 text-sm transition-colors hover:bg-accent/30", archived && "text-muted-foreground opacity-70 hover:opacity-100")}>
+    <div data-perf-item="project" data-perf-key={project.id} className={cn(COMPACT_GRID, "group min-h-12 items-center gap-3 border-b px-4 text-sm transition-colors hover:bg-accent/30", archived && "text-muted-foreground opacity-70 hover:opacity-100")}>
       <ProjectIcon project={project} size="sm" />
       <AppLink href={wsPaths.projectDetail(project.id)} className="min-w-0">
         <span className="block truncate text-left font-medium text-foreground">{project.title}</span>

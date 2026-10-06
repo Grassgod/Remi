@@ -1139,9 +1139,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const tasks = store.listTasksForIssue(issue.id)
-      .filter((task) => canCurrentUserAccessChatTask(c, store, task))
-      .filter((task) => isActiveTaskStatus(task.status))
+    const tasks = store.listActiveTasksForIssue(issue.id, {
+      userId: currentRequestUserId(c), taskToken: currentTaskAccessToken(c) ?? undefined,
+    // The route already authorized this workspace; SQL checked Chat existence,
+    // creator/task capability. Retain the old guard for inconsistent legacy
+    // rows whose task workspace differs from their issue's workspace.
+    }).filter((task) => task.workspaceId === issue.workspaceId || canCurrentUserAccessChatTask(c, store, task))
       .map((task) => taskCompatibilityResponse(
         task,
         null,

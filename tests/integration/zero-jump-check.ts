@@ -39,6 +39,7 @@ import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
 import {
   computeAppReadyMs,
+  computeWaves,
   computeFirstRealMs,
   computeJumps,
   computeReadyWindow,
@@ -66,7 +67,9 @@ import {
   type ZeroJumpRowResult,
   type ZeroJumpViolation,
 } from "../../frontend/scripts/perf/lib/zero-jump-verdict";
+import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
+import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const WEB_APP_DIR = join(REPO_ROOT, "frontend", "apps", "web");
@@ -102,6 +105,7 @@ interface Options {
   apiPort: number | null;
   webPort: number | null;
   keep: boolean;
+  ssrCookie: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -115,6 +119,7 @@ function parseArgs(argv: string[]): Options {
     apiPort: null,
     webPort: null,
     keep: false,
+    ssrCookie: true,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -133,6 +138,8 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--api-port") options.apiPort = Number(next());
     else if (arg === "--web-port") options.webPort = Number(next());
     else if (arg === "--keep") options.keep = true;
+    else if (arg === "--ssr-cookie") options.ssrCookie = true;
+    else if (arg === "--no-ssr-cookie") options.ssrCookie = false;
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write([
         "usage: bun run tests/integration/zero-jump-check.ts [options]",
@@ -145,6 +152,7 @@ function parseArgs(argv: string[]): Options {
         "  --api-port <n>     pin the API port (default: a free one)",
         "  --web-port <n>     pin the web port (default: a free one)",
         "  --keep             leave the servers up (for manual follow-up)",
+        "  --no-ssr-cookie    verify CSR without document/RSC auth cookies (default SSR cookie on)",
       ].join("\n") + "\n");
       process.exit(0);
     } else {
@@ -170,6 +178,8 @@ function findFreePort(start: number): number {
 
 interface Scenario {
   key: string;
+  taskCacheEmpty?: boolean;
+  imageCase?: ImageCase;
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
@@ -184,7 +194,7 @@ interface Scenario {
   expectIssueId: string | null;
 }
 
-function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] {
+function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: ImageCase[] = []): Scenario[] {
   const detail = (key: string, issueId: string, extra: Partial<Scenario> = {}): Scenario[] => [
     {
       key,
@@ -212,10 +222,23 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     },
   ];
   const scenarios: Scenario[] = [
+    ...imageCases.flatMap(imageCase => detail(imageCase.key, imageCase.issueId, {
+      imageCase,
+      ...(imageCase.kind === "element" ? {
+        path: `/issues/${imageCase.issueId}?comment=${imageCase.commentId}`, targetCommentId: imageCase.commentId,
+      } : {}),
+    }).filter(scenario => imageCase.kind !== "element" || scenario.mode === "cold")),
+    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
+    ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
+      path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
+      targetCommentId: fixture.deepLinkCommentId,
+    }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
     ...detail("detail-long", fixture.longIssueId),
+    ...detail("detail-xlong", fixture.xlongIssueId),
     ...detail("detail-running", fixture.runningIssueId),
+    ...(options.only.includes("detail-running-empty-cache") ? detail("detail-running-empty-cache", fixture.runningIssueId, { taskCacheEmpty: true }).filter(row => row.mode === "cold") : []),
     // The deep link is the shape a notification produces, and its cold round
     // *is* the deep link: the URL has to be the inbox one, because that is where
     // the comment highlight and the target anchor come from. Navigating to
@@ -257,19 +280,37 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 }
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
-interface RoundResult {
+interface RoundResult extends RenderMeasurement {
+  imageObservation?: ImageObservation;
+  requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number; transferBytes: number; encodedBytes: number; initiator: string; status: number | null; delivery: string | null }>;
+  preRevealOptional: string[];
+  cardSamples?: Array<{ t: number; height: number; contentHeight: number; textLength: number; state: string | null; scrollTop: number; anchorTop: number | null }>;
+  preRevealWaves: number | null;
+  preRevealWaveRows: ReturnType<typeof computeWaves>["rows"];
+  preRevealWaveChain: number[];
+  waveGate: "blocking" | "record-only";
+  attachmentReads: Record<string, number>;
+  settled: boolean;
+  hubAckSeen: boolean;
+  revealDispatchMs: number | null;
+  fetchPhases: Array<{ path: string; t: number; state: string | null; fresh: string | null }>;
+  logSingleRowReads: number;
+  logRequests: Array<{ query: string; startMs: number; responseEndMs: number }>;
+  ssrSeed: boolean;
   key: string;
   mode: string;
   round: number;
   url: string;
   readyMs: number | null;
+  anchorVisibleMs: number | null;
+  navStartMs: number;
   readyTimeout: boolean;
   firstRealMs: number | null;
   anchorName: string | null;
   anchorRectAtReady: { top: number; bottom: number; height: number; rootHeight: number } | null;
   jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
-  jumpCount: number;
-  jumpPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
   skeletons: number;
   /** The app's own verdict read off `data-perf-state` / `data-perf-fresh`. */
   appReadyMs: number | null;
@@ -295,8 +336,8 @@ function violationsForRound(round: RoundResult): ZeroJumpViolation[] {
     // fixture turns into a green gate. Reported as every kind it could have hit.
     return ["jumps", "anchor", "skeleton", "perf-state"];
   }
-  if (round.jumpCount > 0) violations.push("jumps");
-  if (round.readyTimeout || round.readyMs === null) violations.push("anchor");
+  if ((round.jumpCount ?? 0) > 0) violations.push("jumps");
+  if (round.readyTimeout || round.readyMs === null || round.firstRealMs === null) violations.push("anchor");
   if (round.skeletons > 0) violations.push("skeleton");
   // The plan's assertion is `data-perf-state === "ready"` with `ready-forced`
   // explicitly not a pass, and only `ready` + `fresh=1` once MUL-443 publishes
@@ -355,12 +396,13 @@ async function blockForeignRequests(page: Page, allowedOrigins: string[]): Promi
   await page.route("**/*", async (route) => {
     const url = route.request().url();
     if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const allowed = allowedOrigins.some((origin) => url.startsWith(origin));
     if (allowed) {
-      await route.continue();
+      // Let the API collectors and the SSR/CSR document handler run too.
+      await route.fallback();
       return;
     }
     // The plan's guard: an external font/script/image would make the measured
@@ -417,6 +459,7 @@ async function runRound(input: {
   slug: string;
   scenario: Scenario;
   round: number;
+  ssrCookie: boolean;
 }): Promise<RoundResult> {
   const { browser, token, webOrigin, apiOrigin, slug, scenario, round } = input;
   // The scenario's own profile: a deep link's terminal element is the target
@@ -428,21 +471,28 @@ async function runRound(input: {
     mode: "contract",
     shape: "issue-detail",
     targetCommentId: scenario.targetCommentId,
+    requireAgentStream: scenario.key.startsWith("detail-running"),
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
+    requests: [], preRevealOptional: [], preRevealWaves: null, preRevealWaveRows: [], preRevealWaveChain: [], waveGate: scenario.mode === "warm" && !(["detail-running", "detail-deeplink"].includes(scenario.key)) ? "blocking" : "record-only", attachmentReads: {}, settled: false, hubAckSeen: false, revealDispatchMs: null, fetchPhases: [],
+    renderMs: null, renderSource: "unobserved", renderReason: "not measured", windowResponseEndMs: null,
+    logSingleRowReads: 0,
+    logRequests: [],
+    ssrSeed: false,
     key: scenario.key,
     mode: scenario.mode,
     round,
     url: targetUrl,
     readyMs: null,
+    anchorVisibleMs: null, navStartMs: 0,
     readyTimeout: true,
     firstRealMs: null,
     anchorName: null,
     anchorRectAtReady: null,
     jumps: [],
-    jumpCount: 0,
-    jumpPx: 0,
+    jumpCount: null,
+    jumpPx: null,
     skeletons: 0,
     appReadyMs: null,
     appReadyForced: false,
@@ -456,7 +506,67 @@ async function runRound(input: {
     error: null,
   };
 
-  const context: BrowserContext = await mktContext(browser, token, [], webOrigin);
+  const ssrCookie = input.ssrCookie && !scenario.taskCacheEmpty;
+  const context: BrowserContext = await mktContext(browser, token, [], webOrigin, ssrCookie);
+  if (!ssrCookie) await context.route("**/*", async route => {
+    const request = route.request();
+    if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
+      const headers = { ...request.headers() };
+      headers.cookie = (headers.cookie ?? "").split(";").filter(part => !part.trim().startsWith("multimira_auth=")).join(";");
+      // Use a reader without a browser cookie jar: Cookie cannot be overridden
+      // by Chromium's continue(), and context-owned fetches may restore it.
+      const response = await fetch(request.url(), { headers, redirect: "manual" });
+      const responseHeaders = new Headers(response.headers);
+      for (const name of ["content-length", "content-encoding", "transfer-encoding"]) responseHeaders.delete(name);
+      await route.fulfill({ status: response.status, headers: Object.fromEntries(responseHeaders), body: Buffer.from(await response.arrayBuffer()) });
+    } else await route.continue();
+  });
+  await context.addInitScript(() => {
+    performance.setResourceTimingBufferSize(10_000);
+    const phases = { reveals: [] as number[], fetches: [] as Array<{path: string; t: number; state: string | null; fresh: string | null}> };
+    (window as unknown as { __s7Phases: typeof phases }).__s7Phases = phases;
+    const originalAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+      originalAttribute.call(this, name, value);
+      if ((name === "data-perf-state" || name === "data-perf-fresh") && this.getAttribute("data-perf-scroll") === "issue-detail"
+        && this.getAttribute("data-perf-state") === "ready" && this.getAttribute("data-perf-fresh") === "1") phases.reveals.push(performance.now());
+    };
+    const observeSeed = () => {
+      const confirm = () => {
+        for (const root of document.querySelectorAll('[data-perf-scroll="issue-detail"][data-ssr-positioned="1"][data-perf-state="ready"]')) {
+          if (root.getAttribute("data-perf-fresh") === "1" && !phases.reveals.length) phases.reveals.push(performance.now());
+        }
+      };
+      new MutationObserver(confirm).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-ssr-positioned", "data-perf-state"] });
+      confirm();
+    };
+    if (document.documentElement) observeSeed(); else document.addEventListener("DOMContentLoaded", observeSeed, { once: true });
+    const originalFetch = window.fetch;
+    window.fetch = function(this: Window, input: RequestInfo | URL, init?: RequestInit) {
+      const path = new URL(input instanceof Request ? input.url : String(input), location.href).pathname;
+      if (path.startsWith("/api/")) {
+        const root = [...document.querySelectorAll('[data-perf-scroll="issue-detail"]')].at(-1);
+        phases.fetches.push({ path, t: performance.now(), state: root?.getAttribute("data-perf-state") ?? null, fresh: root?.getAttribute("data-perf-fresh") ?? null });
+      }
+      return originalFetch.call(this, input, init);
+    } as typeof window.fetch;
+  });
+  if (scenario.taskCacheEmpty) await context.addInitScript(() => {
+    const samples: NonNullable<RoundResult["cardSamples"]> = [];
+    (window as unknown as { __s7CardSamples: typeof samples }).__s7CardSamples = samples;
+    const observe = () => new MutationObserver(() => {
+      const slot = document.querySelector<HTMLElement>("[data-agent-card-slot]");
+      const root = document.querySelector<HTMLElement>('[data-perf-scroll="issue-detail"]');
+      if (!slot || !root || root.getAttribute("data-perf-state") !== "ready") return;
+      const anchor = root.querySelector<HTMLElement>('[data-perf-anchor="latest-comment"]');
+      const sample = { t: performance.now(), height: slot.getBoundingClientRect().height,
+        contentHeight: slot.firstElementChild?.getBoundingClientRect().height ?? 0,
+        textLength: slot.textContent?.trim().length ?? 0, state: root.getAttribute("data-perf-state"),
+        scrollTop: root.scrollTop, anchorTop: anchor?.getBoundingClientRect().top ?? null };
+      if (sample.height > 0 && (!samples.length || samples.at(-1)!.textLength !== sample.textLength)) samples.push(sample);
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    if (document.documentElement) observe(); else document.addEventListener("DOMContentLoaded", observe, { once: true });
+  });
   await context.setDefaultTimeout(ROUND_TIMEOUT_MS);
   await installRecorderOnContext(context, { profiles: [profile] });
   if (scenario.sidebarWidth !== null) {
@@ -470,6 +580,23 @@ async function runRound(input: {
   }
 
   const page = await context.newPage();
+  const pendingApi = new Set<unknown>();
+  let lastApiChange = performance.now(), lastHubChange = performance.now();
+  page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/")) { pendingApi.add(request); lastApiChange = performance.now(); } });
+  const finishRequest = (request: unknown) => { if (pendingApi.delete(request)) lastApiChange = performance.now(); };
+  page.on("requestfinished", finishRequest); page.on("requestfailed", finishRequest);
+  page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
+    if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
+    lastHubChange = performance.now();
+    try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
+  }));
+  const seedReads: Promise<void>[] = [];
+  page.on("response", response => {
+    if (new URL(response.url()).pathname === new URL(targetUrl).pathname
+      && (response.request().isNavigationRequest() || new URL(response.url()).searchParams.has("_rsc"))) {
+      seedReads.push(response.text().then(body => { if (/head_ises_[A-Za-z0-9_]+/.test(body)) result.ssrSeed = true; }).catch(() => {}));
+    }
+  });
   await page.emulateMedia({ reducedMotion: "reduce" });
   // The inbox row has to be on the browser's first page for the warm click to
   // find it and for the cold deep link to open the notification rather than fall
@@ -480,8 +607,19 @@ async function runRound(input: {
     ? null
     : await readInboxItem(apiOrigin, token, scenario.inboxItemId);
   const collectors = attachCollectors(page, round, scenario.key, [slug], { inboxTarget });
+  if (scenario.taskCacheEmpty) await page.route("**/api/issues/*/task-runs", async route => {
+    // Functional fault injection only: hold the real task response until the
+    // first normal reveal has exposed the empty card. Then resume the same
+    // request so the genuine running task also reaches the stream row.
+    await page.waitForFunction(() => (window as unknown as {
+      __s7CardSamples: NonNullable<RoundResult["cardSamples"]>;
+    }).__s7CardSamples?.some(sample => sample.textLength === 0));
+    await route.continue();
+  });
+  const observeImage = scenario.imageCase ? await installImageBarrier(page, scenario.imageCase) : null;
   result.foreignRequests = await blockForeignRequests(page, [webOrigin]);
 
+  let navStartMs = 0;
   try {
     if (scenario.mode === "cold") {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
@@ -499,6 +637,7 @@ async function runRound(input: {
         }, RECORDER_GLOBAL)
         .catch(() => null);
       if (clickT !== null) {
+        navStartMs = clickT;
         await page.evaluate(([name, from]) => {
           const recorder = (window as unknown as Record<string, { reset?: (t?: number) => void }>)[name as string];
           recorder?.reset?.(from as number);
@@ -506,31 +645,70 @@ async function runRound(input: {
       }
     }
     await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
+    // Finish the entire deferred/Hub phase, rather than truncating at reveal.
+    const settleDeadline = performance.now() + ROUND_TIMEOUT_MS;
+    while (performance.now() < settleDeadline) {
+      if (result.hubAckSeen && pendingApi.size === 0 && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
+      await page.waitForTimeout(50);
+    }
+    if (!result.settled) result.error = "deferred API / Hub phase did not settle";
   } catch (error) {
     result.error = (error as Error).message.split("\n")[0] ?? String(error);
   }
 
   const summary = await readRecorderSummary(page).catch(() => null);
   const buffer: PerfRecorderBuffer | null = await readRecorder(page).catch(() => null);
+  await Promise.all(seedReads);
+  // CSR warm wave depth is a target after moving the window earlier; all
+  // other structural checks remain blocking on both paths.
+  // The actual rendered log supplies the seed evidence; a cookie or unrelated
+  // serialized head id does not prove this detail used SSR.
+  result.ssrSeed = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial="1"]').count().then(count => count > 0).catch(() => false);
+  result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  if (!result.ssrSeed) result.waveGate = "record-only";
+  const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
+    .map(entry => ({ path: new URL(entry.name).pathname, query: new URL(entry.name).search, startMs: entry.startTime, responseEndMs: entry.responseEnd,
+      transferBytes: entry.transferSize, encodedBytes: entry.encodedBodySize, initiator: entry.initiatorType,
+      status: (entry as PerformanceResourceTiming & { responseStatus?: number }).responseStatus ?? null,
+      delivery: (entry as PerformanceResourceTiming & { deliveryType?: string }).deliveryType ?? null })));
+  result.requests = allRequests.filter(request => request.startMs >= navStartMs);
+  result.logRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter(entry => /\/sessions\/[^/]+\/log\?/.test(entry.name))
+    .map(entry => {
+      const url = new URL(entry.name), query = new URLSearchParams();
+      for (const key of ["anchor", "before", "after"]) { const value = url.searchParams.get(key); if (value !== null && /^\d+$/.test(value)) query.set(key, value); }
+      return { query: query.toString(), startMs: entry.startTime, responseEndMs: entry.responseEnd };
+    }));
+  const targetSessionId = await page.locator('[data-perf-scroll="issue-detail"]').first().getAttribute("data-session-log-id").catch(() => null);
+  Object.assign(result, measureLogRender({ navStartMs, ssrSeed: result.ssrSeed, states: buffer?.stateTransitions ?? [],
+    windows: result.requests.filter(request => request.path === `/api/sessions/${targetSessionId}/log`).filter(request => { const query = new URLSearchParams(request.query); return Number(query.get("before")) > 1 || Number(query.get("after")) > 1; }) }));
+  result.logSingleRowReads = result.logRequests.filter(request => {
+    const query = new URLSearchParams(request.query);
+    return query.get("before") === "1" && query.get("after") === "0";
+  }).length;
+  if (result.logSingleRowReads) result.error = `${result.error ? result.error + "; " : ""}single-row log rereads: ${result.logSingleRowReads}`;
   await page.route("**/api/**", (route) => route.abort()).catch(() => {});
   result.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
   result.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
   result.inboxInjected = collectors.inboxInjected;
 
-  const frames = buffer?.frames ?? [];
+  result.navStartMs = navStartMs;
+  const frames = (buffer?.frames ?? []).filter(frame => frame.t >= navStartMs).map(frame => ({ ...frame, t: frame.t - navStartMs }));
   if (buffer && frames.length > 0) {
     const firstRealMs = computeFirstRealMs(frames, profile.name);
     const ready = computeReadyWindow(frames, { profile, firstRealMs });
-    const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
+    const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs, toMs: frames.at(-1)?.t });
     result.firstRealMs = firstRealMs;
     result.readyMs = ready.readyMs;
+    result.anchorVisibleMs = ready.anchorVisibleMs;
     result.readyTimeout = ready.readyTimeout;
     result.anchorName = ready.anchorName;
     result.anchorRectAtReady = ready.anchorRectAtReady;
     result.jumps = jumps.jumps;
     result.jumpCount = jumps.jumpCount;
     result.jumpPx = jumps.jumpPx;
-    const appReady = computeAppReadyMs(buffer.stateTransitions);
+    const appReady = computeAppReadyMs(buffer.stateTransitions.filter(state => state.t >= navStartMs).map(state => ({ ...state, t: state.t - navStartMs })));
     result.appReadyMs = appReady.appReadyMs;
     result.appReadyForced = appReady.forced;
     result.appReadyForcedSeen = appReady.readyForced;
@@ -542,6 +720,44 @@ async function runRound(input: {
     result.error = "recorder produced no frames";
   }
 
+  const phases = await page.evaluate(() => (window as unknown as { __s7Phases: { reveals: number[]; fetches: RoundResult["fetchPhases"] } }).__s7Phases);
+  result.revealDispatchMs = phases.reveals.find(t => t >= navStartMs) ?? null;
+  result.fetchPhases = phases.fetches.filter(fetch => fetch.t >= navStartMs);
+  const revealAt = result.revealDispatchMs;
+  const preReveal = revealAt === null ? [] : result.requests.filter(request => request.startMs < revealAt);
+  result.preRevealOptional = result.fetchPhases.filter(request => /\/(active-task|subscribers|resources)$/.test(request.path) && (request.state !== "ready" || request.fresh !== "1")).map(request => request.path);
+  const waves = computeWaves(preReveal.map((request, index) => ({ ...request, index })));
+  result.preRevealWaves = revealAt === null ? null : waves.serialDepth;
+  result.preRevealWaveRows = waves.rows;
+  result.preRevealWaveChain = waves.chain;
+  const aliases = new Map<string, string>();
+  for (const request of result.requests) {
+    const id = /\/attachments\/([^/]+)\/content$/.exec(request.path)?.[1];
+    if (id) {
+      if (!aliases.has(id)) aliases.set(id, `attachment-${aliases.size + 1}`);
+      const alias = aliases.get(id)!; result.attachmentReads[alias] = (result.attachmentReads[alias] ?? 0) + 1;
+    }
+  }
+  const attachmentPath = (path: string) => path.replace(/(\/attachments\/)([^/]+)(\/content$)/,
+    (_match, prefix, id, suffix) => `${prefix}${aliases.get(id) ?? id}${suffix}`);
+  result.requests = result.requests.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  result.preRevealWaveRows = result.preRevealWaveRows.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  result.fetchPhases = result.fetchPhases.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  if (scenario.taskCacheEmpty) result.cardSamples = await page.evaluate(() => (window as unknown as { __s7CardSamples: NonNullable<RoundResult["cardSamples"]> }).__s7CardSamples);
+  const emptyCard = result.cardSamples?.find(sample => sample.textLength === 0);
+  const filledCard = result.cardSamples?.find(sample => sample.textLength > 0);
+  if (observeImage) result.imageObservation = await observeImage().catch(() => undefined);
+  const failures = [
+    scenario.imageCase ? result.imageObservation ? imageObservationFailure(result.imageObservation) : "image observation missing" : null,
+    scenario.taskCacheEmpty && (!emptyCard || !filledCard || filledCard.contentHeight <= 0 || emptyCard.height !== filledCard.height
+      || (emptyCard.anchorTop !== null && filledCard.anchorTop !== null && Math.abs(emptyCard.anchorTop - filledCard.anchorTop) > .5))
+      ? "cache-miss agent card changed its reserved slot / anchor or was not observed" : null,
+    result.anchorVisibleMs !== result.readyMs ? `anchorVisibleMs ${result.anchorVisibleMs} != readyMs ${result.readyMs}` : null,
+    result.preRevealOptional.length ? `optional before reveal: ${result.preRevealOptional.join(", ")}` : null,
+    result.waveGate === "blocking" && (result.preRevealWaves ?? 99) > 2 ? `pre-reveal waves: ${result.preRevealWaves}` : null,
+    Object.values(result.attachmentReads).some(count => count > 1) ? `duplicate attachment content: ${JSON.stringify(result.attachmentReads)}` : null,
+  ].filter(Boolean);
+  if (failures.length) result.error = [result.error, ...failures].filter(Boolean).join("; ");
   if (violationsForRound(result).length > 0) {
     const shotDir = process.env[SHOT_DIR_ENV] ?? join(tmpdir(), "mul394-zero-jump");
     ensureDir(shotDir);
@@ -644,6 +860,7 @@ async function main(): Promise<void> {
   // The images in the long issue's markdown resolve to real attachment files;
   // they live in a temp dir this process owns and removes nothing else.
   writeFixtureImages(uploadDir, fixture);
+  const imageCases = await seedImageCases(store, fixture, uploadDir);
 
   apiServer = startMultiremiServer({
     store,
@@ -682,7 +899,7 @@ async function main(): Promise<void> {
   const web = Bun.spawn({
     cmd: ["bun", "x", "next", "start", "--port", String(webPort)],
     cwd: WEB_APP_DIR,
-    env: { ...process.env, PORT: String(webPort) },
+    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: `http://127.0.0.1:${apiPort}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -700,7 +917,7 @@ async function main(): Promise<void> {
 
   // ── browser ──────────────────────────────────────────────────────────────
   browser = await launchBrowser();
-  const scenarios = buildScenarios(fixture, options);
+  const scenarios = buildScenarios(fixture, options, imageCases);
   const rounds: RoundResult[] = [];
   for (const scenario of scenarios) {
     for (let round = 1; round <= options.rounds; round += 1) {
@@ -712,6 +929,7 @@ async function main(): Promise<void> {
         slug: fixture.workspaceSlug,
         scenario,
         round,
+        ssrCookie: options.ssrCookie,
       });
       rounds.push(result);
       const violations = violationsForRound(result);
@@ -742,6 +960,8 @@ async function main(): Promise<void> {
     finishedAt: new Date().toISOString(),
     commit: currentCommit(),
     fixture: fixture.counts,
+    imageFixture: { width: 640, height: 240, cases: imageCases.map(({ key, kind }) => ({ key, kind })) },
+    ssrCookie: options.ssrCookie,
     rounds,
     rows: grouped.map((row) => ({
       ...row,
@@ -793,6 +1013,8 @@ function writeFixtureImages(uploadDir: string, fixture: ZeroJumpFixture): void {
   for (let index = 0; index < fixture.counts.longImages; index += 1) {
     writeFileSync(join(uploadDir, fixture.workspaceId, `att_zerojump_img_${index}.png`), png);
   }
+  writeFileSync(join(uploadDir, fixture.workspaceId, `${fixture.htmlAttachmentId}.html`),
+    "<!doctype html><html><body><h1>Fixture HTML preview</h1><p>" + "safe preview text ".repeat(3000) + "</p></body></html>");
   process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
 }
 

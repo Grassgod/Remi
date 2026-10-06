@@ -38,9 +38,10 @@ interface AgentLiveCardProps {
   issueId: string;
   issueSessionId?: string;
   onInitialReconcile?: () => void;
+  reconcileEnabled?: boolean;
 }
 
-export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: AgentLiveCardProps) {
+export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, reconcileEnabled = true }: AgentLiveCardProps) {
   const qc = useQueryClient();
   const { t } = useT("issues");
   const { getActorName } = useActorName();
@@ -87,6 +88,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // cancelled event was lost during a WS reconnect window), and tasks
   // still active keep their identity; each row reads its live trace directly.
   const reconcile = useCallback(() => {
+    if (!reconcileEnabled) return;
     const mySeq = ++reconcileSeq.current;
     api.getActiveTasksForIssue(issueId).then(({ tasks: issueTasks }) => {
       if (!mountedRef.current) return;
@@ -102,7 +104,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
       setTaskStates(new Map(tasks.map((task) => [task.id, { task }])));
       onInitialReconcile?.();
     }).catch(error => { console.error(error); onInitialReconcile?.(); });
-  }, [issueId, issueSessionId, onInitialReconcile, qc]);
+  }, [issueId, issueSessionId, onInitialReconcile, qc, reconcileEnabled]);
 
   // Initial fetch on mount / issueId change.
   useEffect(() => {

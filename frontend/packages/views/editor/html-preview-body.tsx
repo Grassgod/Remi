@@ -19,6 +19,7 @@
  * just slot HtmlPreviewBody as the body.
  */
 
+import { useDeferredContent } from "../common/deferred-content-context";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
   PreviewTooLargeError,
@@ -96,8 +97,9 @@ function AttachmentBody({
 }) {
   const { t } = useT("editor");
   const query = useAttachmentHtmlText(attachmentId);
+  const enabled = useDeferredContent() !== false;
 
-  if (query.isLoading) {
+  if (!enabled || query.isPending) {
     return (
       <div
         className={cn(

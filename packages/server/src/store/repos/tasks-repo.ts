@@ -718,7 +718,32 @@ export interface TaskListCandidate {
   createdAt: string;
 }
 
-/** Lightweight identity column set for "does any task match?" guards. */
+/** Request identity for the snapshot's creator-only Chat rows. */
+export interface TaskSnapshotAccess {
+  userId: string | null;
+  taskToken?: { taskId: string | null; agentId: string | null; workspaceId: string | null };
+}
+
+// All columns consumed by toTask's public wire shape. Large private execution
+// profiles/delegation state are deliberately absent; public prompt/result remain
+// and public usage comes from the canonical batched projection.
+const SNAPSHOT_PUBLIC_COLUMNS = [
+  "result", "id", "task_kind", "agent_id", "runtime_id",
+  "runtime_workspace_id", "provider", "plugin_snapshot", "execution_fingerprint", "execution_model",
+  "execution_thinking_level", "fallback_switched", "switch_reason", "next_retry_at", "issue_id",
+  "issue_session_id", "issue_session_generation", "holds_workspace", "chat_session_id", "trigger_comment_id",
+  "trigger_summary", "requesting_user_name", "requesting_user_profile_description", "workspace_id", "status",
+  "priority", "prompt", "attempt", "max_attempts", "parent_task_id",
+  "continued_from_task_id", "assignment_event_id", "assignment_source_event_id", "projection_from_seq", "projection_to_seq",
+  "projection_mode", "projection_degrade_level", "projection_truncated", "projection_omitted_events", "projection_estimated_tokens",
+  "inherited_projection_truncated", "inherited_projection_omitted_events", "inherited_projection_estimated_tokens", "inherited_projection_to_seq", "inherited_projection_token_budget",
+  "inherited_projection_recorded_at", "error", "failure_reason", "branch_name", "session_id",
+  "work_dir", "progress_summary", "progress_step", "progress_total", "wait_reason",
+  // Canonical usage is batched by visible task IDs in toTasks; legacy JSON is unused.
+  "created_at", "updated_at", "dispatched_at", "offered_at",
+  "accepted_at", "started_at", "completed_at", "failed_at", "cancelled_at",
+];
+
 export interface TaskRef {
   id: string;
   status: MultiremiTaskStatus;
@@ -1463,6 +1488,28 @@ export class TasksRepo {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC",
     ).all(issueId) as Row[];
+    return this.toTasks(rows);
+  }
+
+  /** Public compatibility fields only, after active/Chat visibility selection. */
+  listActiveTasksForIssue(issueId: string, access: TaskSnapshotAccess): MultiremiTask[] {
+    const params: Array<string | null> = [issueId, ...ACTIVE_TASK_STATUSES];
+    let identity = "";
+    if (access.taskToken) {
+      identity = " AND task.id = ? AND task.agent_id = ? AND task.workspace_id = ?";
+      params.push(access.taskToken.taskId, access.taskToken.agentId, access.taskToken.workspaceId);
+    } else if (access.userId !== null) {
+      identity = " AND COALESCE(chat.creator_id, 'local') = ?";
+      params.push(access.userId);
+    }
+    const rows = this.ctx.db.query(`SELECT ${SNAPSHOT_PUBLIC_COLUMNS.map(column => `task.${column}`).join(", ")}
+      FROM multiremi_tasks task
+      WHERE task.issue_id = ? AND task.status IN (${ACTIVE_TASK_STATUSES.map(() => "?").join(", ")})
+        AND (task.chat_session_id IS NULL OR task.chat_session_id = '' OR EXISTS (
+          SELECT 1 FROM multiremi_chat_sessions chat WHERE chat.id = task.chat_session_id${identity}
+        ))
+      ORDER BY task.created_at DESC`).all(...params) as Row[];
+    // listTasksForIssue does not attach autopilot-run summaries; preserve that shape.
     return this.toTasks(rows);
   }
 
@@ -2985,8 +3032,24 @@ export class TasksRepo {
     return this.withTaskAutopilotRuns(this.toTasks(rows));
   }
 
-  listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MultiremiTask[] {
+  listWorkspaceAgentTaskSnapshot(workspaceId = "local", access?: TaskSnapshotAccess): MultiremiTask[] {
     const activePlaceholders = ACTIVE_TASK_STATUSES.map(() => "?").join(", ");
+    const identityParams: Array<string | null> = [];
+    let chatAccess = "";
+    if (access) {
+      let sessionAccess = "";
+      if (access.taskToken) {
+        sessionAccess = " AND task.id = ? AND task.agent_id = ? AND task.workspace_id = ?";
+        identityParams.push(access.taskToken.taskId, access.taskToken.agentId, access.taskToken.workspaceId);
+      } else if (access.userId !== null) {
+        sessionAccess = " AND COALESCE(chat.creator_id, 'local') = ?";
+        identityParams.push(access.userId);
+      }
+      chatAccess = ` AND (task.chat_session_id IS NULL OR task.chat_session_id = '' OR EXISTS (
+        SELECT 1 FROM multiremi_chat_sessions chat WHERE chat.id = task.chat_session_id${sessionAccess}
+      ))`;
+    }
+    const columns = access ? SNAPSHOT_PUBLIC_COLUMNS.map((column) => `task.${column}`).join(", ") : "task.*";
     const rows = this.ctx.db.query(
       `WITH ranked_outcomes AS (
          SELECT id,
@@ -2996,17 +3059,18 @@ export class TasksRepo {
                 ) AS outcome_rank
          FROM multiremi_tasks
          WHERE workspace_id = ? AND status IN ('completed', 'failed')
+       ), candidates AS (
+         SELECT id FROM multiremi_tasks
+         WHERE workspace_id = ? AND status IN (${activePlaceholders})
+         UNION SELECT id FROM ranked_outcomes WHERE outcome_rank = 1
        )
-       SELECT task.*
-       FROM multiremi_tasks task
-       WHERE task.workspace_id = ? AND task.status IN (${activePlaceholders})
-       UNION
-       SELECT task.*
-       FROM multiremi_tasks task
-       JOIN ranked_outcomes outcome ON outcome.id = task.id
-       WHERE outcome.outcome_rank = 1
-       ORDER BY updated_at DESC`,
-    ).all(workspaceId, workspaceId, ...ACTIVE_TASK_STATUSES) as Row[];
+       SELECT ${columns} FROM multiremi_tasks task
+       JOIN candidates ON candidates.id = task.id
+       WHERE 1 = 1${chatAccess}
+       ORDER BY task.updated_at DESC`,
+    ).all(workspaceId, workspaceId, ...ACTIVE_TASK_STATUSES, ...identityParams) as Row[];
+    // Visibility is applied after ranking: an invisible newest outcome must not
+    // promote an older outcome that the old route would have filtered out.
     return this.withTaskAutopilotRuns(this.toTasks(rows));
   }
 

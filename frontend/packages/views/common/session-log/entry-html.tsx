@@ -31,6 +31,7 @@ import { AttachmentDownloadProvider } from "../../editor/attachment-download-con
 // Static import: the server's empty fileCard slots must reserve height at SSR.
 import "./entry-html.css";
 import { useT } from "../../i18n";
+import { deferStreamedImages } from "./image-loading";
 import {
   enhanceEntryHtml,
   type EntryPreviewSlot,
@@ -104,13 +105,14 @@ function FileCardSlot({ slot }: { slot: EntryFileCardSlot }): React.ReactElement
 }
 
 export function EntryHtml({
-  html,
+  html: sourceHtml,
   markdown,
   attachments,
   onDegradedRender,
   fallback = null,
   className,
 }: EntryHtmlProps): React.ReactElement {
+  const html = useMemo(() => deferStreamedImages(sourceHtml), [sourceHtml]);
   const { t } = useT("chat");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const enhancedHtml = useRef<string | null | undefined>(undefined);
