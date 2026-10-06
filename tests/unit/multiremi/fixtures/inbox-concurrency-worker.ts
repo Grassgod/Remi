@@ -3,7 +3,9 @@ import {PostgresSyncDatabase} from '@multiremi/store/db/postgres.js';
 import {StoreContext,createCommitEventQueue} from '@multiremi/store/context.js';
 import {reRingAfterTurnEnd} from '@multiremi/store/inbox/lane-machine.js';
 import {existsSync} from 'node:fs';
-const input=JSON.parse(await Bun.stdin.text()),db=new PostgresSyncDatabase(input.databaseUrl),store=new MultiremiStore(db);
+const input=JSON.parse(await Bun.stdin.text());
+process.env.MULTIREMI_MIGRATION_REPORT_DIR=input.migrationReportDir;
+const db=new PostgresSyncDatabase(input.databaseUrl),store=new MultiremiStore(db);
 console.log('ready');
 const deadline=Date.now()+15_000;while(!existsSync(input.release)){if(Date.now()>deadline)throw new Error('Barrier timed out');await Bun.sleep(10);}
 try{
