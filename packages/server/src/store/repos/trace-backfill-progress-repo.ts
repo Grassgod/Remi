@@ -258,6 +258,8 @@ export class TraceBackfillProgressRepo {
         counts.missing++;
         continue;
       }
+      attempt.event_count = attempt.event_count == null ? null : Number(attempt.event_count);
+      attempt.tool_call_count = attempt.tool_call_count == null ? null : Number(attempt.tool_call_count);
       if (traceBackfillTurnCardDiff({...attempt,type_histogram:parseJson(attempt.type_histogram,null),model:parseJson(attempt.model,null)} as ConversationLogTurnMetadata, summary).length === 0) {
         counts.unchanged++;
         continue;
