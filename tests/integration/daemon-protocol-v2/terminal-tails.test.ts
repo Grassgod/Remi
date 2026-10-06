@@ -2,6 +2,7 @@ import { expect, it, spyOn } from "bun:test";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import type { StoreContext } from "@multiremi/store/context.js";
 
 it("replays real runAgent finally/workspace and finalize/progress tails once after complete", async () => {
   let summaryRequests = 0;
@@ -81,8 +82,9 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
       if (id === taskId && options?.allowTerminal) progressEffects++;
       return realProgress(id, summary, step, total, options);
     });
-    const realComplete = h.store.completeTaskFromDaemon.bind(h.store);
-    complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+    const tasks = (h.store as unknown as { ctx: StoreContext }).ctx.tasks();
+    const realComplete = tasks.completeTask.bind(tasks);
+    complete = spyOn(tasks, "completeTask").mockImplementation((id, input, authority) => {
       const before = h!.store.getTask(id)?.status;
       const result = realComplete(id, input, authority);
       if (id === taskId && before !== "completed" && result.status === "completed") completeEffects++;
@@ -113,14 +115,18 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     expect(head).toBeGreaterThan(0);
     await waitFor(() => daemonTraceService(h!.layer).sink.head(taskId) === head, "trace head replay");
     const taskFrames = h.ledger.filter((entry) => entry.partition === taskId);
+    expect(taskFrames.filter(entry => entry.type === "turn.input")).toHaveLength(1);
     for (const entry of taskFrames.filter((entry) => entry.seq === null)) {
-      expect(entry.type).toBe("trace.append");
+      if (entry.type === "turn.input") {
+        expect(entry.frame.p).toMatchObject({ turn_id: h.store.getTurnForAttempt(taskId)!.id, attempt_id: taskId });
+        expect(entry.frame.p.message_ids).toHaveLength(1);
+      } else expect(entry.type).toBe("trace.append");
       expect(entry.frame.id).toEqual(expect.any(String));
       expect(entry.frame.seq).toBeUndefined();
     }
     // Trace RPCs have a task subject, but do not belong to its outer-seq outbox partition.
     const frames = taskFrames.filter((entry) => entry.seq !== null);
-    const afterComplete = frames.slice(frames.findIndex((entry) => entry.type === "task.complete") + 1);
+    const afterComplete = frames.slice(frames.findIndex((entry) => entry.type === "turn.complete") + 1);
     expect(afterComplete.filter((entry) => entry.type === "task.progress" && entry.frame.p.final !== true)).toHaveLength(0);
     expect(afterComplete.length).toBe(4);
     expect(afterComplete.every((entry) => entry.type === "task.workspace"

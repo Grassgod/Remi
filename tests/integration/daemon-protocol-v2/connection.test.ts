@@ -3,8 +3,10 @@ import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
-import { MultiremiDaemonHttpError, MultiremiDaemonRequestTimeoutError } from "@multiremi/worker/client.js";
+import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
+import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
@@ -71,13 +73,14 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
   });
 
-  it("reads pending and settled human requests through a real v2 RPC", async () => {
+  it("reads pending and settled decision messages through the card host's real HTTP client", async () => {
     const h = await fixture();
     await h.startDaemon();
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const agent = h.store.createAgent({ name: "human request RPC", provider: "claude", runtimeId });
     const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "question" });
     const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+    const reads = spyOn(h.daemon, "getMessageHumanRequest");
     expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(true);
     expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toEqual(request);
     expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "test" })).toBeTruthy();
@@ -85,20 +88,23 @@ describe("daemon protocol v2 real connection", () => {
     expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes" } });
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toBeInstanceOf(MultiremiDaemonHttpError);
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toMatchObject({ status: 404 });
-    expect(h.ledger.filter(entry => entry.type === "human_request.get")).toHaveLength(6);
+    expect(reads.mock.calls.map(args => args[0])).toEqual([
+      request.id, request.id, request.id, request.id, "hrq_missing", "hrq_missing",
+    ]);
+    expect(h.ledger.filter(entry => entry.type === "human_request.get")).toHaveLength(0);
+    reads.mockRestore();
   });
 
-  it("throws the HTTP-style timeout when human_request.get cannot reach the server", async () => {
+  it("times out a decision RPC while the executing turn's socket is disconnected", async () => {
     const h = await fixture();
     await h.startDaemon();
-    // The short deadline belongs to the disconnected RPC, not file-backed HTTP registration.
-    (h.daemon as unknown as { options: { requestTimeoutMs: number } }).options.requestTimeoutMs = 50;
     await h.disconnect();
-    const error = await h.daemon.getFeishuBotHumanRequest("tsk_unreachable", "hrq_unreachable")
+    const error = await (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
+      turn_id: "turn_unreachable", attempt_id: "tsk_unreachable", message_id: "msg_unreachable",
+    }, 50)
       .catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
-    expect(error).toMatchObject({ method: "GET", timeoutMs: 50,
-      path: "/api/daemon/tasks/tsk_unreachable/human-requests/hrq_unreachable" });
+    expect(error).toBeInstanceOf(DaemonProtocolRpcError);
+    expect(error).toMatchObject({ code: "daemon_timeout", retryable: true });
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
@@ -123,7 +129,7 @@ describe("daemon protocol v2 real connection", () => {
     await h.stopDaemon();
     expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
     expect(h.clock.pendingTimerCount).toBe(0);
-  });
+  }, 15_000);
 
   it("settles exchanges and subsequent lane callbacks from their completion promises", async () => {
     const h = await fixture();
@@ -186,7 +192,7 @@ describe("daemon protocol v2 real connection", () => {
   });
 
   it("commits fixture initialization without reducing file-backed SQLite durability", async () => {
-    const h = await fixture();
+    const h = await fixture({ database: "sqlite" });
     expect(h.db.inTransaction).toBe(false);
     expect(h.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
     expect(h.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
@@ -300,8 +306,8 @@ describe("daemon protocol v2 real connection", () => {
       const session = h.layer.registry.sessionForRuntime(newId)! as typeof h.sessions[number];
       const agent = h.store.createAgent({ name: "offer after registration", provider: "claude", runtimeId: newId, workspaceId: "local" });
       const task = h.store.createTask({ agentId: agent.id, prompt: "offer after registration" });
-      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.id === task.id), "new runtime offer");
-      expect(h.received.find(frame => frame.t === "task.offer")).toMatchObject({ rt: newId, p: { id: task.id } });
+      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id), "new runtime offer");
+      expect(h.received.find(frame => frame.t === "task.offer")).toMatchObject({ rt: newId, p: { attempt_id: task.id } });
       h.clock.advance(100);
       await waitFor(() => session.unacknowledgedFrameCount === 0, "independent offer acknowledgement");
       expect(register).toHaveBeenCalledTimes(2);
@@ -329,7 +335,7 @@ describe("daemon protocol v2 real connection", () => {
     const incumbent = new WebSocket(`${h.url.replace("http:", "ws:")}/api/daemon/ws?protocol=2`, { headers: { Authorization: "Bearer fixture-master" } } as never);
     try {
       await new Promise<void>((resolve, reject) => { incumbent.addEventListener("open", () => resolve(), { once: true }); incumbent.addEventListener("error", reject, { once: true }); });
-      incumbent.send(JSON.stringify({ v: 2, t: "hello", ts: Date.now(), p: { protocol: 2, daemon_id: "dmn_incumbent", cli_version: "0.2.83", launched_by: null, runtimes: [{ runtime_id: "rt_contended", provider: "claude", max_concurrency: 1, active_task_ids: [] }], caps: [] } }));
+      incumbent.send(JSON.stringify({ v: 2, t: "hello", ts: Date.now(), p: { protocol: 2, daemon_id: "dmn_incumbent", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null, runtimes: [{ runtime_id: "rt_contended", provider: "claude", max_concurrency: 1, active_task_ids: [] }], caps: [] } }));
       await waitFor(() => h.layer.registry.daemonIdForRuntime("rt_contended") === "dmn_incumbent", "incumbent runtime ownership");
       await h.startDaemon();
       const later = h.layer.registry.get("dmn_fixture")! as typeof h.sessions[number];

@@ -1,3 +1,4 @@
+import { turnCompletion } from "../../fixtures/turn-report.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
@@ -19,6 +20,11 @@ function task(h: DaemonProtocolHarness) {
   expect(h.store.claimTask(runtime(h))?.id).toBe(value.id);
   return value;
 }
+async function readInput(h: DaemonProtocolHarness, id: string) {
+  const input = h.store.getDaemonTurnBridge().offerInput(h.store.getTaskWithAgent(id)!);
+  expect(await h.client.rpc("turn.input", { ...input, message_ids: input.input_messages.map(m => m.id) }, runtime(h)))
+    .toMatchObject({ ok: true, input_to_seq: input.input_to_seq });
+}
 
 describe("v2 report reconciliation with real sockets and DB", () => {
   for (const injection of ["socket", "daemon", "server"] as const) {
@@ -26,7 +32,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       let interruptTask: string | null = null;
       const faultReplies: Array<ReturnType<typeof spyOn>> = [];
       const h = await fixture({ beforeSend(frame, socket, harness) {
-        if (["task.start", "task.progress", "task.usage", "task.complete"].includes(frame.t)) socket.native.send(JSON.stringify(frame));
+        if (["task.start", "task.progress", "task.usage", "turn.complete"].includes(frame.t)) socket.native.send(JSON.stringify(frame));
         if (frame.t === "task.usage" && frame.p.task_id === interruptTask) {
           const session = harness.sessions.at(-1)!;
           const real = session.sendReply.bind(session);
@@ -44,8 +50,8 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       const sent = new Set<string>();
       const arrived = new Set<string>();
       const completed = new Map<string, number>();
-      const realComplete = h.store.completeTaskFromDaemon.bind(h.store);
-      const complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+      const realComplete = h.store.completeTask.bind(h.store);
+      const complete = spyOn(h.store, "completeTask").mockImplementation((id, input, authority) => {
         const before = h.store.getTask(id)?.status;
         const result = realComplete(id, input, authority);
         if (before !== "completed" && result.status === "completed") completed.set(id, (completed.get(id) ?? 0) + 1);
@@ -59,12 +65,15 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           const box = outbox(h);
           interruptTask = t.id;
           const payload = { runtime_id: runtime(h) };
-          const rows = [box.enqueue(t.id, "start", payload),
+          const start = box.enqueue(t.id, "start", payload);
+          await box.waitForTaskDrain(t.id);
+          await readInput(h, t.id);
+          const rows = [start,
             box.enqueue(t.id, "progress", { ...payload, summary: `early-${round}`, step: 1, total: 2 }),
             box.enqueue(t.id, "progress", { ...payload, summary: `step-${round}`, step: 2, total: 2 }),
             box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-a", inputTokens: 5, outputTokens: 2 }] }),
             box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-b", inputTokens: 7, outputTokens: 3 }] }),
-            box.enqueue(t.id, "complete", { ...payload, output: `result-${round}` })];
+            box.enqueue(t.id, "turn.complete", turnCompletion(h.store, t.id, `result-${round}`, { ...payload }))];
           rows.forEach(id => sent.add(`${t.id}:${id}`));
           await waitFor(() => h.client.connectionState() === "disconnected" && h.store.getTask(t.id)?.usage?.length === 1,
             "usage committed without ACK", 5_000);
@@ -83,10 +92,10 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           const entries = h.ledger.filter(entry => entry.partition === t.id && entry.seq !== null);
           entries.forEach(entry => arrived.add(`${t.id}:${entry.seq}`));
           const unique = [...new Map(entries.map(entry => [entry.seq, entry])).values()];
-          expect(unique.at(-1)?.type).toBe("task.complete");
+          expect(unique.at(-1)?.type).toBe("turn.complete");
           const effects = h.effectiveLedger.filter(entry => entry.partition === t.id);
           for (const seq of rows) expect(effects.filter(entry => entry.seq === seq)).toHaveLength(1);
-          expect(effects.at(-1)?.type).toBe("task.complete");
+          expect(effects.at(-1)?.type).toBe("turn.complete");
           expect(entries.length).toBeGreaterThan(effects.length);
         }
         expect([...arrived].sort()).toEqual([...sent].sort());
@@ -110,8 +119,9 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     const h = await fixture(); await h.startDaemon();
     const large = task(h); const other = task(h);
     const box = outbox(h); const p = { runtime_id: runtime(h) };
-    box.enqueue(large.id, "complete", { ...p, output: "x".repeat(1024 * 1024) });
-    box.enqueue(other.id, "start", p); box.enqueue(other.id, "complete", { ...p, output: "delivered" });
+    box.enqueue(large.id, "turn.complete", turnCompletion(h.store, large.id, "x".repeat(1024 * 1024), { ...p }));
+    box.enqueue(other.id, "start", p); await box.waitForTaskDrain(other.id); await readInput(h, other.id);
+    box.enqueue(other.id, "turn.complete", turnCompletion(h.store, other.id, "delivered", { ...p }));
     expect(await box.waitForTaskDrain(large.id)).toBe("blocked");
     await box.waitForTaskDrain(other.id);
     expect(h.store.getTask(other.id)?.status).toBe("completed");
@@ -120,15 +130,18 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     expect(h.ledger.some(entry => entry.partition === large.id)).toBe(false);
   });
 
-  it("purges an already deleted task after reconnect while delivering another partition", async () => {
+  it("quarantines an unbound turn completion after reconnect while delivering another partition", async () => {
     const h = await fixture(); await h.startDaemon();
-    const other = task(h); await h.disconnect();
+    const other = task(h); h.store.startTask(other.id); await readInput(h, other.id); await h.disconnect();
     const box = outbox(h); const p = { runtime_id: runtime(h) };
-    box.enqueue("deleted", "complete", { ...p, output: "deleted" });
+    box.enqueue("deleted", "turn.complete", { ...p, turn_id: "turn_deleted", attempt_id: "deleted", input_to_seq: 0,
+      reply: { body_md: "deleted", message_kind: "final" } });
     box.enqueue("deleted", "progress", p);
-    box.enqueue(other.id, "start", p); box.enqueue(other.id, "complete", { ...p, output: "ok" });
+    box.enqueue(other.id, "start", p); box.enqueue(other.id, "turn.complete", turnCompletion(h.store, other.id, "ok", { ...p }));
     await h.reconnect(); await box.flushAll();
-    expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
+    expect(box.stats()).toMatchObject({ pending: 0, blocked: 2 });
+    expect(await box.waitForTaskDrain("deleted")).toBe("blocked");
+    expect(h.sockets.at(-1)!.frames.some(frame => frame.t === "res" && frame.p.code === "stale_attempt")).toBe(true);
     expect(h.store.getTask(other.id)?.status).toBe("completed");
   });
 
@@ -157,8 +170,11 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           const agent = h.store.createAgent({ name: "Historical", provider: "claude" });
           const t = h.store.createTask({ agentId: agent.id, prompt: "history" });
           h.store.claimTask("historical-runtime"); h.store.startTask(t.id); historicalTask = t.id;
+          const input = h.store.getDaemonTurnBridge().offerInput(h.store.getTaskWithAgent(t.id)!);
+          expect(h.store.getDaemonTurnBridge().rpc("turn.input", { ...input, message_ids: input.input_messages.map(m => m.id) },
+            { runtimeId: "historical-runtime", daemonId: "dmn_fixture", workspaceId: "local" })).toMatchObject({ ok: true });
           const legacy = new MultiremiTaskReportOutbox({ path: `${h.root}/claude-outbox.db`, canSend: () => false, deliver: async () => {} });
-          legacy.enqueue(t.id, "complete", { output: "historical" }); await legacy.close();
+          legacy.enqueue(t.id, "turn.complete", turnCompletion(h.store, t.id, "historical", {  })); await legacy.close();
         },
       });
       await h.startDaemon();
@@ -167,7 +183,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       const hello = h.ledger.find(entry => entry.type === "hello")!.frame;
       expect(hello.p.runtimes.map((r: any) => r.runtime_id).sort()).toEqual(["codex-runtime", "historical-runtime"]);
       expect(hello.p.runtimes.find((r: any) => r.runtime_id === "historical-runtime").active_task_ids).toContain(historicalTask);
-      expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === historicalTask)).toHaveLength(1);
+      expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === historicalTask)).toHaveLength(1);
       expect(recover.mock.calls.some(([id]) => id === "historical-runtime")).toBe(false);
       expect((h.daemons[0] as any).protocolLane.runtime().active_task_ids).not.toContain(historicalTask);
     } finally { recover.mockRestore(); }
@@ -175,20 +191,22 @@ describe("v2 report reconciliation with real sockets and DB", () => {
 
   it("hands an online steer conflict back to the executor and fails an orphaned replay", async () => {
     const h = await fixture(); await h.startDaemon();
-    const t = task(h); h.store.startTask(t.id);
+    const t = task(h); h.store.startTask(t.id); await readInput(h, t.id);
     const steer = h.store.createTaskSteerMessage({ taskId: t.id, kind: "steer", content: "new turn" });
+    h.store.getDaemonTurnBridge().snapshot({ runtimeId: runtime(h), daemonId: "dmn_fixture", workspaceId: "local" }, new Set([t.id]));
     const box = outbox(h); const p = { runtime_id: runtime(h) };
-    const completion = box.enqueueAndWait(t.id, "complete", { ...p, output: "old" });
+    const completion = box.enqueueAndWait(t.id, "turn.complete", turnCompletion(h.store, t.id, "old", { ...p }));
     box.enqueue(t.id, "progress", { ...p, summary: "injected steer" });
-    await expect(completion).rejects.toMatchObject({ code: "steer_pending" });
+    await expect(completion).rejects.toMatchObject({ code: "turn_input_pending" });
     await box.waitForTaskDrain(t.id);
     h.store.consumeTaskSteerMessages(t.id, [steer.id]);
-    await box.enqueueAndWait(t.id, "complete", { ...p, output: "new" });
+    await box.enqueueAndWait(t.id, "turn.complete", turnCompletion(h.store, t.id, "new", { ...p }));
     expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: "new" });
-    const replay = task(h); h.store.startTask(replay.id);
+    const replay = task(h); h.store.startTask(replay.id); await readInput(h, replay.id);
     h.store.createTaskSteerMessage({ taskId: replay.id, kind: "steer", content: "orphan" });
+    h.store.getDaemonTurnBridge().snapshot({ runtimeId: runtime(h), daemonId: "dmn_fixture", workspaceId: "local" }, new Set([replay.id]));
     await h.disconnect();
-    box.enqueue(replay.id, "complete", { ...p, output: "orphaned" });
+    box.enqueue(replay.id, "turn.complete", turnCompletion(h.store, replay.id, "orphaned", { ...p }));
     await h.restartDaemon(); await outbox(h).waitForTaskDrain(replay.id);
     expect(h.store.getTask(replay.id)).toMatchObject({ status: "failed", failureReason: "runtime_recovery" });
     expect(outbox(h).stats().blocked).toBe(0);
@@ -200,9 +218,10 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     const prompts: string[] = [];
     const h = await fixture({ onReady: () => {},
       beforeSend(frame, _socket, h) {
-        if (frame.t === "task.complete" && !injected) {
+        if (frame.t === "turn.complete" && !injected) {
           injected = true;
-          h.store.createTaskSteerMessage({ taskId: frame.p.task_id, kind: "steer", content: "use the new answer" });
+          h.store.createTaskSteerMessage({ taskId: frame.p.attempt_id, kind: "steer", content: "use the new answer" });
+          h.store.getDaemonTurnBridge().snapshot({ runtimeId: frame.rt, daemonId: "dmn_fixture", workspaceId: "local" }, new Set([frame.p.attempt_id]));
         }
       },
       providerFactory: () => ({
@@ -217,8 +236,8 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     const agent = h.store.createAgent({ name: "Live steer", provider: "claude" });
     const t = h.store.createTask({ agentId: agent.id, prompt: "answer" });
     let terminalEffects = 0;
-    const complete = h.store.completeTaskFromDaemon.bind(h.store);
-    const spy = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+    const complete = h.store.completeTask.bind(h.store);
+    const spy = spyOn(h.store, "completeTask").mockImplementation((id, input, authority) => {
       const before = h.store.getTask(id)?.status;
       const result = complete(id, input, authority);
       if (id === t.id && before !== "completed" && result.status === "completed") terminalEffects++;
@@ -233,7 +252,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: "new answer" });
       expect(h.daemon.traceStore().read(t.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "old answer" }));
       expect(terminalEffects).toBe(1);
-      expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === t.id)).toHaveLength(2);
+      expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === t.id)).toHaveLength(2);
       expect(outbox(h).stats().blocked).toBe(0);
     } finally { spy.mockRestore(); }
   });
@@ -264,7 +283,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           const t = h.store.createTask({ agentId: agent.id, prompt: "already finished" });
           h.store.claimTask("offline-runtime"); h.store.startTask(t.id); historicalTask = t.id;
           const legacy = new MultiremiTaskReportOutbox({ path: `${h.root}/claude-outbox.db`, canSend: () => false, deliver: async () => {} });
-          legacy.enqueue(t.id, "complete", { output: "offline result" }); await legacy.close();
+          legacy.enqueue(t.id, "turn.complete", turnCompletion(h.store, t.id, "offline result", {  })); await legacy.close();
         },
       });
       await h.startDaemon({ waitForSocket: false });

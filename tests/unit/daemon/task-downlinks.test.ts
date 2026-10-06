@@ -153,8 +153,7 @@ describe("turn input push inbox over native WS", () => {
       const wire = frames.find(frame => frame.t === "task.offer")!.p;
       expect(wire).not.toHaveProperty("id"); expect(wire).not.toHaveProperty("prompt");
       expect(await client.event({ t: "task.start", seq: 1, rt, p: { task_id: task.id } })).toMatchObject({ ok: true });
-      expect(await inbox.rpc("turn.input", { ...inbox.turnInput(task.id),
-        message_ids: task.input_messages.map(m => m.id) })).toMatchObject({ ok: true });
+      await inbox.consumeTaskSteerMessages(task.id, task.input_messages.map(m => m.id));
       expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(task.input_to_seq);
 
       const interrupt = send("Process this live input");
@@ -164,12 +163,13 @@ describe("turn input push inbox over native WS", () => {
 
       inbox.beginDecision(task.id);
       const created = await inbox.rpc("turn.decision", { ...inbox.turnInput(task.id), body_md: "Allow tool?",
-        dedupe_key: "store-permission", options: [{ label: "Allow", value: "allow" }], metadata: { kind: "permission" } });
+        dedupe_key: "store-permission", options: [{ label: "Allow", value: "allow" }],
+        metadata: { kind: "permission", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } });
       const decision = created.message as UnifiedMessage;
       inbox.registerDecision(decision, task.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("awaiting_human");
       expect(store.getMessage(decision.id)!.message_kind).toBe("decision");
-      const answered = store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: "Allow" });
+      const answered = store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: "Allow", response: { option_id: "allow" } });
       const reply = await inbox.waitForDecisionReply(decision.id, new AbortController().signal, 2_000);
       expect(reply?.id).toBe(answered.message.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("running");

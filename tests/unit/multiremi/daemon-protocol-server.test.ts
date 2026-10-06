@@ -1,3 +1,4 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 /**
  * MUL-417 — the v2 connection layer as it is actually wired into `Bun.serve`.
  *
@@ -53,7 +54,7 @@ function helloFrame(patch: Record<string, unknown> = {}): string {
     p: {
       protocol: DAEMON_PROTOCOL_VERSION,
       daemon_id: "dmn_v2",
-      cli_version: "0.2.83",
+      cli_version: DAEMON_MIN_CLI_VERSION,
       launched_by: null,
       runtimes: [{ runtime_id: "rt_v2", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
       caps: [],
@@ -98,7 +99,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
         t: "welcome",
         p: {
           protocol: DAEMON_PROTOCOL_VERSION,
-          min_cli_version: "0.2.83",
+          min_cli_version: DAEMON_MIN_CLI_VERSION,
           hb_interval_ms: 15_000,
           // A-1 advertises the A-0 limits and leaves the trace heads to A-6.
           limits: { frame_bytes: 1024 * 1024, window_frames: 64, window_bytes: 1024 * 1024 },
@@ -219,7 +220,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
         p: {
           protocol: DAEMON_PROTOCOL_VERSION,
           daemon_id: "dmn_v2",
-          cli_version: "0.2.83",
+          cli_version: DAEMON_MIN_CLI_VERSION,
           launched_by: null,
           runtimes: [
             { runtime_id: "rt_v2", provider: "codex", max_concurrency: 1, active_task_ids: [] },
@@ -277,7 +278,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
       p: {
         protocol: DAEMON_PROTOCOL_VERSION,
         daemon_id: daemonId,
-        cli_version: "0.2.83",
+        cli_version: DAEMON_MIN_CLI_VERSION,
         launched_by: null,
         runtimes: [{ runtime_id: "rt_v2", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
         caps: [],

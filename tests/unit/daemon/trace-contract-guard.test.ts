@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import {
   isKnownTraceEventType,
   KNOWN_TRACE_EVENT_TYPES,
@@ -175,10 +176,23 @@ function producerEventTypes(): Map<string, string[]> {
 
   for (const { file } of producerFiles()) {
     const src = readFileSync(file, "utf8");
+    const source = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
+    const controls: Array<[number, number]> = [];
+    const visit = (node: ts.Node): void => {
+      // queueInput carries conversation/control messages, not trace events.
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+        && node.expression.name.text === "queueInput") {
+        for (const argument of node.arguments) controls.push([argument.getStart(source), argument.end]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
 
     // (1) Object-literal `type: "..."`. The lookbehind excludes a longer key name
     // that merely ends in `type`.
-    for (const match of src.matchAll(/(?<![A-Za-z0-9_$])type:\s*"([a-z_]+)"/g)) add(match[1]!, file);
+    for (const match of src.matchAll(/(?<![A-Za-z0-9_$])type:\s*"([a-z_]+)"/g)) {
+      if (!controls.some(([start, end]) => match.index >= start && match.index < end)) add(match[1]!, file);
+    }
 
     // (2) The chunk ternary.
     const chunk = CHUNK_TERNARY_RE.exec(src);

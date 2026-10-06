@@ -85,7 +85,7 @@ afterEach(async () => { for (const h of harnesses.splice(0)) await h.dispose(); 
 
 describe("MUL-419 ui to runtime fanout across OS processes", () => {
   for (const status of ["responded", "timeout", "cancelled"] as const) {
-  it(`pushes a UI-${status} request to the executor and Feishu host sockets`, async () => {
+  it(`shares a UI-${status} decision message with its executor and Feishu card host`, async () => {
     const oldKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
     const oldPublicUrl = process.env.MULTIREMI_PUBLIC_URL;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
@@ -106,8 +106,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
         close: async () => {},
       }) } });
     harnesses.push(h);
-    h.db.exec("PRAGMA journal_mode = WAL");
-    h.db.exec("PRAGMA busy_timeout = 5000");
+    if (h.db.dialect === "sqlite") { h.db.exec("PRAGMA journal_mode = WAL"); h.db.exec("PRAGMA busy_timeout = 5000"); }
     let ui: Awaited<ReturnType<typeof startUiProcess>> | null = null;
     let host: WebSocket | null = null;
     try {
@@ -135,7 +134,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       const token = await h.store.createAccessToken({ name: "bot-host", type: "daemon",
         workspaceId: "local", daemonId: "dmn_bot_host" });
       await h.layer.drain();
-      ui = await startUiProcess(join(h.root, "server.db"), h.server.port!, secret);
+      ui = await startUiProcess(h.databaseSource, h.server.port!, secret);
       uiPort = ui.port;
       const taskId = (await ui.command({ op: "create_task", agentId: agent.id, issueId: issue.id,
         runtimeId: executorId })).taskId!;
@@ -162,14 +161,16 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       const started = performance.now();
       expect((await ui.command(status === "responded" ? { op: "respond_human_request", requestId }
         : { op: "expire_human_request", requestId, status })).requestId).toBe(requestId);
-      await waitFor(() => h.received.some(frame => frame.t === "task.human_request.settled" && frame.p.request.id === requestId)
-        && (status !== "responded" || hostFrames.some(frame => frame.t === "task.human_request.settled"
-          && frame.p.request.id === requestId)), "settled frames", 200);
+      if (status === "responded") await waitFor(() => h.received.some(frame => frame.t === "turn.message"
+        && frame.p.message.reply_to_id === requestId), "decision reply message", 200);
       expect(performance.now() - started).toBeLessThan(200);
-      expect(h.received.filter(frame => frame.t === "task.human_request.settled" && frame.p.request.id === requestId)).toHaveLength(1);
-      expect(h.received.find(frame => frame.p?.request?.id === requestId)?.p.request.status).toBe(status);
-      expect(hostFrames.filter(frame => frame.t === "task.human_request.settled" && frame.p.request.id === requestId))
+      expect(h.received.filter(frame => frame.t === "turn.message" && frame.p.message.reply_to_id === requestId))
         .toHaveLength(status === "responded" ? 1 : 0);
+      const read = await fetch(`${h.url}/api/daemon/messages/${requestId}`, { headers: { Authorization: `Bearer ${token.token}` } });
+      expect(read.status).toBe(200);
+      expect((await read.json() as any).request).toMatchObject({ id: requestId, status });
+      expect(hostFrames.filter(frame => frame.t === "turn.message")).toHaveLength(0);
+      expect(h.received.filter(frame => frame.t === "task.human_request.settled")).toHaveLength(0);
       expect((await ui.command({ op: "stats" })).daemonHookCalls).toBe(0);
 
       if (status === "responded") await new Promise<void>(resolve => {
@@ -186,11 +187,11 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       host.send(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "dmn_bot_host",
         cli_version: DAEMON_MIN_CLI_VERSION, caps: [], runtimes: [{ runtime_id: "rt_bot_host",
           provider: "claude", max_concurrency: 1, active_task_ids: [] }] } }));
-      await waitFor(() => recoveredFrames.some(frame => frame.t === "task.human_request.settled"
-        && frame.p.request.id === requestId), "bot host recovered settlement");
-      expect(recoveredFrames.filter(frame => frame.t === "task.human_request.settled"
-        && frame.p.request.id === requestId)).toHaveLength(1);
-      expect(recoveredFrames.find(frame => frame.p?.request?.id === requestId)?.p.request.status).toBe(status);
+      await waitFor(() => recoveredFrames.some(frame => frame.t === "welcome"), "bot host reconnect");
+      const recovered = await fetch(`${h.url}/api/daemon/messages/${requestId}`, { headers: { Authorization: `Bearer ${token.token}` } });
+      expect(recovered.status).toBe(200);
+      expect((await recovered.json() as any).request).toMatchObject({ id: requestId, status });
+      expect(recoveredFrames.filter(frame => frame.t === "task.human_request.settled" || frame.t === "turn.message")).toHaveLength(0);
     } finally {
       releaseProvider();
       if (host && host.readyState !== WebSocket.CLOSED) await new Promise<void>(resolve => {
@@ -230,8 +231,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       }) },
     });
     harnesses.push(h);
-    h.db.exec("PRAGMA journal_mode = WAL");
-    h.db.exec("PRAGMA busy_timeout = 5000");
+    if (h.db.dialect === "sqlite") { h.db.exec("PRAGMA journal_mode = WAL"); h.db.exec("PRAGMA busy_timeout = 5000"); }
     let ui: Awaited<ReturnType<typeof startUiProcess>> | null = null;
     let stage = "daemon startup";
     try {
@@ -242,11 +242,11 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
         workspaceId: "local", runtimeId });
       await h.layer.drain();
       stage = "ui startup";
-      ui = await startUiProcess(join(h.root, "server.db"), h.server.port!, secret);
+      ui = await startUiProcess(h.databaseSource, h.server.port!, secret);
       uiPort = ui.port;
       stage = "task offer";
       const taskId = (await ui.command({ op: "create_task", agentId: agent.id })).taskId!;
-      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.id === taskId),
+      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.attempt_id === taskId),
         "peer-delivered offer", 10_000);
       await waitFor(() => h.store.getTask(taskId)?.status === "running", "running task", 10_000);
 
@@ -257,7 +257,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       await waitFor(() => h.received.some(frame => frame.t === "runtime.command" && frame.p.id === requestId),
         "peer-delivered runtime command", 10_000);
       stage = "steer frame";
-      await waitFor(() => h.received.some(frame => frame.t === "task.steer" && frame.p.steer?.id === steerId),
+      await waitFor(() => h.received.some(frame => frame.t === "turn.message" && frame.p.message.id === steerId),
         "peer-delivered steer", 10_000);
 
       const stats = await ui.command({ op: "stats" });
@@ -271,7 +271,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
 
       releaseProvider();
       await waitFor(() => h.store.getTask(taskId)?.status === "completed", "completed task", 10_000);
-      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === taskId)).toHaveLength(1);
+      expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === taskId)).toHaveLength(1);
       expect(h.errors).toEqual([]);
     } catch (error) {
       console.error(`cross-process stage=${stage} frames=${h.received.map(frame => frame.t).join(",")}`);

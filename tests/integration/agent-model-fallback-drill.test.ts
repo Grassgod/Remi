@@ -400,15 +400,19 @@ describe("MUL-478 turn failure recovery drill", () => {
         fallback: true, provider, failureShape: shape, delegated: true,
       });
       expect(engineModels.slice(0, 2)).toEqual([PRIMARY_MODEL, FALLBACK_MODEL]);
-      expect(store.getTask(taskId)).toMatchObject({ status: "failed", failureReason: reason, result: null });
+      expect(store.getTask(taskId)).toMatchObject({ status: "failed", failureReason: reason });
       expect(issueStateAtPrimaryFailure).toBe("in_progress");
       const tasks = store.listTasksForIssue(issueId);
       const retry = tasks.find((candidate) => candidate.parentTaskId === taskId && candidate.agentId !== leaderId)!;
       expect(retry).toMatchObject({ status: "completed", executionModel: FALLBACK_MODEL, fallbackSwitched: true, result: FALLBACK_OUTPUT });
+      expect(store.getTurnForAttempt(taskId)?.id).toBe(store.getTurnForAttempt(retry.id)?.id);
+      const turn = store.getTurnForAttempt(retry.id)!;
+      expect(store.getMessage(turn.reply_message_id!)?.body_md).toBe(FALLBACK_OUTPUT);
       expect(retry.switchReason).toBe(`gateway_resource:${reason};provider_session_reset`);
       const returns = tasks.filter((candidate) => candidate.agentId === leaderId && candidate.delegationId === "dlg_drill");
       expect(returns).toHaveLength(1);
-      expect(returns[0]!.parentTaskId).toBe(retry.id);
+      expect(returns[0]!.parentTaskId).toBeNull();
+      expect(store.getMessage(returns[0]!.triggerCommentId!)?.task_id).toBe(store.getTurnForAttempt(retry.id)!.id);
     });
   }
   drillIt("Claude model-not-found without a fallback wakes the delegator once", async () => {
@@ -418,7 +422,8 @@ describe("MUL-478 turn failure recovery drill", () => {
     expect(store.getTask(taskId)).toMatchObject({ status: "failed", failureReason: TaskFailureReason.AgentModelNotFoundOrUnavailable });
     expect(issueStateAtPrimaryFailure).not.toBe("in_review");
     const tasks = store.listTasksForIssue(issueId);
-    expect(tasks.filter((candidate) => candidate.agentId === leaderId && candidate.parentTaskId === taskId)).toHaveLength(1);
+    expect(tasks.filter((candidate) => candidate.agentId === leaderId
+      && store.getMessage(candidate.triggerCommentId!)?.task_id === store.getTurnForAttempt(taskId)!.id)).toHaveLength(1);
     expect(tasks.filter((candidate) => candidate.fallbackSwitched)).toHaveLength(0);
   });
 });
