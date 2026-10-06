@@ -983,6 +983,18 @@ describe("selectors", () => {
     expect(profileFor({ mode: "contract", shape: "chat" }).rule).toEqual({ kind: "anchor", anchors: ["latest-message"] });
   });
 
+  it("chat waits for the latest message anchor after the heading and older rows", () => {
+    const profile = profileFor({ mode: "contract", shape: "chat" });
+    const olderRows = { ...view(20), anchors: [] };
+    const latest = { ...view(20), anchors: [{ ...view(20).anchors[0]!, name: "latest-message" }] };
+    const result = computeReadyWindow([frame(0, olderRows), frame(300, latest), frame(800, latest)], { profile });
+    expect(result).toMatchObject({ readyMs: 300, anchorVisibleMs: 300, anchorName: "latest-message", readyTimeout: false });
+    expect(computeReadyWindow([frame(0, olderRows), frame(800, olderRows)], { profile }).readyTimeout).toBe(true);
+    const empty = { ...olderRows, items: [] };
+    expect(computeFirstRealMs([frame(0, empty), frame(800, empty)], "contract")).toBeNull();
+    expect(computeReadyWindow([frame(0, empty), frame(800, empty)], { profile }).readyTimeout).toBe(true);
+  });
+
   it("propagates unobserved movement through computation, persistence, stats and both reports", () => {
     const computed = computeRoundMeasurement({ mode: "contract", shape: "list", targetCommentId: null,
       navStartMs: 0, frames: [frame(0, { ...view(10), items: [], anchors: [] })], shifts: [], stateTransitions: [],

@@ -55,6 +55,7 @@ try {
   const app = createMultiremiApp({ store, authToken: "s96-local-fixture-root" });
   const results: unknown[] = [];
   async function measure(label: string, path: string, token: string) {
+    if (process.env.MUL395_BENCH_ONLY && process.env.MUL395_BENCH_ONLY !== label) return;
     const samples: unknown[] = []; let first: unknown; let queries: string[] = [];
     for (let index = -6; index < 20; index++) {
       bytes = ms = rows = 0; sql = [];
@@ -90,6 +91,11 @@ try {
   await measure("summary-5000-16KiB", "/api/inbox/summary?timezone_offset=-480", reader.token);
   await measure("snapshot-owner-one-visible", "/api/agent-task-snapshot", owner.token);
   await measure("snapshot-reader-100-visible", "/api/agent-task-snapshot", reader.token);
+  // Nine single-task sessions change creator; the owner's existing task makes
+  // exactly ten visible results. Revert before the fixed-visibility size probe.
+  for (let index = 10; index < 19; index++) db.run("UPDATE multiremi_chat_sessions SET creator_id = ? WHERE id = ?", [fixture.ownerUserId, `chat_hotspot_${index}`]);
+  await measure("snapshot-owner-ten-visible", "/api/agent-task-snapshot", owner.token);
+  for (let index = 10; index < 19; index++) db.run("UPDATE multiremi_chat_sessions SET creator_id = ? WHERE id = ?", [fixture.readerUserId, `chat_hotspot_${index}`]);
   db.run("UPDATE multiremi_tasks SET prompt = ?, result = ?, codex_profile = ? WHERE chat_session_id IN (SELECT id FROM multiremi_chat_sessions WHERE creator_id = ?)",
     ["p".repeat(16384), "r".repeat(16384), JSON.stringify({ filler: "x".repeat(16384) }), fixture.readerUserId]);
   await measure("snapshot-owner-large-hidden", "/api/agent-task-snapshot", owner.token);
@@ -98,6 +104,7 @@ try {
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify({ database: postgres ? "postgres-18.3" : "sqlite", bun: Bun.version,
     bridgeDiagnosticMiB: postgres ? 128 : null, fixture: { runs: 5000, chatSessions: 100, agents: 3 }, warmups: 5, steadySamples: 20,
+    selection: process.env.MUL395_BENCH_ONLY ?? "all",
     byteMethod: postgres ? "actual Server-Timing dbb bridge counter, whole authenticated route" : "all driver replies JSON {rows,count}, including empty replies; driver elapsed time", results }, null, 2));
 } finally {
   restore(); raw.close();
