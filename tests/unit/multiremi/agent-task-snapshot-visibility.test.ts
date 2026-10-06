@@ -130,4 +130,13 @@ test("both snapshot routes return the same creator-scoped public contract", asyn
     const tasks = await response.json() as Array<{ id: string }>;
     expect(tasks.map((task) => task.id)).toEqual(binding.taskId === ownTask.id && binding.agentId === ownTask.agentId ? [ownTask.id] : []);
   }
+  f.db.run("UPDATE multiremi_tasks SET status = 'cancelled'");
+  const emptyCredential = await f.store.createAccessToken({ name: "empty snapshot fixture", type: "pat", userId: f.seed.readerUserId, workspaceId: "local" });
+  for (const path of ["/api/agent-task-snapshot", "/api/multiremi/agent-task-snapshot"]) {
+    const response = await app.request(path, { headers: {
+      Authorization: `Bearer ${emptyCredential.token}`, "X-Workspace-ID": "local",
+    } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(path.startsWith("/api/multiremi") ? { tasks: [], total: 0 } : []);
+  }
 }, 20000);

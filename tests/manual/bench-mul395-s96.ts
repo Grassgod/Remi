@@ -36,7 +36,11 @@ const db = new Proxy(raw, { get(target, key) {
   if (key === "query" || key === "prepare") return (query: string) => new Proxy(target[key](query), { get(st, method) {
     const value = Reflect.get(st, method);
     if (["get", "all", "run"].includes(String(method))) return (...args: unknown[]) => {
-      const start = performance.now(), result = value.apply(st, args); record(query, result, start, String(method)); return result;
+      const start = performance.now();
+      let result;
+      try { result = value.apply(st, args); }
+      catch (error) { sql.push(query.replace(/\s+/g, " ").trim()); throw error; }
+      record(query, result, start, String(method)); return result;
     };
     return typeof value === "function" ? value.bind(st) : value;
   } });
@@ -62,15 +66,17 @@ try {
       const start = performance.now();
       const response = await app.request(path, { headers: { Authorization: `Bearer ${token}`, "X-Workspace-ID": "local" } });
       const body = await response.text();
+      const parsed = response.status === 200 ? JSON.parse(body) : null;
       const timing = parseServerTiming(response.headers.get("server-timing"));
       const sample = { round: index, status: response.status, totalMs: performance.now() - start,
         dbMs: postgres ? timing.db : ms, dbBytes: postgres ? timing.dbb : bytes,
         dbq: postgres ? timing.dbq : sql.length, dbRows: rows, responseBytes: Buffer.byteLength(body),
+        responseRows: Array.isArray(parsed) ? parsed.length : null,
         responseSha256: new Bun.CryptoHasher("sha256").update(body).digest("hex") };
       if (response.status !== 200 && !(process.env.MUL395_ALLOW_OVERFLOW === "1" && label === "summary-5000-16KiB" && response.status === 500)) throw new Error(`${label}: HTTP ${response.status}`);
       if (index === -6) first = sample;
       if (index >= 0) samples.push(sample);
-      queries = sql;
+      queries = [...sql];
     }
     results.push({ label, path, first, samples, queries });
     console.log(`${label}: sampled first + 20 steady requests`);
