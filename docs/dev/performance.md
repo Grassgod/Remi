@@ -283,6 +283,10 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 - **属性存在**时，只有 `data-perf-state = ready` **且** `data-perf-fresh = 1` 的帧才算加载完成；`ready` 但 `fresh = 0` 不算，`ready-forced` 也不算通过，但会在报告里**单独列出**（`appReadyForced`）。
 - **属性不存在**时，维持原逻辑（只看 `data-perf-state`），所以 MUL-443 上线前后同一份清单都可用。
 
+### Snapshot 数据裁剪（MUL-395 S9-6）
+
+两个 agent-task-snapshot 路由把 Chat 创建者/任务凭证可见性下推到 SQL。仍先选每个 Agent 的最新 completed/failed，再过滤权限；无权最新结果不会让较旧结果补位。请求身份版本仅投影公开任务响应需要的列，保留 prompt/result/plugin/usage，省去内部执行配置及委派状态；内部无身份调用仍返回原任务对象。
+
 ### 判定口径
 
 | 项 | 口径 |

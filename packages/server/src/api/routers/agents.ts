@@ -340,8 +340,10 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId)
-      .filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
+    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId, {
+      userId: currentRequestUserId(c),
+      taskToken: currentTaskAccessToken(c) ?? undefined,
+    }).map(taskPublicResponse);
     return c.json({ tasks, total: tasks.length });
   });
   app.get("/api/agent-task-snapshot", (c) => {
@@ -349,8 +351,10 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId)
-      .filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse));
+    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId, {
+      userId: currentRequestUserId(c),
+      taskToken: currentTaskAccessToken(c) ?? undefined,
+    }).map(taskPublicResponse));
   });
   app.get("/api/multiremi/agent-run-counts", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));

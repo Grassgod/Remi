@@ -5651,8 +5651,8 @@ runMigrations(this.db);
     return this.tasks.listAgentTasks(agentId);
   }
 
-  listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MultiremiTask[] {
-    return this.tasks.listWorkspaceAgentTaskSnapshot(workspaceId);
+  listWorkspaceAgentTaskSnapshot(...args: Parameters<TasksRepo["listWorkspaceAgentTaskSnapshot"]>): MultiremiTask[] {
+    return this.tasks.listWorkspaceAgentTaskSnapshot(...args);
   }
 
   listWorkspaceAgentRunCounts(workspaceId = "local", days = 30): MultiremiAgentRunCount[] {
