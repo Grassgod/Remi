@@ -374,7 +374,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
 
   const chatMessage = stringField(task, "chatMessage", "chat_message");
   const chatAttachments = arrayField(task, "chatMessageAttachments", "chat_message_attachments");
-  if (chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
+  if (!task.input_messages && chatMessage && chatMessage.trim() !== currentTaskRequest(task).trim()) {
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);
@@ -485,6 +485,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
       sections.push("", "## Current Session Context", unreadInput.instruction);
       for (const line of inputLines.slice(1)) {
         const message = JSON.parse(line);
+        if (task.input_messages?.some(input => input.id === message.id)) continue;
         sections.push("", `### Triggering Message ${message.seq} (${message.id})`,
           `${message.author_type}: ${message.author_id ?? ""}`, message.body,
           ...(message.expand_hint ? [message.expand_hint] : []));

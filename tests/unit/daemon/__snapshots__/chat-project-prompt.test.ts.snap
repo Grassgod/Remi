@@ -7,7 +7,7 @@ exports[`Chat Project prompts preserves the unbound Chat bootstrap prompt byte f
 Continue our conversation.
 
 ## Current Chat Attachment Delivery
-Chat supports attachment delivery through \`remi chat attachment send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.
+Chat supports attachment delivery through \`remi message send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current conversation identifies the destination; no Feishu chat ID is needed.
 - Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.
 - Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.
 - For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.
@@ -38,7 +38,7 @@ exports[`Chat Project prompts preserves the unbound Chat delta prompt byte for b
 Continue our conversation.
 
 ## Current Chat Attachment Delivery
-Chat supports attachment delivery through \`remi chat attachment send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current Task identifies the destination Chat; no Feishu chat ID is needed.
+Chat supports attachment delivery through \`remi message send --attachment <path>\`; repeat \`--attachment\` for multiple files. The current conversation identifies the destination; no Feishu chat ID is needed.
 - Attach files the user explicitly requested, reports longer than one screen, and charts. Send plain-text conclusions without attachments when no file is needed.
 - Do not attach repository source code, raw logs, configuration containing secrets, or files larger than 20MB. The server validates allowed file types and size before queueing delivery.
 - For HTML, produce a self-contained file with inline CSS and JavaScript and no external stylesheet, script, or font URLs; do not depend on localStorage, cookies, or parent-frame access.

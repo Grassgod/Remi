@@ -52,7 +52,7 @@ describe("Chat attachment materialization", () => {
     expect(prompt).toContain(`Local path: ${JSON.stringify(attachments[0]!.localPath)}`);
     expect(prompt).toContain("content-type: image/png; size: 4 bytes");
     expect(prompt).not.toContain("remi attachment download att_pdf");
-    expect(prompt).toContain("remi chat attachment send --attachment <path>");
+    expect(prompt).toContain("remi message send --attachment <path>");
     expect(prompt).toContain("raw logs");
   });
 

@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -932,7 +933,7 @@ describe("Bun Multiremi daemon smoke", () => {
           id: agent.id,
           provider: "claude",
         },
-        prompt: "Say smoke from the daemon",
+        prompt: expect.stringContaining("Say smoke from the daemon"),
         repos: [],
       });
       expect(sendOptions[0]).toMatchObject({
@@ -1028,6 +1029,7 @@ describe("Bun Multiremi daemon smoke", () => {
       result: "Implemented the fix and verified it.",
     });
     expect(store.listIssueComments(issueId).map((comment) => comment.body)).toEqual([
+      "Finish the task",
       "Implemented the fix and verified it.",
     ]);
     expect(traceEvents.map((message) => message.type)).toEqual([
@@ -1050,7 +1052,7 @@ describe("Bun Multiremi daemon smoke", () => {
       error: "Agent returned empty output after compaction.",
       failureReason: "agent_error.empty_or_unparseable_output",
     });
-    expect(store.listIssueComments(issueId)).toEqual([]);
+    expect(store.listIssueComments(issueId).map(comment => comment.body)).toEqual(["Finish the task"]);
     expect(traceEvents.map((message) => message.type)).toEqual([
       "execution",
       "compaction",
@@ -1069,7 +1071,7 @@ describe("Bun Multiremi daemon smoke", () => {
       status: "completed",
       result: "Task completed.",
     });
-    expect(store.listIssueComments(issueId)).toEqual([]);
+    expect(store.listIssueComments(issueId).map(comment => comment.body)).toEqual(["Finish the task"]);
     expect(traceEvents.map(message => ({ type: message.type, meta: message.meta })))
       .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
   });
@@ -1355,6 +1357,10 @@ describe("Bun Multiremi daemon smoke", () => {
           contexts.set(contextPath, context);
           homes.add(options.env!.CLAUDE_CONFIG_DIR!);
           if (contexts.size === 2) bothStarted.resolve();
+          const read = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${tasks[0]!.issueSessionId}/messages?from=0&to=${store.getConversationLogHead(tasks[0]!.issueSessionId!)!.headSeq}`, {
+            headers: { Authorization: `Bearer ${options.env!.MULTIREMI_TOKEN}` },
+          });
+          expect(read.status).toBe(200);
           await release.promise;
           expect(readFileSync(contextPath, "utf8")).toBe(context);
         },
@@ -1673,7 +1679,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({ name: "Lazy Chat Claude", provider: "claude" });
     const chat = store.createChatSession({ agentId: agent.id, title: "No Git" });
     const hello = store.sendChatMessage(chat.id, { body: "你好" });
-    db!.run("UPDATE multiremi_tasks SET priority = 100 WHERE id = ?", [hello.task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET priority = 100 WHERE id = ?", [hello.task.id]);
     const issue = store.createIssue({ title: "Still checkout" });
     const issueTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use the repository", priority: 50 });
     const daemonToken = await store.createAccessToken({
@@ -1761,7 +1767,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(prompts[0]).not.toContain(otherRepo);
 
       const checkout = store.sendChatMessage(chat.id, { body: "Check out only the primary repository" });
-      db!.run("UPDATE multiremi_tasks SET priority = 90 WHERE id = ?", [checkout.task.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET priority = 90 WHERE id = ?", [checkout.task.id]);
       await runDaemonOnce();
       expect(store.getTask(checkout.task.id)?.status).toBe("completed");
       expect(existsSync(join(checkoutPath, "README.md"))).toBe(true);
@@ -2251,10 +2257,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(prompts[3]).not.toContain(`"body":"Start the chat"`);
       expect(prompts[3]).not.toContain(`"body":"Second answer"`);
       expect(prompts[3]).not.toContain("你上次读到");
-      const range = prompts[3]!.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+      const range = prompts[3]!.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
       expect(range[1]).toBe(session.id); expect(range[2]).toBe("0");
-      expect(store.getSessionAgentReadProgress(session.id, agent.id)).toEqual({ seq: 0, offset: 0 });
-      const history = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/log/entry?from=${range[2]}&to=${range[3]}`,
+      expect(store.getSessionAgentReadProgress(session.id, agent.id)).toEqual({ seq: Number(range[3]), offset: 0 });
+      const history = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/messages?from=${range[2]}&to=${range[3]}`,
         { headers: { Authorization: "Bearer root-chat-resume-secret" } });
       expect(history.status).toBe(200);
       const page = await history.json() as any;
@@ -2280,7 +2286,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.getTask(continued.task.id)?.status).toBe("completed");
       expect(sendOptions[4]?.sessionId).toBe("sess-chat-3");
       expect(prompts[4]).toStartWith("# Delta Prompt");
-      expect(prompts[4]).toContain(`remi session log get ${session.id} --from 0 --to`);
+      const continuedRange = prompts[4]!.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
+      expect(continuedRange[1]).toBe(session.id);
+      expect(continuedRange[2]).toBe(range[3]);
+      expect(Number(continuedRange[3])).toEqual(store.getTurnForAttempt(continued.task.id)!.input_to_seq);
     } finally {
       unsubscribeRetries(); now.mockRestore();
       server.stop(true);
@@ -3842,7 +3851,9 @@ describe("Bun Multiremi daemon smoke", () => {
 function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: string } {
   db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
-  return { store: new MultiremiStore(db), workDir };
+  const store = new MultiremiStore(db);
+  store.ensureLocalWorkspace();
+  return { store, workDir };
 }
 
 async function runCompactionFinalizeCase(spec: {
