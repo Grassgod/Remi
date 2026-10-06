@@ -1,7 +1,7 @@
 {
   "name": "MUL-474 daemon GET task status response",
   "capturedAt": "<timestamp>",
-  "source": "pre-change implementation (parent commit of agent/MUL-474)",
+  "source": "canonical actual consumption projection; task payload remains excluded",
   "fixture": {
     "taskId": "tsk_mul474_poll",
     "promptBytes": 131072,
@@ -23,7 +23,7 @@
         "outputTokens": 500,
         "cacheReadTokens": 0,
         "cacheWriteTokens": 0,
-        "totalTokens": 0
+        "totalTokens": 1500
       }
     ],
     "started_at": "2026-09-27T00:00:00.000Z",

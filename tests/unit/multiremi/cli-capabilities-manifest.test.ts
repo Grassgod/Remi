@@ -170,10 +170,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 618,
+      mapped: 622,
       exempt: 164,
       missing: 0,
-      total: 782,
+      total: 786,
     });
     for (const [route, command] of Object.entries({
       "POST /api/sessions/:sessionId/messages": "message.send",

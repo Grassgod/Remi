@@ -14,7 +14,7 @@
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 768 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -59,6 +59,7 @@ function captureConsoleLog<T>(run: () => Promise<T> | T): Promise<{ lines: strin
 
 const GOLDEN_PATH = join(import.meta.dir, "../../../scripts/api-routes.golden.json");
 const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string[] };
+const UI_USAGE_ROUTES = ["GET /api/usage/report", "GET /api/usage/prices", "POST /api/usage/prices", "PATCH /api/usage/prices/:id"];
 
 /**
  * What the plan's guard table says, written out literally.
@@ -389,6 +390,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(misdirected).toContain("GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
     expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
+    for (const route of UI_USAGE_ROUTES) {
+      expect(statuses.has(route)).toBe(true);
+      expect(statuses.get(route), `${route} belongs to the browser/CLI process`).not.toBe(421);
+    }
     expect(misdirected, routeCountHint("ui")).toHaveLength(63);
     // daemon/ws and trace/ws are tested as real upgrades below.
     expect(misdirected.length + 2, routeCountHint("ui")).toBe(65);
@@ -402,15 +407,16 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // #7/#10: the canonical inventory has 782 routes. Runtime owns
-    // daemon/health/peer/trace routes; 708 HTTP routes and two browser upgrades
+    // The merged inventory has 786 routes. Runtime owns
+    // daemon/health/peer/trace routes; 712 HTTP routes and two browser upgrades
     // are refused. The independent literal oracle checks every route above.
     const mintRoute = "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
     expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(708);
-    expect(refused + 2, routeCountHint("runtime")).toBe(710);
+    for (const route of UI_USAGE_ROUTES) expect(statuses.get(route), `${route} belongs to ui`).toBe(421);
+    expect(refused, routeCountHint("runtime")).toBe(712);
+    expect(refused + 2, routeCountHint("runtime")).toBe(714);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

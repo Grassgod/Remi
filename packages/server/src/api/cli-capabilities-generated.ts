@@ -5501,6 +5501,71 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "dashboard.usage.report": {
+      "command": "remi dashboard usage report",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.report",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.reconcile": {
+      "command": "remi dashboard usage reconcile",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.reconcile",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.prices.list": {
+      "command": "remi dashboard usage prices list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.prices.set": {
+      "command": "remi dashboard usage prices set",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.prices.close": {
+      "command": "remi dashboard usage prices close",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.close",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "dashboard.usage.daily": {
       "command": "remi dashboard usage daily",
       "auth": [

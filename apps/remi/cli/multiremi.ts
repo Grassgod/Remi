@@ -29,7 +29,9 @@ import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@co
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { locksForRole, startHubRoleGuard } from "@multiremi/api/hub/hub-role-guard.js";
-import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { evaluateStartupEnv, resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { prepareUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
+import { openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { createLogger, setLogLevel } from "@shared/logger.js";
 
 const log = createLogger("multiremi-cli");
@@ -207,11 +209,29 @@ async function serve(options: CliOptions): Promise<void> {
   // compose's `restart: unless-stopped` starts a fresh attempt. The local SQLite
   // arm has no cross-process fan-out, so the guard is a no-op there.
   const apiRoleConfiguration = resolveStartupApiRole(process.env);
+  const startupConfig = evaluateStartupEnv({ ...process.env, ...(token !== undefined ? { MULTIREMI_TOKEN: token ?? undefined } : {}) }, apiRoleConfiguration);
+  if (startupConfig.missingRequired.length) throw new Error(`Missing required production environment variables: ${startupConfig.missingRequired.join(", ")}`);
   const roleGuard = await startHubRoleGuard({
     databaseUrl: process.env.MULTIREMI_DATABASE_URL,
     locks: locksForRole(apiRoleConfiguration.role, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
   });
-  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRoleConfiguration });
+  let server: ReturnType<typeof startMultiremiServer>;
+  try {
+    const database = openMultiremiDatabase();
+    try {
+      const store = new MultiremiStore(database); // Constructor releases the schema migration lock.
+      await prepareUsageAccountingStartup(database, {
+        onBatch: batch => log.info("usage_startup_migration", batch),
+      });
+      server = startMultiremiServer({ store, port, hostname: host, authToken: token, apiRoleConfiguration });
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+  } catch (error) {
+    await roleGuard?.close();
+    throw error;
+  }
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
   await waitForShutdown(async () => {
     server.stop(true);

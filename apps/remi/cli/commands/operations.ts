@@ -4,6 +4,7 @@ import {
   CliRenderer,
   ResourceResolver,
   sanitizeCliDetails,
+  isPublicUsageStatistic,
   type CliApiClient,
   type CliHttpMethod,
   type CliIdentity,
@@ -15,6 +16,7 @@ import {
   type CommandSpec,
 } from "../core/index.js";
 import { formatRuntimeProtocol, type RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
+import type { UsageReport, UsageMetrics } from "@multiremi/contracts/usage-accounting";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -1077,8 +1079,49 @@ function pinSpecs(): CommandSpec[] {
 }
 
 function dashboardSpecs(): CommandSpec[] {
+  const reportOptions: CliOptionSpec[] = [
+    { name: "days", type: "string", valueName: "n|all", description: "Calendar days in the viewer timezone; all reads full history" },
+    { name: "since", type: "string", valueName: "ISO", description: "Inclusive range start" },
+    { name: "until", type: "string", valueName: "ISO", description: "Exclusive range end" },
+    { name: "tz", type: "string", valueName: "IANA", description: "Viewer timezone" },
+    { name: "project", type: "string", valueName: "id", description: "Filter by execution Project" },
+    { name: "runtime", type: "string", valueName: "id", description: "Filter by Runtime" },
+  ];
+  const reportQuery = (i: CommandInvocation) => ({ workspace_id: requiredWorkspace(i), days: stringOption(i, "days"),
+    since: stringOption(i, "since"), until: stringOption(i, "until"), tz: stringOption(i, "tz"), project_id: stringOption(i, "project"), runtime_id: stringOption(i, "runtime") });
   return [
     group("dashboard", "Read workspace activity and usage analytics"),
+    op({ id: "dashboard.usage.report", path: ["dashboard", "usage", "report"], description: "Read actual consumption, context diagnostics, known cost subtotals and coverage from one snapshot", method: "GET", apiPath: "/api/usage/report", auth: HUMAN_TASK, options: reportOptions, query: reportQuery }),
+    { id: "dashboard.usage.reconcile", path: ["dashboard", "usage", "reconcile"], description: "Verify additive consumption and currency subtotals across report views; task counts are distinct and not additive",
+      capability: "dashboard.usage.reconcile", auth: HUMAN_TASK, mutation: "read", outputs: ["table", "json", "jsonl"], options: commandOptions(PAGE_OPTIONS, reportOptions),
+      run: async invocation => {
+        const client = await clientFor(invocation);
+        const response = await client.request({ method: "GET", path: "/api/usage/report", query: reportQuery(invocation) });
+        const report = response.data as UsageReport;
+        if (!report?.summary || !Array.isArray(report.daily) || !Array.isArray(report.by_agent) || !Array.isArray(report.by_model) || !Array.isArray(report.by_runtime)) throw new CliError("server", "Invalid usage report response");
+        const fields = ["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens", "unpriced_tokens"] as const;
+        const discrepancies: Array<{ view: string; metric: string; expected: number; observed: number }> = [];
+        for (const view of ["daily", "by_agent", "by_model", "by_runtime"] as const) {
+          const rows: UsageMetrics[] = report[view];
+          for (const field of fields) {
+            const expected = report.summary[field], observed = rows.reduce((sum, row) => sum + row[field], 0);
+            if (!Number.isFinite(expected) || !Number.isFinite(observed) || expected !== observed) discrepancies.push({ view, metric: field, expected, observed });
+          }
+          for (const bucket of ["known_cost_by_currency", "reference_cost_by_currency", "sdk_estimate_cost_by_currency"] as const) {
+            const currencies = new Set([...Object.keys(report.summary[bucket] ?? {}), ...rows.flatMap(row => Object.keys(row[bucket] ?? {}))]);
+            for (const currency of currencies) {
+              const expected = report.summary[bucket]?.[currency] ?? 0, observed = rows.reduce((sum, row) => sum + (row[bucket]?.[currency] ?? 0), 0);
+              if (Math.abs(expected - observed) > 1e-9 * Math.max(1, Math.abs(expected))) discrepancies.push({ view, metric: `${bucket}_${currency}`, expected, observed });
+            }
+          }
+        }
+        const result = { reconciled: discrepancies.length === 0, as_of: report.as_of, pricing_revision: report.pricing_revision, window: report.window, distinct_task_count: report.summary.task_count, discrepancies };
+        renderSafe(invocation, result);
+        if (discrepancies.length) throw new CliError("server", "Usage report views do not reconcile", { details: discrepancies });
+      } },
+    op({ id: "dashboard.usage.prices.list", path: ["dashboard", "usage", "prices", "list"], description: "List historical price versions for exact provider/model/connection keys", method: "GET", apiPath: "/api/usage/prices", auth: HUMAN_TASK, query: i => ({ workspace_id: requiredWorkspace(i) }), collections: ["prices"] }),
+    op({ id: "dashboard.usage.prices.set", path: ["dashboard", "usage", "prices", "set"], description: "Append a configured or published price version with --file; unknown rates are null, free rates are 0", method: "POST", apiPath: "/api/usage/prices", auth: HUMAN, options: INPUT_OPTIONS, query: i => ({ workspace_id: requiredWorkspace(i) }) }),
+    op({ id: "dashboard.usage.prices.close", path: ["dashboard", "usage", "prices", "close"], description: "Close a price version without deleting its historical rates", method: "PATCH", apiPath: i => `/api/usage/prices/${encodePath(positional(i, 0, "price"))}`, auth: HUMAN, positionals: [ref("price")], options: [{ name: "effective-to", type: "string", required: true, valueName: "ISO", description: "Exclusive version end" }], query: i => ({ workspace_id: requiredWorkspace(i) }), body: i => ({ effective_to: stringOption(i, "effective-to") }) }),
     ...[
       ["dashboard.usage.daily", ["dashboard", "usage", "daily"], "/api/dashboard/usage/daily", "Get daily usage"],
       ["dashboard.usage.by-agent", ["dashboard", "usage", "by-agent"], "/api/dashboard/usage/by-agent", "Get usage by agent"],
@@ -1322,7 +1365,7 @@ function omitSecretFields(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(omitSecretFields);
   if (!isRecord(value)) return value;
   return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i.test(key))
+    .filter(([key, entry]) => isPublicUsageStatistic(key, entry) || !/(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i.test(key))
     .map(([key, entry]) => [key, omitSecretFields(entry)]));
 }
 

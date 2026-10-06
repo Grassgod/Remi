@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
 import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
 import { outboxRecordBytes } from "@multiremi/worker/report-frames.js";
+import { DAEMON_FRAME_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { actualUnit } from "@acp/usage-collector.js";
+import { createLocalStore, db as usageDb, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import {
   MultiremiTaskReportOutbox,
   type MultiremiOutboxKind,
@@ -24,6 +27,7 @@ afterEach(async () => {
   outboxes = [];
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
+  resetMultiremiTestEnv();
 });
 
 function tempPath(): string {
@@ -42,6 +46,123 @@ function httpError(status: number, path = "/api/daemon/tasks/x"): MultiremiDaemo
 }
 
 describe("MultiremiTaskReportOutbox", () => {
+  it("replays a turn charge whose 5000 request links exceed one frame, preserving exactly one billed amount", async () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ name: "long-charge", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "long-charge", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Long billed turn", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    store.setUsagePrice("local", { provider: "claude", model: "opus", connection_id: null, requested_model_alias: false,
+      currency: "USD", input_per_million: 2, output_per_million: 0, cache_read_per_million: 0, cache_write_per_million: 0,
+      unsplit_per_million: null, source: "configured", source_url: null, effective_from: "2026-01-01T00:00:00Z", effective_to: null });
+    const units = Array.from({ length: 5000 }, (_, i) => ({ ...actualUnit({ unitId: String(i).padStart(6, "0") + "x".repeat(240),
+      provider: "claude", model: "opus", scope: "request", source: "provider_request", inputTokens: 1_000_000,
+      outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 1_000_000 }), occurredAt: "2026-10-01T01:00:00.000Z" }));
+    const money = { ...actualUnit({ unitId: "provider-turn-charge", provider: "claude", scope: "turn", source: "provider_turn",
+      costAmount: 0.25, costCurrency: "USD", costSource: "provider_reported" }), occurredAt: "2026-10-01T01:00:00.000Z",
+      coveredUnitIds: units.map(unit => unit.unitId) };
+    const path = tempPath();
+    const offline = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    offline.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-charge", revision: 1, complete: true, units: [...units, money] } });
+    offline.enqueue(task.id, "complete", { output: "done" });
+    expect(offline.stats().blocked).toBe(0);
+    await offline.close();
+    let chargeFrames = 0;
+    let observedIncomplete = false;
+    let loseChargeAcknowledgement = true;
+    let maxFrameBytes = 0;
+    const partialAmounts: Array<{ amount: number; complete: boolean }> = [];
+    const kinds: string[] = [];
+    const restarted = track(new MultiremiTaskReportOutbox({ path, backoffScheduleMs: [1], deliver: async record => {
+      maxFrameBytes = Math.max(maxFrameBytes, outboxRecordBytes(record));
+      kinds.push(record.kind);
+      if (record.kind === "usage") {
+        const snapshot = record.payload.usageSnapshot as any;
+        chargeFrames += snapshot.units.filter((unit: any) => unit.unitId === money.unitId).length;
+        store.reportTaskUsageSnapshot(task.id, snapshot);
+        if (!observedIncomplete && snapshot.units.some((unit: any) => unit.unitId === money.unitId)
+          && (usageDb!.query("SELECT cost_coverage_complete FROM multiremi_usage_units WHERE task_id=? AND unit_id=?")
+            .get(task.id, money.unitId) as { cost_coverage_complete: number }).cost_coverage_complete === 0) {
+          observedIncomplete = true;
+          const partial = store.getUsageReport({ workspaceId: "local", days: null }).summary;
+          partialAmounts.push({ amount: partial.known_cost_by_currency.USD ?? 0, complete: partial.complete });
+          if (loseChargeAcknowledgement) {
+            loseChargeAcknowledgement = false;
+            throw new Error("charge fragment acknowledgement lost after persistence");
+          }
+        }
+      } else if (record.kind === "complete") store.completeTask(task.id, { output: "done" });
+    } }));
+    expect(await restarted.waitForTaskDrain(task.id)).toBe("delivered");
+    expect(chargeFrames).toBeGreaterThan(1);
+    expect(observedIncomplete).toBe(true);
+    expect(maxFrameBytes).toBeLessThanOrEqual(DAEMON_FRAME_MAX_BYTES);
+    // No part of the unverified reported charge may enter known amounts.
+    // Unrelated configured estimates remain whole USD 2 multiples.
+    expect(partialAmounts).toHaveLength(1);
+    expect(partialAmounts[0]!.complete).toBe(false);
+    expect(partialAmounts[0]!.amount % 2).toBe(0);
+    expect(kinds.at(-1)).toBe("complete");
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary).toMatchObject({ actual_total_tokens: 5_000_000_000, priced_tokens: 5_000_000_000,
+      known_cost_by_currency: { USD: 0.25 }, complete: true });
+    expect(store.getTask(task.id)?.status).toBe("completed");
+  }, 30_000);
+  it("replays over 3000 request facts after an outage with bounded final chunks and delivers terminal last", async () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ name: "long-usage", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "long-usage", provider: "claude", runtimeId: runtime.id, workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Long task", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    const units = Array.from({ length: 3500 }, (_, i) => ({ ...actualUnit({ unitId: `request-${i}`, provider: "claude", model: i % 2 ? "opus" : "haiku",
+      scope: "request", source: "provider_request", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0,
+      totalTokens: 2, evidenceRef: "upstream_request" }), occurredAt: "2026-10-01T01:00:00.000Z" }));
+    for (const [index, unit] of units.entries()) first.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-run", revision: index + 1, complete: false, units: [unit] } });
+    first.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-run", revision: 3501, complete: true, units } });
+    first.enqueue(task.id, "complete", { output: "done" });
+    expect(first.stats().blocked).toBe(0);
+    await first.close();
+    const kinds: string[] = [];
+    const reopened = track(new MultiremiTaskReportOutbox({ path, deliver: async record => {
+      expect(outboxRecordBytes(record)).toBeLessThanOrEqual(DAEMON_FRAME_MAX_BYTES);
+      kinds.push(record.kind);
+      if (record.kind === "usage") store.reportTaskUsageSnapshot(task.id, record.payload.usageSnapshot as any);
+      else if (record.kind === "complete") store.completeTask(task.id, { output: "done" });
+    } }));
+    expect(await reopened.waitForTaskDrain(task.id)).toBe("delivered");
+    expect(kinds.at(-1)).toBe("complete");
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary.actual_total_tokens).toBe(7000);
+    expect(report.by_model.map(row => row.actual_total_tokens).sort()).toEqual([3500, 3500]);
+  }, 30_000);
+  it("keeps v2 usage through cancellation and restart without discarding deltas behind a complete marker", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("offline"); } }));
+    const snapshot = (runId: string, revision: number, complete = false) => ({ usageSnapshot: { version: 2, runId, revision, complete, units: [] } });
+    first.enqueue("task", "messages", { messages: [] });
+    first.enqueue("task", "usage", snapshot("run1", 1));
+    first.enqueue("task", "usage", snapshot("run1", 2));
+    first.enqueue("task", "usage", snapshot("run2", 1));
+    first.purgeTask("task", { keepUsage: true });
+    expect(first.enqueue("task", "complete", {})).toBeNull();
+    expect(first.enqueue("task", "usage", snapshot("run1", 3, true))).not.toBeNull();
+    expect(first.stats().pending).toBe(4);
+    await first.close();
+    const delivered: Array<[unknown, unknown]> = [];
+    const reopened = track(new MultiremiTaskReportOutbox({ path, deliver: async (record) => {
+      const value = record.payload.usageSnapshot as any;
+      delivered.push([value.runId, value.revision]);
+    } }));
+    expect(reopened.enqueue("task", "messages", { messages: [] })).toBeNull();
+    expect(await reopened.waitForTaskDrain("task")).toBe("delivered");
+    expect(delivered).toEqual([["run1", 1], ["run1", 2], ["run2", 1], ["run1", 3]]);
+    reopened.purgeTask("task"); // deletion takes precedence over cancellation's allowance
+    expect(reopened.enqueue("task", "usage", snapshot("run1", 4))).toBeNull();
+  });
   it("retries through an API outage and delivers strictly in seq order, terminal last", async () => {
     const delivered: string[] = [];
     let apiDown = true;
@@ -215,6 +336,69 @@ describe("MultiremiTaskReportOutbox", () => {
     await Bun.sleep(20);
     // No further attempts after blocking.
     expect(attempts).toBe(before);
+  });
+
+  it("recovers usage from an older persisted authority-blocked execution partition and authorizes each run separately", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    first.enqueue("old-task", "progress", { step: "obsolete" });
+    first.enqueue("old-task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await first.close();
+    const persisted = openSqliteDatabase(path);
+    persisted.run("UPDATE outbox_events SET status='blocked',last_error='authority_revoked'");
+    persisted.run("INSERT INTO outbox_meta(key,value) VALUES('blocked:old-task','authority_revoked'),('blocked-code:old-task','authority_revoked')");
+    persisted.close();
+    const sent: string[] = [];
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { sent.push(record.kind); return { ok: true }; } }));
+    expect(await second.waitForTaskDrain("old-task")).toBe("delivered");
+    expect(sent).toEqual(["usage"]);
+    expect(second.stats()).toMatchObject({ blocked: 0, pending: 0 });
+    expect(second.enqueue("old-task", "complete", {})).toBeNull();
+  });
+
+  it.each(["usage", "start", "progress", "messages", "complete"] as const)("parks invalid %s payloads without blocking independent usage or faking an ACK", async kind => {
+    const sent: string[] = [];
+    const blocked: string[] = [];
+    const path = tempPath();
+    const outbox = track(new MultiremiTaskReportOutbox({ path, onTaskBlocked: taskId => blocked.push(taskId), deliver: async record => {
+      sent.push(record.kind + ":" + (record.payload.invalid ? "invalid" : "valid"));
+      if (record.payload.invalid) throw new DaemonProtocolRpcError("invalid_report", false);
+      return { ok: true };
+    } }));
+    const rejected = outbox.enqueueAndWait("task", kind, { invalid: true });
+    const accepted = outbox.enqueueAndWait("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await expect(rejected).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(accepted).resolves.toMatchObject({ ok: true });
+    expect(sent).toEqual([`${kind}:invalid`, "usage:valid"]);
+    expect(blocked).toEqual([]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    await outbox.close();
+    const resumed: string[] = [];
+    const restarted = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { resumed.push(record.kind); return { ok: true }; } }));
+    await expect(restarted.enqueueAndWait("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 2, complete: true, units: [] } })).resolves.toMatchObject({ ok: true });
+    expect(resumed).toEqual(["usage"]);
+    expect(restarted.stats()).toMatchObject({ pending: 0, blocked: 1 });
+  });
+
+  it.each([false, true])("recovers old invalid-report partitions while retaining HTTP authority barriers (revoked=%s)", async revoked => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    first.enqueue("task", "prompt", { invalid: true });
+    first.enqueue("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await first.close();
+    const persisted = openSqliteDatabase(path);
+    persisted.run("UPDATE outbox_events SET status='blocked'");
+    persisted.run("INSERT INTO outbox_meta(key,value) VALUES(?,?),(?,?)", ["blocked:task", revoked ? "POST /report returned 401: unauthorized" : "daemon RPC failed: invalid_report", "blocked-code:task", "invalid_report"]);
+    persisted.close();
+    const sent: string[] = [];
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async record => {
+      sent.push(record.kind);
+      if (record.payload.invalid) throw new DaemonProtocolRpcError("invalid_report", false);
+      return { ok: true };
+    } }));
+    expect(await second.waitForTaskDrain("task")).toBe("blocked");
+    expect(sent).toEqual(revoked ? [] : ["prompt", "usage"]);
+    expect(second.stats()).toMatchObject({ pending: 0, blocked: revoked ? 2 : 1 });
   });
 
   it("treats a start replay 400 as delivered and drops rejected best-effort reports", async () => {

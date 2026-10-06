@@ -9,6 +9,7 @@ import { AgentsEndpoints } from "./endpoints/agents";
 import { RuntimesEndpoints } from "./endpoints/runtimes";
 import { BillingEndpoints } from "./endpoints/billing";
 import { DashboardEndpoints } from "./endpoints/dashboard";
+import { UsageAccountingEndpoints } from "./endpoints/usage-accounting";
 import { TasksEndpoints } from "./endpoints/tasks";
 import { InboxEndpoints } from "./endpoints/inbox";
 import { NotificationPreferencesEndpoints } from "./endpoints/notification-preferences";
@@ -68,6 +69,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new RuntimesEndpoints(http),
   (http: HttpClient) => new BillingEndpoints(http),
   (http: HttpClient) => new DashboardEndpoints(http),
+  (http: HttpClient) => new UsageAccountingEndpoints(http),
   (http: HttpClient) => new TasksEndpoints(http),
   (http: HttpClient) => new InboxEndpoints(http),
   (http: HttpClient) => new NotificationPreferencesEndpoints(http),
@@ -118,6 +120,7 @@ export interface ApiClient extends
     RuntimesEndpoints,
     BillingEndpoints,
     DashboardEndpoints,
+    UsageAccountingEndpoints,
     TasksEndpoints,
     InboxEndpoints,
     NotificationPreferencesEndpoints,

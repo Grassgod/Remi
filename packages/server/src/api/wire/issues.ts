@@ -790,7 +790,8 @@ export function issueUsageResponse(store: MultiremiStore, issue: MultiremiIssue)
   total_tokens: number;
   task_count: number;
 } {
-  const taskIds = new Set(store.listTasksForIssue(issue.id).map((task) => task.id));
+  const tasks = store.listTasksForIssue(issue.id);
+  const taskIds = new Set(tasks.map((task) => task.id));
   const totals = {
     total_input_tokens: 0,
     total_output_tokens: 0,
@@ -799,7 +800,8 @@ export function issueUsageResponse(store: MultiremiStore, issue: MultiremiIssue)
     total_tokens: 0,
     task_count: taskIds.size,
   };
-  for (const task of store.listTasksForIssue(issue.id)) {
+  // task.usage is a compatibility projection of canonical actual units.
+  for (const task of tasks) {
     for (const entry of task.usage) {
       totals.total_input_tokens += entry.inputTokens ?? 0;
       totals.total_output_tokens += entry.outputTokens ?? 0;

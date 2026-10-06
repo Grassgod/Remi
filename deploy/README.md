@@ -8,6 +8,106 @@ The API records lifecycle operations. A host-owned `remi-platform-updater`
 service executes them through one deployment driver. The API container never
 receives the Docker socket and cannot invoke `systemctl`.
 
+## Usage accounting startup cutover
+
+API startup automatically migrates the required legacy task usage scalars after
+the global schema migration lock has been released. Both `api` and `api-runtime`
+wait for this gate before starting jobs or opening the HTTP listener, including
+`/readyz`. Container updates require no manual migration command. The CLI yields
+between batches; embedded `startMultiremiServer` retains its synchronous API and
+waits for the same gate.
+
+The default batch size is 500 tasks (maximum 5000), controlled by
+`MULTIREMI_USAGE_MIGRATION_BATCH_SIZE`. Each task commits independently. A durable
+keyset cursor and per-task source checkpoints resume interrupted startup without
+repeating the completed prefix. `MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS` defaults
+to 300000 ms and must be positive; the deadline is checked between database
+operations/batches, so an in-flight database operation can extend elapsed time.
+Migration errors or deadline expiry fail startup, and the next container attempt
+resumes the committed work. Logs include counts, never legacy JSON or credentials.
+Compose/systemd updater readiness uses a 360000 ms wall-clock deadline, controlled
+by `MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS` in the **host updater environment**.
+Requests allow at most 5000 ms and probes sleep at most 2500 ms; both are capped
+by the remaining deadline. API, Web and configured extra readiness URLs are
+checked in parallel. Persistent failures still trigger local rollback. Keep
+this deadline above the API migration budget plus schema/process startup time,
+including when increasing `MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS`.
+
+**Before the first usage-accounting update, install and restart the host updater
+with this deadline implementation.** Updating only the API image does not change
+an already-running older updater: its fixed 24-probe window can roll back while
+migration is still running. Setting the new variable on that older code alone
+does not extend its window. On an isolated restored copy with 11320 task rows,
+Bun 1.3.14/PostgreSQL 17.11 measured schema setup at 8.343 s and scalar migration
+at 138.350 s (2026-10-06), exceeding the old roughly 60 s connection-refused
+window. This is clone evidence, not production throughput. No production
+migration duration has been measured.
+
+PostgreSQL uses a dedicated usage migration advisory mutex for schema/checkpoints
+and each bounded batch. It does not hold the global schema lock while migrating
+data. SQLite uses immediate per-task writer transactions. The final readiness
+check and marker share one transaction; PostgreSQL briefly locks task/run tables
+against writes during that final check. Empty databases pass this gate too.
+Subsequent ready startups check the marker and query pending task IDs inside the
+database. They detect source changes from old writers or an image rollback
+without loading old JSON payloads into the process. Null or default `[]`
+deprecated fields for new v2-only tasks do not create empty legacy runs.
+An empty first-attempt queued task with no dispatch/start/terminal evidence is
+audited without a phantom execution run, so its later complete v2 usage remains
+complete. Actual retries create new task IDs. A matching direct parent chain
+with a complete, Runtime-bound live v2 parent run keeps prior consumption on the
+parent; restart does not manufacture an old execution on its child. An attempt
+ordinal without that attribution evidence still retains unknown coverage,
+without inventing any additional tokens.
+
+An optional `scripts/migrate-usage-accounting.ts --execute` preparation retains
+the original audit and all observed source versions, but does not write the
+startup cutover marker. The first new startup detects JSON/time changes made by
+old servers after preparation, replaces only its provisional legacy aggregate,
+and preserves modern live runs and evidence-verified recovered facts. Totals with
+ambiguous semantics remain reported evidence, without invented actual/context
+tokens. Startup never scans archives or raw telemetry; normal reports read only
+the canonical ledger. See the [usage contract](../docs/usage-accounting.md).
+
+Keep the updater's drain-protected switch: stop the old API writers before
+allowing the new processes to finish cutover. Running an old image against the
+database after the startup marker has been established can still write JSON
+without updating the ledger. A new startup detects such changes. If the task
+already has counted native facts under any run, including ordinary authenticated
+v2 and recovered historical runs, it commits a source-conflict audit,
+revokes readiness and fails without advancing the processed source or changing
+those facts. The deprecated ingestion entry likewise rejects changed aggregates
+as nonretryable `invalid_report`; identical processed snapshots remain idempotent.
+An audit can describe a rejected observation and is never acceptance proof,
+even beside an existing legacy run. A pre-checkpoint preparation or ingress
+snapshot may establish a checkpoint only if its normalized nonempty legacy
+units exactly match persisted unit identities and facts (excluding revisions
+and task lifecycle occurrence times).
+Empty execution shells and context-only history do not block proven legacy
+consumption. Resolving an overlap requires reviewed evidence, not an automatic
+sum, maximum, or replacement.
+
+Production schema preparation may precede the switch. Evidence recovery must
+wait until old writers have stopped, old reports have drained and new code has
+completed its startup cutover. Generate and review a fresh source cohort and
+plan after that fence. A clone rehearsal or merged source does not establish
+that deployment or production recovery has happened.
+
+Validation: `tests/unit/multiremi/usage-startup-migration.test.ts` covers fresh and
+existing databases, checkpoints/restart, source changes, modern/recovered facts,
+failed readiness, unchanged ready startup, and two processes sharing an isolated
+SQLite file. `tests/unit/multiremi/usage-startup-postgres.test.ts` creates and
+deletes an isolated database through `MULTIREMI_TEST_POSTGRES_URL` and exercises
+fresh/restart/prepared cutover and two real UI/runtime startup processes. The
+PostgreSQL and SQLite startup tests were run with Bun 1.3.14 against disposable
+databases. Updater deadline tests cover readiness beyond 60 s/300 s, finite
+failure deadlines, request time, extra runtime readiness and rollback. The clone
+benchmark completed all 11320 checkpoints in 23 batches; the separate-process
+earlier marker-only warm migration check took 0.984 ms and executed zero batches
+(Store schema setup still took 8.309 s). That measurement predates the required
+pending-source check and is not a timing claim for the current warm gate. The
+benchmark started no jobs, HTTP listener or providers.
+
 ## Release pipeline
 
 Prepare every release, including nightly releases, with Bun 1.3.14:

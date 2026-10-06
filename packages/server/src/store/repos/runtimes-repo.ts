@@ -34,19 +34,16 @@ import {
   hasAnyField,
   IN_FLIGHT_TASK_STATUSES,
   isActiveTaskStatus,
-  isInFlightTaskStatus,
   isRecord,
   normalizeRuntimeConcurrency,
   nullableString,
   parseJson,
-  parseTaskUsageEntries,
   resolveOptionalStringField,
   toJson,
 } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { CancelTaskResult, ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import { activeRequestReadCache, cacheKey, writeThroughRequestReadCache } from "@multiremi/store/request-read-cache.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
@@ -95,7 +92,6 @@ import type {
   MultiremiRuntimeUpdateRequestStatus,
   MultiremiBotMenuPublishRequest,
   MultiremiRuntimeVisibility,
-  MultiremiTaskStatus,
   RegisterRuntimeInput,
   ReportRuntimeDirectoryScanInput,
   ReportRuntimeCommandInput,
@@ -294,12 +290,6 @@ export class RuntimesRepo {
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
   private readonly commandQueue: RuntimeRequestQueue<MultiremiRuntimeCommandRequest>;
   private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
-  // Postgres only: per runtime, token totals over its settled tasks and the row version they reflect.
-  private readonly settledUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
-  // Lists also reuse unchanged open-task totals; a live task's row version changes
-  // on every persisted usage/status update, so this never delays a visible update.
-  private readonly openListUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
-
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
     this.directoryScanQueue = new RuntimeRequestQueue(ctx.db, DIRECTORY_SCAN_REQUESTS);
@@ -611,8 +601,7 @@ export class RuntimesRepo {
   /**
    * `hydrateRuntime` over a list: one statement per derived table for all rows.
    *
-   * List and detail share the PostgreSQL settled-token cache. The list reads counts,
-   * versions and open usage in one snapshot, returning settled usage only on cache misses.
+   * Usage totals come from normalized scalar facts in one coherent aggregate.
    */
   private hydrateRuntimes(
     runtimes: MultiremiRuntime[], workspaceId: string,
@@ -623,28 +612,7 @@ export class RuntimesRepo {
     const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
     const usageByRuntime = new Map<string, RuntimeUsageSummary>();
     const workspaceRuntimes = `SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?`;
-    if (this.ctx.db instanceof PostgresSyncDatabase) {
-      for (const [id, stats] of this.runtimeListUsagePostgres(this.ctx.db, runtimes, workspaceId)) {
-        usageByRuntime.set(id, stats);
-      }
-    } else {
-      const usageRows = this.ctx.db.query(
-        `SELECT runtime_id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id IN (${workspaceRuntimes})`,
-      ).all(workspaceId) as Row[];
-      for (const row of usageRows) {
-        const id = String(row.runtime_id);
-        const stats = usageByRuntime.get(id) ?? {
-          taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
-          inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-        };
-        stats.taskCount += 1;
-        if (isInFlightTaskStatus(String(row.status) as MultiremiTaskStatus)) stats.activeTaskCount += 1;
-        if (row.status === "completed") stats.completedTaskCount += 1;
-        if (row.status === "failed") stats.failedTaskCount += 1;
-        addTaskUsage(stats, row.usage);
-        usageByRuntime.set(id, stats);
-      }
-    }
+    for (const [id, stats] of this.runtimeUsageSummaries(workspaceRuntimes, [workspaceId])) usageByRuntime.set(id, stats);
     const groupRows = this.ctx.db.query(
       `SELECT runtime_id, group_id FROM multiremi_execution_group_members
        WHERE runtime_id IN (${workspaceRuntimes})
@@ -679,68 +647,6 @@ export class RuntimesRepo {
     }));
   }
 
-  private runtimeListUsagePostgres(db: PostgresSyncDatabase, runtimes: MultiremiRuntime[], workspaceId: string): Map<string, RuntimeUsageSummary> {
-    // Do not trust xmin between writes inside one transaction. Neither read nor publish
-    // cached totals there; the one SQL statement is still a coherent read-your-writes snapshot.
-    const cached = db.inTransaction ? [] : runtimes.flatMap(runtime => {
-      const settled = this.settledUsageCache.get(runtime.id);
-      const open = this.openListUsageCache.get(runtime.id);
-      return settled || open ? [[runtime.id, settled?.version ?? null, open?.version ?? null]] : [];
-    });
-    const cacheSql = cached.length ? `VALUES ${cached.map(() => '(?::text, ?::text, ?::text)').join(', ')}`
-      : 'SELECT NULL::text, NULL::text, NULL::text WHERE false';
-    const settled = SETTLED_TASK_STATUSES.map(() => '?').join(', ');
-    const rows = db.query(`WITH selected_tasks AS MATERIALIZED (
-        SELECT id, execution_version, runtime_id, status, usage FROM multiremi_turn_execution_records
-        WHERE runtime_id IN (SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?)
-      ), cached(runtime_id, settled_version, open_version) AS (${cacheSql}), summaries AS (
-        SELECT runtime_id, COUNT(*) AS task_count,
-          COUNT(*) FILTER (WHERE status IN (${IN_FLIGHT_TASK_STATUSES.map(() => '?').join(', ')})) AS active_task_count,
-          COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
-          COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
-          ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
-          ${tasksVersionSql(` FILTER (WHERE status NOT IN (${settled}))`)} AS open_version
-        FROM selected_tasks GROUP BY runtime_id
-      ) SELECT summaries.*,
-        CASE WHEN cached.settled_version = COALESCE(summaries.settled_version, '') THEN NULL ELSE
-          (SELECT json_agg(usage)::text FROM selected_tasks t
-           WHERE t.runtime_id = summaries.runtime_id AND t.status IN (${settled})) END AS settled_usage,
-        CASE WHEN cached.open_version = COALESCE(summaries.open_version, '') THEN NULL ELSE
-          (SELECT json_agg(usage)::text FROM selected_tasks t
-           WHERE t.runtime_id = summaries.runtime_id AND t.status NOT IN (${settled})) END AS open_usage
-      FROM summaries LEFT JOIN cached ON cached.runtime_id = summaries.runtime_id`)
-      .all(workspaceId, ...cached.flat(), ...IN_FLIGHT_TASK_STATUSES,
-        ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES) as Row[];
-    const result = new Map<string, RuntimeUsageSummary>();
-    for (const row of rows) {
-      const id = String(row.runtime_id), version = String(row.settled_version ?? '');
-      const previous = db.inTransaction ? undefined : this.settledUsageCache.get(id);
-      const tokens = previous?.version === version ? { ...previous.tokens }
-        : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-      if (previous?.version !== version) {
-        for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
-      }
-      if (!db.inTransaction) this.settledUsageCache.set(id, { version, tokens: { ...tokens } });
-      const openVersion = String(row.open_version ?? '');
-      const previousOpen = db.inTransaction ? undefined : this.openListUsageCache.get(id);
-      const openTokens = previousOpen?.version === openVersion ? { ...previousOpen.tokens }
-        : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-      if (previousOpen?.version !== openVersion) {
-        for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(openTokens, usage);
-      }
-      if (!db.inTransaction) this.openListUsageCache.set(id, { version: openVersion, tokens: { ...openTokens } });
-      for (const field of Object.keys(openTokens) as Array<keyof TaskTokenTotals>) tokens[field] += openTokens[field];
-      // Splitting settled/open addition is exact for safe nonnegative integers. Above
-      // that range, JS addition order matters; retain the original list scan semantics.
-      if (Object.values(tokens).some(total => !Number.isSafeInteger(total))) {
-        result.set(id, this.runtimeUsageSummaryScan(id));
-        continue;
-      }
-      result.set(id, { taskCount: Number(row.task_count), activeTaskCount: Number(row.active_task_count),
-        completedTaskCount: Number(row.completed_task_count), failedTaskCount: Number(row.failed_task_count), ...tokens });
-    }
-    return result;
-  }
 
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
     return this.withRuntimeLifecycleLock(id, (current) => {
@@ -2628,88 +2534,35 @@ export class RuntimesRepo {
   }
 
   private runtimeUsageSummary(runtimeId: string): RuntimeUsageSummary {
-    // Every runtime read (heartbeat, claim, runtime lists) lands here. On Postgres each row crosses
-    // the worker bridge as JSON, so re-reading a runtime's whole task history on every read
-    // dominated those requests. bun:sqlite reads in-process and keeps the plain scan.
-    if (this.ctx.db instanceof PostgresSyncDatabase) return this.runtimeUsageSummaryPostgres(this.ctx.db, runtimeId);
-    return this.runtimeUsageSummaryScan(runtimeId);
-  }
-
-  private runtimeUsageSummaryScan(runtimeId: string): RuntimeUsageSummary {
-    const rows = this.ctx.db.query(
-      "SELECT id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id = ?",
-    ).all(runtimeId) as Row[];
-    const stats = {
-      taskCount: rows.length,
-      activeTaskCount: 0,
-      completedTaskCount: 0,
-      failedTaskCount: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
+    return this.runtimeUsageSummaries("SELECT id FROM multiremi_runtimes WHERE id=?", [runtimeId]).get(runtimeId) ?? {
+      taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
     };
-    for (const row of rows) {
-      const status = String(row.status ?? "") as MultiremiTaskStatus;
-      if (isInFlightTaskStatus(status)) stats.activeTaskCount += 1;
-      if (status === "completed") stats.completedTaskCount += 1;
-      if (status === "failed") stats.failedTaskCount += 1;
-      addTaskUsage(stats, row.usage);
-    }
-    return stats;
   }
 
-  /**
-   * Counts come from SQL. Token totals still come from `parseTaskUsageEntries`, so they match the
-   * scan exactly, but only unsettled tasks (a handful) send their usage every time. Settled tasks'
-   * totals are cached per runtime under a version of those rows (ids plus `xmin`, which every
-   * insert, update or delete changes) and re-read only when the version moves.
-   */
-  private runtimeUsageSummaryPostgres(db: PostgresSyncDatabase, runtimeId: string): RuntimeUsageSummary {
-    const inFlight = IN_FLIGHT_TASK_STATUSES.map(() => "?").join(", ");
-    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
-    const row = db.query(
-      `SELECT COUNT(*) AS task_count,
-              COUNT(*) FILTER (WHERE status IN (${inFlight})) AS active_task_count,
-              COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
-              COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
-              ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
-              (json_agg(usage) FILTER (WHERE status NOT IN (${settled})))::text AS open_usage
-       FROM multiremi_turn_execution_records
-       WHERE runtime_id = ?`,
-    ).get(...IN_FLIGHT_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, runtimeId) as Row;
-    const settledTokens = this.settledTaskTokens(db, runtimeId, String(row.settled_version ?? ""));
-    // A task settled or changed between the two reads; rescan rather than mix two snapshots.
-    if (!settledTokens) return this.runtimeUsageSummaryScan(runtimeId);
-    const stats = {
-      taskCount: Number(row.task_count ?? 0),
-      activeTaskCount: Number(row.active_task_count ?? 0),
-      completedTaskCount: Number(row.completed_task_count ?? 0),
-      failedTaskCount: Number(row.failed_task_count ?? 0),
-      ...settledTokens,
-    };
-    for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(stats, usage);
-    return stats;
-  }
-
-  /** Token totals over the runtime's settled tasks at `version`, or null if the rows moved past it. */
-  private settledTaskTokens(db: PostgresSyncDatabase, runtimeId: string, version: string): TaskTokenTotals | null {
-    const cached = this.settledUsageCache.get(runtimeId);
-    if (cached?.version === version) return { ...cached.tokens };
-    const settled = SETTLED_TASK_STATUSES.map(() => "?").join(", ");
-    const row = db.query(
-      `SELECT ${tasksVersionSql()} AS settled_version, json_agg(usage)::text AS settled_usage
-       FROM multiremi_turn_execution_records
-       WHERE runtime_id = ? AND status IN (${settled})`,
-    ).get(runtimeId, ...SETTLED_TASK_STATUSES) as Row;
-    const tokens = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
-    const current = String(row.settled_version ?? "");
-    // Two writes to one row inside a transaction leave the same `xmin`, so a version read between
-    // them could outlive the second write. Cache only outside transactions; lookups inside one stay
-    // safe, since no cached version can include rows this transaction wrote.
-    if (!db.inTransaction) this.settledUsageCache.set(runtimeId, { version: current, tokens });
-    return current === version ? { ...tokens } : null;
+  /** One coherent scalar read on both databases; telemetry never invalidates task-row caches. */
+  private runtimeUsageSummaries(selection: string, params: string[]): Map<string, RuntimeUsageSummary> {
+    const rows = this.ctx.db.query(`WITH selected AS (${selection}), owners AS (
+      SELECT t.runtime_id,t.turn_id AS task_id FROM multiremi_turn_execution_records t WHERE t.runtime_id IN (SELECT id FROM selected)
+      UNION SELECT u.runtime_id,t.turn_id AS task_id FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected)
+    ), counts AS (SELECT runtime_id,COUNT(*) AS task_count FROM owners GROUP BY runtime_id), lifecycle AS (
+      SELECT runtime_id,SUM(CASE WHEN status IN (${IN_FLIGHT_TASK_STATUSES.map(() => '?').join(',')}) THEN 1 ELSE 0 END) AS active_task_count,
+      SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_task_count,
+      SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_task_count
+      FROM multiremi_turn_execution_records t WHERE t.id=(SELECT current_attempt_id FROM multiremi_turns WHERE id=t.turn_id) AND runtime_id IN (SELECT id FROM selected) GROUP BY runtime_id
+    ), tokens AS (SELECT u.runtime_id,SUM(COALESCE(u.input_tokens,0)) AS input_tokens,SUM(COALESCE(u.output_tokens,0)) AS output_tokens,
+      SUM(COALESCE(u.cache_read_tokens,0)) AS cache_read_tokens,SUM(COALESCE(u.cache_write_tokens,0)) AS cache_write_tokens
+      FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected) GROUP BY u.runtime_id)
+    SELECT selected.id,counts.task_count,lifecycle.active_task_count,lifecycle.completed_task_count,lifecycle.failed_task_count,
+      tokens.input_tokens,tokens.output_tokens,tokens.cache_read_tokens,tokens.cache_write_tokens
+    FROM selected LEFT JOIN counts ON counts.runtime_id=selected.id LEFT JOIN lifecycle ON lifecycle.runtime_id=selected.id
+    LEFT JOIN tokens ON tokens.runtime_id=selected.id`).all(...params, ...IN_FLIGHT_TASK_STATUSES) as Row[];
+    return new Map(rows.map(row => [String(row.id), {
+      taskCount: Number(row.task_count ?? 0), activeTaskCount: Number(row.active_task_count ?? 0),
+      completedTaskCount: Number(row.completed_task_count ?? 0), failedTaskCount: Number(row.failed_task_count ?? 0),
+      inputTokens: Number(row.input_tokens ?? 0), outputTokens: Number(row.output_tokens ?? 0),
+      cacheReadTokens: Number(row.cache_read_tokens ?? 0), cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+    }]));
   }
 }
 
@@ -2724,28 +2577,6 @@ type RuntimeUsageSummary = Pick<MultiremiRuntime,
   "cacheWriteTokens"
 >;
 
-type TaskTokenTotals = Pick<MultiremiRuntime, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">;
-
-// Tasks in these states are finished; their rows (and usage) rarely change again.
-const SETTLED_TASK_STATUSES: readonly MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
-
-/**
- * Digest of task ids and `xmin`. A row's `xmin` is the transaction that wrote its current version,
- * so inserting, updating, deleting or re-homing any matched row changes the digest. "C" collation
- * keeps the order independent of the database locale.
- */
-function tasksVersionSql(filter = ""): string {
-  return `md5(string_agg(id || ':' || execution_version, ',' ORDER BY id COLLATE "C")${filter})`;
-}
-
-function addTaskUsage(stats: TaskTokenTotals, usage: unknown): void {
-  for (const entry of parseTaskUsageEntries(usage)) {
-    stats.inputTokens += entry.inputTokens;
-    stats.outputTokens += entry.outputTokens;
-    stats.cacheReadTokens += entry.cacheReadTokens;
-    stats.cacheWriteTokens += entry.cacheWriteTokens;
-  }
-}
 
 function normalizeAgentPluginProtocol(value: unknown): number {
   const protocol = Number(value);

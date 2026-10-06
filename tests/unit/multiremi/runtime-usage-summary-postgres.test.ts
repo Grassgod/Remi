@@ -1,18 +1,9 @@
-/**
- * MUL-366: on PostgreSQL the runtime usage summary (task counts and token totals on every
- * hydrated runtime) no longer pulls each task's `usage` through the worker bridge on every read.
- * Counts come from SQL; settled tasks' token totals are cached per runtime under a version of
- * those rows, and only unsettled tasks' usage is read each time. Tokens are still summed by the JS
- * parser, and bun:sqlite keeps the plain scan, so the same fixture goes through both backends and
- * every field must match, including after the rows change.
- *
- * Skipped (not failed) when Postgres is unreachable, matching `multiremi-postgres-store.test.ts`.
- * Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the configured role may CREATE DATABASE.
- */
+/** Runtime summaries use one canonical scalar SQL snapshot on PostgreSQL and SQLite. */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { writeUsageSnapshot, validateUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
@@ -49,10 +40,10 @@ class RecordingPostgresDb extends PostgresSyncDatabase {
   override query(sql: string): SqlStatement {
     this.statements.push(sql);
     const statement = super.query(sql);
-    if (!sql.includes("open_usage")) return statement;
-    const get = statement.get.bind(statement);
-    statement.get = (...params: unknown[]) => {
-      const row = get(...params);
+    if (!sql.includes("WITH selected AS")) return statement;
+    const all = statement.all.bind(statement);
+    statement.all = (...params: unknown[]) => {
+      const row = all(...params);
       const hook = this.afterSummaryQuery;
       this.afterSummaryQuery = null;
       hook?.();
@@ -141,6 +132,15 @@ function usageSummary(runtime: MultiremiRuntime | null) {
   };
 }
 
+function canonical(db: SqlDatabase, taskId: string, raw: string, occurredAt = "2026-09-24T00:00:00.000Z") {
+  const entries = parseTaskUsageEntries(raw);
+  writeUsageSnapshot(db, taskId, { version: 2, runId: "fixture", revision: 1, complete: true,
+    units: entries.map((entry, index) => ({ unitId: String(index), revision: 1, provider: "codex", model: "fixture-model", modelSource: "provider_reported",
+      source: "provider_request", scope: "request", accuracy: "exact", inputTokens: entry.inputTokens, outputTokens: entry.outputTokens,
+      cacheReadTokens: entry.cacheReadTokens, cacheWriteTokens: entry.cacheWriteTokens, actualUnsplitTokens: 0,
+      reportedTotalTokens: entry.totalTokens, contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt })) });
+}
+
 function seed(store: MultiremiStore, db: SqlDatabase) {
   store.ensureLocalWorkspace();
   const runtimeA = store.registerRuntime({ name: "Busy runtime", provider: "codex" });
@@ -159,6 +159,7 @@ function seed(store: MultiremiStore, db: SqlDatabase) {
        VALUES (?, 'direct', ?, 'local', ?, 0, ?, 1, 3, 1, ?, ?, ?, ?, ?)`,
       [`tsk_mul366_${index}`, agent.id, status, `usage fixture ${index}`, createdAt, createdAt, runtimeId, usage, `usage:${index}`],
     );
+    canonical(db, `tsk_mul366_${index}`, usage, createdAt);
   };
   for (const [status, usage] of RUNTIME_A_TASKS) insert(runtimeA.id, status, usage);
   insert(runtimeB.id, "completed", JSON.stringify([{ provider: "claude", model: "opus", inputTokens: 1000, outputTokens: 1 }]));
@@ -206,7 +207,7 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
   /** Applies the same raw write to both backends. */
   function mutate(sql: string, params: (runtimes: Runtimes) => string[]) {
     for (const [db, runtimes] of [[pg, pgRuntimes], [sqlite, sqliteRuntimes]] as const) {
-      if (sql.startsWith("DELETE")) db.run(sql, params(runtimes));
+      if (!sql.includes("multiremi_turn_execution_records")) db.run(sql, params(runtimes));
       else runTurnExecutionMutation(db, sql, params(runtimes));
     }
   }
@@ -248,99 +249,78 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeD))).toEqual(expected);
   });
 
-  it("reads settled usage once and again only after those rows change", () => {
-    pgStore.listRuntimes();
+  it("reads scalar facts for every list and detail, without legacy JSON or stale caches", () => {
     pg.statements.length = 0;
-    const listed = pgStore.listRuntimes().find((runtime) => runtime.id === pgRuntimes.runtimeA) ?? null;
+    const listed = pgStore.listRuntimesForWorkspace("local").find(runtime => runtime.id === pgRuntimes.runtimeA) ?? null;
     expect(usageSummary(listed)).toEqual(EXPECTED_RUNTIME_A);
-    expect(pg.statements.some((sql) => sql.includes("open_usage"))).toBe(true);
-    expect(pg.statements.some((sql) => sql.includes("settled_usage"))).toBe(false);
-    expect(pg.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(false);
-
-    const settledRereads = (change: () => void) => {
-      change();
-      pg.statements.length = 0;
-      expectBackendsAgree("runtimeA", "runtimeB");
-      return pg.statements.filter((sql) => sql.includes("settled_usage")).length;
-    };
-    // Unsettled usage is read live, so its changes need no re-read.
-    expect(settledRereads(() => mutate(
-      "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?",
-      () => [JSON.stringify([{ inputTokens: 40, outputTokens: 4 }]), "tsk_mul366_4"],
-    ))).toBe(0);
-    expect(settledRereads(() => mutate(
-      "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?",
-      () => [JSON.stringify([{ inputTokens: 5000, cacheReadTokens: 9 }]), "tsk_mul366_1"],
-    ))).toBe(1);
-    expect(settledRereads(() => mutate(
-      "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?",
-      () => ["tsk_mul366_4"],
-    ))).toBe(1);
-    // Rewriting a settled row with identical values is still a new row version.
-    expect(settledRereads(() => mutate(
-      "UPDATE multiremi_turn_execution_records SET usage = usage WHERE id = ?",
-      () => ["tsk_mul366_2"],
-    ))).toBe(1);
-    expect(settledRereads(() => mutate("DELETE FROM multiremi_turn_attempts WHERE id = ?", () => ["tsk_mul366_2"]))).toBe(1);
-    // Moving a settled task changes both runtimes.
-    expect(settledRereads(() => mutate(
-      "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?",
-      (runtimes) => [runtimes.runtimeB, "tsk_mul366_1"],
-    ))).toBe(2);
-    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).inputTokens).toBe(6000);
-    expect(settledRereads(() => {
-      for (const db of [pg, sqlite]) {
-        const source = db.query("SELECT * FROM multiremi_turn_execution_records WHERE id = ?").get("tsk_mul366_3");
-        runTurnExecutionMutation(db, `INSERT INTO multiremi_turn_execution_records
-          (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
-           created_at, updated_at, runtime_id, usage, execution_scope)
-          VALUES ('tsk_mul366_new', ?, ?, ?, 'cancelled', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'usage:new')`,
-          [source.task_kind, source.agent_id, source.workspace_id, source.priority, source.prompt, source.attempt,
-           source.max_attempts, source.holds_workspace, source.created_at, source.updated_at, source.runtime_id,
-           JSON.stringify([{ inputTokens: 70 }])]);
-      }
-    })).toBe(1);
-    expect(pg.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(false);
-
-    // Nothing changed since: no settled usage is read again.
-    expect(settledRereads(() => {})).toBe(0);
+    expect(pg.statements.filter(sql => sql.includes("WITH selected AS")).length).toBe(1);
+    expect(pg.statements.some(sql => /json_agg|settled_usage|open_usage/.test(sql))).toBe(false);
+    // Legacy audit text cannot change normal statistics.
+    mutate("UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", () => ['[{"inputTokens":999999}]', "tsk_mul366_1"]);
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA))).toEqual(EXPECTED_RUNTIME_A);
+    mutate("UPDATE multiremi_usage_units SET input_tokens=? WHERE task_id=?", () => ["5000", "tsk_mul366_1"]);
+    expectBackendsAgree("runtimeA");
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(EXPECTED_RUNTIME_A.inputTokens - 1200 + 5000);
+    mutate("UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?", () => ["tsk_mul366_4"]);
+    expectBackendsAgree("runtimeA");
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).activeTaskCount).toBe(3);
+    mutate("DELETE FROM multiremi_turn_attempts WHERE id=?", () => ["tsk_mul366_2"]);
+    expectBackendsAgree("runtimeA");
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).taskCount).toBe(10);
   });
 
-  it("rescans from one snapshot when a task settles between its two reads", () => {
-    // A second store starts with a cold cache, so its first summary reads settled usage separately.
+  it("keeps old consumption on its original runtime after reassignment", () => {
+    const beforeA = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA));
+    const beforeB = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB));
+    mutate("UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", runtimes => [runtimes.runtimeB, "tsk_mul366_1"]);
+    expectBackendsAgree("runtimeA", "runtimeB");
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(beforeA.inputTokens);
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).inputTokens).toBe(beforeB.inputTokens);
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).taskCount).toBe(beforeA.taskCount);
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).taskCount).toBe(beforeB.taskCount + 1);
+  });
+
+  it("returns one coherent snapshot when a concurrent fact update follows the query", () => {
     const racing = new RecordingPostgresDb(url);
     try {
       const racingStore = new MultiremiStore(racing);
-      const settle = [JSON.stringify([{ inputTokens: 800, outputTokens: 8 }]), "tsk_mul366_5"];
-      racing.afterSummaryQuery = () => {
-        runTurnExecutionMutation(racing, "UPDATE multiremi_turn_execution_records SET status = 'completed', usage = ? WHERE id = ?", settle);
-      };
-      runTurnExecutionMutation(sqlite, "UPDATE multiremi_turn_execution_records SET status = 'completed', usage = ? WHERE id = ?", settle);
+      const before = usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA));
+      racing.afterSummaryQuery = () => racing.run("UPDATE multiremi_usage_units SET input_tokens=800 WHERE task_id='tsk_mul366_5'");
       racing.statements.length = 0;
-      const summary = usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA));
+      expect(usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA))).toEqual(before);
       expect(racing.afterSummaryQuery).toBeNull();
-      expect(racing.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(true);
-      expect(summary).toEqual(usageSummary(sqliteStore.getRuntime(sqliteRuntimes.runtimeA)));
-      expect(usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA))).toEqual(summary);
+      expect(racing.statements.filter(sql => sql.includes("WITH selected AS")).length).toBe(1);
+      sqlite.run("UPDATE multiremi_usage_units SET input_tokens=800 WHERE task_id='tsk_mul366_5'");
       expectBackendsAgree("runtimeA");
-    } finally {
-      racing.close();
-    }
+      expect(usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(before.inputTokens - 4 + 800);
+    } finally { racing.close(); }
   }, 60_000);
 
-  it("does not cache settled totals read between two writes in one transaction", () => {
+  it("sees each write inside one transaction and never publishes a rolled-back cache", () => {
+    const sql = "UPDATE multiremi_usage_units SET input_tokens=? WHERE task_id=?";
+    const before = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens;
+    expect(() => pg.transaction(() => {
+      pg.run(sql, [111, "tsk_mul366_4"]);
+      expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(before - 11 + 111);
+      pg.run(sql, [222, "tsk_mul366_4"]);
+      expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(before - 11 + 222);
+      throw new Error("rollback");
+    })()).toThrow("rollback");
+    expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(before);
     expectBackendsAgree("runtimeA");
-    const sql = "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?";
-    const usage = (inputTokens: number) => [JSON.stringify([{ inputTokens }]), "tsk_mul366_10"];
-    pg.transaction(() => {
-      runTurnExecutionMutation(pg, sql, usage(111));
-      pg.statements.length = 0;
-      pgStore.getRuntime(pgRuntimes.runtimeA);
-      expect(pg.statements.some((statement) => statement.includes("settled_usage"))).toBe(true);
-      // Same row, same transaction: the row keeps the `xmin` the read above saw.
-      runTurnExecutionMutation(pg, sql, usage(222));
-    })();
-    runTurnExecutionMutation(sqlite, sql, usage(222));
+  });
+
+  it("retains large safe integers and rejects unsafe native facts before persistence", () => {
+    const value = 2 ** 52 + 1;
+    mutate("UPDATE multiremi_usage_units SET input_tokens=? WHERE task_id=?", () => [String(value), "tsk_mul366_3"]);
+    // The failed task had no unit; use a measured task instead.
+    mutate("UPDATE multiremi_usage_units SET input_tokens=? WHERE task_id=?", () => [String(value), "tsk_mul366_4"]);
     expectBackendsAgree("runtimeA");
+    expect(Number.isSafeInteger(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens)).toBe(true);
+    const sample = { version: 2 as const, runId: "unsafe", revision: 1, complete: true, units: [{ unitId: "bad", revision: 1,
+      provider: "codex", model: "m", source: "provider_request" as const, scope: "request" as const, accuracy: "exact" as const,
+      inputTokens: Number.MAX_SAFE_INTEGER + 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0,
+      reportedTotalTokens: null, contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-09-24T00:00:00Z" }] };
+    expect(() => validateUsageSnapshot(sample)).toThrow("inputTokens");
   });
 });

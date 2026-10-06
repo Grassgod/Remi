@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
@@ -842,6 +843,8 @@ describe("Feishu bot standard Task bridge", () => {
       text,
     });
     const first = submit("om_kick_1", "first message");
+    expect(store.claimTask("rt_bot")?.id).toBe(first.taskId);
+    store.startTask(first.taskId);
     const storeDb = (store as unknown as { db: SqlDatabase }).db;
     const kicks: Array<{ payload: Record<string, unknown>; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
@@ -1154,7 +1157,7 @@ describe("Feishu bot standard Task bridge", () => {
             outputTokens: 3,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
-            totalTokens: 0,
+            totalTokens: 15,
           }],
         },
       });

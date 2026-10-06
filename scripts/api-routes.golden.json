@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 782,
+    "routeCount": 786,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 554,
+      "compat": 558,
       "root": 16
     },
-    "getRoutes": 338,
-    "getRoutesWithBody": 334,
+    "getRoutes": 340,
+    "getRoutesWithBody": 336,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 444,
+    "mutationRoutes": 446,
     "mutationRoutesCovered": 274,
     "flows": [
       "agents-compat",
@@ -411,6 +411,8 @@
     "GET /api/turns",
     "GET /api/turns/:id",
     "GET /api/turns/:id/trace",
+    "GET /api/usage/prices",
+    "GET /api/usage/report",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -509,6 +511,7 @@
     "PATCH /api/runtimes/:id",
     "PATCH /api/skills/:id",
     "PATCH /api/squads/:id/members/role",
+    "PATCH /api/usage/prices/:id",
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
@@ -740,6 +743,7 @@
     "POST /api/turns/:id/retry",
     "POST /api/turns/:id/wrap-up",
     "POST /api/upload-file",
+    "POST /api/usage/prices",
     "POST /api/webhooks/autopilots/:token",
     "POST /api/webhooks/scm/:connectionId",
     "POST /api/webhooks/stripe",
@@ -1176,6 +1180,8 @@
     "GET /api/turns",
     "GET /api/turns/:id",
     "GET /api/turns/:id/trace",
+    "GET /api/usage/prices",
+    "GET /api/usage/report",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -4658,7 +4664,7 @@
               "outputTokens": 5,
               "cacheReadTokens": 0,
               "cacheWriteTokens": 0,
-              "totalTokens": 0
+              "totalTokens": 15
             }
           ],
           "createdAt": "<timestamp>",
@@ -5714,7 +5720,7 @@
               "outputTokens": 5,
               "cacheReadTokens": 0,
               "cacheWriteTokens": 0,
-              "totalTokens": 0
+              "totalTokens": 15
             }
           ],
           "createdAt": "<timestamp>",
@@ -7026,6 +7032,61 @@
             "id": "dashboard.usage.daily",
             "command": "remi dashboard usage daily",
             "capability": "dashboard.usage.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.prices.close",
+            "command": "remi dashboard usage prices close",
+            "capability": "dashboard.usage.prices.close",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.prices.list",
+            "command": "remi dashboard usage prices list",
+            "capability": "dashboard.usage.prices.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.prices.set",
+            "command": "remi dashboard usage prices set",
+            "capability": "dashboard.usage.prices.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.reconcile",
+            "command": "remi dashboard usage reconcile",
+            "capability": "dashboard.usage.reconcile",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.report",
+            "command": "remi dashboard usage report",
+            "capability": "dashboard.usage.report",
             "outputs": [
               "table",
               "json",
@@ -11985,7 +12046,7 @@
             "outputTokens": 5,
             "cacheReadTokens": 0,
             "cacheWriteTokens": 0,
-            "totalTokens": 0
+            "totalTokens": 15
           }
         ],
         "started_at": "<timestamp>",
@@ -12088,7 +12149,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
-          "total_tokens": 0,
+          "total_tokens": 15,
           "task_count": 1
         }
       ]
@@ -12108,7 +12169,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
-          "total_tokens": 0,
+          "total_tokens": 15,
           "task_count": 1
         }
       ]
@@ -13315,7 +13376,7 @@
         "total_output_tokens": 5,
         "total_cache_read_tokens": 0,
         "total_cache_write_tokens": 0,
-        "total_tokens": 0,
+        "total_tokens": 15,
         "task_count": 2
       }
     },
@@ -14805,7 +14866,7 @@
                 "outputTokens": 5,
                 "cacheReadTokens": 0,
                 "cacheWriteTokens": 0,
-                "totalTokens": 0
+                "totalTokens": 15
               }
             ],
             "createdAt": "<timestamp>",
@@ -15939,7 +16000,7 @@
                 "outputTokens": 5,
                 "cacheReadTokens": 0,
                 "cacheWriteTokens": 0,
-                "totalTokens": 0
+                "totalTokens": 15
               }
             ],
             "createdAt": "<timestamp>",
@@ -17134,7 +17195,7 @@
                   "outputTokens": 5,
                   "cacheReadTokens": 0,
                   "cacheWriteTokens": 0,
-                  "totalTokens": 0
+                  "totalTokens": 15
                 }
               ],
               "createdAt": "<timestamp>",
@@ -19402,7 +19463,7 @@
             "outputTokens": 5,
             "cacheReadTokens": 0,
             "cacheWriteTokens": 0,
-            "totalTokens": 0,
+            "totalTokens": 15,
             "taskCount": 1
           }
         ]
@@ -20394,7 +20455,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
-          "total_tokens": 0
+          "total_tokens": 15
         }
       ]
     },
@@ -20411,7 +20472,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
-          "total_tokens": 0,
+          "total_tokens": 15,
           "task_count": 1
         }
       ]
@@ -20672,7 +20733,7 @@
             "options": null,
             "reply_to_id": null,
             "session_id": "ise_snapshot",
-            "seq": 3,
+            "seq": 2,
             "id": "sevt_u6dzsg7stnai",
             "kind": "message",
             "visibility": "shown",
@@ -20711,7 +20772,7 @@
             "options": null,
             "reply_to_id": null,
             "session_id": "ise_snapshot",
-            "seq": 4,
+            "seq": 3,
             "id": "sevt_5nowh2h5qvvj",
             "kind": "result_published",
             "visibility": "shown",
@@ -20735,8 +20796,8 @@
             "deleted_at": null
           }
         ],
-        "head_seq": 4,
-        "log_version": 6,
+        "head_seq": 3,
+        "log_version": 3,
         "has_more_before": false,
         "has_more_after": false,
         "prev_entry_created_at": null
@@ -20782,7 +20843,7 @@
             "options": null,
             "reply_to_id": null,
             "session_id": "ise_snapshot",
-            "seq": 3,
+            "seq": 2,
             "id": "sevt_u6dzsg7stnai",
             "kind": "message",
             "visibility": "shown",
@@ -21346,6 +21407,261 @@
         "runtime_id": "rt_snapshot",
         "runtime_name": "snapshot-runtime",
         "retryable": true
+      }
+    },
+    {
+      "key": "get-sweep GET /api/usage/prices",
+      "route": "GET /api/usage/prices",
+      "path": "/api/usage/prices",
+      "status": 200,
+      "body": {
+        "prices": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/usage/report",
+      "route": "GET /api/usage/report",
+      "path": "/api/usage/report",
+      "status": 200,
+      "body": {
+        "summary": {
+          "actual_input_tokens": 10,
+          "actual_output_tokens": 5,
+          "actual_cache_read_tokens": 0,
+          "actual_cache_write_tokens": 0,
+          "actual_unsplit_tokens": 0,
+          "actual_total_tokens": 15,
+          "priced_tokens": 0,
+          "task_count": 5,
+          "unknown_task_count": 5,
+          "task_attributed_task_count": 1,
+          "task_attributed_tokens": 15,
+          "time_provenance": "task_attributed",
+          "context_peak_tokens": null,
+          "runtime_provenance": "mixed",
+          "total_seconds": 0.02997368574142456,
+          "known_cost_by_currency": {},
+          "reference_cost_by_currency": {},
+          "sdk_estimate_cost_by_currency": {},
+          "unpriced_tokens": 15,
+          "status_counts": {
+            "completed": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "active": 1,
+            "queued": 3
+          },
+          "price_quality": "unknown",
+          "complete": false
+        },
+        "daily": [
+          {
+            "date": "2026-01-01",
+            "actual_input_tokens": 10,
+            "actual_output_tokens": 5,
+            "actual_cache_read_tokens": 0,
+            "actual_cache_write_tokens": 0,
+            "actual_unsplit_tokens": 0,
+            "actual_total_tokens": 15,
+            "priced_tokens": 0,
+            "task_count": 5,
+            "unknown_task_count": 5,
+            "task_attributed_task_count": 1,
+            "task_attributed_tokens": 15,
+            "time_provenance": "task_attributed",
+            "context_peak_tokens": null,
+            "runtime_provenance": "mixed",
+            "total_seconds": 0.02997368574142456,
+            "known_cost_by_currency": {},
+            "reference_cost_by_currency": {},
+            "sdk_estimate_cost_by_currency": {},
+            "unpriced_tokens": 15,
+            "status_counts": {
+              "completed": 1,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 1,
+              "queued": 3
+            },
+            "price_quality": "unknown",
+            "complete": false
+          }
+        ],
+        "by_agent": [
+          {
+            "agent_id": "agt_snapshot",
+            "actual_input_tokens": 10,
+            "actual_output_tokens": 5,
+            "actual_cache_read_tokens": 0,
+            "actual_cache_write_tokens": 0,
+            "actual_unsplit_tokens": 0,
+            "actual_total_tokens": 15,
+            "priced_tokens": 0,
+            "task_count": 5,
+            "unknown_task_count": 5,
+            "task_attributed_task_count": 1,
+            "task_attributed_tokens": 15,
+            "time_provenance": "task_attributed",
+            "context_peak_tokens": null,
+            "runtime_provenance": "mixed",
+            "total_seconds": 0.02997368574142456,
+            "known_cost_by_currency": {},
+            "reference_cost_by_currency": {},
+            "sdk_estimate_cost_by_currency": {},
+            "unpriced_tokens": 15,
+            "status_counts": {
+              "completed": 1,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 1,
+              "queued": 3
+            },
+            "price_quality": "unknown",
+            "complete": false
+          }
+        ],
+        "by_model": [
+          {
+            "provider": "unknown",
+            "model": null,
+            "requested_model": null,
+            "model_provenance": "unknown",
+            "purpose": "agent",
+            "connection_id": null,
+            "actual_input_tokens": 0,
+            "actual_output_tokens": 0,
+            "actual_cache_read_tokens": 0,
+            "actual_cache_write_tokens": 0,
+            "actual_unsplit_tokens": 0,
+            "actual_total_tokens": 0,
+            "priced_tokens": 0,
+            "task_count": 4,
+            "unknown_task_count": 4,
+            "context_peak_tokens": null,
+            "runtime_provenance": "unknown",
+            "total_seconds": 0,
+            "known_cost_by_currency": {},
+            "reference_cost_by_currency": {},
+            "sdk_estimate_cost_by_currency": {},
+            "unpriced_tokens": 0,
+            "status_counts": {
+              "completed": 0,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 1,
+              "queued": 3
+            },
+            "price_quality": "unknown",
+            "complete": false,
+            "model_source": "unknown"
+          },
+          {
+            "provider": "unknown",
+            "model": null,
+            "requested_model": "claude-sonnet-4",
+            "model_provenance": "configured",
+            "purpose": "agent",
+            "connection_id": null,
+            "actual_input_tokens": 10,
+            "actual_output_tokens": 5,
+            "actual_cache_read_tokens": 0,
+            "actual_cache_write_tokens": 0,
+            "actual_unsplit_tokens": 0,
+            "actual_total_tokens": 15,
+            "priced_tokens": 0,
+            "task_count": 1,
+            "unknown_task_count": 1,
+            "task_attributed_task_count": 1,
+            "task_attributed_tokens": 15,
+            "time_provenance": "task_attributed",
+            "context_peak_tokens": null,
+            "runtime_provenance": "live_task",
+            "total_seconds": 0.02997368574142456,
+            "known_cost_by_currency": {},
+            "reference_cost_by_currency": {},
+            "sdk_estimate_cost_by_currency": {},
+            "unpriced_tokens": 15,
+            "status_counts": {
+              "completed": 1,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 0,
+              "queued": 0
+            },
+            "price_quality": "unknown",
+            "complete": false,
+            "model_source": "requested"
+          }
+        ],
+        "by_runtime": [
+          {
+            "runtime_id": "rt_snapshot",
+            "actual_input_tokens": 10,
+            "actual_output_tokens": 5,
+            "actual_cache_read_tokens": 0,
+            "actual_cache_write_tokens": 0,
+            "actual_unsplit_tokens": 0,
+            "actual_total_tokens": 15,
+            "priced_tokens": 0,
+            "task_count": 5,
+            "unknown_task_count": 5,
+            "task_attributed_task_count": 1,
+            "task_attributed_tokens": 15,
+            "time_provenance": "task_attributed",
+            "context_peak_tokens": null,
+            "runtime_provenance": "mixed",
+            "total_seconds": 0.02997368574142456,
+            "known_cost_by_currency": {},
+            "reference_cost_by_currency": {},
+            "sdk_estimate_cost_by_currency": {},
+            "unpriced_tokens": 15,
+            "status_counts": {
+              "completed": 1,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 1,
+              "queued": 3
+            },
+            "price_quality": "unknown",
+            "complete": false
+          }
+        ],
+        "task_daily": [
+          {
+            "date": "2026-01-01",
+            "task_count": 5,
+            "total_seconds": 0.02997368574142456,
+            "status_counts": {
+              "completed": 1,
+              "failed": 0,
+              "cancelled": 0,
+              "active": 1,
+              "queued": 3
+            }
+          }
+        ],
+        "time_basis": {
+          "consumption": "unit_occurred_at",
+          "terminal_tasks": "terminal_lifecycle_at",
+          "active_tasks": "current_snapshot",
+          "historical_aggregates": "task_attribution_at"
+        },
+        "coverage": {
+          "priced_tokens": 0,
+          "unpriced_tokens": 15,
+          "token_ratio": 0,
+          "unknown_task_count": 5
+        },
+        "as_of": "<timestamp>",
+        "pricing_revision": "0",
+        "window": {
+          "since": "<timestamp>",
+          "until": null,
+          "days": 30,
+          "tz": "UTC",
+          "project_id": null,
+          "runtime_id": null
+        }
       }
     },
     {
@@ -25853,7 +26169,7 @@
           "options": null,
           "reply_to_id": null,
           "session_id": "ise_snapshot",
-          "seq": 5,
+          "seq": 4,
           "id": "msg_jez2ujdp6d5n",
           "kind": "message",
           "visibility": "shown",
@@ -25900,7 +26216,7 @@
             "options": null,
             "reply_to_id": null,
             "session_id": "ise_snapshot",
-            "seq": 3,
+            "seq": 2,
             "id": "sevt_u6dzsg7stnai",
             "kind": "message",
             "visibility": "shown",
@@ -25922,7 +26238,7 @@
             "reactions": []
           }
         ],
-        "next_cursor": "3"
+        "next_cursor": "2"
       }
     },
     {
@@ -25946,7 +26262,7 @@
           "options": null,
           "reply_to_id": null,
           "session_id": "ise_snapshot",
-          "seq": 5,
+          "seq": 4,
           "id": "msg_jez2ujdp6d5n",
           "kind": "message",
           "visibility": "shown",
@@ -25990,7 +26306,7 @@
           "options": null,
           "reply_to_id": null,
           "session_id": "ise_snapshot",
-          "seq": 5,
+          "seq": 4,
           "id": "msg_jez2ujdp6d5n",
           "kind": "message",
           "visibility": "shown",
@@ -26034,7 +26350,7 @@
           "options": null,
           "reply_to_id": null,
           "session_id": "ise_snapshot",
-          "seq": 5,
+          "seq": 4,
           "id": "msg_jez2ujdp6d5n",
           "kind": "message",
           "visibility": "shown",
@@ -26097,7 +26413,7 @@
           "options": null,
           "reply_to_id": null,
           "session_id": "ise_snapshot",
-          "seq": 5,
+          "seq": 4,
           "id": "msg_jez2ujdp6d5n",
           "kind": "message",
           "visibility": "shown",

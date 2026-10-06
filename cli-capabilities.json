@@ -7728,6 +7728,91 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "dashboard.usage.report": {
+      "command": "remi dashboard usage report",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.report",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "dashboard.usage.reconcile": {
+      "command": "remi dashboard usage reconcile",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.reconcile",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "dashboard.usage.prices.list": {
+      "command": "remi dashboard usage prices list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "dashboard.usage.prices.set": {
+      "command": "remi dashboard usage prices set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "dashboard.usage.prices.close": {
+      "command": "remi dashboard usage prices close",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.prices.close",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "dashboard.usage.daily": {
       "command": "remi dashboard usage daily",
       "aliases": [],
@@ -11300,6 +11385,12 @@
     "GET /api/turns/:id/trace": {
       "command": "turn.trace.read"
     },
+    "GET /api/usage/prices": {
+      "command": "dashboard.usage.prices.list"
+    },
+    "GET /api/usage/report": {
+      "command": "dashboard.usage.report"
+    },
     "GET /api/workspaces": {
       "command": "workspace.list"
     },
@@ -11603,6 +11694,9 @@
     },
     "PATCH /api/squads/:id/members/role": {
       "command": "squad.member.update"
+    },
+    "PATCH /api/usage/prices/:id": {
+      "command": "dashboard.usage.prices.close"
     },
     "PATCH /api/workspaces/:id": {
       "command": "workspace.update"
@@ -12462,6 +12556,9 @@
     },
     "POST /api/upload-file": {
       "command": "issue.attachment.upload"
+    },
+    "POST /api/usage/prices": {
+      "command": "dashboard.usage.prices.set"
     },
     "POST /api/webhooks/autopilots/:token": {
       "cli_exempt": true,

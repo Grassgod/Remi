@@ -9,12 +9,42 @@ import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.j
 import { dropRetiredTables, RETIRED_TABLE_SETS, RETIRED_COLUMN_SETS } from "../../../scripts/drop-retired-tables.js";
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
+import { ensureUsageAccountingSchema } from "@multiremi/store/usage-accounting.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 const dirs: string[] = [];
 function reportDir(): string { const dir=mkdtempSync(join(tmpdir(),"mul505-"));dirs.push(dir);return dir; }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir,{recursive:true,force:true}); });
 
 unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
+  it("preserves main usage facts and their cascading attempt foreign keys through cutover", () => {
+    const { db, store } = fixture();
+    const agent = store.createAgent({ name: "Usage cutover", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Already metered", status: "completed" });
+    // Reproduce #384's historical schema before invoking the current cutover.
+    const historical = new Proxy(db, { get(target, key) {
+      if (key === "exec") return (sql: string) => target.exec(sql.replaceAll("multiremi_turn_attempts", "multiremi_tasks"));
+      if (key === "query") return (sql: string) => target.query(sql.replaceAll("multiremi_turn_execution_records", "multiremi_tasks"));
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    } }) as SqlDatabase;
+    ensureUsageAccountingSchema(historical);
+    if (db.dialect === "postgres") {
+      db.exec("ALTER TABLE multiremi_usage_runs ADD CONSTRAINT historical_usage_attempt_fk FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE");
+      db.exec("ALTER TABLE multiremi_usage_units ADD CONSTRAINT historical_usage_run_fk FOREIGN KEY(task_id,run_id) REFERENCES multiremi_usage_runs(task_id,run_id) ON DELETE CASCADE");
+    } else db.exec("PRAGMA foreign_keys=ON");
+    db.run("INSERT INTO multiremi_usage_runs(task_id,run_id,revision,complete) VALUES(?,'existing',1,1)", [task.id]);
+    db.run(`INSERT INTO multiremi_usage_units(task_id,run_id,unit_id,revision,workspace_id,agent_id,provider,model,scope,source,accuracy,input_tokens,output_tokens,occurred_at)
+      VALUES(?,'existing','request',1,'local',?,'claude','opus','request','provider_request','exact',5,2,'2026-10-01T00:00:00.000Z')`, [task.id, agent.id]);
+    const current = new MultiremiStore(db);
+    current.ensureUsageAccountingStartup();
+    expect(current.getTask(task.id)?.usage).toMatchObject([{ inputTokens: 5, outputTokens: 2, totalTokens: 7 }]);
+    expect(current.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(7);
+    db.run("DELETE FROM multiremi_turn_attempts WHERE id=?", [task.id]);
+    expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_usage_units").get().n)).toBe(0);
+    expect(db.query("SELECT task_id FROM multiremi_usage_runs WHERE task_id=?").get(task.id)).toBeNull();
+  });
+
   it("migrates empty stores, writes both reports, and is idempotent", () => {
     const { db } = fixture();
     const dir=reportDir();

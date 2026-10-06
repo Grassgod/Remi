@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Sibling test for packages/server/src/store/repos/usage-repo.ts.
 // Drives the carved-out repo directly over its StoreContext (not through the
 // MultiremiStore facade) so a broken delegation cannot mask a broken move.
@@ -64,23 +65,52 @@ describe("UsageRepo", () => {
     expect(() => repo.listUsageByHour({ workspaceId: "local", runtimeId: "rt_missing" })).toThrow("Runtime not found: rt_missing");
   });
 
-  it("carries totalTokens through the daily rollup so totals-only history is not erased", () => {
+  it("preserves ambiguous totals-only history as unknown evidence without counting consumption", () => {
     const repo = createRepo();
     const runtime = store!.registerRuntime({ name: "totals-runtime", provider: "claude" });
     const agent = store!.createAgent({ name: "Totals worker", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
     const task = store!.createTask({ agentId: agent.id, prompt: "history", workspaceId: "local" });
     store!.claimTask(runtime.id);
     store!.startTask(task.id);
-    // Pre-0.2.49 daemons reported only the context-occupancy total.
+    // Legacy total semantics are ambiguous; context cannot be inferred either.
     store!.reportTaskUsage(task.id, [{ provider: "claude", model: "opus", inputTokens: 0, outputTokens: 0, totalTokens: 78048 }]);
     store!.completeTask(task.id, { output: "done" });
 
     const daily = repo.listUsageDaily({ workspaceId: "local" });
-    expect(daily.length).toBe(1);
-    expect(daily[0]!.inputTokens).toBe(0);
-    expect(daily[0]!.totalTokens).toBe(78048);
+    expect(daily).toEqual([]);
     const byAgent = repo.listUsageByAgent({ workspaceId: "local" });
-    expect(byAgent[0]!.totalTokens).toBe(78048);
+    expect(byAgent).toEqual([]);
+    expect(store!.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 0, unknown_task_count: 1, context_peak_tokens: null, complete: false });
+    expect(db!.query("SELECT reported_total_tokens FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toMatchObject({ reported_total_tokens: 78048 });
+  });
+
+  it("projects unit occurrence dates and frozen scope even after task reassignment", () => {
+    const repo = createRepo();
+    const first = store!.registerRuntime({ name: "first", provider: "claude" });
+    const second = store!.registerRuntime({ name: "second", provider: "claude" });
+    const project = store!.createProject({ title: "Original", workspaceId: "local" });
+    const otherProject = store!.createProject({ title: "Other", workspaceId: "local" });
+    const issue = store!.createIssue({ title: "Work", workspaceId: "local", projectId: project.id });
+    const agent = store!.createAgent({ name: "worker", workspaceId: "local", provider: "claude", runtimeId: first.id });
+    const task = store!.createTask({ agentId: agent.id, issueId: issue.id, prompt: "cross day", workspaceId: "local" });
+    store!.claimTask(first.id); store!.startTask(task.id);
+    const units = ["2026-10-01T15:30:00Z", "2026-10-01T16:30:00Z"].map((occurredAt,index) => ({
+      unitId: String(index), revision: 1, provider: "claude", model: "opus", source: "provider_request" as const, scope: "request" as const, accuracy: "exact" as const,
+      inputTokens: (index + 1) * 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0,
+      reportedTotalTokens: null, contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt,
+    }));
+    store!.reportTaskUsageSnapshot(task.id, { version: 2, runId: "first-attempt", revision: 1, complete: true, units });
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", [second.id, task.id]);
+    db!.run("UPDATE multiremi_issues SET project_id=? WHERE id=?", [otherProject.id, issue.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='dispatched' WHERE id=?", [task.id]);
+    store!.startTask(task.id, "second-attempt", second.id);
+    store!.completeTask(task.id, { output: "done" });
+    const daily = repo.listUsageDaily({ workspaceId: "local", runtimeId: first.id, projectId: project.id, days: 0, tz: "Asia/Shanghai" });
+    expect(daily.map(row => [row.date, row.inputTokens, row.taskCount])).toEqual([["2026-10-01", 100, 1], ["2026-10-02", 200, 1]]);
+    expect(repo.listRuntimeUsage(first.id)[0]?.inputTokens).toBe(300);
+    expect(repo.listRuntimeUsage(second.id)).toEqual([]);
+    expect(repo.listTaskActivityByHour({ workspaceId: "local", runtimeId: first.id, days: 0 })).toEqual([]);
+    expect(repo.listAgentRuntime({ workspaceId: "local", runtimeId: second.id, projectId: otherProject.id, days: 0 })[0]?.taskCount).toBe(1);
   });
 
   it("rolls per-agent runtime totals that reconcile with the daily runtime series", () => {

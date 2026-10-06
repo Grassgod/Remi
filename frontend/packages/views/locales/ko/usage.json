@@ -1,80 +1,126 @@
 {
   "title": "사용량",
-  "subtitle": "이 워크스페이스의 토큰 비용과 에이전트 활동입니다.",
+  "subtitle": "실제 소비량, 컨텍스트 진단 및 버전별 비용.",
   "filter": {
-    "project_label": "프로젝트",
+    "project": "프로젝트",
     "all_projects": "모든 프로젝트",
-    "period_label": "기간"
-  },
-  "kpi": {
-    "cost_label": "비용 · {{days}}일",
-    "tokens_label": "토큰 · {{days}}일",
-    "tokens_hint": "입력 {{input}} · 출력 {{output}} · 캐시 읽기 {{cacheRead}} · 캐시 쓰기 {{cacheWrite}}",
-    "run_time_label": "실행 시간 · {{days}}일",
-    "run_time_hint": "작업 {{tasks}}개 기준",
-    "tasks_label": "작업 · {{days}}일",
-    "tasks_hint": "실패 {{failed}}개",
-    "unavailable_hint": "불러오지 못해 값을 표시할 수 없습니다(0이 아닙니다)",
-    "not_collected": "{{tasks}}개 작업이 실행되었지만 토큰 사용량이 기록되지 않았습니다",
-    "no_tasks": "기간 내 작업 없음",
-    "cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다",
-    "cost_total_only": "토큰 총량만 기록되어 비용을 계산할 수 없습니다",
-    "total_only_notice": "이전 런타임이 기록한 토큰 {{tokens}}개는 총량만 있고 입력/출력 구분이 없어 비용 합계에서 제외됩니다. 최신 실행은 구분을 기록하므로 이 수치는 더 늘어나지 않습니다."
-  },
-  "dim": {
-    "label": "단위",
+    "runtime": "Runtime",
+    "all_runtimes": "모든 Runtime",
+    "period": "기간",
+    "all_history": "전체 기록",
+    "dimension": "집계 단위",
     "daily": "일별",
     "weekly": "주별"
   },
-  "daily": {
-    "title_cost": "일별 비용",
-    "title_tokens": "일별 토큰",
-    "title_time": "일별 실행 시간",
-    "title_tasks": "일별 작업",
-    "metric_cost": "비용",
-    "metric_tokens": "토큰",
-    "metric_time": "시간",
-    "metric_tasks": "작업",
-    "no_data": "이 기간에는 사용량이 없습니다.",
-    "no_tasks": "선택한 기간에 작업이 없습니다.",
-    "load_failed": "이 데이터를 불러오지 못했습니다. 값은 0이 아니라 사용할 수 없는 상태입니다.",
-    "not_collected": "기간 내 작업이 실행되었지만 토큰 사용량이 기록되지 않았습니다.",
-    "cost_unpriced": "토큰은 기록되었지만 사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다.",
-    "cost_total_only": "토큰 총량만 기록되고 입력/출력 구분이 없어 비용을 계산할 수 없습니다.",
-    "total_only_legend": "총량만"
+  "summary": {
+    "time_hint": "요청은 보고 또는 관측 시간으로 집계합니다. 요청 시간이 없는 이전 집계는 작업 귀속 날짜를 사용합니다. 종료 상태와 실행 시간은 완료·실패·취소 시간 기준이며 실행 중과 대기 중은 현재 스냅샷입니다.",
+    "historical_date_hint": "작업 날짜에 귀속한 이전 집계가 포함되어 요청별 소비 날짜로 나눌 수 없습니다.",
+    "identity_conflict_hint": "일부 요청의 작업 또는 실행 귀속이 충돌합니다. 한 번만 계량하고 충돌 기록은 감사 증거로 보존합니다.",
+    "actual": "기록된 실제 토큰",
+    "known_cost": "확인된 비용 소계",
+    "coverage": "토큰 가격 적용률",
+    "unknown": "사용량 미확인 작업",
+    "context": "최대 컨텍스트",
+    "context_hint": "컨텍스트 점유량은 진단용이며 실제 토큰 소비량에 포함하지 않습니다.",
+    "tasks": "중복을 제외한 작업",
+    "run_time": "실행 시간",
+    "partial": "일부 사용량 또는 가격이 확인되지 않았습니다. 수치는 확인된 소계입니다.",
+    "complete": "사용량 및 가격 정보가 완전합니다.",
+    "reference_cost": "공개 참고 가격 추정",
+    "reference_hint": "적용 조건이 확인되지 않아 알려진 소계와 가격 적용률에서 제외됩니다.",
+    "sdk_estimate": "SDK 보고 추정"
   },
-  "weekly": {
-    "title_cost": "주별 비용",
-    "title_tokens": "주별 토큰",
-    "title_time": "주별 실행 시간",
-    "title_tasks": "주별 작업",
-    "partial_label": "{{range}} (부분 · 7일 중 {{covered}}일)"
+  "statuses": {
+    "completed": "완료",
+    "failed": "실패",
+    "cancelled": "취소",
+    "active": "실행 중",
+    "queued": "대기 중"
   },
-  "leaderboard": {
-    "title": "리더보드",
-    "caption": "에이전트 {{count}}개",
-    "header_agent": "에이전트",
-    "header_tokens": "토큰",
-    "header_cost": "비용",
-    "header_time": "시간",
-    "header_tasks": "작업",
-    "no_data": "이 기간에는 에이전트 활동이 없습니다.",
-    "load_failed": "리더보드 데이터를 불러오지 못했습니다. 값은 0이 아니라 사용할 수 없는 상태입니다.",
-    "total_only_tooltip": "이 중 {{tokens}}개는 총량만 있고 입력/출력 구분이 없어 비용에서 제외됩니다."
+  "views": {
+    "daily": "날짜별",
+    "agents": "에이전트별",
+    "models": "모델별",
+    "runtimes": "Runtime별",
+    "counts_hint": "각 그룹 내 작업 수는 중복을 제외합니다. 여러 날짜나 모델에 걸친 작업은 여러 그룹에 표시되므로 총 작업 수는 요약을 확인하세요."
   },
-  "empty": {
-    "title": "아직 사용량이 없습니다",
-    "body": "여기에서 에이전트가 작업을 실행하기 시작하면 토큰 비용과 실행 시간이 이 화면에 표시됩니다.",
-    "zero_hint": "선택한 기간에 실행된 작업이 없으므로 이 0은 실제 측정값입니다."
+  "table": {
+    "group": "그룹",
+    "total": "실제 합계",
+    "input": "입력",
+    "output": "출력",
+    "cache_read": "캐시 읽기",
+    "cache_write": "캐시 쓰기",
+    "unsplit": "실제 미분류",
+    "context": "최대 컨텍스트",
+    "cost": "확인된 비용 소계",
+    "coverage": "토큰 적용률",
+    "unknown": "미확인 작업",
+    "tasks": "작업",
+    "statuses": "상태별 수"
   },
-  "duration": {
-    "less_than_minute": "1분 미만",
-    "zero": "0분"
+  "trend": {
+    "title": "소비 추이",
+    "tokens": "실제 토큰",
+    "cost": "확인된 비용",
+    "unknown": "이 시계열에는 측정된 사용량이 없습니다.",
+    "subtotal_hint": "비용은 통화별로 표시하며 가격 미확인 소비량은 제외합니다."
+  },
+  "price": {
+    "requested": "요청 모델",
+    "reported_model": "제공업체 보고 모델",
+    "session_model": "세션에서 확인한 요청",
+    "configured_model": "설정된 요청 모델",
+    "requested_model": "요청 모델 (실제 모델 미보고)",
+    "requested_alias": "요청 모델을 명시적으로 설정된 가격 별칭으로 사용",
+    "open": "가격 관리",
+    "title": "모델 가격 버전",
+    "description": "가격은 공급자, 모델 및 연결과 정확히 일치합니다. 적용 시작 시간을 지정하여 새 버전을 추가하면 이전 버전이 기록에 보존됩니다.",
+    "model": "모델",
+    "provider": "호출 엔진",
+    "connection": "연결",
+    "unknown_model": "실제 모델 미확인",
+    "unallocated_cost": "모델 간 미배분 금액",
+    "allocation_unknown": "토큰 과금 범위는 알려져 있지만 모델별 금액은 배분할 수 없습니다",
+    "currency": "통화",
+    "effective_from": "적용 시작 (ISO 타임스탬프)",
+    "version": "버전",
+    "source": "가격 출처",
+    "configured": "설정된 가격",
+    "published": "공개 참고 가격",
+    "provider_reported": "제공업체 보고 금액",
+    "mixed": "혼합 출처",
+    "unknown": "미확인",
+    "rates": "100만 토큰당 요금. 빈칸은 미확인, 0은 확인된 무료 요금입니다.",
+    "save": "버전 저장",
+    "cancel": "취소",
+    "invalid": "모델, 유효한 시간 및 음수가 아닌 요금을 입력하세요. 미확인 요금은 비워두세요.",
+    "save_error": "가격 버전을 저장하지 못했습니다. 초안은 유지됩니다.",
+    "history": "가격 기록",
+    "source_url": "공개 출처 URL",
+    "progress_summary": "진행 요약"
   },
   "error": {
-    "title": "사용량 데이터를 불러올 수 없음",
-    "body": "사용량 데이터를 불러오지 못했습니다. 사용량이 0이라는 뜻이 아닙니다. 다시 시도해 주세요.",
-    "partial": "일부 사용량 데이터를 불러오지 못했습니다. 해당 값은 0이 아니라 “—”로 표시됩니다.",
+    "title": "사용량 데이터를 사용할 수 없습니다",
+    "body": "사용량을 불러오지 못했습니다. 알 수 없는 측정값은 0이 아닙니다.",
     "retry": "다시 시도"
+  },
+  "empty": {
+    "title": "사용량 없음",
+    "body": "이 기간에는 작업 또는 기록된 소비량이 없습니다."
+  },
+  "common": {
+    "scope_live": "실행 기록 소유자",
+    "scope_task_record": "과거 작업 기록 소유자",
+    "scope_trace_owner": "저장된 Trace 소유자",
+    "scope_archive": "Archive manifest 소유자",
+    "scope_unknown": "실행 소유자 알 수 없음",
+    "scope_mixed": "혼합 소유자 증거",
+    "export_csv": "CSV 내보내기",
+    "unknown": "미확인",
+    "no_runtime": "알 수 없음 / 미할당 Runtime",
+    "updated": "업데이트",
+    "price_revision": "가격 리비전",
+    "refresh": "새로고침"
   }
 }

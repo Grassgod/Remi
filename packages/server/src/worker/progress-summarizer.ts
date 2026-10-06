@@ -17,6 +17,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import { extractBaseUrl, type RelayEngine } from "@multiremi/relay/fragment.js";
+import { beginSummaryUsage, type SummaryUsageCallback } from "./progress-summary-usage.js";
 
 const log = createLogger("multiremi-progress");
 
@@ -382,6 +383,7 @@ async function callSummaryModel(
   prompt: string,
   timeoutMs: number,
   fetchImpl: FetchLike,
+  onUsage?: SummaryUsageCallback,
 ): Promise<ProgressSummaryResult> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -389,6 +391,7 @@ async function callSummaryModel(
   };
   if (credentials.apiKey) headers["x-api-key"] = credentials.apiKey;
   if (credentials.authToken) headers.authorization = `Bearer ${credentials.authToken}`;
+  const recordUsage = beginSummaryUsage("claude", model, onUsage);
   const response = await fetchImpl(`${credentials.baseUrl}/v1/messages`, {
     method: "POST",
     headers,
@@ -401,10 +404,11 @@ async function callSummaryModel(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
+    try { recordUsage(await response.json()); } catch { await response.body?.cancel().catch(() => undefined); }
     throw new SummaryModelHttpError(response.status);
   }
   const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+  recordUsage(payload);
   const text = (payload.content ?? [])
     .map((block) => (block?.type === "text" ? block.text ?? "" : ""))
     .join("")
@@ -418,8 +422,10 @@ async function callOpenAiSummaryModel(
   prompt: string,
   timeoutMs: number,
   fetchImpl: FetchLike,
+  onUsage?: SummaryUsageCallback,
 ): Promise<ProgressSummaryResult> {
   const apiRoot = config.baseUrl.endsWith("/v1") ? config.baseUrl : `${config.baseUrl}/v1`;
+  const recordUsage = beginSummaryUsage("openai", config.model, onUsage);
   const response = await fetchImpl(`${apiRoot}/chat/completions`, {
     method: "POST",
     headers: {
@@ -437,12 +443,13 @@ async function callOpenAiSummaryModel(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
+    try { recordUsage(await response.json()); } catch { await response.body?.cancel().catch(() => undefined); }
     throw new SummaryModelHttpError(response.status);
   }
   const payload = await response.json() as {
     choices?: Array<{ message?: { content?: string } }>;
   };
+  recordUsage(payload);
   const text = payload.choices?.[0]?.message?.content?.trim() ?? "";
   if (!text) throw new Error("OpenAI-compatible summary model returned no text");
   return parseSummaryText(text);
@@ -508,17 +515,19 @@ async function callSummaryCli(input: {
   timeoutMs: number;
   providerEnv?: Record<string, string>;
   spawnImpl: SummaryCliSpawn;
+  onUsage?: SummaryUsageCallback;
 }): Promise<ProgressSummaryResult> {
   const cwd = await mkdtemp(join(tmpdir(), "multiremi-progress-"));
   let processHandle: SummaryCliProcess | null = null;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const cliPrompt = `${SUMMARY_SYSTEM_PROMPT}\n\n${input.prompt}`;
+    const recordUsage = beginSummaryUsage("claude", input.model, input.onUsage);
     processHandle = input.spawnImpl(
       // `--tools ""` disables all built-in tools: the digest embeds raw task
       // messages, so the summary session must not be able to act on injected
       // instructions (read files, fetch URLs) — text in, text out only.
-      [input.executable, "-p", cliPrompt, "--model", input.model, "--tools", ""],
+      [input.executable, "-p", cliPrompt, "--model", input.model, "--tools", "", "--output-format", "json"],
       {
         cwd,
         env: { ...process.env, ...input.providerEnv },
@@ -540,10 +549,16 @@ async function callSummaryCli(input: {
     });
     const exitCode = await Promise.race([processHandle.exited, timeoutExit]);
     await stderrDrain;
-    if (exitCode !== 0) throw new Error(`summary CLI exited with code ${exitCode}`);
     const text = (await stdoutText).trim();
+    let resultText = text;
+    try {
+      const payload = JSON.parse(text);
+      recordUsage(payload, true);
+      if (typeof payload.result === "string") resultText = payload.result;
+    } catch { /* Older/custom CLI output remains text, with unknown usage. */ }
+    if (exitCode !== 0) throw new Error(`summary CLI exited with code ${exitCode}`);
     if (!text) throw new Error("summary CLI returned no text");
-    return parseSummaryText(text);
+    return parseSummaryText(resultText);
   } finally {
     if (timeout) clearTimeout(timeout);
     await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
@@ -586,6 +601,8 @@ export interface TaskProgressSummarizerOptions {
   spawnImpl?: SummaryCliSpawn;
   whichImpl?: (binary: string) => string | null;
   now?: () => number;
+  onUsage?: SummaryUsageCallback;
+  onClosed?: () => void;
 }
 
 /**
@@ -644,9 +661,11 @@ export class TaskProgressSummarizer {
   async finalize(outcome: ProgressRunOutcome, detail?: string): Promise<void> {
     if (this.finalized) return;
     this.finalized = true;
-    if (this.inFlight) await this.inFlight.catch(() => undefined);
-    const { digest } = this.tracker.drain(this.now());
-    await this.summarizeAndReport(digest, outcome, detail);
+    try {
+      if (this.inFlight) await this.inFlight.catch(() => undefined);
+      const { digest } = this.tracker.drain(this.now());
+      await this.summarizeAndReport(digest, outcome, detail);
+    } finally { this.options.onClosed?.(); }
   }
 
   private async summarizeAndReport(digest: string, outcome?: ProgressRunOutcome, detail?: string): Promise<void> {
@@ -677,6 +696,7 @@ export class TaskProgressSummarizer {
           prompt,
           this.options.config.requestTimeoutMs,
           this.fetchImpl,
+          this.options.onUsage,
         );
       } catch (err) {
         const canFallback = this.options.config.transport === "auto"
@@ -698,6 +718,7 @@ export class TaskProgressSummarizer {
         prompt,
         this.options.config.requestTimeoutMs,
         this.fetchImpl,
+        this.options.onUsage,
       );
     } catch (err) {
       const autoFallback = this.options.config.transport === "auto"
@@ -725,6 +746,7 @@ export class TaskProgressSummarizer {
       timeoutMs: this.options.config.requestTimeoutMs,
       providerEnv: this.options.providerEnv,
       spawnImpl: this.spawnImpl,
+      onUsage: this.options.onUsage,
     });
   }
 }

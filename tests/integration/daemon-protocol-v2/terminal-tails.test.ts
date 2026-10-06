@@ -11,7 +11,8 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     hostname: "127.0.0.1", port: 0,
     async fetch() {
       if (++summaryRequests === 1) await new Promise<void>((resolve) => { releasePeriodicSummary = resolve; });
-      return Response.json({ choices: [{ message: { content: '{"summary":"final display summary","step":3,"total":3}' } }] });
+      return Response.json({ model: "actual-summary-model", usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+        choices: [{ message: { content: '{"summary":"final display summary","step":3,"total":3}' } }] });
     },
   });
   const settings = {
@@ -128,9 +129,14 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     const frames = taskFrames.filter((entry) => entry.seq !== null);
     const afterComplete = frames.slice(frames.findIndex((entry) => entry.type === "turn.complete") + 1);
     expect(afterComplete.filter((entry) => entry.type === "task.progress" && entry.frame.p.final !== true)).toHaveLength(0);
-    expect(afterComplete.length).toBe(4);
+    expect(afterComplete.filter(entry => entry.type !== "task.usage")).toHaveLength(4);
     expect(afterComplete.every((entry) => entry.type === "task.workspace"
+      || entry.type === "task.usage"
       || (entry.type === "task.progress" && entry.frame.p.final === true))).toBe(true);
+    expect(afterComplete.some(entry => entry.type === "task.usage"
+      && entry.frame.p.usageSnapshot.units.some((unit: any) => unit.purpose === "progress_summary"))).toBe(true);
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).by_model
+      .find(row => row.purpose === "progress_summary" && row.model === "actual-summary-model")?.actual_total_tokens).toBe(20);
     for (const seq of lost) expect(afterComplete.filter((entry) => String(entry.seq) === seq)).toHaveLength(2);
     expect(h.errors).toEqual([]);
   } finally {

@@ -107,6 +107,7 @@ export const HERMETIC_ENV_RUN_ROOT_PATHS: Readonly<Record<string, string>> = {
   MULTIREMI_MIGRATION_REPORT_DIR: "reports/migrations",
   MULTIREMI_CONFIG: "config.json",
   REMI_HOME: "remi-home",
+  REMI_PLUGINS_DIR: "plugins",
 };
 
 /** True when `name` is one of the variables the preload removes. */

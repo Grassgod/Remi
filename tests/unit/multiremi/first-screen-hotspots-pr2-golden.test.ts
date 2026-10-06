@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { readFileSync } from "node:fs";
 import { AUTH_COOKIE_NAME } from "@multiremi/api/helpers/login.js";
-import { createPr2Harness, capturePr2Responses, capturePr2QueryCounts } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
+import { createPr2Harness, capturePr2Responses, capturePr2QueryCounts, reportPr2Usage } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
 
 const fixtureDir = `${import.meta.dir}/../../fixtures/multiremi`;
 
@@ -67,8 +67,11 @@ it("hydrates usage, groups and models exactly like the old per-runtime reads", a
     expect(harness.probe.statements).toBe(4);
     expect(runtimes).toHaveLength(harness.runtimeIds.length);
     for (const runtime of runtimes) expect(runtime).toEqual(expected.get(runtime.id)!);
-    // A task update must be visible on the next list, including settled usage.
-    runTurnExecutionMutation(harness.db,"UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?", JSON.stringify([{ input_tokens: 73, output_tokens: 91 }]), harness.fixture.taskIds[1]!);
+    // Rewriting the audit-only JSON must not change the canonical facts.
+    runTurnExecutionMutation(harness.db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?", JSON.stringify([{ input_tokens: 73, output_tokens: 91 }]), harness.fixture.taskIds[1]!);
+    expect(harness.store.listRuntimesForWorkspace("local")).toEqual(runtimes);
+    // A newer canonical revision must be visible on the next list, including settled usage.
+    reportPr2Usage(harness.store, harness.fixture.taskIds[1]!, 1, 73, 91, 2);
     const updated = harness.store.listRuntimesForWorkspace("local").find(runtime => runtime.id === "rt_pr2_1");
     expect(updated).toEqual(harness.store.getRuntime("rt_pr2_1")!);
     expect(updated!.inputTokens).toBeGreaterThanOrEqual(73);

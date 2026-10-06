@@ -116,6 +116,8 @@ Issue 活动区默认显示普通评论、固定单行的派活、字段动态�
 
 Chat 的消息姓名查询等待首屏就绪，并在窗口隐藏时停用成员、agent 和 squad 观察者；执行弹窗的姓名仅在打开时查询。`useActorName({ enabled: false })` 仍读取缓存供显示，缓存失效不会发起请求。首屏测试以消息收件箱和 decision 消息为数据源，不再模拟已退役的通知摘要或任务提问接口。附件发送使用统一消息接口；空附件列表省略 `attachment_ids`。
 
+Dashboard、Runtime 用量详情和列表费用共同读取[统一用量 report](../usage-accounting.md)，接线在 [usage/queries.ts](../../frontend/packages/core/usage/queries.ts)、[严格响应 schema](../../frontend/packages/core/api/schemas/usage-accounting.ts) 和 [UsagePanel](../../frontend/packages/views/usage/usage-panel.tsx)。query key 包含 workspace、范围、项目、Runtime 和查看时区；工作区切换重置筛选与价格草稿。未知消费/费用显示 `—`，上下文只显示独立 peak；已知金额按货币分开，保留 token 覆盖率和未知任务数。模型表保留历史模型和请求/实际模型出处，重复来源提示与相同 requested/actual 行不重复显示，完整字段仍供 CSV 导出。日/周 token 与金额趋势按单位时间证据归属；没有逐请求时间的历史聚合明确提示任务归属日。任务与耗时趋势读取 `task_daily` 生命周期轴；各模型或日期任务数不可加总。CSV 保留未知空值、各币种金额、时间出处和身份归属争议指标。价格管理读取服务端历史版本，失败保留草稿，保存成功失效当前 workspace 全部用量视图；task 事件也会失效，前台另以 60 秒周期刷新。Runtime 列表所有行共享一份 7 日报告，不为每行扫描旧 JSON，不在前端计价。
+
 Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../../frontend/packages/core/runtimes/provider-profile.ts) 与[共享表单](../../frontend/packages/views/runtimes/components/runtime-provider-profile-tab.tsx)读取和保存单个 Runtime 的 provider 配置；查询键包含 workspace/runtime ID，响应严格校验。表单支持 API Key（保存后清空，留空保留）和本机环境变量；Claude 还支持 Bearer / x-api-key 请求鉴权；未声明对应 `codex_profiles: 1` 或 `claude_profiles: 1` 的旧 daemon 只能查看更新提示。保存后失效 Runtime 和模型目录缓存；鉴权与隔离契约见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)和 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)。
 
 - [useRealtimeSync](../../frontend/packages/core/realtime/use-realtime-sync.ts)负责订阅生命周期和断线重连后的缓存恢复；领域处理器集中在 [realtime/sync/](../../frontend/packages/core/realtime/sync/)。

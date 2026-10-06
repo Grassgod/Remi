@@ -5,6 +5,7 @@ import type { ConversationLogEntry, ConversationLogTurnMetadata } from "@multire
 import type { TurnAttemptStatus } from "@multiremi/contracts/unified-model.js";
 import { notifyTurnChanged } from "./turn-execution-records.js";
 import { parseJson } from "./helpers.js";
+import { turnUsageProjection } from "./usage-projection.js";
 
 /**
  * Replace an execution in the caller's transaction. The turn is the mutex and
@@ -68,7 +69,7 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
   const metadata: ConversationLogTurnMetadata={
     status,summary:row.progress_summary ?? null,event_count:row.event_count==null?null:Number(row.event_count),tool_call_count:row.tool_call_count==null?null:Number(row.tool_call_count),
     type_histogram:parseJson(row.type_histogram,null),model:parseJson(row.model,null),trace_ref:parseJson(row.trace_ref,null),
-    usage:parseJson(row.usage,[]),failure_reason:row.failure_reason ?? null,
+    usage:turnUsageProjection(db,[row.id]).get(row.id) ?? [],failure_reason:row.failure_reason ?? null,
     final_entry_id:row.reply_message_id ?? null,
     ...(entry.session_id.startsWith("chat_") ? {final_reply_md:reply?.body_md ?? null} : {}),
     elapsed_ms:Number.isFinite(start) && Number.isFinite(end) ? Math.max(0,end-start) : null,

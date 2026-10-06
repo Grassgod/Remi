@@ -16,6 +16,8 @@ import type {
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
+import { UsageCollector } from "./usage-collector.js";
+import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 import { AcpClient } from "./client.js";
 import { AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
@@ -175,19 +177,10 @@ const MODEL_OPTION_CATEGORY = "model";
 const EFFORT_OPTION_CATEGORY = "thought_level";
 
 export interface PromptUsageState {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
+  collector: UsageCollector;
   /** Latest `used` context-occupancy snapshot, retained for existing displays. */
   totalTokens: number;
-  /** Sum of `used` from unpatched usage updates (totals-only fallback). */
-  streamedTotalSum: number;
-  /** Sum of per-request totalTokens from patched codex usage metadata. */
-  detailedTotalTokens: number;
-  hasStreamedTotal: boolean;
-  hasDetailedUsage: boolean;
-  costUsd: number;
+  costUsd: number | null;
   model: string | null;
   contextWindowSize: number | null;
 }
@@ -203,16 +196,9 @@ interface PromptState {
 
 export function createPromptUsageState(): PromptUsageState {
   return {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
+    collector: new UsageCollector(),
     totalTokens: 0,
-    streamedTotalSum: 0,
-    detailedTotalTokens: 0,
-    hasStreamedTotal: false,
-    hasDetailedUsage: false,
-    costUsd: 0,
+    costUsd: null,
     model: null,
     contextWindowSize: null,
   };
@@ -589,6 +575,7 @@ export class AcpProvider implements Provider {
   }
 
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
+    this._lastResponse = null;
     const credentials = [this._options.apiKey, ...Object.entries(this._options.env ?? {})
       .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
       .map(([, value]) => value)].filter((value): value is string => Boolean(value));
@@ -599,6 +586,11 @@ export class AcpProvider implements Provider {
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
     entry.promptState = createPromptState();
+    const promptState = entry.promptState;
+    const requestedModel = () => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      ?? entry.models?.currentModelId ?? options?.model ?? this._options.model;
+    const requestedModelSource = (): TaskUsageUnit["modelSource"] => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      || entry.models?.currentModelId ? "session_acknowledged" : requestedModel() ? "configured" : "unknown";
     this._lastResponse = null;
 
     const eventQueue: ProviderEvent[] = [];
@@ -653,10 +645,13 @@ export class AcpProvider implements Provider {
         if (entry.models) entry.models = { ...entry.models, currentModelId: value };
       }
       if (update.sessionUpdate === "usage_update") {
-        accumulateUsage(entry.promptState.usage, update);
+        accumulateUsage(entry.promptState.usage, update, requestedModel(), requestedModelSource(), this._adapter.agentType);
         const context = (update._meta?.claudeCode as { parentToolUseId?: string } | undefined)?.parentToolUseId
           ? null : readContextUsage(update);
         if (context) entry.promptState.contextUsage = context;
+        update = { ...update, _meta: { ...update._meta,
+          remiUsageUnits: entry.promptState.usage.collector.takeChangedUnits(this._adapter.agentType, requestedModel()),
+        } };
       }
       if (update.sessionUpdate === "agent_message_chunk") {
         const text = extractChunkText((update as Record<string, any>).content);
@@ -698,7 +693,10 @@ export class AcpProvider implements Provider {
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
-        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, turnFailure());
+        if (entry.promptState === promptState && this._activeStreaming.has(chatId)) {
+          this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, turnFailure(),
+            this._adapter.agentType, requestedModel(), requestedModelSource());
+        }
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
           promptError = new Error("Cancelled");
         }
@@ -750,6 +748,11 @@ export class AcpProvider implements Provider {
         resolveWaiting = null;
       }
     } finally {
+      // Streaming errors, process death, generator return and task aborts all
+      // retain actual requests observed before the prompt stopped.
+      if (!this._lastResponse) this._lastResponse = buildAgentResponse(entry,
+        { stopReason: options?.signal?.aborted ? "cancelled" : "end_turn" }, this._adapter.promptUsageSettleScope, turnFailure(),
+        this._adapter.agentType, requestedModel(), requestedModelSource());
       this._deathListeners.delete(chatId);
       entry.client["_options"].onSessionUpdate = originalOnUpdate;
       this._activeStreaming.delete(chatId);
@@ -1359,76 +1362,53 @@ function extractChunkText(content: unknown): string {
 }
 
 /**
- * Resolve the provider-specific usage scope. Claude's settle result covers the
- * whole turn and remains authoritative (MUL-92). Codex's settle result covers
- * only the last model request, so its per-request stream is authoritative; an
- * unpatched stream deliberately resolves to totals-only instead of inventing a
- * split. Codex falls back to settle only when no usable stream event arrived.
+ * Actual request telemetry is authoritative. Claude's whole-turn settle can
+ * expose unattributed work; Codex's last-request settle is only a partial
+ * fallback. Context occupancy is never consumption.
  */
 export function resolvePromptUsage(
   streamed: PromptUsageState,
   settle: PromptResult["usage"],
   settleScope: PromptUsageSettleScope,
 ): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; totalTokens: number } {
-  const settled = (value: number | null | undefined, fallback: number): number => {
-    if (value == null) return fallback;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-  };
-
-  if (settleScope === "last-request") {
-    if (streamed.hasDetailedUsage && !streamed.hasStreamedTotal) {
-      return {
-        inputTokens: streamed.inputTokens,
-        outputTokens: streamed.outputTokens,
-        cacheReadTokens: streamed.cacheReadTokens,
-        cacheWriteTokens: streamed.cacheWriteTokens,
-        totalTokens: streamed.detailedTotalTokens,
-      };
-    }
-    if (streamed.hasStreamedTotal) {
-      return {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        totalTokens: streamed.detailedTotalTokens + streamed.streamedTotalSum,
-      };
-    }
+  const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 };
+  for (const entry of streamed.collector.units("", null, settle, settleScope)) {
+    if (entry.source === "context_snapshot") continue;
+    totals.inputTokens += entry.inputTokens ?? 0;
+    totals.outputTokens += entry.outputTokens ?? 0;
+    totals.cacheReadTokens += entry.cacheReadTokens ?? 0;
+    totals.cacheWriteTokens += entry.cacheWriteTokens ?? 0;
+    totals.totalTokens += (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0) + (entry.cacheReadTokens ?? 0)
+      + (entry.cacheWriteTokens ?? 0) + (entry.actualUnsplitTokens ?? 0);
   }
-
-  // Turn-scoped settle is authoritative. An explicit 0 is legitimate and
-  // must not fall back; only a missing, non-finite, or negative field does.
-  return {
-    inputTokens: settled(settle?.inputTokens, streamed.inputTokens),
-    outputTokens: settled(settle?.outputTokens, streamed.outputTokens),
-    cacheReadTokens: settled(settle?.cachedReadTokens, streamed.cacheReadTokens),
-    cacheWriteTokens: settled(settle?.cachedWriteTokens, streamed.cacheWriteTokens),
-    totalTokens: settled(settle?.totalTokens, streamed.totalTokens),
-  };
+  return totals;
 }
 
-export function accumulateUsage(state: PromptUsageState, update: SessionUpdate): void {
+export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"], providerType?: string): void {
   const u = update as Record<string, any>;
   const used = nonNegativeFinite(u.used);
   if (used != null) state.totalTokens = used;
+  if (!(u._meta?.claudeCode?.parentToolUseId)) state.collector.context(u.used, u.size);
 
   const remiUsage = readRemiTokenUsage(u._meta?.remiTokenUsage);
   if (remiUsage) {
-    state.inputTokens += remiUsage.inputTokens;
-    state.cacheReadTokens += remiUsage.cachedInputTokens;
-    state.outputTokens += remiUsage.outputTokens;
-    state.detailedTotalTokens += remiUsage.totalTokens;
-    state.hasDetailedUsage = true;
-  } else if (used != null) {
-    state.streamedTotalSum += used;
-    state.hasStreamedTotal = true;
+    state.collector.update(u._meta.remiTokenUsage, requestedModel, modelSource);
   }
+  state.collector.uncertainTotal(u._meta?.remiUncertainUsage?.reportedTotalTokens);
 
   const size = nonNegativeFinite(u.size);
-  if (size != null) state.contextWindowSize = size;
+  if (size != null && size > 0) state.contextWindowSize = size;
   const cost = nonNegativeFinite(u.cost?.amount);
-  if (cost != null) state.costUsd = cost;
+  if (cost != null) {
+    if (u.cost?.currency === "USD") state.costUsd = cost;
+    const monetary = u._meta?.remiCostUsage;
+    const established = monetary && ["request", "turn", "task"].includes(monetary.scope);
+    const source = established && monetary.source === "provider_reported" ? "provider_reported"
+      : established && monetary.source === "sdk_estimate" || providerType === "claude" ? "sdk_estimate" : "unknown";
+    state.collector.cost(cost, u.cost?.currency, established ? monetary.scope : providerType === "claude" ? "turn" : "task", source,
+      established && typeof monetary.requestId === "string" ? monetary.requestId : undefined,
+      established && typeof monetary.providerSessionId === "string" ? monetary.providerSessionId : undefined);
+  }
 }
 
 function readRemiTokenUsage(value: unknown): {
@@ -1453,12 +1433,10 @@ function nonNegativeFinite(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope, sessionFailure?: AcpSessionFailure | null): AgentResponse {
+function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope, sessionFailure?: AcpSessionFailure | null,
+  providerType = "acp", requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"]): AgentResponse {
   const { usage, text, promptStartTime, completedToolCount, contextUsage } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
-
-  // Reset per-prompt state for next prompt
-  entry.promptState = createPromptState();
 
   const resolved = resolvePromptUsage(usage, result.usage, settleScope);
 
@@ -1466,7 +1444,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope:
     text,
     sessionId: entry.acpSessionId,
     model: usage.model,
-    costUsd: usage.costUsd || null,
+    costUsd: usage.costUsd,
     inputTokens: resolved.inputTokens || null,
     outputTokens: resolved.outputTokens || null,
     totalTokens: resolved.totalTokens || null,
@@ -1478,6 +1456,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope:
     metadata: {
       stopReason: result.stopReason,
       provider: "acp",
+      usageUnits: usage.collector.units(providerType, requestedModel, result.usage, settleScope, modelSource),
       ...(sessionFailure ? { sessionFailure } : {}),
       ...(contextUsage ? { contextUsage } : {}),
     },

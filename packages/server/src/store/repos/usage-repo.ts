@@ -21,11 +21,8 @@ export class UsageRepo {
     if (runtimeId !== undefined && runtimeId !== null && !this.ctx.runtimes().getRuntime(runtimeId)) {
       throw new Error(`Runtime not found: ${runtimeId}`);
     }
-    const rows = runtimeId === undefined
-      ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id IS NOT NULL").all() as Row[]
-      : runtimeId === null
-        ? this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id IS NULL").all() as Row[]
-        : this.ctx.db.query("SELECT id, runtime_id, usage FROM multiremi_turn_execution_records WHERE runtime_id = ?").all(runtimeId) as Row[];
+    const runtime = runtimeId ? this.ctx.runtimes().getRuntime(runtimeId) : null;
+    const rows = this.filteredUsageTaskRows({ runtimeId, days: 0, workspaceId: runtime?.workspaceId ?? "local" });
     const usage = new Map<string, MultiremiRuntimeUsage & { taskIds: Set<string> }>();
     for (const row of rows) {
       const rowRuntimeId = nullableString(row.runtime_id);
@@ -242,46 +239,53 @@ export class UsageRepo {
     days?: number;
     tz?: string | null;
   }, options: { includeTasksWithoutUsage?: boolean } = {}): Row[] {
-    const clauses = ["1 = 1"];
-    const params: Array<string | number | null> = [];
     const workspaceId = input.workspaceId ?? "local";
-    if (workspaceId) {
-      clauses.push("t.workspace_id = ?");
-      params.push(workspaceId);
+    if (input.runtimeId) {
+      const runtime = this.ctx.runtimes().getRuntimeLite(input.runtimeId);
+      if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) throw new Error(`Runtime not found: ${input.runtimeId}`);
     }
-    if (input.projectId) {
-      clauses.push("i.project_id = ?");
-      params.push(input.projectId);
-    }
+    const clauses = [options.includeTasksWithoutUsage ? "t.workspace_id=?" : "u.workspace_id=?"];
+    const params: Array<string | number | null> = [workspaceId];
+    const scheduleProject = this.ctx.db.dialect === "postgres"
+      ? "CASE WHEN CAST(a.schedule_target AS JSONB)->>'kind'='project' THEN CAST(a.schedule_target AS JSONB)->>'id' ELSE NULL END"
+      : "CASE WHEN json_valid(a.schedule_target) AND json_extract(a.schedule_target,'$.kind')='project' THEN json_extract(a.schedule_target,'$.id') ELSE NULL END";
+    const lifecycleProject = `CASE WHEN r.task_id IS NOT NULL THEN r.project_id WHEN t.runtime_workspace_id IS NOT NULL THEN NULL ELSE COALESCE(i.project_id,${scheduleProject},c.project_id) END`;
+    const lifeTime = `CASE WHEN t.status='completed' THEN COALESCE(t.completed_at,t.updated_at,t.created_at)
+      WHEN t.status='failed' THEN COALESCE(t.failed_at,t.completed_at,t.updated_at,t.created_at)
+      WHEN t.status='cancelled' THEN COALESCE(t.cancelled_at,t.completed_at,t.updated_at,t.created_at)
+      ELSE '${new Date().toISOString()}' END`;
+    if (input.projectId) { clauses.push(options.includeTasksWithoutUsage ? `(${lifecycleProject})=?` : "u.project_id=?"); params.push(input.projectId); }
     if (input.runtimeId !== undefined) {
-      if (input.runtimeId === null) {
-        clauses.push("t.runtime_id IS NULL");
-      } else {
-        if (!this.ctx.runtimes().getRuntime(input.runtimeId)) throw new Error(`Runtime not found: ${input.runtimeId}`);
-        clauses.push("t.runtime_id = ?");
-        params.push(input.runtimeId);
-      }
+      const field = options.includeTasksWithoutUsage ? "t.runtime_id" : "u.runtime_id";
+      clauses.push(input.runtimeId === null ? `${field} IS NULL` : `${field}=?`);
+      if (input.runtimeId !== null) params.push(input.runtimeId);
     }
     const since = usageSince(input.days, input.tz);
-    if (since) {
-      clauses.push("COALESCE(t.completed_at, t.failed_at, t.cancelled_at, t.started_at, t.dispatched_at, t.updated_at, t.created_at) >= ?");
-      params.push(since);
-    }
-    if (!options.includeTasksWithoutUsage) {
-      clauses.push("t.usage IS NOT NULL AND t.usage != '[]' AND t.usage != ''");
-    }
-    return this.ctx.db.query(
-      `SELECT t.*
-       FROM multiremi_turn_execution_records t
-       LEFT JOIN multiremi_issues i ON i.id = t.issue_id
-       WHERE ${clauses.join(" AND ")}
-       ORDER BY COALESCE(t.completed_at, t.failed_at, t.cancelled_at, t.started_at, t.dispatched_at, t.updated_at, t.created_at) ASC`,
-    ).all(...params) as Row[];
+    if (since) { clauses.push(options.includeTasksWithoutUsage ? `(${lifeTime})>=?` : "u.occurred_at>=?"); params.push(since); }
+    if (options.includeTasksWithoutUsage) return this.ctx.db.query(`SELECT t.turn_id AS id,t.agent_id,t.runtime_id,t.status,t.completed_at,t.failed_at,t.cancelled_at,work.started_at,t.dispatched_at,t.updated_at,work.created_at,
+      ${lifeTime} AS consumption_at FROM multiremi_turn_execution_records t JOIN multiremi_turns work ON work.id=t.turn_id AND work.current_attempt_id=t.id
+      LEFT JOIN multiremi_usage_task_scopes r ON r.task_id=t.id LEFT JOIN multiremi_issues i ON i.id=t.issue_id
+      LEFT JOIN multiremi_chat_sessions c ON c.id=t.chat_session_id
+      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.turn_id=t.turn_id ORDER BY ar.created_at DESC LIMIT 1)
+      WHERE ${clauses.join(" AND ")}`).all(...params) as Row[];
+    // Deprecated wire shapes project canonical consumption, including its frozen
+    // owner and actual occurrence time. They never read the legacy JSON column.
+    clauses.push("u.source<>'context_snapshot'", "(u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL OR u.cache_read_tokens IS NOT NULL OR u.cache_write_tokens IS NOT NULL OR u.actual_unsplit_tokens IS NOT NULL)");
+    const facts = this.ctx.db.query(`SELECT t.turn_id AS id,u.agent_id,u.runtime_id,u.occurred_at AS consumption_at,u.provider,COALESCE(u.model,u.requested_model,'unknown') AS model,
+      SUM(COALESCE(u.input_tokens,0)) AS input_tokens,SUM(COALESCE(u.output_tokens,0)) AS output_tokens,
+      SUM(COALESCE(u.cache_read_tokens,0)) AS cache_read_tokens,SUM(COALESCE(u.cache_write_tokens,0)) AS cache_write_tokens,
+      SUM(COALESCE(u.actual_unsplit_tokens,0)) AS unsplit_tokens
+      FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE ${clauses.join(" AND ")}
+      GROUP BY t.turn_id,u.agent_id,u.runtime_id,u.occurred_at,u.provider,COALESCE(u.model,u.requested_model,'unknown')`).all(...params) as Row[];
+    return facts.map(row => ({ ...row, usage: [{ provider: row.provider, model: row.model,
+      inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), cacheReadTokens: Number(row.cache_read_tokens), cacheWriteTokens: Number(row.cache_write_tokens),
+      totalTokens: Number(row.input_tokens) + Number(row.output_tokens) + Number(row.cache_read_tokens) + Number(row.cache_write_tokens) + Number(row.unsplit_tokens) }] }));
   }
 }
 
 function usageTimestamp(row: Row): string {
   return String(
+    row.consumption_at ??
     row.completed_at ??
     row.failed_at ??
     row.cancelled_at ??
@@ -374,6 +378,7 @@ function usageSince(days: number | undefined, tz?: string | null): string | null
 }
 
 function taskRunSeconds(row: Row): number {
+  if (!["completed", "failed", "cancelled"].includes(String(row.status))) return 0;
   const start = Date.parse(String(row.started_at ?? row.dispatched_at ?? row.created_at));
   const end = Date.parse(String(row.completed_at ?? row.failed_at ?? row.cancelled_at ?? row.updated_at));
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;

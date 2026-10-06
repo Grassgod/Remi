@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { ensureNode, patchCodexUsageBridge } from "../packages/acp/src/provision.js";
+import { ensureNode, patchCodexUsageBridge, patchClaudeUsageBridge } from "../packages/acp/src/provision.js";
 import { installRuntimeBundle, runtimeBundleBridge, runtimeBundlePrefix } from "../packages/acp/src/runtime-bundle.js";
 import { verifyAcpRuntime } from "../packages/acp/src/runtime-verify.js";
 import { checkReleaseSnapshot, type RuntimeSnapshot } from "./release-runtime.js";
@@ -18,6 +18,7 @@ if (import.meta.main) {
     log(`verifying ${provider}: ACP ${versions.acp}, SDK ${versions.sdk}, executable ${versions.executable}`);
     installRuntimeBundle(provider, node, (bridge) => {
       if (provider === "codex" && !patchCodexUsageBridge(log, bridge)) throw new Error("Codex usage patch verification failed");
+      if (provider === "claude" && !patchClaudeUsageBridge(log, bridge)) throw new Error("Claude usage patch verification failed");
     }, versions);
     await verifyAcpRuntime(provider, runtimeBundleBridge(provider, runtimeBundlePrefix(provider, versions)));
   }
