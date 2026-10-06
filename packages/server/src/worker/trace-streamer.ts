@@ -2,7 +2,6 @@ import {
   DAEMON_TRACE_APPEND_MAX_BYTES, DAEMON_TRACE_APPEND_MAX_EVENTS,
   DAEMON_TRACE_REPLAY_MAX_BYTES, DAEMON_TRACE_REPLAY_MAX_EVENTS,
 } from "@multiremi/contracts/daemon-protocol.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonProtocolClient } from "./daemon-protocol-client.js";
 import { traceEventBytes, type TraceStore } from "@multiremi/worker/trace-store.js";
 import { encodeDaemonProtocolFrame } from "../api/daemon-protocol/frames.js";
@@ -10,23 +9,21 @@ import { encodeDaemonProtocolFrame } from "../api/daemon-protocol/frames.js";
 /** The cold replay budget is a tail budget, not a prefix of the last 2,000 rows. */
 export function coldTraceCursor(store: TraceStore, taskId: string): number {
   const head = store.head(taskId)?.head ?? 0;
-  const events: TraceEvent[] = [];
+  const tail: Array<{ seq: number; bytes: number }> = [];
+  let bytes = 0;
   let cursor = Math.max(0, head - DAEMON_TRACE_REPLAY_MAX_EVENTS);
   while (cursor < head) {
-    const page = store.read(taskId, cursor, 500);
+    const page = store.read(taskId, cursor, 500, DAEMON_TRACE_REPLAY_MAX_BYTES);
     if (!page.events.length) break;
-    events.push(...page.events);
+    for (const event of page.events) {
+      const size = traceEventBytes(event);
+      tail.push({ seq: event.seq, bytes: size });
+      bytes += size;
+      while (bytes > DAEMON_TRACE_REPLAY_MAX_BYTES && tail.length > 1) bytes -= tail.shift()!.bytes;
+    }
     cursor = page.events.at(-1)!.seq;
   }
-  let bytes = 0;
-  let first = events.length;
-  while (first > 0) {
-    const size = traceEventBytes(events[first - 1]!);
-    if (bytes + size > DAEMON_TRACE_REPLAY_MAX_BYTES) break;
-    bytes += size;
-    first--;
-  }
-  return first < events.length ? events[first]!.seq - 1 : head;
+  return tail.length ? tail[0]!.seq - 1 : head;
 }
 
 interface StreamCursor { runtimeId: string; afterSeq: number; closed: boolean; blocked: boolean }
@@ -126,4 +123,6 @@ export class TraceStreamer {
     this.timer = null;
     await this.running;
   }
+
+  forget(taskId: string): void { this.tasks.delete(taskId); delete this.heads[taskId]; }
 }

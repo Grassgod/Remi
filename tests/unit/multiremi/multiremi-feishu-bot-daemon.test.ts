@@ -161,6 +161,43 @@ function queuedClient(test: Scaffold, canSend = () => true, timeoutMs = 30_000) 
 }
 
 describe("Feishu bot control-plane delivery", () => {
+  it("falls back to the legacy status frame only when an older API rejects the new RPC", async () => {
+    const client = new MultiremiDaemonClient("http://unused");
+    const fallback: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    client.setReportTransport({
+      report: async () => ({ ok: true }),
+      rpc: async () => { throw new DaemonProtocolRpcError("unknown_frame", false); },
+      bestEffort: (type, payload) => { fallback.push({ type, payload }); },
+      upgradeWaiting: () => false,
+    });
+    await client.reportFeishuBotRuntimeStatus("rt_a", { applied_revision: 1, state: "online" });
+    expect(fallback).toEqual([{ type: "concierge.status", payload: {
+      runtime_id: "rt_a", applied_revision: 1, state: "online",
+    } }]);
+
+    client.setReportTransport({
+      report: async () => ({ ok: true }),
+      rpc: async () => { throw new DaemonProtocolRpcError("authority_revoked", false); },
+      bestEffort: (type, payload) => { fallback.push({ type, payload }); },
+      upgradeWaiting: () => false,
+    });
+    await expect(client.reportFeishuBotRuntimeStatus("rt_a", { applied_revision: 1, state: "online" }))
+      .rejects.toMatchObject({ code: "authority_revoked" });
+    expect(fallback).toHaveLength(1);
+  });
+
+  it("acknowledges the persisted online status over RPC and rejects a foreign runtime", async () => {
+    const test = await scaffold();
+    const payload = { runtime_id: "rt_a", applied_revision: 1, state: "online" };
+    expect(await reportFrame(test.store, "concierge.status_report", payload,
+      { headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toEqual({ ok: true });
+    expect(test.store.listFeishuBotRuntimeStatuses("local").find(row => row.runtimeId === "rt_a"))
+      .toMatchObject({ state: "online", appliedRevision: 1 });
+    expect(await reportFrame(test.store, "concierge.status_report", payload,
+      { headers: daemonHeaders(test.tokens.rt_b!), authToken: "MASTER", runtimeId: "rt_a" }))
+      .toMatchObject({ ok: false, code: "authority_revoked" });
+  });
+
   it("pushes a new outbound immediately, replays pre-ACK work and applies the result once", async () => {
     const test = await scaffold();
     test.store.heartbeatRuntime("rt_a", { claimPending: false, supportsFeishuBotConfig: true });

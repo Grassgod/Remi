@@ -92,6 +92,8 @@ export interface PrepareSessionArchiveOptions {
   storageBoundary?: string;
   stagingRoot?: string;
   maxSourceBytes?: number;
+  /** Optional process ownership/cancellation fence before every local write. */
+  assertWritable?: () => void;
 }
 
 export interface PreparedSessionArchive {
@@ -198,20 +200,24 @@ export async function prepareSessionArchive(
 
   const stagingRoot = resolve(options.stagingRoot ?? join(workspaceRoot, ".multiremi", "archive-spool"));
   assertContained(workspaceRoot, stagingRoot, "archive staging root");
-  await ensureRealDirectoryTree(workspaceRoot, stagingRoot, "archive staging root");
+  options.assertWritable?.();
+  await ensureRealDirectoryTree(workspaceRoot, stagingRoot, "archive staging root", options.assertWritable);
   const archivePath = join(stagingRoot, `${options.subject.kind}-${sourceRevision}.zip`);
   const partialPath = `${archivePath}.${process.pid}.${randomUUID()}.partial`;
+  options.assertWritable?.();
   await rm(partialPath, { force: true });
 
   try {
-    const written = await writeArchiveMembers({ partialPath, manifest, files });
+    const written = await writeArchiveMembers({ partialPath, manifest, files, assertWritable: options.assertWritable });
     log.debug(`Session archive compression finished: subject=${options.subject.kind}:${options.subject.id}`);
     // A file that appeared, grew or was replaced during compression would not
     // match the manifest and the index written into the blob.
     const verifiedSnapshot = await scanArchiveEntries(sources, maxSourceBytes);
     assertSameArchiveSnapshot(sourceSnapshot, verifiedSnapshot);
+    options.assertWritable?.();
     await rename(partialPath, archivePath).catch(async (error) => {
       if (!isAlreadyExists(error)) throw error;
+      options.assertWritable?.();
       await rm(partialPath, { force: true });
     });
     const archived = await inspectRegularFile(archivePath);
@@ -230,7 +236,7 @@ export async function prepareSessionArchive(
       metadata: { format: SESSION_ARCHIVE_FORMAT_V2, subject: options.subject, files: [...manifest.files] },
     };
   } catch (error) {
-    await rm(partialPath, { force: true }).catch(() => {});
+    try { options.assertWritable?.(); await rm(partialPath, { force: true }); } catch { /* Ownership handoff preserves excluded staging. */ }
     throw error;
   }
 }
@@ -493,6 +499,7 @@ async function walkArchiveDirectory(
 }
 
 interface WriteArchiveInput {
+  assertWritable?: () => void;
   partialPath: string;
   manifest: {
     format: typeof SESSION_ARCHIVE_FORMAT_V2;
@@ -503,6 +510,7 @@ interface WriteArchiveInput {
 }
 
 async function writeArchiveMembers(input: WriteArchiveInput): Promise<{ sha256: string; sizeBytes: number }> {
+  input.assertWritable?.();
   const handle = await open(
     input.partialPath,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
@@ -512,6 +520,7 @@ async function writeArchiveMembers(input: WriteArchiveInput): Promise<{ sha256: 
   let writeFailure: unknown = null;
   const writer = new ZipStreamWriter({
     write: async (chunk) => {
+      input.assertWritable?.();
       blobDigest.update(chunk);
       await handle.write(chunk);
     },
@@ -534,6 +543,7 @@ async function writeArchiveMembers(input: WriteArchiveInput): Promise<{ sha256: 
     );
     await writer.addBuffer(SESSION_ARCHIVE_INDEX_MEMBER, indexBytes, digestHex(indexBytes));
     await writer.finish();
+    input.assertWritable?.();
     await handle.sync();
     return { sha256: blobDigest.digest("hex"), sizeBytes: writer.bytesWritten };
   } catch (error) {
@@ -852,7 +862,7 @@ function assertContained(root: string, candidate: string, label: string): void {
   }
 }
 
-async function ensureRealDirectoryTree(root: string, candidate: string, label: string): Promise<void> {
+async function ensureRealDirectoryTree(root: string, candidate: string, label: string, assertWritable?: () => void): Promise<void> {
   const resolvedRoot = resolve(root);
   const resolvedCandidate = resolve(candidate);
   assertContained(resolvedRoot, resolvedCandidate, label);
@@ -866,6 +876,7 @@ async function ensureRealDirectoryTree(root: string, candidate: string, label: s
   for (const segment of pathFromRoot.split(sep)) {
     current = join(current, segment);
     try {
+      assertWritable?.();
       await mkdir(current, { mode: 0o700 });
     } catch (error) {
       if (!isAlreadyExists(error)) throw error;

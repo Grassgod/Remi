@@ -29,6 +29,8 @@ import {
   type SessionArchiveIndex,
 } from "@multiremi/contracts/session-archive.js";
 import { isTraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import { TraceFileStore } from "@multiremi/worker/trace-file-store.js";
+import { listIssueSessionRuntimeRoots } from "@daemon/agent-runtime/workspace/session-home.js";
 
 interface ArchiveContents {
   members: Map<string, Buffer>;
@@ -63,6 +65,26 @@ function sha256(value: Uint8Array | string): string {
 
 describe("Session archive v2 writer", () => {
   const roots: string[] = [];
+  it("archives durable Issue traces even before provider-home preparation created GC metadata", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "multiremi-trace-issue-archive-"));
+    roots.push(storage);
+    const issueRoot = join(storage, "issues", "MUL-TRACE");
+    mkdirSync(issueRoot, { recursive: true });
+    const store = new TraceFileStore({ workspacesRoot: storage, resolveTask: () => ({
+      sessionId: "ises_trace", agentId: "agt_trace", provider: "codex", runtimeId: "rt_trace", issueId: "iss_trace",
+      startedAt: "2026-10-05T00:00:00Z" }) });
+    store.append("tsk_trace", [{ type: "text", content: "preparation failed" }]);
+    store.close("tsk_trace", { status: "failed", ended_at: "2026-10-05T00:00:01Z" });
+    const rootsForIssue = listIssueSessionRuntimeRoots(storage, "iss_trace");
+    expect(rootsForIssue).toEqual([{ sessionId: "ises_trace", root: join(storage, ".runtime", "ises_trace") }]);
+    const prepared = await prepareIssueSessionArchive(issueRoot, { issueId: "iss_trace",
+      sessionRoots: rootsForIssue, sessionRootBoundary: storage });
+    const archive = await readArchive(prepared.archivePath);
+    const expected = readFileSync(join(storage, ".runtime", "ises_trace", "traces", "tsk_trace.jsonl"), "utf8");
+    expect(archive.members.get("traces/tsk_trace.jsonl")?.toString("utf8")).toBe(expected);
+    expect(archive.index.members.find(member => member.task_id === "tsk_trace"))
+      .toMatchObject({ head: 1, event_count: 1, closed: true });
+  });
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });

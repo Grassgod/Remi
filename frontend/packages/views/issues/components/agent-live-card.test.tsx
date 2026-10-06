@@ -182,23 +182,11 @@ describe("AgentLiveCard reconcile race", () => {
     await screen.findByText("3 running");
   });
 
-  it("counts tool calls from the hydrated trace", async () => {
-    const hydration = deferred<{ events: Array<{ seq: number; ts: string; type: string; tool?: string }>; eof: boolean; state: string; next_after_seq: number }>();
-    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
-    mockApi.getTaskTrace.mockReturnValue(hydration.promise);
-
+  it("uses task progress and keeps trace loading behind the transcript action", async () => {
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1", { progress_summary: "Checking trace lifecycle" })] });
     renderCard();
-    await waitFor(() => expect(mockApi.getTaskTrace).toHaveBeenCalledWith("task-1", 0));
-
-    await act(async () => {
-      hydration.resolve({ events: [
-        { seq: 1, ts: "2026-01-01T00:00:00Z", type: "tool_use", tool: "Bash" },
-        { seq: 2, ts: "2026-01-01T00:00:00Z", type: "tool_result" },
-        { seq: 3, ts: "2026-01-01T00:00:00Z", type: "text" },
-        { seq: 4, ts: "2026-01-01T00:00:00Z", type: "tool_use", tool: "Bash" },
-      ], eof: true, state: "ok", next_after_seq: 4 });
-    });
-    await screen.findByText("2 tools");
+    await screen.findByText("Checking trace lifecycle");
+    expect(mockApi.getTaskTrace).not.toHaveBeenCalled();
     expect(screen.getByTestId("transcript-button")).toBeInTheDocument();
   });
 

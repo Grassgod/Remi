@@ -90,3 +90,17 @@ describe("preprocessFileCards (integration)", () => {
     expect(out).not.toContain('data-type="fileCard"');
   });
 });
+
+// The same corpus drives the server and full renderer parity checks.
+import FILE_CARD_CASES from "../../../../tests/unit/multiremi/file-card-fixtures.json";
+
+describe("shared S2 corpus (MUL-518)", () => {
+  it.each(FILE_CARD_CASES)("$href -> $allowed", ({ href, markdown, allowed }) => {
+    expect(isAllowedFileCardHref(href)).toBe(allowed);
+    const exact = new RegExp(`^(?:${FILE_CARD_URL_PATTERN.source})$`).exec(href)?.[0] === href;
+    expect(exact).toBe(allowed);
+    const output = preprocessFileCards(markdown, "");
+    expect(output.includes('data-type="fileCard"')).toBe(allowed);
+    if (!allowed) expect(output).toBe(markdown);
+  });
+});

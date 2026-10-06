@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   DAEMON_FRAME_MAX_BYTES, DAEMON_HEARTBEAT_INTERVAL_MS, DAEMON_SEND_PAUSE_BYTES,
   DAEMON_SEND_RESUME_BYTES, DAEMON_TERMINAL_CLOSE_CODES,
-  DAEMON_MIN_CLI_VERSION,
+  DAEMON_MIN_CLI_VERSION, DAEMON_TRACE_FRAME_MAX_BYTES,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { encodeDaemonProtocolFrame } from "@multiremi/api/daemon-protocol/frames.js";
@@ -89,6 +89,19 @@ describe("daemon protocol v2 client", () => {
     expect(b.client.connectionState()).toBe("upgrade_wait");
     expect(b.logs).toContain(`daemon protocol rejected by server (min ${DAEMON_MIN_CLI_VERSION}, self 0.2.85); waiting for pending_update, no tasks will be claimed`);
     expect(b.client.allowsClaims()).toBe(false);
+  });
+  it("admits one trace event through the 4 MiB ceiling while preserving ordinary frame limits", () => {
+    const b = bed(); const socket = b.sockets[0]!; socket.handshake();
+    const event = { seq: 1, type: "text", ts: "2026-10-05T00:00:00Z", content: "" };
+    const frame = { t: "trace.append", p: { events: [event], closed: false } };
+    const overhead = Buffer.byteLength(encodeDaemonProtocolFrame(frame, b.clock.now()));
+    event.content = "x".repeat(DAEMON_TRACE_FRAME_MAX_BYTES - overhead);
+    b.client.send(frame);
+    expect(Buffer.byteLength(socket.text.at(-1)!)).toBe(DAEMON_TRACE_FRAME_MAX_BYTES);
+    event.content += "x";
+    expect(() => b.client.send(frame)).toThrow(DaemonProtocolRpcError);
+    expect(() => b.client.send({ t: "trace.append", p: { events: [event, { ...event, seq: 2 }] } })).toThrow(DaemonProtocolRpcError);
+    expect(() => b.client.send({ t: "task.progress", p: { events: [event] } })).toThrow(DaemonProtocolRpcError);
   });
   it("sends the daemon token in an Authorization header, not in the URL", () => {
     const b = bed({ token: "test-daemon-credential" });

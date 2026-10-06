@@ -123,6 +123,7 @@ export interface TraceStore {
 
 export const TRACE_READ_DEFAULT_LIMIT = 200;
 export const TRACE_READ_MAX_LIMIT = 500;
+export const TRACE_READ_MAX_BYTES = 2 * 1024 * 1024;
 
 export function normalizeTraceReadArgs(afterSeq?: number, limit?: number, maxBytes?: number): {
   afterSeq: number; limit: number; maxBytes: number;
@@ -133,8 +134,8 @@ export function normalizeTraceReadArgs(afterSeq?: number, limit?: number, maxByt
       ? TRACE_READ_DEFAULT_LIMIT
       : Math.max(1, Math.min(Math.floor(limit), TRACE_READ_MAX_LIMIT)),
     maxBytes: maxBytes === undefined || Number.isNaN(maxBytes)
-      ? Infinity
-      : Math.max(0, Math.floor(maxBytes)),
+      ? TRACE_READ_MAX_BYTES
+      : Math.max(0, Math.min(TRACE_READ_MAX_BYTES, Math.floor(maxBytes))),
   };
 }
 

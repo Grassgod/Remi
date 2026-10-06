@@ -57,6 +57,7 @@ interface Harness {
 function harness(options: {
   fetch?: () => Promise<MultiremiFeishuBotAssignment | null>;
   start?: (input: MultiremiFeishuBotAssignment) => Promise<{ botName?: string | null }>;
+  report?: (input: FeishuConciergeStatusReport) => Promise<void>;
   retryBackoffMs?: readonly number[];
 } = {}): Harness {
   const state = {
@@ -81,7 +82,7 @@ function harness(options: {
       },
     },
     fetchConfig: options.fetch ?? (async () => assignment(1)),
-    report: async (input) => { state.reports.push(input); },
+    report: async (input) => { state.reports.push(input); await options.report?.(input); },
     retryBackoffMs: options.retryBackoffMs,
     now: () => state.nowMs,
   });
@@ -146,6 +147,31 @@ describe("FeishuConciergeSupervisor", () => {
     expect(test.stops).toBe(0);
   });
 
+  it("retries a lost online report on a heartbeat without receiving another directive", async () => {
+    let persisted = "stopped";
+    let rejectOnline = true;
+    const test = harness({ report: async input => {
+      if (input.state === "online" && rejectOnline) { rejectOnline = false; throw new Error("transient report failure"); }
+      persisted = input.state;
+    } });
+    await test.supervisor.apply(directive());
+    expect(test.supervisor.snapshot().state).toBe("online");
+    expect(persisted).toBe("starting");
+
+    test.advance(15_000);
+    await test.supervisor.tick();
+    expect(persisted).toBe("online");
+    expect(test.starts).toHaveLength(1);
+    expect(test.reports.map(report => report.state)).toEqual(["starting", "online", "online"]);
+
+    test.advance(15_000);
+    await test.supervisor.tick();
+    expect(test.reports).toHaveLength(3);
+    test.advance(15_000);
+    await test.supervisor.tick();
+    expect(test.reports).toHaveLength(4);
+  });
+
   it("withholds the start until the control plane says the config is available", async () => {
     // `config_available: false` is the other half of a handover: another
     // Runtime still holds the bot, so starting here would double-run it.
@@ -207,7 +233,7 @@ describe("FeishuConciergeSupervisor", () => {
   });
 
   it("backs off after a failure and retries once the ladder elapses", async () => {
-    // Directives arrive every few seconds. Without a backoff, a revoked App
+    // Heartbeats arrive every few seconds. Without a backoff, a revoked App
     // Secret would be retried against Feishu at heartbeat rate forever.
     const test = harness({
       start: async () => { throw new Error("connect ECONNREFUSED"); },
@@ -220,7 +246,7 @@ describe("FeishuConciergeSupervisor", () => {
     expect(test.starts).toHaveLength(1);
 
     test.advance(10_001);
-    await test.supervisor.apply(directive());
+    await test.supervisor.tick();
     expect(test.starts).toHaveLength(2);
   });
 

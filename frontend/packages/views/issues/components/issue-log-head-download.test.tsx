@@ -46,10 +46,10 @@ afterEach(() => {
   Reflect.deleteProperty(window, "desktopAPI");
 });
 
-function renderHead() {
+function renderHead(href = OLD_URL) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const entry = SessionLogEntrySchema.parse({ session_id: "s", id: "head", seq: 0, kind: "head", revision: 1,
-    body_md: `Title\n\n!file[report.txt](${OLD_URL})`, body_html: null, render_version: null, metadata: { title: "Title" } });
+    body_md: `Title\n\n!file[report.txt](${href})`, body_html: null, render_version: null, metadata: { title: "Title" } });
   render(<QueryClientProvider client={qc}><WorkspaceSlugProvider slug="test">
     <NavigationProvider value={{ pathname: "/test/issues/i", searchParams: new URLSearchParams(), push: vi.fn(), replace: vi.fn(), back: vi.fn(), getShareableUrl: path => path }}>
       <I18nProvider locale="en" resources={{ en: { issues: enIssues, editor: enEditor, ui: enUI } }}>
@@ -94,5 +94,19 @@ describe("readonly description attachment downloads (MUL-499)", () => {
     fireEvent.mouseDown(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(mocks.external).toHaveBeenCalledExactlyOnceWith(OLD_URL));
     expect(mocks.getAttachment).not.toHaveBeenCalled();
+  });
+
+  it("resolves a cold authenticated content URL with a query by its strict attachment ID (MUL-518)", async () => {
+    const apiAttachment = { ...attachment, url: "/api/attachments/att/content" };
+    mocks.attachments.mockResolvedValue([apiAttachment]);
+    mocks.getAttachment.mockResolvedValue(apiAttachment);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderHead("/api/attachments/att/content?download=1");
+    expect(mocks.attachments).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(mocks.attachments).toHaveBeenCalledExactlyOnceWith("i");
+    expect(mocks.getAttachment).toHaveBeenCalledExactlyOnceWith("att");
+    expect(mocks.external).not.toHaveBeenCalled();
   });
 });

@@ -308,7 +308,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           }
           break;
         }
-        case "concierge.status": {
+        case "concierge.status":
+        case "concierge.status_report": {
           if (!["stopped", "starting", "online", "failed"].includes(string(p.state))) reject();
           const revision = Number(p.applied_revision);
           store.reportFeishuBotRuntimeStatus(store.getRuntimeLite(runtimeId)!.workspaceId ?? "local", runtimeId, {
@@ -330,6 +331,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
     "runtime.update_result", "runtime.command_result", "runtime.model_list_result", "runtime.local_skills_result", "runtime.directory_scan_result",
     "runtime.local_skill_import_result", "runtime.bot_menu_result", "feishu.outbound_result", "plugin.state"]) layer.registerEventHandler(type, handle);
   layer.registerBestEffortHandler("concierge.status", handle);
+  // Keep the legacy best-effort frame for older daemons during a rolling upgrade.
+  layer.registerRpcHandler("concierge.status_report", handle);
 }
 
 export function registerDaemonMaintenanceHandlers(layer: DaemonProtocolLayer, store: MultiremiStore, archives: SessionArchiveService): void {

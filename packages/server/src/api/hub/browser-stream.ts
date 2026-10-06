@@ -261,6 +261,9 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
           });
         },
         gap: (from, to) => emit(() => sendStreamGap(client, parsed.stream, parsed.id, from, to)),
+        closed: (head) => emit(() => sendFrame(client, "stream.closed", {
+          stream: parsed.stream, id: parsed.id, head_seq: head,
+        })),
       };
       let subscription: HubSubscription & Partial<Pick<HubSinkSubscription, "notifyDrain">>;
       try {
@@ -287,6 +290,7 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
         head_seq: subscription.head,
         log_version: subscription.log_version ?? null,
         gap: subscription.gap ?? null,
+        ...(parsed.stream === "trace" ? { closed: subscription.closed ?? false } : {}),
       });
       ackSent = true;
       for (const deliver of buffered) { if (alive) deliver(); }

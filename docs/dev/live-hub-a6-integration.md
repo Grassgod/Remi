@@ -92,9 +92,11 @@ const keyed = hub.subscribe("trace:" + taskId, fromSeq, (key, frames) => { /* ..
 
 ## 6. closed 终态
 
-`closed` 是唯一的完整性信号：没有 `trace.end` 事件，也没有帧上的 `ended` 字段。
+`closed` 是完整性事实：没有 `trace.end` 日志事件，也没有帧上的 `ended` 字段。
 `task.complete` / `task.fail` 帧带的 `trace{head, event_count, closed: true}` 是同一个
-事实的另一种表达。订阅者读 `closed`，不要轮询 `/status`。
+事实的另一种表达。内部订阅者读取 `closed`，浏览器在 ack 中看到该事实，并在当前
+订阅的数据发送完毕后收到 `stream.closed`。零事件也会发送结束帧；背压期间等 drain
+恢复后先发数据再发结束。客户端补读未加载的历史不受终态影响，无需轮询 `/status`。
 
 ## 7. 不在这张接口上的东西
 

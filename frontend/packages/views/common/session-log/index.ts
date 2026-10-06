@@ -25,6 +25,8 @@ export {
   type EnhanceEntryHtmlOptions,
   type EntryPreviewKind,
   type EntryPreviewSlot,
+  type EntryFileCardSlot,
+  type EntryEnhancementSlot,
 } from "./enhance";
 export {
   reservedRowHeight,

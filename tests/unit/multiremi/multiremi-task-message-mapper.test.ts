@@ -156,7 +156,7 @@ describe("daemon task-message mapper", () => {
     expect(done[0]!.status).toBe("completed");
   });
 
-  it("publishes late claude input while the call is running without repeating it on the result", () => {
+  it("publishes late claude input while running and a self-contained terminal result", () => {
     const map = createEventMapper(createAdapter("claude"));
 
     const initial = map(event(CLAUDE_BASH_INITIAL));
@@ -197,9 +197,7 @@ describe("daemon task-message mapper", () => {
     expect(result.toolCallId).toBe(use.toolCallId);
     expect(result.status).toBe("completed");
     expect(result.output).toBe(JSON.stringify("hello_from_acp_test"));
-    // The running refresh already published this exact input, so the terminal
-    // frame does not repeat it.
-    expect(result.input).toBeUndefined();
+    expect(result.input).toEqual(refined[0]?.input);
     expect(typeof result.meta?.duration_ms).toBe("number");
 
     // Fingerprint idempotency: a repeat of the same terminal frame stays silent.
@@ -231,8 +229,7 @@ describe("daemon task-message mapper", () => {
     expect(finished).toHaveLength(1);
     expect(finished[0]?.type).toBe("tool_result");
     expect(finished[0]?.tool).toBe("Bash");
-    // The use already showed the args, so the result doesn't repeat them.
-    expect(finished[0]?.input).toBeUndefined();
+    expect(finished[0]?.input).toEqual(initial[0]?.input);
     expect(finished[0]?.output).toBe(JSON.stringify({ formatted_output: "hello_from_acp_test\n", exit_code: 0 }));
   });
 
@@ -252,7 +249,7 @@ describe("daemon task-message mapper", () => {
       description: "first",
       terminal_id: "term_42",
     });
-    expect(finished[0]?.input).toBeUndefined();
+    expect(finished[0]?.input).toEqual(refined[0]?.input);
   });
 });
 
@@ -428,14 +425,13 @@ describe("daemon mapper input refresh", () => {
     expect(spawnResult?.input?.receiverThreadIds).toEqual(["019fd67e-f5d8-7041-87ee-6f1d8d52280f"]);
   });
 
-  it("still omits the input from a result whose input never changed", () => {
+  it("retains unchanged input in a self-contained result for bounded tail replay", () => {
     const emitted = replayFixture("codex-bash-exec-notifications-1778495289225.json", "codex");
 
     const use = emitted.find((m) => m.type === "tool_use");
     const result = emitted.find((m) => m.type === "tool_result");
     expect(use?.input).toMatchObject({ command: "echo hello_from_acp_test" });
-    // The initial frame already carried the args and nothing refined them.
-    expect(result?.input).toBeUndefined();
+    expect(result?.input).toEqual(use?.input);
   });
 });
 

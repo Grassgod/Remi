@@ -558,7 +558,18 @@ export class MultiremiDaemonClient {
       error_message?: string | null;
     },
   ): Promise<void> {
-    this.reportTransport?.bestEffort("concierge.status", { ...input, runtime_id: runtimeId });
+    if (!this.reportTransport) throw new Error("daemon WS report transport is not bound");
+    // A successful RPC means the control plane persisted the state. A silent
+    // best-effort drop could otherwise strand the outbox behind `starting`.
+    const payload = { ...input, runtime_id: runtimeId };
+    try {
+      await this.reportTransport.rpc("concierge.status_report", payload);
+    } catch (error) {
+      if (!(error instanceof DaemonProtocolRpcError) || error.code !== "unknown_frame") throw error;
+      // Daemon upgrades can race the API. Keep older servers functional until
+      // they support the acknowledged report; independent ticks still resend.
+      this.reportTransport.bestEffort("concierge.status", payload);
+    }
   }
 
   async reportFeishuBotOutboundResult(
@@ -1319,7 +1330,9 @@ export class MultiremiDaemonClient {
     subject: SessionArchiveClientSubject,
     archiveId: string,
     archivePath: string,
+    signal?: AbortSignal,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
+    signal?.throwIfAborted();
     const claim = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
     const path = sessionArchiveUploadPath(runtimeId, subject, archiveId, claim.attempt);
     try {
@@ -1329,6 +1342,7 @@ export class MultiremiDaemonClient {
       const direct = target.directCandidate
         ? await this.hasAttestedSessionArchiveDirectRoute(target.url)
         : false;
+      signal?.throwIfAborted();
       if (!direct && archiveStat.size > this.sessionArchiveProxyMaxBytes) {
         throw new Error(
           `Session archive is ${archiveStat.size} bytes, exceeding the ${this.sessionArchiveProxyMaxBytes}-byte proxy fallback limit. `
@@ -1349,12 +1363,13 @@ export class MultiremiDaemonClient {
           body: archive as unknown as BodyInit,
           duplex: "half",
           redirect: "error",
-          signal: AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs)]) : AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs),
         };
         let resp: Response;
         try {
           resp = await fetch(target.url, request);
         } catch (error) {
+          signal?.throwIfAborted();
           if (request.signal?.aborted) {
             throw new Error(
               `Session archive upload timed out after ${this.sessionArchiveUploadTimeoutMs}ms`,
@@ -1368,6 +1383,9 @@ export class MultiremiDaemonClient {
         archive.destroy();
       }
     } catch (error) {
+      // A replacement process retries the durable intent. Do not start a new
+      // failure-report request while the owner is shutting down.
+      signal?.throwIfAborted();
       const message = error instanceof Error ? error.message : String(error);
       try {
         await this.post(

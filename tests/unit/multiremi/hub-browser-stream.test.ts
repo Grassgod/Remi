@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { createHub, type HubImpl } from "@multiremi/api/hub/hub-core.js";
+import { createHub, type HubImpl, type HubOptions } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import { createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
@@ -15,8 +15,8 @@ const auth: StreamAuthReader = {
   traceFacts: async () => ({ ok: true, facts: { workspaceId: "w", chatSessionId: null, chatCreatorId: null, agentId: null, agentVisibility: null, agentOwnerId: null, requesterIsWorkspaceAdmin: true } }),
 };
 
-function fixture(stream: "log" | "trace" = "log") {
-  const hub = createHub({ transport: createLocalHubTransport(), scheduleFlush: () => {}, limits: { ring: { streamMaxFrames: 3 }, laggingBytes: 10 } });
+function fixture(stream: "log" | "trace" = "log", options: Partial<HubOptions> = {}) {
+  const hub = createHub({ transport: createLocalHubTransport(), scheduleFlush: () => {}, limits: { ring: { streamMaxFrames: 3 }, laggingBytes: 10 }, ...options });
   hubs.push(hub);
   const frames: Array<{ type: string; payload: any }> = [];
   let buffered = 0;
@@ -36,6 +36,54 @@ function fixture(stream: "log" | "trace" = "log") {
 }
 
 describe("MUL-436 regression 4B: real Hub browser sink", () => {
+  it("delivers completion once after data even when task state has not refreshed", async () => {
+    const { hub, frames, subscribe, row } = fixture("trace");
+    await subscribe(); row(1); row(2); hub.close("s"); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data", "stream.closed"]);
+    expect(frames.at(-1)!.payload).toEqual({ stream: "trace", id: "s", head_seq: 2 });
+    hub.close("s"); hub.flushNow();
+    expect(frames.filter(frame => frame.type === "stream.closed")).toHaveLength(1);
+  });
+
+  it("announces zero-event completion and replays an already-closed trace", async () => {
+    const { hub, frames, subscribe, row } = fixture("trace");
+    hub.close("s"); await subscribe(); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.closed"]);
+    expect(frames[0]!.payload.closed).toBe(true);
+    expect(frames[1]!.payload.head_seq).toBe(0);
+    row(1); frames.length = 0; await subscribe(); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data", "stream.closed"]);
+  });
+
+  it("waits for the final backpressured batch before completion", async () => {
+    const { hub, client, handler, frames, subscribe, row, setBuffered } = fixture("trace");
+    await subscribe(); setBuffered(11); row(1); hub.close("s"); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data"]);
+    setBuffered(0); handler.notifyDrain(client); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data", "stream.closed"]);
+  });
+
+  it("retains completion when an idle closed ring was evicted before opening", async () => {
+    let now = 0;
+    const { hub, frames, subscribe, row } = fixture("trace", { now: () => now,
+      limits: { ring: { globalMaxBytes: 100, evictAfterMs: 1 } } });
+    row(1); hub.close("s"); now = 10;
+    hub.append("hot", [{ seq: 1, type: "text", ts: "", content: "x".repeat(200) }]);
+    expect(hub.head("s")).toBeNull();
+    await subscribe(2); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.closed"]);
+    expect(frames[0]!.payload.closed).toBe(true);
+  });
+
+  it("does not announce completion while an out-of-order final frame awaits its gap", async () => {
+    const { hub, frames, subscribe, row } = fixture("trace");
+    await subscribe(); row(1); row(3); hub.close("s"); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data"]);
+    row(2); hub.flushNow();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data", "stream.data", "stream.closed"]);
+    expect(frames.at(-2)!.payload.frames.map((frame: { seq: number }) => frame.seq)).toEqual([2, 3]);
+    expect(frames.at(-1)!.payload.head_seq).toBe(3);
+  });
   for (const stream of ["log", "trace"] as const) {
     it(`reports a running ${stream} ring gap before the retained tail`, async () => {
       const { hub, frames, subscribe, row } = fixture(stream);
@@ -83,6 +131,19 @@ describe("MUL-436 regression 4B: real Hub browser sink", () => {
     };
     await subscribe();
     expect(frames.map((frame) => frame.type)).toEqual(["stream.ack", "stream.data", "stream.gap", "stream.data"]);
+  });
+
+  it("buffers synchronous trace data and completion behind the ack", async () => {
+    const { hub, frames, subscribe } = fixture("trace");
+    const original = hub.subscribeWithSink.bind(hub);
+    hub.subscribeWithSink = (key, from, sink) => {
+      const sub = original(key, from, sink);
+      sink.send([{ seq: 1, kind: "trace", payload: { seq: 1 } }]);
+      sink.closed?.(1);
+      return sub;
+    };
+    await subscribe();
+    expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.data", "stream.closed"]);
   });
 
   it("sends running gaps and late-revision gaps over the real browser endpoint", async () => {

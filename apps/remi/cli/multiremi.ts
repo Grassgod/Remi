@@ -737,7 +737,10 @@ export function controlPlaneConciergeHost(deps: {
         const threadId = delivery.threadId ?? delivery.replyToMessageId;
         const sessionKey = threadId ? `${delivery.chatId}:thread:${threadId}` : delivery.chatId;
         return handle.streamProactiveTask(delivery.chatId, sessionKey,
-          subscribeFeishuTask(daemon, taskId, options.signal, delivery.presentation?.throughSeq ?? 0), {
+          // Replay the canonical prefix to reconstruct held final/candidate
+          // text and metadata. Presentation throughSeq suppresses native sends;
+          // the subscription's live reconnect cursor still resumes incrementally.
+          subscribeFeishuTask(daemon, taskId, options.signal), {
             // `null` until the first snapshot pins the provider session, so the
             // card opens as "刚醒来的 <agent>" instead of a bare agent name.
             taskId, displayName, sessionId: null, signal: options.signal,
@@ -1414,22 +1417,39 @@ export async function* subscribeFeishuTask(
   signal?: AbortSignal,
   throughSeq = 0,
 ): AsyncGenerator<TaskStreamEvent> {
-  const batches: Array<{ events: TraceEvent[]; closed: boolean }> = [];
+  const batches: Array<{ events: TraceEvent[]; closed: boolean; consumed: () => void }> = [];
+  const pendingAcks = new Set<() => void>();
   let wake: (() => void) | undefined;
   let active = true;
   let unsubscribe: (() => Promise<void>) | undefined;
+  let subscriptionFailed = false;
+  let subscriptionError: unknown;
+  let subscribing: Promise<void> | undefined;
   const onAbort = () => wake?.();
   signal?.throwIfAborted();
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
     // A-0's cursor is exclusive. Reconnects and gap filling belong to subscribeTrace.
-    unsubscribe = await daemon.subscribeTrace(taskId, throughSeq, (events, closed) => {
+    // Await consumption of each bounded batch before gap fill fetches another
+    // page. Subscribe concurrently: implementations may deliver before their
+    // subscribeTrace promise returns, so awaiting it here could deadlock.
+    subscribing = daemon.subscribeTrace(taskId, throughSeq, (events, closed) => {
       if (!active) return;
-      batches.push({ events, closed });
+      const consumed = new Promise<void>(resolve => {
+        const release = () => { pendingAcks.delete(release); resolve(); };
+        pendingAcks.add(release);
+        batches.push({ events, closed, consumed: release });
+      });
+      wake?.();
+      return consumed;
+    }).then(stop => { unsubscribe = stop; }, error => {
+      subscriptionFailed = true;
+      subscriptionError = error;
       wake?.();
     });
     for (;;) {
       signal?.throwIfAborted();
+      if (subscriptionFailed) throw subscriptionError;
       const batch = batches.shift();
       if (!batch) {
         await new Promise<void>(resolve => { wake = resolve; });
@@ -1440,6 +1460,7 @@ export async function* subscribeFeishuTask(
         signal?.throwIfAborted();
         yield { kind: "message", message };
       }
+      batch.consumed();
       if (batch.closed) {
         // One final read supplies display metadata; closed alone ends the subscription.
         signal?.throwIfAborted();
@@ -1451,7 +1472,9 @@ export async function* subscribeFeishuTask(
     }
   } finally {
     active = false;
+    for (const release of [...pendingAcks]) release();
     signal?.removeEventListener("abort", onAbort);
+    await subscribing;
     await unsubscribe?.();
   }
 }

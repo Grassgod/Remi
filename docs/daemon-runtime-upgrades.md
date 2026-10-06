@@ -53,6 +53,22 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 
 原有 daemon 启动健康检查继续执行；安装校验不等同于登录授权、真实模型调用或重启后服务注册成功的端到端验收。旧发布包不含 runtime-bundle.json，安装脚本仍兼容旧版本安装；旧 daemon 需要升级到包含本改动的版本才会使用新依赖。
 
+## Trace 持久化升级边界
+
+本版本 daemon 将规范化过程记录写入 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`。
+保留同一工作区根与 Runtime 身份重启时，恢复文件的 head、closed 和读取归属；已关闭历史按需读取，
+未结束任务按 Hub head 续传。这只保证本版本已写入文件的记录，活跃追加未逐条 fsync，不承诺断电尾部保留。
+
+旧版本只有进程内存中的 trace，新进程不能自动找回；原始 provider 日志也不能可靠重建全部 Remi 事件。
+旧 daemon 停止前，需通过现有 `trace.read` 分页保存仍需保留的记录，或确认对应 Session Archive 已达到 ready 后再交接。
+保存的导出只是人工备份：本 PR 不提供导入命令，也不保证把它自动恢复到新 daemon 的热指针。
+已停止且没有归档/备份的旧内存记录不可恢复，不能把升级后的空或不可达历史解释为本版本恢复成功。
+
+新文件头保存 `runtime_id`；缺少该字段的旧文件不猜测热读权限，可继续走已有归档流程。
+一次性任务的后台归档意图也保存在该 Runtime 的 `.runtime` root，上传失败或重启不会授权提前删除源文件；
+GC 仍需 ready archive 和删除前物理验证。停止会取消后台上传并最多等待 5 秒，下一进程按持久意图重试；
+被取消的 staging 留在排除目录，旧实例不在所有权交接后继续清理。实现及读页上限见 [daemon 协议 v2](daemon-protocol-v2.md)。
+
 ## 本地准备与验证
 
 ```bash

@@ -82,6 +82,8 @@ export type AttachmentInput =
 
 export interface AttachmentProps {
   attachment: AttachmentInput;
+  /** Fixed file row; all previews open in the modal instead of inline. */
+  presentation?: "inline" | "card";
   /** Editor hint — when true, the image toolbar exposes Trash. */
   editable?: boolean;
   /** Editor hint — applies the "selected" visual to the image figure. */
@@ -135,6 +137,7 @@ function normalize(
 
 export function Attachment({
   attachment,
+  presentation = "inline",
   editable,
   selected,
   onDelete,
@@ -175,7 +178,7 @@ export function Attachment({
     if (state.url) openByUrl(state.url);
   };
 
-  if (kind === "image") {
+  if (kind === "image" && presentation === "inline") {
     return (
       <>
         <ImageAttachmentView
@@ -196,7 +199,7 @@ export function Attachment({
     );
   }
 
-  if (kind === "html" && state.attachmentId && !state.uploading) {
+  if (kind === "html" && presentation === "inline" && state.attachmentId && !state.uploading) {
     return (
       <>
         <HtmlAttachmentPreview
@@ -214,6 +217,7 @@ export function Attachment({
   return (
     <>
       <AttachmentCard
+        className={className}
         filename={state.filename}
         contentType={state.contentType}
         attachmentId={state.attachmentId}

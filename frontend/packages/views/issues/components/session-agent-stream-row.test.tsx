@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("session agent stream row", () => {
-  it("uses trace for current-step history and opens its dialog on demand", async () => {
+  it("loads trace history only after opening the execution dialog", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
     getTaskTrace.mockResolvedValue({
       events: Array.from({ length: 61 }, (_, index) => ({
@@ -95,14 +95,15 @@ describe("session agent stream row", () => {
     });
     renderRow();
     const row = await screen.findByText("Agent a1 is working");
+    expect(getTaskTrace).not.toHaveBeenCalled();
     fireEvent.click(row.closest("button")!);
 
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0, 200, undefined));
     expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
   });
 
-  it("announces the working agent with its current step", async () => {
-    listTasksByIssue.mockResolvedValue([task()]);
+  it("announces the working agent with server progress without a trace observer", async () => {
+    listTasksByIssue.mockResolvedValue([task({ progress_summary: "Running focused tests" })]);
     getTaskTrace.mockResolvedValue({ events: [
       { seq: 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Read", input: { file_path: "/a/b/c/d.ts" } },
       { seq: 2, ts: "2026-08-08T00:00:01Z", type: "tool_use", tool: "Bash", input: { command: "bun test" } },
@@ -111,8 +112,8 @@ describe("session agent stream row", () => {
     renderRow();
 
     expect(await screen.findByText("Agent a1 is working")).toBeInTheDocument();
-    // The latest tool call, summarized the same way the transcript does it.
-    expect(await screen.findByText("$ bun test")).toBeInTheDocument();
+    expect(await screen.findByText("Running focused tests")).toBeInTheDocument();
+    expect(getTaskTrace).not.toHaveBeenCalled();
   });
 
   it("keeps a queued agent visibly queued instead of calling it working", async () => {

@@ -1,5 +1,6 @@
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { TraceEvent } from "@multiremi/contracts/trace";
+import { canMergeTraceText, isTerminalTraceToolStatus, traceParentToolCallId } from "@multiremi/shared/trace-semantics";
 import { redactString, redactValue } from "./redact";
 
 /** A unified timeline entry: tool calls, thinking, text, and errors in chronological order. */
@@ -34,7 +35,14 @@ export interface TimelineItem {
 
 /** Shared tool-call count contract for transcript summaries and dialogs. */
 export function countToolCalls(items: readonly TimelineItem[]): number {
-  return items.filter((item) => item.type === "tool_use").length;
+  const ids = new Set<string>();
+  let anonymous = 0;
+  for (const item of items) {
+    if (item.type !== "tool_use" && item.type !== "tool_result") continue;
+    if (item.toolCallId) ids.add(item.toolCallId);
+    else if (item.type === "tool_use") anonymous += 1;
+  }
+  return ids.size + anonymous;
 }
 
 /** Rolled-up token snapshot for the transcript header. */
@@ -68,8 +76,6 @@ export type TranscriptEntry =
       children?: TranscriptEntry[];
     }
   | { kind: "event"; seq: number; item: TimelineItem };
-
-const TERMINAL_STATUS = new Set(["completed", "failed"]);
 
 /**
  * Fold a redacted timeline into render entries: pair tool_use/tool_result by
@@ -108,10 +114,8 @@ export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
       if (item.type === "tool_use") {
         if (item.input) step.input = item.input;
       } else {
-        // The daemon repeats the input on the result only when it changed since
-        // the use: claude sends the args after the use, codex collab enriches an
-        // already-sent input with the subagent's states and answer on the
-        // terminal frame. Later keys win; keys only the use carried survive.
+        // New results carry the current input snapshot; older logs may repeat
+        // only changed fields. Later keys win without erasing earlier args.
         if (item.input) step.input = { ...step.input, ...item.input };
         if (item.output != null) step.output = item.output;
         const metaDuration = typeof item.meta?.duration_ms === "number" ? item.meta.duration_ms : undefined;
@@ -176,12 +180,11 @@ function parentIdOf(entry: TranscriptEntry): string | undefined {
 }
 
 export function isStepRunning(status?: string): boolean {
-  return status != null && !TERMINAL_STATUS.has(status);
+  return status != null && !isTerminalTraceToolStatus(status);
 }
 
 function canMergeStreamingText(prev: TimelineItem, next: TimelineItem): boolean {
-  return (prev.type === "thinking" || prev.type === "text") && prev.type === next.type
-    && prev.meta?.parent_tool_call_id === next.meta?.parent_tool_call_id;
+  return canMergeTraceText(prev, next);
 }
 
 /** Merge adjacent text/thinking fragments that were split only by daemon flush timing. */
@@ -233,13 +236,13 @@ export interface ContextUsage {
 export function extractContextUsage(events: readonly TraceEvent[]): ContextUsage | null {
   let last: TraceEvent | undefined;
   for (const event of events) {
-    if (USAGE_TYPES.has(event.type) && (!last || event.seq > last.seq)) last = event;
+    if (USAGE_TYPES.has(event.type) && !traceParentToolCallId(event) && (!last || event.seq > last.seq)) last = event;
   }
   if (!last) return null;
   const src = last.meta ?? parseUsageContent(last.content ?? undefined);
   if (!src) return null;
   const nested = src.usage;
-  const usage = nested && typeof nested === "object" ? nested as Record<string, unknown> : src;
+  const usage = src.used != null ? src : nested && typeof nested === "object" ? nested as Record<string, unknown> : src;
   const { used, size } = usage;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0) return null;
   return {
@@ -256,8 +259,8 @@ export function extractContextUsage(events: readonly TraceEvent[]): ContextUsage
  */
 export function extractUsageFromMessages(msgs: TaskMessagePayload[]): UsageSnapshot | null {
   let last: UsageSnapshot | null = null;
-  for (const msg of msgs) {
-    if (!USAGE_TYPES.has(msg.type)) continue;
+  for (const msg of [...msgs].sort((a, b) => a.seq - b.seq)) {
+    if (!USAGE_TYPES.has(msg.type) || traceParentToolCallId(msg)) continue;
     const src = msg.meta ?? parseUsageContent(msg.content);
     if (!src) continue;
     const nested = src.usage;
@@ -296,8 +299,14 @@ function parseUsageContent(content?: string): Record<string, unknown> | null {
 function finalizeTimeline(items: TimelineItem[]): TimelineItem[] {
   // Filter before merging: context snapshots between flushes are not prose
   // boundaries. Redact after merging so split credentials cannot escape.
-  const visible = items.filter((item) => !["usage", "execution"].includes(item.type));
-  return redactTimelineItems(coalesceTimelineItems(visible));
+  const groups: TimelineItem[][] = [];
+  let previous: TimelineItem | undefined;
+  for (const item of [...items].sort((a, b) => a.seq - b.seq)) {
+    if (!previous || item.seq !== previous.seq + 1) groups.push([]);
+    if (!["usage", "execution"].includes(item.type)) groups.at(-1)!.push(item);
+    previous = item;
+  }
+  return redactTimelineItems(groups.flatMap(coalesceTimelineItems));
 }
 
 /** Build a display timeline; metadata rows belong in the header, not the event list. */

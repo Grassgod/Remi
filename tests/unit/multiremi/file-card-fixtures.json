@@ -1,0 +1,162 @@
+[
+  {
+    "href": "/uploads/ok.pdf",
+    "allowed": true,
+    "markdown": "!file[x](/uploads/ok.pdf)"
+  },
+  {
+    "href": "https://cdn.example.com/report.pdf",
+    "allowed": true,
+    "markdown": "!file[x](https://cdn.example.com/report.pdf)"
+  },
+  {
+    "href": "http://localhost:8080/uploads/x.txt",
+    "allowed": true,
+    "markdown": "!file[x](http://localhost:8080/uploads/x.txt)"
+  },
+  {
+    "href": "/api/attachments/att_1/content",
+    "allowed": true,
+    "markdown": "!file[x](/api/attachments/att_1/content)"
+  },
+  {
+    "href": "/api/attachments/ATT-1_a/content?download=1&name=x.txt",
+    "allowed": true,
+    "markdown": "!file[x](/api/attachments/ATT-1_a/content?download=1&name=x.txt)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?",
+    "allowed": true,
+    "markdown": "!file[x](/api/attachments/att_1/content?)"
+  },
+  {
+    "href": "javascript:alert(1)",
+    "allowed": false,
+    "markdown": "!file[x](javascript:alert(1))"
+  },
+  {
+    "href": "data:text/html,xss",
+    "allowed": false,
+    "markdown": "!file[x](data:text/html,xss)"
+  },
+  {
+    "href": "//host/x",
+    "allowed": false,
+    "markdown": "!file[x](//host/x)"
+  },
+  {
+    "href": "/api/x",
+    "allowed": false,
+    "markdown": "!file[x](/api/x)"
+  },
+  {
+    "href": "/api/internal/x",
+    "allowed": false,
+    "markdown": "!file[x](/api/internal/x)"
+  },
+  {
+    "href": "/api/attachments/../content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/../content)"
+  },
+  {
+    "href": "/api/attachments/att_1/../content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/../content)"
+  },
+  {
+    "href": "/api/attachments//content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments//content)"
+  },
+  {
+    "href": "/api/attachments/att.1/content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att.1/content)"
+  },
+  {
+    "href": "/api/attachments/att%31/content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att%31/content)"
+  },
+  {
+    "href": "/api/attachments/att 1/content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att 1/content)"
+  },
+  {
+    "href": "/api/attachments/att/1/content",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att/1/content)"
+  },
+  {
+    "href": "/api/attachments/att_1/content/extra",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content/extra)"
+  },
+  {
+    "href": "/api/attachments/att_1/content#fragment",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content#fragment)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=..",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=..)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=a b",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=a b)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=a\tb",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=a\tb)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=a\nb",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=a\nb)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=)evil",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=)evil)"
+  },
+  {
+    "href": "/api/attachments/att_1/content?x=..../evil",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content?x=..../evil)"
+  },
+  {
+    "href": "/api/attachments/att_1/content\n",
+    "allowed": false,
+    "markdown": "!file[x](/api/attachments/att_1/content\n)"
+  },
+  {
+    "href": "prefix/api/attachments/att_1/content",
+    "allowed": false,
+    "markdown": "!file[x](prefix/api/attachments/att_1/content)"
+  },
+  {
+    "href": "/../api/x",
+    "allowed": false,
+    "markdown": "!file[x](/../api/x)"
+  },
+  {
+    "href": "",
+    "allowed": false,
+    "markdown": "!file[x]()"
+  },
+  {
+    "href": "ftp://example.com/x",
+    "allowed": false,
+    "markdown": "!file[x](ftp://example.com/x)"
+  },
+  {
+    "href": "uploads/x",
+    "allowed": false,
+    "markdown": "!file[x](uploads/x)"
+  }
+]

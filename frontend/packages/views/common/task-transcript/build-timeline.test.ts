@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { TraceEvent } from "@multiremi/contracts/trace";
-import { appendTimelineItem, buildEntries, buildTimeline, buildTraceTimeline, coalesceTimelineItems, extractContextUsage, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
+import { appendTimelineItem, buildEntries, buildTimeline, buildTraceTimeline, coalesceTimelineItems, countToolCalls, isStepRunning, extractContextUsage, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
 
 function trace(seq: number, type: string, fields: Partial<TraceEvent> = {}): TraceEvent {
   return { seq, type, ts: "2026-10-04T00:00:00Z", ...fields };
@@ -18,6 +18,45 @@ function message(seq: number, type: TaskMessagePayload["type"], content?: string
 }
 
 describe("task transcript timeline", () => {
+  it("preserves phase and missing-history boundaries when assembling live and historical text", () => {
+    const items = buildTraceTimeline([
+      trace(1, "text", { content: "Working", meta: { phase: "commentary" } }),
+      trace(2, "text", { content: "Final ", meta: { phase: "final_answer" } }),
+      trace(3, "usage", { meta: { used: 20 } }),
+      trace(4, "text", { content: "answer", meta: { phase: "final" } }),
+      trace(99, "text", { content: "unread gap", meta: { phase: "final" } }),
+    ]);
+    expect(items.map(item => item.content)).toEqual(["Working", "Final answer", "unread gap"]);
+  });
+
+  it("counts call ids once and treats cancellation as a terminal step", () => {
+    const items = buildTraceTimeline([
+      trace(1, "tool_use", { tool_call_id: "call", tool: "Bash", input: { command: "ls" } }),
+      trace(2, "tool_use", { tool_call_id: "call", tool: "Bash", input: { command: "pwd" } }),
+      trace(3, "tool_result", { tool_call_id: "call", status: "cancelled" }),
+      trace(4, "tool_use", { tool: "legacy" }),
+    ]);
+    expect(countToolCalls(items)).toBe(2);
+    expect(buildEntries(items)[0]).toMatchObject({ kind: "step", status: "cancelled", input: { command: "pwd" } });
+    expect(isStepRunning("cancelled")).toBe(false);
+  });
+
+  it("counts terminal-only calls in a loaded tail without counting anonymous results", () => {
+    expect(countToolCalls(buildTraceTimeline([
+      trace(99, "tool_result", { tool_call_id: "retained", status: "completed" }),
+      trace(100, "tool_result", { tool_call_id: "retained", status: "completed" }),
+      trace(101, "tool_result", { status: "completed" }),
+    ]))).toBe(1);
+  });
+
+  it("ignores child usage for parent context and chooses the latest parent snapshot by seq", () => {
+    expect(extractContextUsage([
+      trace(3, "usage", { meta: { used: 40, size: 100 } }),
+      trace(4, "usage", { meta: { used: 99, parent_tool_call_id: "child" } }),
+      trace(1, "usage", { meta: { used: 10 } }),
+    ])).toEqual({ used: 40, size: 100 });
+    expect(extractContextUsage([trace(5, "usage", { meta: { used: 82_000, size: 200_000, usage: { totalTokens: 883_000 } } })])).toEqual({ used: 82_000, size: 200_000 });
+  });
   it("keeps steer messages as distinct timeline events with audit metadata", () => {
     const steer = message(1, "steer", "Switch to Chinese");
     steer.meta = { steer_kind: "steer", author_type: "user" };

@@ -31,19 +31,28 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   // Feishu conversations share transport storage with Chat, but belong to
   // Feishu — an Issue topic to the Issue discussion surface, a private Feishu
   // thread to Feishu itself — never to the user's Web conversation list.
-  const isListedSession = (c: Context, session: MultiremiChatSession): boolean =>
-    !store.isFeishuTransportChatSession(session.id)
-      && canCurrentUserAccessChatSessionAgent(c, store, session);
+  const listedSessions = (c: Context, workspaceId: string): MultiremiChatSession[] => {
+    const sessions = store.listChatSessions(workspaceId, {
+      creatorId: currentRequestUserId(c),
+      includeArchived: c.req.query("status") === "all" || c.req.query("status") === "archived",
+      excludeTransportSessions: true,
+    });
+    const agentsById = new Map(store.listAgentsLiteByIds(sessions.map(session => session.agentId))
+      .map(agent => [agent.id, agent]));
+    const canAccess = canCurrentUserAccessAgentChecker(c, store);
+    return sessions.filter(session => {
+      const agent = agentsById.get(session.agentId);
+      return (c.req.query("status") !== "archived" || session.status === "archived")
+        && Boolean(agent && agent.workspaceId === session.workspaceId && canAccess(agent));
+    });
+  };
 
   app.get("/api/multiremi/chats", (c) => {
     const workspaceId = requestedChatWorkspaceId(c, store);
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const sessions = store.listChatSessions(workspaceId, {
-      creatorId: currentRequestUserId(c),
-      includeArchived: c.req.query("status") === "all" || c.req.query("status") === "archived",
-    }).filter((session) => (c.req.query("status") !== "archived" || session.status === "archived") && isListedSession(c, session));
+    const sessions = listedSessions(c, workspaceId);
     return c.json({ sessions, total: sessions.length });
   });
   app.post("/api/multiremi/chats", async (c) => {
@@ -71,10 +80,7 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json(store.listChatSessions(workspaceId, {
-      creatorId: currentRequestUserId(c),
-      includeArchived: c.req.query("status") === "all" || c.req.query("status") === "archived",
-    }).filter((session) => (c.req.query("status") !== "archived" || session.status === "archived") && isListedSession(c, session)).map(chatSessionCompatibilityResponse));
+    return c.json(listedSessions(c, workspaceId).map(chatSessionCompatibilityResponse));
   });
   app.post("/api/chat/sessions", async (c) => {
     const body = await readJson<CreateChatSessionInput>(c);

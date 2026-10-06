@@ -54,6 +54,58 @@ beforeEach(() => {
 });
 
 describe("task trace dialog", () => {
+  it("can reload history evicted by the byte budget even before 200 events", async () => {
+    const large = (seq: number) => ({ ...event(seq), type: "tool_result", status: "completed", output: "x".repeat(3 * 1024 * 1024), input: { command: `history-command-${seq}` } });
+    getTaskTrace.mockResolvedValueOnce(page({ events: [large(1)], next_after_seq: 1, head: 3, eof: false }))
+      .mockResolvedValueOnce(page({ events: [large(2)], next_after_seq: 2, head: 3, eof: false }))
+      .mockResolvedValueOnce(page({ events: [large(3)], next_after_seq: 3, head: 3 }))
+      .mockResolvedValueOnce(page({ events: [large(1)], next_after_seq: 1, head: 3, eof: false }));
+    renderTrace({ status: "completed" });
+    await screen.findByText("$ history-command-1");
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await screen.findByText("$ history-command-2");
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await screen.findByText("$ history-command-3");
+    expect(screen.queryByText("$ history-command-1")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to beginning" }));
+    expect(await screen.findByText("$ history-command-1")).toBeInTheDocument();
+  });
+  it("keeps unread history reachable when live suffixes arrive and allows restarting", async () => {
+    getTaskTrace.mockResolvedValueOnce(page({ events: [event(1)], next_after_seq: 1, head: 400, eof: false }))
+      .mockResolvedValueOnce(page({ events: [event(2)], next_after_seq: 201, head: 400, eof: false }))
+      .mockResolvedValueOnce(page({ events: [event(1)], next_after_seq: 1, head: 400, eof: false }));
+    renderTrace();
+    await screen.findByText("1 tool call");
+    await act(async () => handlers.current?.onFrames?.([{ seq: 400, kind: "trace", payload: event(400) }] as never));
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200, "turn_1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to beginning" }));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenLastCalledWith(task.id, 0, 200, "turn_1"));
+    expect(screen.queryByText("Final answer")).toBeNull();
+  });
+
+  it("stops tool and status spinners when the trace closes before task status updates", async () => {
+    getTaskTrace.mockResolvedValue(page({ events: [{ ...event(1), status: "in_progress" }], head: 1, next_after_seq: 1 }));
+    renderTrace();
+    await screen.findByText("1 tool call");
+    await act(async () => handlers.current?.onClosed?.({ head_seq: 1 } as never));
+    expect(await screen.findByText("Execution finished · 1 events")).toBeInTheDocument();
+    expect(screen.getByRole("dialog").querySelector(".animate-spin")).toBeNull();
+    expect(subscriptionEnabled).toHaveBeenLastCalledWith(false);
+  });
+
+  it("excludes commentary and child replies from the final answer", async () => {
+    getTaskTrace.mockResolvedValue(page({ closed: true, head: 3, next_after_seq: 3, events: [
+      { seq: 1, ts: "", type: "text", content: "Checking files", meta: { phase: "commentary" } },
+      { seq: 2, ts: "", type: "text", content: "Finished fix", meta: { phase: "final_answer" } },
+      { seq: 3, ts: "", type: "text", content: "Child answer", meta: { parent_tool_call_id: "child", phase: "final_answer" } },
+    ] }));
+    renderTrace({ status: "completed" });
+    const answer = (await screen.findByText("Final answer")).parentElement!.parentElement!;
+    expect(within(answer).getByText("Finished fix")).toBeInTheDocument();
+    expect(within(answer).queryByText("Checking files")).toBeNull();
+    expect(within(answer).queryByText("Child answer")).toBeNull();
+  });
   it("counts only display events and surfaces the complete final reply and latest context", async () => {
     const prose = (seq: number, type: string, content: string, meta?: Record<string, unknown>) => ({
       seq, type, content, meta, ts: "2026-10-04T00:00:00Z",
@@ -93,6 +145,10 @@ describe("task trace dialog", () => {
     expect(await screen.findByText("Context 100")).toBeInTheDocument();
     expect(screen.getByText("40→9.3K")).toBeInTheDocument();
     expect(screen.getByText("1 events")).toBeInTheDocument();
+    expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Final answer")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
     expect(screen.getAllByText("Hello world")).toHaveLength(2);
 
     await act(async () => {
@@ -149,7 +205,10 @@ describe("task trace dialog", () => {
       .mockResolvedValueOnce(page({ events: [event(3)], next_after_seq: 3, head: 3 }))
       .mockResolvedValueOnce(page({ events: [event(5)], next_after_seq: 5, head: 5 }));
     renderTrace();
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 500, "turn_1"));
+    await screen.findByText("2 tool calls");
+    expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
     expect(await screen.findByText("3 tool calls")).toBeInTheDocument();
     await act(async () => {
       handlers.current?.onFrames?.([
@@ -159,7 +218,7 @@ describe("task trace dialog", () => {
     });
     expect(screen.getByText("4 tool calls")).toBeInTheDocument();
     await act(async () => { handlers.current?.onGap?.({ from: 5, to: 5 } as never); });
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 4, 500, "turn_1"));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 3, 200, "turn_1"));
     expect(await screen.findByText("5 tool calls")).toBeInTheDocument();
   });
 

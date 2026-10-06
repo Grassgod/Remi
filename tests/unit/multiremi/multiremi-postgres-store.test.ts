@@ -3666,6 +3666,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const terminalEntry = inboxReportEntry(store, terminalReturn, fixture.childTask.id);
     expect(terminalEntry.body_md).toContain("Final PG QA result after the explicit report was withdrawn.");
     expect(terminalReturn.prompt).toBe(terminalEntry.body_md); // #9: the canonical report body is the input.
+    expect(store.getTask(fixture.childTask.id)?.result).toBe("Final PG QA result after the explicit report was withdrawn.");
   });
 
   /**

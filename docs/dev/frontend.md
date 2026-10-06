@@ -48,6 +48,10 @@ Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；
 
 决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
 
+评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
+
+客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
+
 ## 一次任务读取与更新
 
 ```text
@@ -78,7 +82,11 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
-执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并不会跨越不同的 `meta.parent_tool_call_id`。Chat 在此结果上只额外过滤 compaction。弹窗事件数基于处理后的时间线，上下文标签独立读取 seq 最新的 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。
+执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并同时保留父调用、回答阶段和记录连续性的边界。[共享 trace 语义](../../packages/shared/src/trace-semantics.ts)供页面、Daemon 和飞书使用，工具按调用 ID 配对并去重计数，取消也是终态。上下文标签独立读取 seq 最新的有效 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。
+
+执行过程弹窗打开时读取一页，后续历史由用户继续加载；历史游标独立于 WS 尾部记录，实时帧不能跨过尚未加载的历史。浏览器的历史与实时窗口同时限制记录数和序列化字节数，具体上限集中在 [trace-window.ts](../../frontend/packages/core/api/trace-window.ts)。窗口回收只移除浏览器缓存，可回到历史开头重新分页读取。页面计数明确标示已加载范围，只有序号连续且完整时才从记录提取最终回复；不把某一页文字当作完整回答。切换任务重新创建窗口状态，旧请求不能写入新任务；订阅错误提供重试，`stream.closed` 在最终批次之后结束实时状态。
+
+Issue 运行条读取已有任务状态、耗时和 `progress_summary`，详细 trace 在点击后读取；不为显示运行条自动下载历史记录，也不把有限窗口的工具计数标成全任务总数。已结束的 Chat 直接展示会话日志保存的最终答复、附件和失败信息，通过“执行过程”按钮查看 trace；复制正文不依赖 trace 是否在线。Chat 正在展示的执行时间线是单独的实时消费者，使用有限尾部窗口。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)、[chat-message-list.test.tsx](../../frontend/packages/views/chat/components/chat-message-list.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。
 
 任务列表包含按状态分页的缓存结构；详情只需要已有列表中的某个对象时，使用 `findCachedIssue`，避免为查缓存额外挂载完整列表查询。列表、看板、我的单的「显示子单」偏好由各自的 view store 持久化，默认关闭；查询键与请求都包含服务端 `top_level_only` 过滤值，不能在客户端裁掉子单。父单进度从服务端 child-progress buckets 显示。工作台复用查询缓存区分待人工输入与待验收，不能只根据单个任务的完成状态自行推导整个 issue 的展示。
 
@@ -112,7 +120,7 @@ Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../.
 - [issues/ws-updaters.ts](../../frontend/packages/core/issues/ws-updaters.ts)补写可确定的任务列表和详情，对派生列表做失效处理。改任务响应字段时同时检查这里和 mutation 的缓存处理。
 - [prefix-refresh.ts](../../frontend/packages/core/realtime/sync/prefix-refresh.ts)按事件前缀合并刷新；`SPECIFIC_EVENTS` 排除已有精确处理器的事件，避免重复失效。
 - 浮动 Chat 在 [FloatingPanelLayout](../../frontend/packages/views/layout/floating-panel-layout.tsx) 中预留展开的 Issue 属性栏宽度；右栏缩放和折叠通过 ResizeObserver 更新布局，普通与展开的浮窗均限制在剩余文档区域，不提高属性按钮层级。
-- Chat/Issue 正文由 [SessionReplica](../../frontend/packages/core/replica/browser.ts) 的 `log:` 流驱动；运行中的简要工具状态由 [use-task-trace.ts](../../frontend/packages/views/common/task-transcript/use-task-trace.ts) 读取并订阅 `trace:`，结束任务只读分页结果，不继续占用 trace socket。
+- Chat/Issue 正文由 [SessionReplica](../../frontend/packages/core/replica/browser.ts) 的 `log:` 流驱动；打开的执行过程窗口和 Chat 可见的运行时间线按需订阅 `trace:`。关闭窗口只移除该消费者，最后一个消费者离开才关闭 trace socket；结束任务只读分页结果。
 - 排查慢页面先区分网络请求扇出、API 延迟、缓存失效范围和 React 渲染成本；保留测量场景与前后结果。以上文件提供定位入口，不把静态代码形态直接当成已证实的性能瓶颈。
 
 ## 验证入口

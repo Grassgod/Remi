@@ -296,6 +296,9 @@ export class RuntimesRepo {
   private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
   // Postgres only: per runtime, token totals over its settled tasks and the row version they reflect.
   private readonly settledUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
+  // Lists also reuse unchanged open-task totals; a live task's row version changes
+  // on every persisted usage/status update, so this never delays a visible update.
+  private readonly openListUsageCache = new Map<string, { version: string; tokens: TaskTokenTotals }>();
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -608,8 +611,8 @@ export class RuntimesRepo {
   /**
    * `hydrateRuntime` over a list: one statement per derived table for all rows.
    *
-   * List usage uses the existing parser on one workspace-scoped task read.
-   * Single-runtime reads keep their existing PostgreSQL settled-usage cache.
+   * List and detail share the PostgreSQL settled-token cache. The list reads counts,
+   * versions and open usage in one snapshot, returning settled usage only on cache misses.
    */
   private hydrateRuntimes(
     runtimes: MultiremiRuntime[], workspaceId: string,
@@ -620,21 +623,27 @@ export class RuntimesRepo {
     const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
     const usageByRuntime = new Map<string, RuntimeUsageSummary>();
     const workspaceRuntimes = `SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?`;
-    const usageRows = this.ctx.db.query(
-      `SELECT runtime_id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id IN (${workspaceRuntimes})`,
-    ).all(workspaceId) as Row[];
-    for (const row of usageRows) {
-      const id = String(row.runtime_id);
-      const stats = usageByRuntime.get(id) ?? {
-        taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
-        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-      };
-      stats.taskCount += 1;
-      if (isInFlightTaskStatus(String(row.status) as MultiremiTaskStatus)) stats.activeTaskCount += 1;
-      if (row.status === "completed") stats.completedTaskCount += 1;
-      if (row.status === "failed") stats.failedTaskCount += 1;
-      addTaskUsage(stats, row.usage);
-      usageByRuntime.set(id, stats);
+    if (this.ctx.db instanceof PostgresSyncDatabase) {
+      for (const [id, stats] of this.runtimeListUsagePostgres(this.ctx.db, runtimes, workspaceId)) {
+        usageByRuntime.set(id, stats);
+      }
+    } else {
+      const usageRows = this.ctx.db.query(
+        `SELECT runtime_id, status, usage FROM multiremi_turn_execution_records WHERE runtime_id IN (${workspaceRuntimes})`,
+      ).all(workspaceId) as Row[];
+      for (const row of usageRows) {
+        const id = String(row.runtime_id);
+        const stats = usageByRuntime.get(id) ?? {
+          taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
+          inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+        };
+        stats.taskCount += 1;
+        if (isInFlightTaskStatus(String(row.status) as MultiremiTaskStatus)) stats.activeTaskCount += 1;
+        if (row.status === "completed") stats.completedTaskCount += 1;
+        if (row.status === "failed") stats.failedTaskCount += 1;
+        addTaskUsage(stats, row.usage);
+        usageByRuntime.set(id, stats);
+      }
     }
     const groupRows = this.ctx.db.query(
       `SELECT runtime_id, group_id FROM multiremi_execution_group_members
@@ -668,6 +677,69 @@ export class RuntimesRepo {
       executionGroupIds: groupsByRuntime.get(runtime.id) ?? [],
       models: modelsByRuntime.get(runtime.id) ?? [],
     }));
+  }
+
+  private runtimeListUsagePostgres(db: PostgresSyncDatabase, runtimes: MultiremiRuntime[], workspaceId: string): Map<string, RuntimeUsageSummary> {
+    // Do not trust xmin between writes inside one transaction. Neither read nor publish
+    // cached totals there; the one SQL statement is still a coherent read-your-writes snapshot.
+    const cached = db.inTransaction ? [] : runtimes.flatMap(runtime => {
+      const settled = this.settledUsageCache.get(runtime.id);
+      const open = this.openListUsageCache.get(runtime.id);
+      return settled || open ? [[runtime.id, settled?.version ?? null, open?.version ?? null]] : [];
+    });
+    const cacheSql = cached.length ? `VALUES ${cached.map(() => '(?::text, ?::text, ?::text)').join(', ')}`
+      : 'SELECT NULL::text, NULL::text, NULL::text WHERE false';
+    const settled = SETTLED_TASK_STATUSES.map(() => '?').join(', ');
+    const rows = db.query(`WITH selected_tasks AS MATERIALIZED (
+        SELECT id, execution_version, runtime_id, status, usage FROM multiremi_turn_execution_records
+        WHERE runtime_id IN (SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?)
+      ), cached(runtime_id, settled_version, open_version) AS (${cacheSql}), summaries AS (
+        SELECT runtime_id, COUNT(*) AS task_count,
+          COUNT(*) FILTER (WHERE status IN (${IN_FLIGHT_TASK_STATUSES.map(() => '?').join(', ')})) AS active_task_count,
+          COUNT(*) FILTER (WHERE status = 'completed') AS completed_task_count,
+          COUNT(*) FILTER (WHERE status = 'failed') AS failed_task_count,
+          ${tasksVersionSql(` FILTER (WHERE status IN (${settled}))`)} AS settled_version,
+          ${tasksVersionSql(` FILTER (WHERE status NOT IN (${settled}))`)} AS open_version
+        FROM selected_tasks GROUP BY runtime_id
+      ) SELECT summaries.*,
+        CASE WHEN cached.settled_version = COALESCE(summaries.settled_version, '') THEN NULL ELSE
+          (SELECT json_agg(usage)::text FROM selected_tasks t
+           WHERE t.runtime_id = summaries.runtime_id AND t.status IN (${settled})) END AS settled_usage,
+        CASE WHEN cached.open_version = COALESCE(summaries.open_version, '') THEN NULL ELSE
+          (SELECT json_agg(usage)::text FROM selected_tasks t
+           WHERE t.runtime_id = summaries.runtime_id AND t.status NOT IN (${settled})) END AS open_usage
+      FROM summaries LEFT JOIN cached ON cached.runtime_id = summaries.runtime_id`)
+      .all(workspaceId, ...cached.flat(), ...IN_FLIGHT_TASK_STATUSES,
+        ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES, ...SETTLED_TASK_STATUSES) as Row[];
+    const result = new Map<string, RuntimeUsageSummary>();
+    for (const row of rows) {
+      const id = String(row.runtime_id), version = String(row.settled_version ?? '');
+      const previous = db.inTransaction ? undefined : this.settledUsageCache.get(id);
+      const tokens = previous?.version === version ? { ...previous.tokens }
+        : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+      if (previous?.version !== version) {
+        for (const usage of parseJson<unknown[]>(row.settled_usage, [])) addTaskUsage(tokens, usage);
+      }
+      if (!db.inTransaction) this.settledUsageCache.set(id, { version, tokens: { ...tokens } });
+      const openVersion = String(row.open_version ?? '');
+      const previousOpen = db.inTransaction ? undefined : this.openListUsageCache.get(id);
+      const openTokens = previousOpen?.version === openVersion ? { ...previousOpen.tokens }
+        : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+      if (previousOpen?.version !== openVersion) {
+        for (const usage of parseJson<unknown[]>(row.open_usage, [])) addTaskUsage(openTokens, usage);
+      }
+      if (!db.inTransaction) this.openListUsageCache.set(id, { version: openVersion, tokens: { ...openTokens } });
+      for (const field of Object.keys(openTokens) as Array<keyof TaskTokenTotals>) tokens[field] += openTokens[field];
+      // Splitting settled/open addition is exact for safe nonnegative integers. Above
+      // that range, JS addition order matters; retain the original list scan semantics.
+      if (Object.values(tokens).some(total => !Number.isSafeInteger(total))) {
+        result.set(id, this.runtimeUsageSummaryScan(id));
+        continue;
+      }
+      result.set(id, { taskCount: Number(row.task_count), activeTaskCount: Number(row.active_task_count),
+        completedTaskCount: Number(row.completed_task_count), failedTaskCount: Number(row.failed_task_count), ...tokens });
+    }
+    return result;
   }
 
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
@@ -1583,7 +1655,9 @@ export class RuntimesRepo {
     if (!target) return [];
 
     const runtimesByDaemon = new Map<string, MultiremiRuntime[]>();
-    for (const runtime of this.listRuntimes()) {
+    // Reconciliation reads identity/liveness/version, never task usage, models or groups.
+    const snapshot = this.runtimeCliReleaseSnapshot();
+    for (const runtime of snapshot.runtimes) {
       const daemonKey = runtime.daemonId?.trim();
       if (runtime.status !== "online" || runtime.runtimeMode !== "local" || !daemonKey) continue;
       const group = runtimesByDaemon.get(daemonKey) ?? [];
@@ -1599,10 +1673,7 @@ export class RuntimesRepo {
         return current ? compareReleaseVersionParts(current, target.parts) >= 0 : false;
       })) continue;
 
-      const previous = runtimes.flatMap((runtime) => this.ctx.db.query(
-        `SELECT status, target_version FROM multiremi_runtime_update_requests
-         WHERE runtime_id = ? AND scope = 'cli'`,
-      ).all(runtime.id) as Array<{ status?: string; target_version?: string }>);
+      const previous = runtimes.flatMap(runtime => snapshot.previous.filter(request => request.runtime_id === runtime.id));
       if (previous.some((request) => {
         const version = parseReleaseVersion(request.target_version);
         return version ? compareReleaseVersionParts(version, target.parts) === 0 : false;
@@ -1620,6 +1691,22 @@ export class RuntimesRepo {
       }));
     }
     return queued;
+  }
+
+  runtimeCliReleaseReconciliationKey(targetVersion: string): string {
+    const snapshot = this.runtimeCliReleaseSnapshot();
+    return JSON.stringify([targetVersion, snapshot.runtimes.map(runtime => [runtime.id, runtime.provider,
+      runtime.daemonId, runtime.status, runtime.runtimeMode, runtimeCliVersion(runtime), runtimeLaunchOwner(runtime)]),
+      snapshot.previous]);
+  }
+
+  private runtimeCliReleaseSnapshot() {
+    const rows = this.ctx.db.query(`SELECT id, provider, daemon_id, runtime_mode, status, metadata, last_heartbeat_at
+      FROM multiremi_runtimes ORDER BY id`).all() as Row[];
+    const previous = this.ctx.db.query(`SELECT DISTINCT runtime_id, status, target_version
+      FROM multiremi_runtime_update_requests WHERE scope = 'cli'
+      ORDER BY runtime_id, status, target_version`).all() as Array<{ runtime_id: string; status: string; target_version: string | null }>;
+    return { runtimes: rows.map(row => withRuntimeLiveness(toRuntime(row))), previous };
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string, input: CreateRuntimeLocalSkillListInput = {}): MultiremiRuntimeLocalSkillListRequest {

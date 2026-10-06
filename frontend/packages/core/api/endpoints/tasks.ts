@@ -7,7 +7,7 @@ import type {
   IssueUsageSummary,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseStrictResponse } from "../schema";
+import { ApiContractError, parseStrictResponse } from "../schema";
 import { TaskTraceReadSchema, type TaskTraceRead } from "../schemas/tasks";
 
 export class TasksEndpoints {
@@ -48,6 +48,16 @@ export class TasksEndpoints {
     if (turnId) query.set("attempt_id", taskId);
     const raw = await this.http.fetch<unknown>(`/api/turns/${encodeURIComponent(turnId ?? taskId)}/trace?${query}`);
     return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/turns/:id/trace" });
+  }
+
+  async getTask(taskId: string, turnId = taskId): Promise<AgentTask> {
+    const detail = await new MessagesEndpoints(this.http).getTurn(turnId, true);
+    const attemptId = taskId === turnId ? detail.turn.current_attempt_id : taskId;
+    const attempt = detail.attempts?.find(candidate => candidate.id === attemptId);
+    if (detail.turn.id !== turnId || !attempt) {
+      throw new ApiContractError("GET /api/turns/:id", "Server returned a different turn or attempt");
+    }
+    return turnToTask(detail.turn, attempt);
   }
 
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {

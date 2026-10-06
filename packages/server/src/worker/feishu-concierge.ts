@@ -4,8 +4,8 @@
  * The daemon used to read bot identity from process environment once at boot
  * and run the connector for the life of the process. This drives the connector
  * from the control plane instead:
- * every heartbeat carries a directive (a revision plus a desired state), and
- * this class reconciles the running channel against it.
+ * a versioned directive (a revision plus a desired state) is pushed when it
+ * changes; heartbeat ticks independently reconcile and refresh its status.
  *
  * Three rules shape the reconcile, and they are the reason it is not simply
  * "start when told to":
@@ -17,8 +17,8 @@
  *    withholds `config_available` until every other Runtime has reported
  *    `stopped`. Reporting our own stop promptly is what lets a handover finish,
  *    so a stop is always reported even when we were already stopped.
- * 3. **One reconcile at a time.** Directives arrive on every heartbeat, which
- *    is faster than a channel takes to boot. Overlapping starts would race two
+ * 3. **One reconcile at a time.** A new directive or heartbeat tick can arrive
+ *    while a channel is booting. Overlapping starts would race two
  *    websockets onto the same bot inside a single process.
  */
 
@@ -94,7 +94,7 @@ export interface FeishuConciergeSupervisorOptions {
   host: FeishuConciergeHost;
   fetchConfig: () => Promise<MultiremiFeishuBotAssignment | null>;
   report: (input: FeishuConciergeStatusReport) => Promise<void>;
-  /** Re-report an unchanged state at least this often to keep it from ageing out. */
+  /** Re-report an unchanged state at least this often, even without a new directive. */
   refreshIntervalMs?: number;
   /** Backoff ladder after a failed start, indexed by consecutive failure count. */
   retryBackoffMs?: readonly number[];
@@ -105,9 +105,9 @@ export interface FeishuConciergeSupervisorOptions {
 const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
 
 /**
- * Directives arrive every few seconds, so a start that fails for a lasting
- * reason — a revoked App Secret, say — would otherwise retry against Feishu at
- * heartbeat rate. Backing off caps that at roughly twelve attempts an hour
+ * Heartbeat ticks can retry a failed start. A lasting failure — a revoked App
+ * Secret, say — must not retry against Feishu at heartbeat rate. Backing off
+ * caps that at roughly twelve attempts an hour
  * while still recovering on its own from a transient network failure.
  */
 const DEFAULT_RETRY_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 120_000, 300_000];
@@ -125,6 +125,7 @@ export class FeishuConciergeSupervisor {
   private queued: MultiremiFeishuBotDirective | null = null;
   private consecutiveFailures = 0;
   private retryAtMs = 0;
+  private latestDirective: MultiremiFeishuBotDirective | null = null;
 
   constructor(private readonly options: FeishuConciergeSupervisorOptions) {}
 
@@ -134,11 +135,11 @@ export class FeishuConciergeSupervisor {
   }
 
   /**
-   * Reconcile against a heartbeat directive. Safe to call on every heartbeat:
-   * a directive that matches the running channel costs nothing but an
-   * occasional keepalive report.
+   * Reconcile against a versioned directive. The control plane sends it once
+   * per revision per connection, so keep a copy for independent heartbeat ticks.
    */
   async apply(directive: MultiremiFeishuBotDirective): Promise<void> {
+    this.latestDirective = directive;
     // A reconcile in flight always wins the current attempt; the newest
     // directive is remembered so it runs immediately afterwards, and any
     // directive it superseded is simply dropped — it is already stale.
@@ -155,6 +156,11 @@ export class FeishuConciergeSupervisor {
       this.queued = null;
       await this.apply(queued);
     }
+  }
+
+  /** Retry failed starts and status reports without waiting for another directive. */
+  async tick(): Promise<void> {
+    if (this.latestDirective) await this.apply(this.latestDirective);
   }
 
   /** Stop the channel and tell the control plane, e.g. on daemon shutdown. */
@@ -300,7 +306,6 @@ export class FeishuConciergeSupervisor {
     const now = this.options.now?.() ?? Date.now();
     const interval = this.options.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
     if (!force && now - this.lastReportAtMs < interval) return;
-    this.lastReportAtMs = now;
     try {
       await this.options.report({
         applied_revision: this.appliedRevision,
@@ -310,9 +315,10 @@ export class FeishuConciergeSupervisor {
         error_code: this.errorCode,
         error_message: this.errorMessage,
       });
+      this.lastReportAtMs = this.options.now?.() ?? Date.now();
     } catch (error) {
-      // A failed report is retried by the next heartbeat. Losing the connector
-      // over a transient control-plane blip would be far worse.
+      // Keep the connector alive; the next heartbeat retries the actual state,
+      // even if no new directive arrives on this protocol connection.
       this.lastReportAtMs = 0;
       this.options.log?.warn(`Feishu concierge status report failed: ${redactFeishuBotError(error)}`);
     }

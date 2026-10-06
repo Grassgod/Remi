@@ -12,7 +12,17 @@
  * that adds a frame type must get a diagnosable answer, not a dead socket.
  */
 
-import { DAEMON_PROTOCOL_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_FRAME_MAX_BYTES, DAEMON_PROTOCOL_VERSION, DAEMON_TRACE_FRAME_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
+
+/** A singleton trace page can exceed its soft byte budget without deadlocking readers. */
+export function daemonFrameByteLimit(type: string, payload: unknown): number {
+  if (type !== "trace.append" && type !== "trace.push" && type !== "res") return DAEMON_FRAME_MAX_BYTES;
+  if (!payload || typeof payload !== "object") return DAEMON_FRAME_MAX_BYTES;
+  const events = (payload as { events?: unknown }).events;
+  return Array.isArray(events) && events.length === 1 && isTraceFileEvent(events[0])
+    ? DAEMON_TRACE_FRAME_MAX_BYTES : DAEMON_FRAME_MAX_BYTES;
+}
 
 /** The parse result, with every optional field already narrowed to its type. */
 export interface DaemonParsedFrame {

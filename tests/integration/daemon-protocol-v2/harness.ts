@@ -63,8 +63,8 @@ export async function waitFor(predicate: () => boolean, label: string, timeoutMs
 export class DaemonProtocolHarness {
   readonly root = mkdtempSync(join(tmpdir(), "mul418-protocol-"));
   readonly db = openSqliteDatabase(join(this.root, "server.db"));
-  // Commit the fresh fixture schema once; business writes remain separate real transactions.
-  readonly store = this.db.transaction(() => new MultiremiStore(this.db))();
+  // Unified cutover owns its outer transaction; business writes stay separate.
+  readonly store = new MultiremiStore(this.db);
   readonly clock = new ManualDaemonProtocolClock();
   readonly sockets: InjectedSocket[] = [];
   readonly sessions: DaemonProtocolSession[] = [];

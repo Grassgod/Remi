@@ -43,8 +43,11 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
 当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
-过程消息仍经 `TaskMessageBatcher` 写入 `multiremi_task_messages`；MUL-421 负责后续上行 outbox
-与 trace 接入：过程事件作为 trace 流交给 Live Hub 而不再落库，`trace.read` 作为反向 RPC 读热 trace。
+过程消息经 `TaskMessageBatcher` 合并后，由 [TraceFileStore](../packages/server/src/worker/trace-file-store.ts)
+写入 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；写入完成后才公布连续 seq。
+[TraceStreamer](../packages/server/src/worker/trace-streamer.ts)按游标将规范化事件推给 Live Hub，
+过程事件不再写消息表或 outbox；`trace.read` 反向 RPC 按持久化 Runtime 归属读取有界页。
+daemon 重启会从文件恢复索引与归属，已关闭历史仅按需读取，活跃 trace 按 Hub head 续传。
 **A-2 连接层已接线**：[客户端](../packages/server/src/worker/daemon-protocol-client.ts)每进程一条 socket，
 `hello` 汇总所有 provider lane，`hb` 每 15 秒一次，ack 独立调度。主循环不再发 HTTP 心跳；
 4426、HTTP 426 或 v1 `ready` 会暂停全部 lane 接单，改走每 60 秒一次的 HTTP 升级探测。
@@ -53,7 +56,11 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 跨进程触发依赖 MUL-462 的实时扇出，临时同进程接线不能替代该交付门禁。
 HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。规范见
 [daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0012](adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
-上行报告在 MUL-421 合入前仍走现有 HTTP 路径，不能将它视为已经迁移。
+任务开始、usage、终态等可靠报告由 [report transport](../packages/server/src/worker/report-transport.ts)
+持久化到本地 outbox，经同一 socket 按任务顺序发送和重试。完成摘要随追加增量计算，
+恢复后的历史任务只在首次需要摘要时分页重建。一次性任务的 Session Archive 上传由持久化后台队列处理，
+不等待上传释放任务；GC 仍须通过现有 ready archive 与物理验证屏障后才能删除目录。
+文件恢复与旧内存版本的升级边界见 [Daemon 升级](daemon-runtime-upgrades.md)。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 

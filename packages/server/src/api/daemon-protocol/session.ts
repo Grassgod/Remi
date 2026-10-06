@@ -44,6 +44,7 @@ import {
 } from "@multiremi/contracts/daemon-protocol.js";
 import {
   daemonFrameBytes,
+  daemonFrameByteLimit,
   daemonFrameText,
   encodeDaemonProtocolFrame,
   parseDaemonProtocolFrame,
@@ -381,11 +382,13 @@ export class DaemonProtocolSession {
     // over it could never be delivered, so it is refused rather than sent. This is
     // `too_large`, not `window_full`: an ack frees window space, but nothing makes
     // this frame fit, so the caller must not sit waiting for one.
-    if (bytes > DAEMON_FRAME_MAX_BYTES) return { ok: false, reason: "too_large" };
+    const frameLimit = daemonFrameByteLimit(frame.t, frame.p);
+    if (bytes > frameLimit) return { ok: false, reason: "too_large" };
     const inFlight = this.windowUsage();
     if (
       this.pendingAcks.size + 1 > DAEMON_UPLINK_WINDOW_FRAMES
-      || inFlight.bytes + bytes > DAEMON_UPLINK_WINDOW_BYTES
+      || (inFlight.bytes + bytes > DAEMON_UPLINK_WINDOW_BYTES
+        && !(this.pendingAcks.size === 0 && frameLimit > DAEMON_FRAME_MAX_BYTES))
     ) {
       return { ok: false, reason: "window_full" };
     }
@@ -449,7 +452,9 @@ export class DaemonProtocolSession {
 
   private write(frame: DaemonSessionOutboundFrame): DaemonSessionSendOutcome {
     if (this.closed) return { status: "closed" };
-    return this.writeEncoded(encodeDaemonProtocolFrame(frame, this.clock.now()));
+    const encoded = encodeDaemonProtocolFrame(frame, this.clock.now());
+    if (Buffer.byteLength(encoded, "utf8") > daemonFrameByteLimit(frame.t, frame.p)) return { status: "dropped" };
+    return this.writeEncoded(encoded);
   }
 
   private writeEncoded(encoded: string): DaemonSessionSendOutcome {
@@ -482,21 +487,23 @@ export class DaemonProtocolSession {
     const parsed = parseDaemonProtocolFrame(text);
 
     // ── oversized frames ─────────────────────────────────────────────────────
-    // `maxPayloadLength` is 4 MiB precisely so a frame over the 1 MiB protocol cap
-    // arrives whole and can be answered. Closing instead would be a reconnect loop:
+    // Ordinary frames keep 1 MiB; a singleton trace event can use the 4 MiB
+    // socket ceiling. Addressable violations get a nonretryable reply so an
+    // oversized outbox row cannot cause a perpetual reconnect loop:
     // the daemon replays the same unacknowledged outbox row, sends the same
     // oversized frame, and is disconnected again, forever.
     //
     // The daemon's own isolation point is the outbox row, so the answer has to name
     // that row. A reliable event names it with `seq`, an RPC with `id`.
-    if (bytes > DAEMON_FRAME_MAX_BYTES) {
+    const frameLimit = parsed.ok ? daemonFrameByteLimit(parsed.frame.type, parsed.frame.payload) : DAEMON_FRAME_MAX_BYTES;
+    if (bytes > frameLimit) {
       const addressable = parsed.ok ? (parsed.frame.seq ?? null) : null;
       const rpcId = parsed.ok ? parsed.frame.id : null;
       if (addressable !== null || rpcId !== null) {
         this.sendReply(String(addressable ?? rpcId), {
           ok: false,
           code: "protocol_violation",
-          message: `frame exceeds the ${DAEMON_FRAME_MAX_BYTES} byte protocol limit`,
+          message: `frame exceeds the ${frameLimit} byte protocol limit`,
           retryable: false,
         });
         this.emitFrameSample(parsed.ok ? parsed.frame.type : "oversized", startedAt, dbBefore, {

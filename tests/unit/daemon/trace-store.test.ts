@@ -175,10 +175,10 @@ describe("InMemoryTraceStore", () => {
     expect(stored.content!.length).toBeLessThan(300 * 1024);
   });
 
-  it("drops an unsupported status and keeps the raw type on append", () => {
+  it("preserves cancellation and the raw type on append", () => {
     const s = store();
     const [cancelled] = s.append("task_a", [event({ type: "assistant", status: "cancelled" })]).events;
     expect(cancelled!.type).toBe("assistant");
-    expect(cancelled!.status).toBeNull();
+    expect(cancelled!.status).toBe("cancelled");
   });
 });

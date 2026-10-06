@@ -3,6 +3,7 @@ import { type Logger, noopLogger } from "../logger";
 import type {
   HubFrame,
   HubStreamAckPayload,
+  HubStreamClosedPayload,
   HubStreamErrorPayload,
   HubStreamGapPayload,
   HubStreamName,
@@ -42,6 +43,8 @@ export type StreamFrameHandler = (frames: readonly HubFrame[]) => void;
 
 /** What a stream subscriber wants to hear about. Every callback is optional. */
 export interface StreamSubscriptionHandlers {
+  /** Trace ended, after its final data batch (also emitted for zero events). */
+  onClosed?: (payload: HubStreamClosedPayload) => void;
   /** The subscription is live; carries the hub's range and any gap to backfill. */
   onAck?: (payload: HubStreamAckPayload) => void;
   /** One ordered batch. `seq` is the upstream sequence, not a client counter. */
@@ -94,6 +97,7 @@ const STREAM_FRAME_TYPES: ReadonlySet<string> = new Set([
   "stream.data",
   "stream.gap",
   "stream.error",
+  "stream.closed",
 ]);
 
 // Cap how much of an unparseable frame we put into the log. A malformed or
@@ -419,6 +423,9 @@ export class WSClient {
         break;
       case "stream.error":
         entry.handlers.onError?.(msg.payload as HubStreamErrorPayload);
+        break;
+      case "stream.closed":
+        entry.handlers.onClosed?.(msg.payload as HubStreamClosedPayload);
         break;
       default:
         break;

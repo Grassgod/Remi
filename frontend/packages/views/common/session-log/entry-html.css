@@ -1,0 +1,31 @@
+/* MUL-518 / MUL-383: SSR and enhanced file rows occupy exactly 40px.
+   flow-root contains AttachmentCard's 4px vertical margins (32 + 4 + 4).
+   This stylesheet is imported statically by EntryHtml, before portals mount. */
+[data-entry-html] div[data-type="fileCard"] {
+  display: flow-root;
+  box-sizing: border-box;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+[data-entry-html] [data-entry-preview="fileCard"] {
+  display: flow-root;
+  height: 100%;
+}
+
+[data-entry-html] .entry-file-card {
+  height: 32px;
+  margin: 4px 0;
+}
+
+[data-entry-html] .entry-file-card > div {
+  box-sizing: border-box;
+  height: 32px;
+}
+
+.rich-text-editor[data-entry-html] .entry-file-card p {
+  margin: 0;
+  line-height: 20px;
+}

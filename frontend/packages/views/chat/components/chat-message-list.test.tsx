@@ -7,6 +7,10 @@ import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
 import type { OptimisticChatRow } from "../lib/optimistic-log";
+import { useTraceStreamSubscription } from "@multiremi/core/realtime";
+
+const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
+vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
 
 vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
   ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
@@ -77,7 +81,7 @@ describe("cached message observer visibility", () => {
     view.unmount(); client.clear();
   });
 
-  it.each(["live", "assistant"])("keeps the %s task observer inactive while hidden and refetches after opening", async (kind) => {
+  it.each(["live", "assistant"])("loads only a visible live task, keeps terminal reply trace lazy (%s)", async (kind) => {
     const taskId = "tsk_visibility";
     const getTaskTrace = vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 }));
     setApiInstance({ getTaskTrace } as never);
@@ -96,9 +100,10 @@ describe("cached message observer visibility", () => {
     try {
       expect(getTaskTrace).not.toHaveBeenCalled();
       view.rerender(content(true));
-      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
+      if (kind === "live") await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
+      else expect(getTaskTrace).not.toHaveBeenCalled();
       view.rerender(content(false));
-      expect(getTaskTrace).toHaveBeenCalledTimes(1);
+      expect(getTaskTrace).toHaveBeenCalledTimes(kind === "live" ? 1 : 0);
     } finally { view.unmount(); client.clear(); }
   });
 });
@@ -320,6 +325,47 @@ describe("ChatMessageList measurement contract", () => {
 });
 
 describe("ChatMessageList with mid-run agent attachments", () => {
+  it.each(["closed", "error"])("stops the stale pending-task spinner when the trace reports %s", async state => {
+    const view = renderList([], pendingTask);
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    const callbacks = vi.mocked(useTraceStreamSubscription).mock.calls.at(-1)![1];
+    await act(async () => {
+      if (state === "closed") callbacks.onClosed?.({ stream: "trace", id: TASK_ID, head_seq: 1 });
+      else callbacks.onError?.({ stream: "trace", id: TASK_ID, code: "forbidden" });
+    });
+    expect(screen.queryByTestId("status-pill")).toBeNull();
+    if (state === "error") expect(screen.getByRole("alert", { hidden: true })).toBeInTheDocument();
+    view.unmount();
+  });
+  it("keeps and copies the complete persisted reply, then reads execution only on click", async () => {
+    copiedText.mockClear();
+    const getTaskTrace = vi.fn().mockResolvedValue({ events: [], head: 0, next_after_seq: 0, eof: true, closed: true, source: "daemon", state: "ok" });
+    const getTask = vi.fn().mockResolvedValue({ id: TASK_ID, agent_id: "", runtime_id: "", issue_id: "", status: "completed",
+      priority: 0, created_at: "2026-10-05T00:00:00Z", started_at: null, dispatched_at: null, completed_at: null, result: null, error: null });
+    setApiInstance({ getTaskTrace, getTask, getTaskPrompt: vi.fn().mockRejectedValue({ status: 404 }) } as never);
+    const complete = "Full persisted reply\n\nIncluding the final paragraph that a first trace page cannot contain.";
+    const view = renderList([{ ...terminalReply("lazy"), content: complete }], null);
+    expect(screen.getByText(complete, { normalizer: value => value })).toBeInTheDocument();
+    expect(getTaskTrace).not.toHaveBeenCalled();
+    expect(getTask).not.toHaveBeenCalled();
+    fireEvent.click(view.container.querySelector(".lucide-copy")!.closest("button")!);
+    await waitFor(() => expect(copiedText).toHaveBeenCalledWith(complete));
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-chat-trace]")!);
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith(TASK_ID, undefined));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(TASK_ID, 0, 200, undefined));
+    view.unmount();
+  });
+
+  it("keeps raw failure details available without loading trace history", () => {
+    const getTaskTrace = vi.fn();
+    setApiInstance({ getTaskTrace } as never);
+    const view = renderList([{ ...terminalReply("failed"), failure_reason: "agent_error", content: "Provider rejected the prompt" }], null);
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!);
+    expect(screen.getByText("Provider rejected the prompt")).toBeInTheDocument();
+    expect(getTaskTrace).not.toHaveBeenCalled();
+    expect(view.container.querySelector("[data-chat-trace]")).toBeInTheDocument();
+    view.unmount();
+  });
   it("keeps the running task's status visible after an attachment push lands", () => {
     renderList([attachmentPush("msg-1", "Here is the report.")], pendingTask);
 
@@ -341,27 +387,31 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     expect(screen.getByTestId("attachment-list")).toHaveTextContent("1");
   });
 
-  it("draws the timeline once when a push and its terminal reply share a task id", () => {
+  it("uses the stored answer when a push and its terminal reply share a task id", () => {
     renderList([attachmentPush("msg-1", "Here is the report."), terminalReply("msg-2")], null);
 
-    expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+    expect(screen.queryByText(TIMELINE_TEXT)).toBeNull();
+    expect(screen.getByText("Task completed.")).toBeInTheDocument();
     expect(screen.getByText("Here is the report.")).toBeInTheDocument();
   });
 
-  it("still renders the timeline for an ordinary reply that carries attachments", () => {
+  it("renders the stored answer for an ordinary reply that carries attachments", () => {
     // A terminal reply is identified by elapsed_ms / failure_reason, so files
     // hanging off one must not demote it to a side-channel push.
     const reply = { ...terminalReply("msg-1"), attachments: [attachment("att-x")] };
     renderList([reply], null);
 
-    expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+    expect(screen.queryByText(TIMELINE_TEXT)).toBeNull();
+    expect(screen.getByText("Task completed.")).toBeInTheDocument();
+    expect(screen.getByTestId("attachment-list")).toHaveTextContent("1");
   });
 
   it("keeps a nonterminal turn without attachments separate from the final reply", () => {
     const push = { ...attachmentPush("msg-1", "Progress update"), attachments: [] };
     renderList([push, terminalReply("msg-2")], null);
     expect(screen.getByText("Progress update")).toBeInTheDocument();
-    expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+    expect(screen.queryByText(TIMELINE_TEXT)).toBeNull();
+    expect(screen.getByText("Task completed.")).toBeInTheDocument();
   });
 });
 

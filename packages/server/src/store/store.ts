@@ -3437,6 +3437,10 @@ runMigrations(this.db);
     return this.runtimes.reconcileRuntimeCliRelease(targetVersion);
   }
 
+  runtimeCliReleaseReconciliationKey(targetVersion: string): string {
+    return this.runtimes.runtimeCliReleaseReconciliationKey(targetVersion);
+  }
+
   getRuntimeUpdateRequest(runtimeId: string, requestId: string): MultiremiRuntimeUpdateRequest | null {
     return this.runtimes.getRuntimeUpdateRequest(runtimeId, requestId);
   }
@@ -5357,7 +5361,7 @@ runMigrations(this.db);
     return this.chat.createChatSession(input);
   }
 
-  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
+  listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean; excludeTransportSessions?: boolean } = {}): MultiremiChatSession[] {
     return this.chat.listChatSessions(workspaceId, options);
   }
 

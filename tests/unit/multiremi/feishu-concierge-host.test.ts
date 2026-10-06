@@ -356,7 +356,7 @@ describe("control-plane Feishu concierge host", () => {
     ]);
   });
 
-  it("passes the saved presentation checkpoint unchanged to the trace subscription", async () => {
+  it("replays canonical trace from zero while retaining the presentation checkpoint", async () => {
     const fake = fakeDaemon();
     const cursors: number[] = [];
     const received: number[] = [];
@@ -380,8 +380,8 @@ describe("control-plane Feishu concierge host", () => {
       replyToMessageId: "om_root", body: "", bodyOrigin: "agent", taskId: "tsk_resume", resumeMessageId: "om_existing",
       idempotencyKey: "fbo_resume", presentation: { version: "native_cot_v1", startedAt: 1, throughSeq: 7, interactions: {} } },
       { signal: new AbortController().signal, onStarted: async () => {} });
-    expect(cursors).toEqual([7]);
-    expect(received).toEqual([8]);
+    expect(cursors).toEqual([0]);
+    expect(received).toEqual([1]);
   });
 
   it("applies live no-mention settings to exactly the configured group", async () => {

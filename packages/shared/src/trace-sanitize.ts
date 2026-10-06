@@ -34,7 +34,7 @@ export const TRACE_JSON_MAX_ARRAY = 256;
  *
  * Derived from `TRACE_EVENT_STATUSES` in `@multiremi/contracts/trace.js`, which is
  * the single definition: the set is part of the wire contract, and this module is
- * the enforcement of it. Restating the four values here would let the two drift
+ * the enforcement of it. Restating the values here would let the two drift
  * silently — a status added to the contract would be normalized away by the
  * sanitizer with nothing failing.
  */
@@ -54,7 +54,7 @@ export function cleanTraceField(value: unknown): string | null {
   return s.length > 0 ? s : null;
 }
 
-/** Keep a status only when it is one of the four the write path accepts. */
+/** Keep a status only when the trace contract accepts it. */
 export function normalizeTraceStatus(value: unknown): string | null {
   const s = cleanTraceField(value);
   return s && TRACE_STATUSES.has(s) ? s : null;

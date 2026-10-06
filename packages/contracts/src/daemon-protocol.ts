@@ -29,9 +29,10 @@
  * The design draft described five categories because it folded `res` into the
  * rpc class and treated `hb` as the only best-effort frame. Both are wrong in
  * code: a reply has a different validation path than a request, and
- * `runtime.ready` / `concierge.status` are best effort for exactly the same
- * reason `hb` is - each is recomputed from local state, so losing one costs
- * nothing. Category decides the envelope; trace-head reliability is separate
+ * `runtime.ready` and the legacy `concierge.status` are best effort. New
+ * concierge status reports use `concierge.status_report` RPC: outbound delivery
+ * is gated on the persisted online state, so losing one is not harmless.
+ * Category decides the envelope; trace-head reliability is separate
  * from the event sequence and window, so the classification lives here as data.
  */
 
@@ -120,6 +121,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
 export const DAEMON_UPLINK_RPC_FRAMES = [
+  "concierge.status_report",
   "turn.input",
   "turn.decision",
   "turn.decision.get",
@@ -794,6 +796,8 @@ export const DAEMON_OFFER_BUDGET_BYTES = 512 * 1024;
 
 /** `Bun.serve` `maxPayloadLength`; above the protocol cap so a violation is readable. */
 export const DAEMON_WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+/** One oversized normalized trace event may use the socket ceiling; ordinary frames keep 1 MiB. */
+export const DAEMON_TRACE_FRAME_MAX_BYTES = DAEMON_WS_MAX_PAYLOAD_BYTES;
 
 /** Sliding window for reliable uplink frames, whichever bound is hit first. */
 export const DAEMON_UPLINK_WINDOW_FRAMES = 64;

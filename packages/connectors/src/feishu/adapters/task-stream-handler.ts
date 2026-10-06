@@ -3,6 +3,8 @@ import type { PermissionOption } from "@shared/contracts/acp-protocol.js";
 import type { FeishuStreamingSession } from "../streaming.js";
 import type { ToolEntry } from "../tool-formatters.js";
 import { executionModel, readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
+import { isTerminalTraceToolStatus, traceParentToolCallId, traceTextPhase,
+  TraceFinalReplyAccumulator } from "@shared/trace-semantics.js";
 import { formatCardStats } from "../card-metadata.js";
 import { formatToolInputSummary } from "../tool-formatters.js";
 import {
@@ -43,6 +45,7 @@ export async function handleTaskStream(
   let currentModel: string | null | undefined;
   const tools: ToolEntry[] = [];
   const toolIndexes = new Map<string, number>();
+  const reply = new TraceFinalReplyAccumulator();
 
   for await (const event of stream) {
     meta.signal?.throwIfAborted();
@@ -64,9 +67,16 @@ export async function handleTaskStream(
     }
 
     const message = event.message;
+    reply.add(message);
+    if (traceParentToolCallId(message) && message.type !== "tool_use" && message.type !== "tool_result") continue;
     switch (message.type) {
       case "text":
-        contentText += message.content ?? "";
+        if (traceTextPhase(message) === "commentary") {
+          thinkingText += message.content ?? "";
+          await session.updateThinking(thinkingText);
+          break;
+        }
+        contentText = reply.answer() ?? "";
         await session.update(contentText);
         break;
       case "thinking":
@@ -113,9 +123,10 @@ export async function handleTaskStream(
         const existingIndex = message.tool_call_id ? toolIndexes.get(message.tool_call_id) : undefined;
         if (existingIndex != null) {
           const existing = tools[existingIndex]!;
+          if (message.tool) existing.name = message.tool;
           existing.input = { ...existing.input, ...message.input };
           if (existingIndex === tools.length - 1) {
-            session.updateStepDesc(`${existing.name} ${formatToolInputSummary(existing.name, existing.input)}`.trim());
+            session.updateStepDesc(`${existing.name} ${formatToolInputSummary(existing.name, existing.input)}`.trim(), existing.name);
           }
           continue;
         }
@@ -136,15 +147,19 @@ export async function handleTaskStream(
         const index = message.tool_call_id ? toolIndexes.get(message.tool_call_id) : undefined;
         const entry = index == null ? tools.findLast((item) => item.status === "pending") : tools[index];
         if (entry) {
-          entry.status = "done";
+          if (message.tool) entry.name = message.tool;
+          entry.input = { ...entry.input, ...message.input };
           entry.resultPreview = message.output ?? message.content ?? undefined;
+          if (entry === tools.at(-1)) session.updateStepDesc(
+            `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}${entry.resultPreview
+              ? `: ${entry.resultPreview.slice(0, 400)}` : ""}`.trim(), entry.name);
+          if (message.status && !isTerminalTraceToolStatus(message.status)) break;
+          entry.status = "done";
           entry.durationMs = numberValue(message.meta?.duration_ms);
-          if (entry.resultPreview) session.updateStepDesc(
-            `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}: ${entry.resultPreview.slice(0, 400)}`.trim(),
-          );
-          if (entry.durationMs) session.updateStepDuration(entry.durationMs);
+          if (entry.durationMs && entry === tools.at(-1)) session.updateStepDuration(entry.durationMs);
         }
-        await session.updateStatus(message.status === "failed" ? "Tool failed" : "Thinking...");
+        await session.updateStatus(message.status === "failed" ? "Tool failed"
+          : message.status === "cancelled" ? "Tool cancelled" : "Thinking...");
         break;
       }
       case "permission_request":

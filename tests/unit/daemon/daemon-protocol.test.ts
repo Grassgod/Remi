@@ -116,6 +116,7 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("trace.push")).toBe("event");
     expect(daemonFrameCategory("runtime.ready")).toBe("best_effort");
     expect(daemonFrameCategory("concierge.status")).toBe("best_effort");
+    expect(daemonFrameCategory("concierge.status_report")).toBe("rpc");
     expect(daemonFrameCategory("trace.read")).toBe("rpc");
     expect(daemonFrameCategory("trace.subscribe")).toBe("rpc");
   });

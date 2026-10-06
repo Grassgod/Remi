@@ -22,6 +22,7 @@ import {
   DAEMON_ACK_TIMEOUT_MS,
   DAEMON_MIN_CLI_VERSION,
   DAEMON_FRAME_MAX_BYTES,
+  DAEMON_TRACE_FRAME_MAX_BYTES,
   DAEMON_PROTOCOL_CLOSE_CODES,
   DAEMON_UPLINK_WINDOW_FRAMES,
 } from "@multiremi/contracts/daemon-protocol.js";
@@ -590,6 +591,35 @@ describe("MUL-417 daemon protocol session — the downlink window is enforced", 
 });
 
 describe("MUL-417 daemon protocol session — rpc dispatch and unknown frames", () => {
+  it("accepts a singleton trace RPC up to 4 MiB and explicitly rejects the next byte", async () => {
+    const h = harness({ rpc: () => ({ ok: true }) }); await handshake(h);
+    const event = { seq: 1, type: "text", ts: "2026-10-05T00:00:00Z", content: "" };
+    const frame = { v: 2, t: "trace.append", id: "large-trace", rt: "rt_one", ts: 1,
+      p: { task_id: "task", events: [event], closed: false } };
+    event.content = "x".repeat(DAEMON_TRACE_FRAME_MAX_BYTES - Buffer.byteLength(JSON.stringify(frame)));
+    await h.session.handleMessage(JSON.stringify(frame));
+    expect(h.rpcCalls).toContain("trace.append");
+    expect(h.socket.lastDeliveredOfType("res")).toMatchObject({ re: "large-trace", p: { ok: true } });
+    event.content += "x";
+    await h.session.handleMessage(JSON.stringify(frame));
+    expect(h.socket.lastDeliveredOfType("res")).toMatchObject({ re: "large-trace", p: { code: "protocol_violation", retryable: false } });
+    expect(h.session.isClosed).toBe(false);
+  });
+
+  it("lets one oversized trace push occupy the window alone until acknowledgement", async () => {
+    const h = harness(); await handshake(h);
+    const event = { seq: 1, type: "text", ts: "2026-10-05T00:00:00Z", content: "\u0001".repeat(256 * 1024) };
+    expect(h.session.sendEvent({ t: "trace.push", p: { events: [event] } })).toEqual({ ok: true, seq: 1 });
+    expect(h.session.windowUsage().bytes).toBeGreaterThan(DAEMON_FRAME_MAX_BYTES);
+    expect(h.session.sendEvent({ t: "trace.push", p: { events: [{ ...event, content: "next", seq: 2 }] } }))
+      .toEqual({ ok: false, reason: "window_full" });
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 2, ack: 1 }));
+    expect(h.session.windowUsage()).toEqual({ frames: 0, bytes: 0 });
+    expect(h.session.sendEvent({ t: "trace.push", p: { events: [{ ...event, content: "next", seq: 2 }] } }))
+      .toEqual({ ok: true, seq: 2 });
+    expect(h.session.sendReply("too-large", { ok: true, events: [{ ...event, content: "x".repeat(DAEMON_TRACE_FRAME_MAX_BYTES) }] })).toBe(false);
+  });
+
   it("dispatches a registered rpc and answers through res", async () => {
     const h = harness({ rpc: () => ({ ok: true, first_seq: 1, head: 3 }) });
     await handshake(h);
