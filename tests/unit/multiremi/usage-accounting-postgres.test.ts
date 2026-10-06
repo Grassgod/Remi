@@ -4,6 +4,7 @@ import type { TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const databaseName = `multiremi_usage_pg_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
@@ -29,6 +30,29 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
       await admin.end();
     }
   });
+  it("persists parked revision floors and preserves established owners across PostgreSQL reconnection", () => {
+    const runtime = store.registerRuntime({ name: "boundary-pg", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "boundary-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const tasks = [0, 1].map(index => store.createTask({ agentId: agent.id, prompt: `Boundary ${index}`, workspaceId: "local" }));
+    store.claimTask(runtime.id); store.startTask(tasks[0]!.id);
+    const connections: PostgresSyncDatabase[] = [];
+    try {
+      assertUsageIdentityBoundaries(store, db!, tasks[0]!.id, tasks[1]!.id, runtime.id, "postgres-boundaries", () => {
+        const isolated = new URL(adminUrl!); isolated.pathname = `/${databaseName}`;
+        // A distinct backend connection proves receipts are durable, not cached.
+        const reopened = new PostgresSyncDatabase(isolated.toString());
+        connections.push(reopened);
+        return new MultiremiStore(reopened);
+      });
+    } finally { for (const connection of connections) connection.close(); }
+  }, 20_000);
+  for (const order of ["money-first", "tokens-first", "identity-later"] as const) it(`rejects contradictory monetary request identity on PostgreSQL with ${order}`, () => {
+    const runtime = store.registerRuntime({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Charge scope", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    assertRequestChargeIdentity(store, task.id, runtime.id, `postgres-price-${order}`, order, () => new MultiremiStore(db!));
+  });
 
   it("migrates, merges out-of-order retries after cancellation and reconciles timestamped prices in SQL", () => {
     const runtime = store.registerRuntime({ name: "usage-pg", provider: "codex", workspaceId: "local" });
@@ -53,7 +77,7 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     store.reportTaskUsageSnapshot(task.id, snapshot([{ ...unit, unitId: "child", model: "actual-child", modelSource: "provider_reported",
       inputTokens: 30, reportedTotalTokens: 30, occurredAt: "2026-10-01T16:01:00.000Z", connectionId: null }], 2));
     store.reportTaskUsageSnapshot(task.id, snapshot([{ ...unit, inputTokens: 500_000, reportedTotalTokens: 500_000 }], 1, "retry"));
-    const report = store.getUsageReport({ workspaceId: "local", days: null, tz: "Asia/Shanghai" });
+    const report = store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null, tz: "Asia/Shanghai" });
     expect(store.getTask(task.id)?.status).toBe("cancelled");
     expect(report.summary).toMatchObject({ task_count: 1, actual_total_tokens: 2_500_030,
       known_cost_by_currency: { USD: 5 }, unpriced_tokens: 30 });
@@ -61,7 +85,7 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     for (const rows of [report.daily, report.by_agent, report.by_model, report.by_runtime]) {
       expect(rows.reduce((sum, row) => sum + row.actual_total_tokens, 0)).toBe(report.summary.actual_total_tokens);
     }
-    expect(Number((db!.query("SELECT count(*) AS count FROM multiremi_usage_units").get() as { count: string }).count)).toBe(3);
+    expect(Number((db!.query("SELECT count(*) AS count FROM multiremi_usage_units WHERE task_id=?").get(task.id) as { count: string }).count)).toBe(3);
   });
 
   it("assigns bounded legacy revisions on PostgreSQL at current epoch milliseconds", () => {

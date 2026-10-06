@@ -7,6 +7,39 @@ import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
 import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
+test("invalid usage and execution payloads cannot strand independently authorized consumption over the real socket", async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "validation accounting owner", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "manual protocol validation", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 910_000, p: { task_id: task.id, usage_run_id: "accepted" } })).resolves.toMatchObject({ execution_authorized: true });
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "invalid-accounting.db"), canSend: () => h.client.connectionState() === "connected",
+      deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 910_000 + record.seq }) });
+    // This reaches the actual snapshot validator rather than a mocked failure.
+    const invalid = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: false,
+        units: [{ ...actualUnit({ unitId: "bad", provider: "claude", scope: "request", source: "provider_request", inputTokens: 99 }), inputTokens: -99 }] } });
+    const accepted = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 2, complete: true,
+        units: [actualUnit({ unitId: "valid", provider: "claude", scope: "request", source: "provider_request", inputTokens: 12 })] } });
+    await expect(invalid).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(accepted).resolves.toMatchObject({ ok: true });
+    const invalidExecution = outbox.enqueueAndWait(task.id, "prompt", { runtime_id: runtimeId, prompt: 42 });
+    const next = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 3, complete: true,
+        units: [actualUnit({ unitId: "second-valid", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 })] } });
+    await expect(invalidExecution).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(next).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 2 });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15_000);
+
 test("rejected obsolete progress cannot strand independently authorized late usage over the real socket", async () => {
   const h = await DaemonProtocolHarness.create();
   let outbox: MultiremiTaskReportOutbox | undefined;

@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import type { SetUsagePriceInput, TaskUsageSnapshot, TaskUsageUnit, UsageMetrics } from "@multiremi/contracts/usage-accounting.js";
 import { migrateLegacyUsage, validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -31,6 +33,15 @@ const price = (overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput 
 });
 
 describe("normalized task consumption", () => {
+  it("retains parked revision floors and established owner facts across replay and store restart", () => {
+    const { store, task, agent, runtime } = fixture();
+    const other = store.createTask({ agentId: agent.id, prompt: "Parked duplicate", workspaceId: "local" });
+    assertUsageIdentityBoundaries(store, db!, task.id, other.id, runtime.id, "sqlite-boundaries", () => new MultiremiStore(db!));
+  });
+  for (const order of ["money-first", "tokens-first", "identity-later"] as const) it(`checks request charge identity with ${order} arrival`, () => {
+    const { store, task, runtime } = fixture();
+    assertRequestChargeIdentity(store, task.id, runtime.id, `sqlite-price-${order}`, order, () => new MultiremiStore(db!));
+  });
   it("keeps one canonical native request across tasks and retry runs, including separate charge evidence", () => {
     const { store, task, agent } = fixture();
     const other = store.createTask({ agentId: agent.id, prompt: "Duplicate archive owner", workspaceId: "local" });

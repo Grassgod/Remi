@@ -174,6 +174,16 @@ export class MultiremiTaskReportOutbox {
       this.purgeTask(taskId, { keepUsage: true });
       this.db.run("UPDATE outbox_events SET status='pending',last_error=NULL,next_attempt_at=NULL WHERE task_id=? AND kind='usage'", [taskId]);
     }
+    const invalid = this.db.query("SELECT key FROM outbox_meta WHERE key LIKE 'blocked-code:%' AND value='invalid_report'").all() as Array<{ key: string }>;
+    for (const row of invalid) {
+      const taskId = row.key.slice("blocked-code:".length);
+      // Older generic HTTP authority failures used the same fallback code.
+      // Only an explicit payload-validation RPC rejection proves this upgrade
+      // can reopen the partition; HTTP/global authority barriers stay intact.
+      if (this.readMeta(`blocked:${taskId}`) !== "daemon RPC failed: invalid_report") continue;
+      this.db.run("UPDATE outbox_events SET status='pending',last_error=NULL,next_attempt_at=NULL WHERE task_id=? AND status='blocked'", [taskId]);
+      this.db.run("DELETE FROM outbox_meta WHERE key IN (?,?)", [`blocked:${taskId}`, `blocked-code:${taskId}`]);
+    }
   }
 
   /** Persist a report and wake the task's delivery pump. Never throws on queue pressure. */
@@ -524,6 +534,18 @@ export class MultiremiTaskReportOutbox {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof DaemonProtocolRpcError && error.code === "invalid_report" && !error.retryable
+        && (record.kind === "usage" || EXECUTION_KINDS.has(record.kind))) {
+        // Validation belongs to this payload, not to later independently
+        // authorized usage. Keep every rejected constituent durable and reject
+        // its actual waiter; a parked record is never an acknowledgement.
+        for (const id of recordIds) {
+          this.db.run("UPDATE outbox_events SET status='blocked',last_error=? WHERE id=? AND status='pending'", [message.slice(0, 2_000), id]);
+          this.recordWaiters.get(id)?.reject(error);
+          this.recordWaiters.delete(id);
+        }
+        return;
+      }
       if (error instanceof DaemonProtocolRpcError && error.code === "authority_revoked"
         && (record.kind === "usage" || EXECUTION_KINDS.has(record.kind))) {
         for (const id of recordIds) {

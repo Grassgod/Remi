@@ -18,6 +18,14 @@ const coverageHash = (ids: string[]) => createHash("sha256").update(JSON.stringi
 // supplementary Unicode characters, independently of database collation.
 const coverageSortKey = (id: string) => Array.from({ length: id.length }, (_, index) => id.charCodeAt(index).toString(16).padStart(4, "0")).join("");
 const COVERAGE_PAGE_SIZE = 512;
+function unitValues(u: TaskUsageUnit): unknown[] {
+  return [u.provider, u.model, u.modelSource ?? "unknown", u.purpose ?? "agent", u.requestedModel ?? null, u.connectionId ?? null,
+    u.providerSessionId ?? null, u.providerRequestId ?? null, u.providerObservationId ?? null, u.identityKind ?? (u.providerRequestId ? "request" : null), meterJson(u), u.timeProvenance ?? (u.source === "legacy_task" ? "task_attributed" : "observed_at"), u.scope, u.source, u.accuracy,
+    u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.actualUnsplitTokens, u.reportedTotalTokens,
+    u.contextTokens, u.contextWindow, u.costAmount, u.costCurrency, u.costSource ?? (u.costAmount !== null ? "provider_reported" : "unknown"),
+    u.coverageExpectedCount ?? (u.coveredUnitIds === undefined ? null : u.coveredUnitIds.length),
+    u.coverageSha256 ?? (u.coveredUnitIds === undefined ? null : coverageHash(u.coveredUnitIds)), new Date(u.occurredAt).toISOString(), u.evidenceRef ?? null];
+}
 
 function storedCoverageDigest(db: SqlDatabase, taskId: string, runId: string, monetaryUnitId: string): { count: number; sha256: string } {
   const collation = db.dialect === "postgres" ? 'COLLATE "C"' : "COLLATE BINARY";
@@ -79,6 +87,11 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_usage_units_runtime_time ON multiremi_usage_units(workspace_id, runtime_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_usage_units_project_time ON multiremi_usage_units(workspace_id, project_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_usage_units_model ON multiremi_usage_units(workspace_id, provider, model, connection_id);
+    CREATE TABLE IF NOT EXISTS multiremi_usage_unit_receipts (
+      task_id TEXT NOT NULL,run_id TEXT NOT NULL,unit_id TEXT NOT NULL,revision INTEGER NOT NULL,
+      disposition TEXT NOT NULL,normalized_json TEXT NOT NULL,
+      PRIMARY KEY(task_id,run_id,unit_id), FOREIGN KEY(task_id,run_id) REFERENCES multiremi_usage_runs(task_id,run_id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS multiremi_usage_cost_coverage (
       task_id TEXT NOT NULL,run_id TEXT NOT NULL,monetary_unit_id TEXT NOT NULL,covered_unit_id TEXT NOT NULL,covered_unit_sort_key TEXT,
       PRIMARY KEY(task_id,run_id,monetary_unit_id,covered_unit_id),
@@ -369,12 +382,25 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
     for (const u of s.units) {
       const coverageExpectedCount = u.coverageExpectedCount ?? (u.coveredUnitIds === undefined ? null : u.coveredUnitIds.length);
       const coverageSha256 = u.coverageSha256 ?? (u.coveredUnitIds === undefined ? null : coverageHash(u.coveredUnitIds));
-      const values = [u.provider, u.model, u.modelSource ?? "unknown", u.purpose ?? "agent", u.requestedModel ?? null, u.connectionId ?? null,
-        u.providerSessionId ?? null, u.providerRequestId ?? null, u.providerObservationId ?? null, u.identityKind ?? (u.providerRequestId ? "request" : null), meterJson(u), u.timeProvenance ?? (u.source === "legacy_task" ? "task_attributed" : "observed_at"), u.scope, u.source, u.accuracy,
-        u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.actualUnsplitTokens, u.reportedTotalTokens,
-        u.contextTokens, u.contextWindow, u.costAmount, u.costCurrency, u.costSource ?? (u.costAmount !== null ? "provider_reported" : "unknown"), coverageExpectedCount, coverageSha256, new Date(u.occurredAt).toISOString(), u.evidenceRef ?? null];
+      const values = unitValues(u);
+      const normalized = JSON.stringify(values);
       const columns = ["task_id", "run_id", "unit_id", "revision", "workspace_id", "agent_id", "runtime_id", "project_id", "runtime_provenance", "project_provenance", ...UNIT_FIELDS, "cost_coverage_complete", "cost_coverage_received_count"];
       const previous = db.query(`SELECT revision,cost_coverage_received_count,cost_coverage_complete,${UNIT_FIELDS.join(",")} FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?`).get(taskId, s.runId, u.unitId) as Row | null;
+      let receipt = db.query("SELECT revision,disposition,normalized_json FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id=? AND unit_id=?").get(taskId, s.runId, u.unitId) as Row | null;
+      if (!receipt) {
+        // Preserve revision floors from conflicts recorded before this schema
+        // upgrade; a missing canonical row must never make a parked unit new.
+        const parked = db.query("SELECT revision,unit_json FROM multiremi_usage_identity_conflicts WHERE task_id=? AND run_id=? AND unit_id=? ORDER BY revision DESC LIMIT 1").get(taskId, s.runId, u.unitId) as Row | null;
+        if (parked && (!previous || Number(parked.revision) > Number(previous.revision))) {
+          receipt = { revision: Number(parked.revision), disposition: "parked", normalized_json: JSON.stringify(unitValues(JSON.parse(String(parked.unit_json)) as TaskUsageUnit)) };
+          db.run("INSERT INTO multiremi_usage_unit_receipts(task_id,run_id,unit_id,revision,disposition,normalized_json) VALUES(?,?,?,?,?,?)", [taskId, s.runId, u.unitId, receipt.revision, receipt.disposition, receipt.normalized_json]);
+        }
+      }
+      if (receipt && Number(receipt.revision) > u.revision) continue;
+      if (receipt && Number(receipt.revision) === u.revision) {
+        if (receipt.normalized_json !== normalized) throw new UsageValidationError("Conflicting usage unit at the same revision");
+        if (receipt.disposition === "parked") continue;
+      }
       if (previous && Number(previous.revision) > u.revision) continue;
       let receivedCount = 0;
       if (previous && Number(previous.revision) === u.revision) {
@@ -397,10 +423,18 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
       if (!claimProviderIdentity(db, String(scope.workspace_id), taskId, s.runId, u, previous)) {
         // Strong evidence can identify an earlier weak unit as an already owned
         // request. Retain that earlier observation in the conflict audit too.
-        if (previous) {
+        const weakDuplicate = previous && !previous.provider_session_id && !previous.provider_request_id && !previous.provider_observation_id
+          && ["provider_request", "provider_turn"].includes(String(previous.source)) && previous.scope === u.scope
+          && ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "cost_amount", "cost_currency"].every(field => {
+            const value = values[UNIT_FIELDS.indexOf(field)];
+            return typeof value === "number" ? previous[field] !== null && Number(previous[field]) === value : previous[field] === value;
+          });
+        if (weakDuplicate) {
           db.run("DELETE FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id=? AND monetary_unit_id=?", [taskId, s.runId, u.unitId]);
           db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?", [taskId, s.runId, u.unitId]);
         }
+        db.run(`INSERT INTO multiremi_usage_unit_receipts(task_id,run_id,unit_id,revision,disposition,normalized_json) VALUES(?,?,?,?,?,?)
+          ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision,disposition=excluded.disposition,normalized_json=excluded.normalized_json`, [taskId, s.runId, u.unitId, u.revision, "parked", normalized]);
         changed = true;
         continue;
       }
@@ -426,6 +460,8 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
         db.run("UPDATE multiremi_usage_units SET cost_coverage_expected_count=?,cost_coverage_sha256=?,cost_coverage_complete=?,cost_coverage_received_count=? WHERE task_id=? AND run_id=? AND unit_id=?",
           [coverageExpectedCount, coverageSha256, receivedCount === coverageExpectedCount ? 1 : 0, receivedCount, taskId, s.runId, u.unitId]);
       }
+      db.run(`INSERT INTO multiremi_usage_unit_receipts(task_id,run_id,unit_id,revision,disposition,normalized_json) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision,disposition=excluded.disposition,normalized_json=excluded.normalized_json`, [taskId, s.runId, u.unitId, u.revision, "accepted", normalized]);
     }
     return changed;
   })();

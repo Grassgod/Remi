@@ -356,6 +356,51 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(second.enqueue("old-task", "complete", {})).toBeNull();
   });
 
+  it.each(["usage", "start", "progress", "messages", "complete"] as const)("parks invalid %s payloads without blocking independent usage or faking an ACK", async kind => {
+    const sent: string[] = [];
+    const blocked: string[] = [];
+    const path = tempPath();
+    const outbox = track(new MultiremiTaskReportOutbox({ path, onTaskBlocked: taskId => blocked.push(taskId), deliver: async record => {
+      sent.push(record.kind + ":" + (record.payload.invalid ? "invalid" : "valid"));
+      if (record.payload.invalid) throw new DaemonProtocolRpcError("invalid_report", false);
+      return { ok: true };
+    } }));
+    const rejected = outbox.enqueueAndWait("task", kind, { invalid: true });
+    const accepted = outbox.enqueueAndWait("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await expect(rejected).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(accepted).resolves.toMatchObject({ ok: true });
+    expect(sent).toEqual([`${kind}:invalid`, "usage:valid"]);
+    expect(blocked).toEqual([]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    await outbox.close();
+    const resumed: string[] = [];
+    const restarted = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { resumed.push(record.kind); return { ok: true }; } }));
+    await expect(restarted.enqueueAndWait("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 2, complete: true, units: [] } })).resolves.toMatchObject({ ok: true });
+    expect(resumed).toEqual(["usage"]);
+    expect(restarted.stats()).toMatchObject({ pending: 0, blocked: 1 });
+  });
+
+  it.each([false, true])("recovers old invalid-report partitions while retaining HTTP authority barriers (revoked=%s)", async revoked => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    first.enqueue("task", "prompt", { invalid: true });
+    first.enqueue("task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await first.close();
+    const persisted = openSqliteDatabase(path);
+    persisted.run("UPDATE outbox_events SET status='blocked'");
+    persisted.run("INSERT INTO outbox_meta(key,value) VALUES(?,?),(?,?)", ["blocked:task", revoked ? "POST /report returned 401: unauthorized" : "daemon RPC failed: invalid_report", "blocked-code:task", "invalid_report"]);
+    persisted.close();
+    const sent: string[] = [];
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async record => {
+      sent.push(record.kind);
+      if (record.payload.invalid) throw new DaemonProtocolRpcError("invalid_report", false);
+      return { ok: true };
+    } }));
+    expect(await second.waitForTaskDrain("task")).toBe("blocked");
+    expect(sent).toEqual(revoked ? [] : ["prompt", "usage"]);
+    expect(second.stats()).toMatchObject({ pending: 0, blocked: revoked ? 2 : 1 });
+  });
+
   it("treats a start replay 400 as delivered and drops rejected best-effort reports", async () => {
     const delivered: string[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({

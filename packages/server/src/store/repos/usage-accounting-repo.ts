@@ -143,7 +143,10 @@ export class UsageAccountingRepo {
             LEFT JOIN cost_claims c ON c.task_id=l.task_id AND c.run_id=l.run_id AND c.covered_unit_id=l.covered_unit_id
             WHERE l.task_id=m.task_id AND l.run_id=m.run_id AND l.monetary_unit_id=m.unit_id
               AND (target.unit_id IS NULL OR target.source='context_snapshot' OR NOT ${tokenEvidence("target")}
-                OR target.provider<>m.provider OR COALESCE(target.connection_id,'')<>COALESCE(m.connection_id,'') OR c.claim_count<>1))
+                OR target.provider<>m.provider OR COALESCE(target.connection_id,'')<>COALESCE(m.connection_id,'') OR c.claim_count<>1
+                OR (m.scope='request' AND m.provider_session_id IS NOT NULL AND target.provider_session_id IS NOT NULL
+                  AND (m.provider_session_id<>target.provider_session_id OR m.provider_request_id<>target.provider_request_id
+                    OR target.identity_kind='cumulative_meter'))))
       ), charge_groups AS (
         SELECT v.task_id,v.run_id,v.unit_id,target.provider,target.model,target.requested_model,target.model_source,target.purpose,target.connection_id
         FROM valid_charges v JOIN cost_links l ON l.task_id=v.task_id AND l.run_id=v.run_id AND l.monetary_unit_id=v.unit_id

@@ -22,7 +22,11 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 换机后过期 execution 报告收到 `authority_revoked` 时，outbox 丢弃同任务后续 execution 报告并保留 usage，让每个用量帧独立通过当前 daemon 身份与不可变 run 授权。单个 usage 帧被拒绝时仅持久阻塞该帧，不将拒绝伪装为送达，也不阻塞其他已绑定 run 的用量。重启可以恢复旧版因 execution 拒绝而封锁的 usage，但不绕过服务端全局身份撤权。
 
+不可重试的 `invalid_report` 只持久停放该 usage 或 execution payload，并向等待者返回真实拒绝；后续 usage 仍单独接受鉴权与验证。批量 message payload 被拒绝时，其全部参与记录保留为诊断。重启可重新逐帧检查旧版由明确 `invalid_report` RPC 封锁的任务分区，HTTP 身份撤权造成的分区屏障保持生效。
+
 单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 中已证明独立的执行消费相加。旧报告边界在任务锁内用上一 revision 加一，不把毫秒时间戳写入 PostgreSQL INTEGER。
+
+`multiremi_usage_unit_receipts` 持久保存单位的最高 revision、规范化不可变字段和 accepted/parked disposition。即使重复事实被撤下或冲突更新仅停放，更旧重放也不能重新插入消费；同 revision 改变事实仍拒绝。升级已有冲突审计时懒恢复停放水位。已建立强请求或 meter owner 的更新发生竞争时，保留此前已接受的小计与 owner 区间，并审计停放新版。只有同一稳定单位的旧弱证据没有强身份、且消费与金额分量一致，补出的强证据明确识别其为已有 owner 的重复时，才撤下该弱事实；不以任意冲突更新删除已确认消费。
 
 真实上游 `providerSessionId` 与 `providerRequestId` 建立跨 task/run 的请求身份；调用引擎、工作区、连接也是命名空间。同请求的 token 与独立金额证据可以在同一 owner run 保存，跨归属竞争不能再加一份消费。两个明确不同连接可区分；未知连接不能证明独立，因此与相同 session/request 的已知连接竞争。PostgreSQL 在 domain 写入前按稳定顺序取得身份事务锁，持久 owner 保证并发只认领一次。竞争证据及此前弱证据写入 `multiremi_usage_identity_conflicts`，报表保留规范 owner 的已知小计，双方显示 `identity_conflict_task_count` 和 incomplete，不把归属争议伪成零消费。上下文和 legacy 聚合不能认领请求身份。
 
@@ -57,6 +61,8 @@ Runtime 列表/详情和 task/status/Issue 用量兼容响应同样只从规范�
 五类 per-million rate 独立允许 null 和明确零。缺价分量保留未计价 token；已有配置分量的金额作为已知小计。单位明确对应 request/turn 范围的 `costAmount` 与 `costCurrency` 另存 `costSource`：`provider_reported` 为提供商报告金额，仍不是实际支付/代理扣款凭证；`sdk_estimate` 只进入独立 SDK 估算栏，不提高计价覆盖率；`unknown` 不进入金额统计。不能把范围不明的会话总金额重复分配给多个 task。
 
 独立的提供商金额单位通过 `coveredUnitIds` 明确关联同一 run 内被收费的 token 单位；金额与 token 在同一单位时隐式覆盖自身。覆盖关系保存在标量关联表，随金额单位 revision 原子替换。可确认且不重叠的提供商金额优先于其覆盖 token 的配置价，这些 token 仍计入计价覆盖率，配置价金额不再相加。缺少目标、调用来源/连接不一致或多笔金额覆盖同一 token 时，金额不进入已知小计，且报表保持不完整；不根据接收顺序、同模型或同一 turn 名称猜测关联。SDK 估算继续单列，不参与提供商金额优先级。
+
+request 范围金额带有真实 session/request 身份时，其覆盖目标已有的强身份必须一致；不能用请求 A 的金额支付请求 B 的 token，或将 request 金额对应累计 meter 观察。矛盾关联作为诊断保留，不启用该金额或声称完整计价。该检查在报表 SQL 中使用当前规范证据，因此金额先到、token 先到及后续补出强身份均采用相同口径；turn 的多请求覆盖仍需明确关联，不猜请求级拆分。
 
 长 turn 的覆盖关联可分块发送：每块保持同一金额单位与 revision，仅携带部分 `coveredUnitIds`，并同时声明完整集合的 `coverageExpectedCount` 与 `coverageSha256`。哈希为排序后全部 ID 数组的 JSON UTF-8 的 SHA-256。服务端持久化幂等追加同 revision 的关联，数量及哈希全部吻合后才启用该金额；缺块期间金额只保留诊断，报表不完整。较新单位 revision 重置覆盖集合，旧 revision 不参与新集合；不可变金额字段或承诺冲突拒绝写入。普通完整数组由服务端生成同一承诺，重放不能偷偷改变目标集合，金额始终只计一次。
 
