@@ -426,8 +426,10 @@ describe("Multiremi API — realtime websockets", () => {
       // Chat-linked task lifecycle (which carries the assistant result text) stays on the private chat scope.
       expect(first("task:completed")?.payload).toMatchObject({ task_id: sent.task.id, chat_session_id: chat.id, result: "all done" });
       // The workspace peer must never receive any private chat session traffic.
+      // Two requests and one terminal reply refresh the index. Deleting the
+      // second message no longer cancels a separate queued task/notification.
       expect(peerMessages).toEqual([
-        ...Array.from({ length: 4 }, () => ({ type: "inbox:new", actor_id: null, actor_type: "system", payload: { index_only: true } })),
+        ...Array.from({ length: 3 }, () => ({ type: "inbox:new", actor_id: null, actor_type: "system", payload: { index_only: true } })),
         { type: "inbox:read", actor_id: null, actor_type: "system", payload: { index_only: true } },
       ]);
     } finally {
