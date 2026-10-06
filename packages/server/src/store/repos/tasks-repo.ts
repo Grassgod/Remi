@@ -2,7 +2,7 @@
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
-import { hasProtectedNativeUsage, legacyUsageSnapshot, UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { hasProtectedNativeUsage, legacyUsageSnapshot, matchesAcceptedLegacyFacts, UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import { taskUsageProjection } from "@multiremi/store/usage-projection.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
@@ -5306,7 +5306,8 @@ ${placementAfter.sql}
       if (hasProtectedNativeUsage(this.ctx.db, taskId)) {
         if (!unchanged) throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
         const baseline = this.ctx.db.query("SELECT source_usage FROM multiremi_usage_legacy_sources WHERE task_id=?").get(taskId) as Row | null;
-        if (baseline && previousEntries !== toJson(keyed(baseline.source_usage))) {
+        if (baseline ? previousEntries !== toJson(keyed(baseline.source_usage))
+          : previousEntries !== "[]" && !matchesAcceptedLegacyFacts(this.ctx.db, taskId, legacy.usage, nowIso())) {
           throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
         }
         // Identical old snapshots acknowledge without touching facts, clocks,

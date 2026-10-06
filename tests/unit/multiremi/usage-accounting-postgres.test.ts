@@ -5,7 +5,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
-import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary, assertRecordedV2RetryChain } from "./usage-legacy-history-boundaries.js";
+import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary, assertRecordedV2RetryChain, assertRejectedAuditWithLegacyRun } from "./usage-legacy-history-boundaries.js";
 import { assertRecoveryRevisions, assertRecreatedLegacyReceipt } from "../scripts/usage-reconciliation-revision-cases.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -57,6 +57,9 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
   });
   for (const startupWhileQueued of [false, true]) it(`keeps a real Store v2 retry chain complete on PostgreSQL (startup while queued=${startupWhileQueued})`, async () => {
     await assertRecordedV2RetryChain(store, db!, startupWhileQueued);
+  });
+  it("never promotes rejected JSON beside a real deprecated-ingress legacy run on PostgreSQL", () => {
+    assertRejectedAuditWithLegacyRun(store, db!);
   });
   it("rejects overlapping late legacy ingestion and stops source refresh durably on PostgreSQL", () => {
     const agent = store.createAgent({ name: "late old writer pg", provider: "claude", workspaceId: "local" });

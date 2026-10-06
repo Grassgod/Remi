@@ -1,7 +1,10 @@
 import { afterEach, it } from "bun:test";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary, assertRecordedV2RetryChain } from "./usage-legacy-history-boundaries.js";
+import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary, assertRecordedV2RetryChain, assertRejectedAuditWithLegacyRun } from "./usage-legacy-history-boundaries.js";
 afterEach(resetMultiremiTestEnv);
+it("rejects changed JSON on both startups despite a real deprecated-ingress legacy run", () => {
+  assertRejectedAuditWithLegacyRun(createLocalStore(), db!);
+});
 it("rejects overlapping late legacy ingestion and stops source refresh durably on SQLite", () => {
   const store = createLocalStore();
   const agent = store.createAgent({ name: "late old writer", provider: "claude" });

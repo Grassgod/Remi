@@ -55,6 +55,51 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   expect(hasPendingLegacyUsage(db)).toBe(false);
 }
 
+/** A legacy run from real ingress is not proof that a later observed JSON was accepted. */
+export function assertRejectedAuditWithLegacyRun(store: MultiremiStore, db: SqlDatabase): void {
+  ensureUsageAccountingStartup(db);
+  const runtime = store.registerRuntime({ name: "legacy audit boundary", provider: "claude", workspaceId: "local" });
+  const agent = store.createAgent({ name: "legacy audit boundary", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+  const task = store.createTask({ agentId: agent.id, prompt: "synthetic legacy ingress", workspaceId: "local" });
+  const old = [{ provider: "claude", model: "configured", totalTokens: 70, inputTokens: 0, outputTokens: 0 }];
+  store.reportTaskUsage(task.id, old);
+  const original = db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(task.id).usage;
+  expect(db.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toBeNull();
+  expect(db.query("SELECT task_id FROM multiremi_usage_legacy_audit WHERE task_id=?").get(task.id)).toBeNull();
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  store.startTask(task.id, "accepted-native", runtime.id);
+  store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "accepted-native", revision: 1, complete: false,
+    units: [actualUnit({ unitId: "native", provider: "claude", model: "reported", scope: "request", source: "provider_request",
+      providerSessionId: `native:${task.id}`, providerRequestId: "request", inputTokens: 10, outputTokens: 2,
+      cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12 })] });
+  expect(store.reportTaskUsage(task.id, old).id).toBe(task.id);
+  const changed = JSON.stringify([{ provider: "claude", model: "configured", inputTokens: 20, outputTokens: 0 }]);
+  const facts = db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
+  const receipts = db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
+  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [changed, task.id]);
+  expect(() => store.reportTaskUsage(task.id, JSON.parse(changed))).toThrow(UsageValidationError);
+  for (let restart = 0; restart < 2; restart++) {
+    expect(() => ensureUsageAccountingStartup(db)).toThrow(UsageValidationError);
+    expect(db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(facts);
+    expect(db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(receipts);
+    expect(db.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toBeNull();
+    expect(db.query("SELECT original_usage FROM multiremi_usage_legacy_audit WHERE task_id=?").get(task.id)).toEqual({ original_usage: changed });
+    expect(hasPendingLegacyUsage(db)).toBe(true);
+    expect(db.query("SELECT id FROM multiremi_schema_migrations WHERE id IN (?,?)").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER)).toEqual([]);
+    expect(Number(db.query("SELECT SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS n FROM multiremi_usage_units WHERE task_id=?").get(task.id).n)).toBe(12);
+  }
+  // Explicitly restore the fixture's accepted ingress snapshot. Its canonical
+  // total-only facts prove equivalence, even though the first audit was rejected.
+  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [original, task.id]);
+  ensureUsageAccountingStartup(db);
+  expect(hasPendingLegacyUsage(db)).toBe(false);
+  expect(db.query("SELECT source_usage FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toEqual({ source_usage: original });
+  const totalOnly = db.query("SELECT reported_total_tokens,input_tokens FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'").get(task.id);
+  expect(Number(totalOnly.reported_total_tokens)).toBe(70);
+  expect(totalOnly.input_tokens).toBeNull();
+  expect(store.reportTaskUsage(task.id, old).id).toBe(task.id);
+}
+
 /** Real Store failure recovery creates a second task ID for the next attempt. */
 export async function assertRecordedV2RetryChain(store: MultiremiStore, db: SqlDatabase, startupWhileQueued: boolean): Promise<void> {
   const runtime = store.registerRuntime({ name: `native retry ${startupWhileQueued}`, provider: "claude", workspaceId: "local" });

@@ -78,6 +78,11 @@ v2 and recovered historical runs, it commits a source-conflict audit,
 revokes readiness and fails without advancing the processed source or changing
 those facts. The deprecated ingestion entry likewise rejects changed aggregates
 as nonretryable `invalid_report`; identical processed snapshots remain idempotent.
+An audit can describe a rejected observation and is never acceptance proof,
+even beside an existing legacy run. A pre-checkpoint preparation or ingress
+snapshot may establish a checkpoint only if its normalized nonempty legacy
+units exactly match persisted unit identities and facts (excluding revisions
+and task lifecycle occurrence times).
 Empty execution shells and context-only history do not block proven legacy
 consumption. Resolving an overlap requires reviewed evidence, not an automatic
 sum, maximum, or replacement.

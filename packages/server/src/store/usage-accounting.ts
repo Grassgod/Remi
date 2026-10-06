@@ -537,6 +537,24 @@ export function hasProtectedNativeUsage(db: SqlDatabase, taskId: string): boolea
       OR (cost_amount>0 AND cost_source='provider_reported')) LIMIT 1`).get(taskId));
 }
 
+/** Pre-checkpoint writers already persisted these facts; an audit is not acceptance. */
+export function matchesAcceptedLegacyFacts(db: SqlDatabase, taskId: string, raw: unknown, occurredAt: string): boolean {
+  const expected = legacyUsageSnapshot(taskId, raw, occurredAt).units;
+  if (!expected.length) return false;
+  const stored = db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source='legacy_task'").all(taskId) as Row[];
+  if (stored.length !== expected.length) return false;
+  const storedById = new Map(stored.map(row => [row.unit_id, row]));
+  return expected.every(unit => {
+    const row = storedById.get(unit.unitId);
+    if (!row) return false;
+    return unitValues(unit).every((value, index) => {
+      // Legacy occurrence time follows the task lifecycle, not the source payload.
+      const field = UNIT_FIELDS[index]!;
+      return field === "occurred_at" || (typeof value === "number" ? row[field] !== null && Number(row[field]) === value : row[field] === value);
+    });
+  });
+}
+
 /** Bounded backfill. Immutable originals and every observed source version survive retries. */
 export function migrateLegacyUsage(db: SqlDatabase, options: { batchSize?: number; afterTaskId?: string; schemaReady?: boolean } = {}): { migrated: number; remaining: number; complete: boolean; lastTaskId?: string } {
   const batchSize = options.batchSize ?? 500;
@@ -569,13 +587,11 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       if ((Number(row.attempt) <= 1 || Number(row.recorded_retry) === 1) && (row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
         && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")) return 0;
       const timestamp = new Date().toISOString();
-      const priorAudit = db.query("SELECT original_usage FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row | null;
-      // The original preparation had an audit and legacy run but no source
-      // checkpoints. A newly committed conflict audit alone is not acceptance
-      // proof, or the next restart would silently accept the same conflict.
-      const establishedAudit = priorAudit && runs.some(run => run.run_id === "legacy");
-      const priorSource = state ? state.source_usage : establishedAudit ? priorAudit.original_usage : undefined;
-      const changedAggregate = state || establishedAudit ? priorSource !== row.usage : row.usage != null && row.usage !== "[]";
+      // Original preparation and deprecated live ingress had no checkpoints.
+      // Only the already accepted canonical legacy facts can prove equivalence;
+      // an audit (even alongside an unrelated legacy run) may be a rejection.
+      const acceptedEquivalent = !state && matchesAcceptedLegacyFacts(db, String(row.id), row.usage, String(row.occurred_at));
+      const changedAggregate = state ? state.source_usage !== row.usage : !acceptedEquivalent && row.usage != null && row.usage !== "[]";
       db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);
       const original = db.query("SELECT original_usage,migrated_at FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row;
       db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,0,?,?,?) ON CONFLICT(task_id,source_version) DO NOTHING",
