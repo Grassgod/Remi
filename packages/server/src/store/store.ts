@@ -5651,6 +5651,7 @@ runMigrations(this.db);
   }
 
   taskOfferRetryDeadlines(runtimeId: string) { return this.tasks.taskOfferRetryDeadlines(runtimeId); }
+  hasPendingTaskOffers(workspaceId: string) { return this.tasks.hasPendingTaskOffers(workspaceId); }
 
   private publishDaemonDispatchConditionsChanged(workspaceId: string, runtimeId?: string): void {
     this.ctx.emitWorkspaceEvent({ type: "daemon:dispatch_conditions_changed", workspaceId,

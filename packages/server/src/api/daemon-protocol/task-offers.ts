@@ -229,6 +229,10 @@ export class DaemonTaskOffers {
       if (maintenance.expiresAt) this.scheduleRetry("platform-drain", null, Date.parse(maintenance.expiresAt));
       return;
     }
+    const runtime = store.getRuntimeLite(runtimeId);
+    // Status/input notifications do not create work. Avoid a locked claim and
+    // heartbeat write when this workspace has no queued or offered turn.
+    if (!runtime || !store.hasPendingTaskOffers(runtime.workspaceId ?? "local")) return;
     const task = store.claimTask(runtimeId, { supportsBinarySkillFiles: true });
     if (!task) return;
     pump.preparing = task.id;

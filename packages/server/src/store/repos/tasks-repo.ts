@@ -2996,6 +2996,11 @@ export class TasksRepo {
     });
   }
 
+  hasPendingTaskOffers(workspaceId: string): boolean {
+    return Boolean(this.ctx.db.query(`SELECT 1 FROM multiremi_turn_execution_records
+      WHERE workspace_id = ? AND status IN ('queued', 'dispatched') LIMIT 1`).get(workspaceId));
+  }
+
   taskOfferRetryDeadlines(runtimeId: string): Array<{ taskId: string; runtimeId: string | null; at: string }> {
     const runtime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!runtime) return [];

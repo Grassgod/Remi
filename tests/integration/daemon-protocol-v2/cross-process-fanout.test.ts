@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { join } from "node:path";
 import { createPeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
@@ -158,12 +158,16 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       expect(hostFrames.filter(frame => frame.t === "task.human_request.settled")).toHaveLength(0);
       if (status !== "responded") await new Promise<void>(resolve => {
         host!.addEventListener("close", () => resolve(), { once: true }); host!.close(); });
+      await h.layer.drain();
+      const claims = spyOn(h.store, "claimTask");
       const started = performance.now();
       expect((await ui.command(status === "responded" ? { op: "respond_human_request", requestId }
         : { op: "expire_human_request", requestId, status })).requestId).toBe(requestId);
       if (status === "responded") await waitFor(() => h.received.some(frame => frame.t === "turn.message"
         && frame.p.message.reply_to_id === requestId), "decision reply message", 200);
       expect(performance.now() - started).toBeLessThan(200);
+      expect(claims).not.toHaveBeenCalled();
+      claims.mockRestore();
       expect(h.received.filter(frame => frame.t === "turn.message" && frame.p.message.reply_to_id === requestId))
         .toHaveLength(status === "responded" ? 1 : 0);
       const read = await fetch(`${h.url}/api/daemon/messages/${requestId}`, { headers: { Authorization: `Bearer ${token.token}` } });
