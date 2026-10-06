@@ -1675,6 +1675,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (issueSession) {
       return denyCurrentUserWorkspaceAccess(c, store, issueSession.workspaceId) ?? sessionId;
     }
+    const token = currentTaskAccessToken(c);
+    if (token?.taskId) {
+      const task = store.getTask(token.taskId);
+      const chat = store.getChatSession(sessionId);
+      // Feishu Chat creators differ from runtime owners; authorize the bound Task.
+      if (chat && task?.chatSessionId === sessionId
+        && task.workspaceId === chat.workspaceId
+        && token.workspaceId === chat.workspaceId) return sessionId;
+    }
     const chat = loadChatSessionForCurrentUser(c, store, sessionId);
     return chat instanceof Response ? chat : chat.session.id;
   };
