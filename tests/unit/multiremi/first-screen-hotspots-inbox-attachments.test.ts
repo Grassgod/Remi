@@ -245,6 +245,34 @@ async function getInboxSummary(
 }
 
 describe("MUL-473 inbox summary", () => {
+  it("MUL-395: 5000 run payloads never cross the summary bridge", async () => {
+    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
+    const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
+      (id, workspace_id, member_id, recipient_type, recipient_id, type, title, body, details, read, archived, created_at)
+      VALUES (?, ?, ?, 'member', ?, 'autopilot_run_completed', 'run', '', ?, ?, 0, ?)`);
+    const shapes = [null, {}, { autopilot_id: "" }, { autopilot_id: 42 }, { autopilot_id: "a" }, { autopilot_id: "b" }];
+    harness.db.transaction(() => {
+      for (let i = 0; i < 5000; i++) insert.run(`inb_s96_${i}`, harness.fixture.workspaceId,
+        harness.fixture.readerMemberId, harness.fixture.readerMemberId,
+        JSON.stringify({ ...shapes[i % shapes.length], transcript: "x".repeat(2048) }),
+        i % 3 === 0 ? 1 : 0, new Date(Date.now() - (i % 14) * 86_400_000).toISOString());
+    })();
+    for (const offset of [0, -480, 300, 840]) {
+      const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
+      const actual = await getInboxSummary(harness, offset);
+      expect(actual.body).toEqual(expected);
+      expect(actual.bytes).toBeLessThanOrEqual(50_000);
+      expect([...harness.probe.bySql.keys()].some((sql) => /SELECT read, created_at, details/.test(sql))).toBe(false);
+    }
+    const valid = (await getInboxSummary(harness, 0)).body;
+    harness.db.run("UPDATE multiremi_inbox_items SET details = 'invalid json' WHERE id = 'inb_s96_1'");
+    expect((await getInboxSummary(harness, 0)).body).toEqual(valid);
+    harness.db.run("UPDATE multiremi_inbox_items SET details = '{}' WHERE id = 'inb_s96_1'");
+    harness.db.run("UPDATE multiremi_inbox_items SET details = ? WHERE id = ?", ['{"autopilot_id":"a","autopilot_id":"b"}', 'inb_s96_1']);
+    expect((await getInboxSummary(harness, 0)).body).toEqual(
+      legacyInboxSummary(harness.db, harness.fixture.readerMemberId, 0, harness.fixture.workspaceId));
+  }, 20000);
+
   it("matches the pre-change implementation on the same fixture, across timezones", async () => {
     const harness = await createHarness();
     for (const timezoneOffset of [0, 480, -300, 840]) {
