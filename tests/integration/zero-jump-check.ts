@@ -243,6 +243,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
     }).filter(scenario => scenario.mode === "warm") : []),
     ...(options.only.includes("detail-ssr-timeout") ? detail("detail-ssr-timeout", fixture.shortIssueId, {
       ssrTimeout: true,
+      path: `/issues/${encodeURIComponent(fixture.shortIssueId)}?session=${encodeURIComponent(fixture.shortSessionId)}`,
     }).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
@@ -306,6 +307,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
 interface RoundResult extends RenderMeasurement {
   skeletonFlashFrames: number;
   ssrSeedStatus: string | null;
+  documentSsrSeedStatus: string | null;
   legacySsrMarker: boolean;
   ssrApiReads: Array<{ path: string; query: string; startedAt: number }>;
   softNavigationSsrReads: Array<{ path: string; query: string; startedAt: number }>;
@@ -547,7 +549,7 @@ async function runRound(input: {
     logRequests: [],
     ssrSeed: false,
     ssrSeedRereads: [],
-    ssrSeedStatus: null, legacySsrMarker: false, ssrApiReads: [], softNavigationSsrReads: [], navigationResponses: [], skeletonFlashFrames: 0,
+    ssrSeedStatus: null, documentSsrSeedStatus: null, legacySsrMarker: false, ssrApiReads: [], softNavigationSsrReads: [], navigationResponses: [], skeletonFlashFrames: 0,
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -793,6 +795,13 @@ async function runRound(input: {
   result.ssrSeed = result.ssrSeedStatus === "ok";
   result.ssrApiReads = input.ssrProbe.reads.slice(ssrReadStart);
   const rscResponses = result.navigationResponses.filter(response => response.rsc);
+  const documentResponse = result.navigationResponses.find(response => !response.rsc);
+  result.documentSsrSeedStatus = documentResponse?.seedStatus ?? null;
+  const expectedDocumentStatus = !ssrCookie ? "no-cookie" : scenario.ssrTimeout ? "timeout" : "ok";
+  // CSR can canonicalize the default session through router.replace after the
+  // document renders. Assert both requests, rather than losing its first result.
+  const expectedDomStatus = scenario.mode === "warm" || rscResponses.some(response => response.seedStatus === "soft-nav")
+    ? "soft-nav" : expectedDocumentStatus;
   // Include cancelled prefetches and late SSR work, not just completed responses.
   result.softNavigationSsrReads = rscStarts.length ? result.ssrApiReads.filter(read => read.startedAt >= Math.min(...rscStarts)) : [];
   if (!result.ssrSeed) result.waveGate = "record-only";
@@ -900,15 +909,20 @@ async function runRound(input: {
   });
   const stream = result.streamObservation;
   const failures = [
-    scenario.entry !== "inbox" && result.ssrSeedStatus !== (scenario.mode === "warm" ? "soft-nav"
-      : !ssrCookie ? "no-cookie" : scenario.ssrTimeout ? "timeout" : "ok")
+    scenario.entry !== "inbox" && result.ssrSeedStatus !== expectedDomStatus
       ? `unexpected SSR seed status: ${result.ssrSeedStatus}` : null,
+    scenario.ssrTimeout && ssrCookie && result.ssrSeedStatus !== "timeout"
+      ? "explicit-session timeout marker was lost" : null,
+    scenario.entry !== "inbox" && scenario.mode === "cold" && (result.documentSsrSeedStatus !== expectedDocumentStatus
+      || documentResponse?.initialLog !== (expectedDocumentStatus === "ok")
+      || documentResponse?.initialData !== (expectedDocumentStatus === "ok"))
+      ? `document seed outcome/props mismatch: ${result.documentSsrSeedStatus}` : null,
     scenario.entry !== "inbox" && result.legacySsrMarker !== result.ssrSeed ? "legacy SSR marker contradicts seed status" : null,
     scenario.entry !== "inbox" && (scenario.mode === "cold" || result.navigationResponses.some(response => response.seedStatus))
       && !result.navigationResponses.some(response => response.seedStatus === result.ssrSeedStatus
       && response.initialLog === result.ssrSeed && response.initialData === result.ssrSeed)
       ? "Flight/document seed props contradict the result marker" : null,
-    scenario.entry !== "inbox" && scenario.mode === "warm" && (!rscResponses.length || result.softNavigationSsrReads.length)
+    scenario.entry !== "inbox" && ((scenario.mode === "warm" && !rscResponses.length) || result.softNavigationSsrReads.length)
       ? `soft navigation SSR GETs: ${result.softNavigationSsrReads.length}, RSC responses: ${rscResponses.length}` : null,
     scenario.mode === "warm" && result.skeletonFlashFrames ? `visible warm skeleton frames: ${result.skeletonFlashFrames}` : null,
     result.ssrSeedRereads.length ? `SSR seed rereads: ${JSON.stringify(result.ssrSeedRereads)}` : null,

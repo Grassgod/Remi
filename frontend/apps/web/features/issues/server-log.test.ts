@@ -6,7 +6,7 @@ import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined, navigation: "document" }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => cookie.value ? { value: cookie.value } : undefined }),
-  headers: async () => new Headers({ accept: cookie.navigation === "soft-nav" ? "text/x-component" : "text/html" }) }));
+  headers: async () => new Headers({ accept: cookie.navigation === "soft-nav" ? "*/*" : "text/html" }) }));
 import { readIssueLogBootstrap, readIssueLogBootstrapResult, readIssuePageBootstrap, readSSRWorkspace, readWithSessionCookie, SSR_LOG_TIMEOUT_MS } from "./server-log";
 
 afterEach(() => { cookie.value = undefined; cookie.navigation = "document"; vi.unstubAllGlobals(); });

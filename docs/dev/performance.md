@@ -567,7 +567,7 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 
 S7 默认带 SSR cookie，并在普通独立详情的 cold 轮次断言实际 SSR seed 存在；`--no-ssr-cookie` 断言实际走 CSR。已播种页的 Issue detail、父 Issue detail、members、sessions、children、task-runs 与当前 Session 的所有 `before=1` 回读必须为 0，逐轮报告 `ssrSeedRereads`，无 seed 的客户端读取不计为重复。`--only detail-locate` 覆盖显式 Session 的评论深链，`--only detail-locate-default` 覆盖未指定 Session 的评论深链，两者与 `detail-child`、`detail-short` 均可定向运行。
 
-Issue 页以 `data-ssr-seed` 输出播种结果枚举；S7 同时核对最终标记、文档/Flight 的 `initialLog` / `initialData` 和旧日志预定位标记。普通 warm 和 `--only detail-child-warm`（从父详情原生链接进入）必须是 `soft-nav`、空 seed；真实 RSC 与 Link 预取通过仅供 SSR 的本地代理记账，记录 `Accept` / `Sec-Fetch-Dest`，所有软导航 SSR GET 必须为 0（包括取消的 prefetch 和晚到工作），浏览器 rewrites 仍直连内存 API。`--only detail-ssr-timeout` 仅将 SSR Issue 读取延迟 1200ms，必须得到 `timeout` 并由 Bearer CSR 正常读取。warm、超时及 no-cookie 的客户端首次读取不计为 seed 补读；所有场景仍要求零跳动、anchorVisible=ready、无骨架和真实 Hub ack。
+Issue 页以 `data-ssr-seed` 输出当前服务端渲染的播种结果枚举；S7 分别记录初始文档结果和最终 DOM，并核对文档/Flight 的 `initialLog` / `initialData` 和旧日志预定位标记。CSR 选中默认 Session 后可能通过现有 `router.replace` 发出 RSC，使文档的 `no-cookie` / `timeout` 更新为最终 `soft-nav`，两次结果都必须正确，后续 SSR GET 仍为 0。普通 warm 和 `--only detail-child-warm`（从父详情原生链接进入）必须是 `soft-nav`、空 seed；真实 RSC 与 Link 预取通过仅供 SSR 的本地代理记账，记录 `Accept` / `Sec-Fetch-Dest`，所有软导航 SSR GET 必须为 0（包括取消的 prefetch 和晚到工作），浏览器 rewrites 仍直连内存 API。`--only detail-ssr-timeout` 显式指定 Session，仅将 SSR Issue 读取延迟 1200ms，文档和最终 DOM 必须均为 `timeout` 并由 Bearer CSR 正常读取。warm、超时及 no-cookie 的客户端首次读取不计为 seed 补读；所有场景仍要求零跳动、anchorVisible=ready、无骨架和真实 Hub ack。
 
 无 cookie 的 S7 文档/RSC 拦截仍保留浏览器 Bearer 鉴权，并仅向本地 Web origin 授予 `local-network-access` 权限，避免 Chromium 对被拦截文档的地址空间检查阻断本机 WebSocket。所有路径仍必须观测真实 Hub `stream.ack`，无 ack 或请求未安静均失败；没有关闭浏览器安全策略或放宽等待断言。
 
