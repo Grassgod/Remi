@@ -761,7 +761,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
   // MUL-449 ruling 2: the claim predicate and the wait-reason observer must be
   // one body of SQL. MUL-466 only adds the explicit-workspace dedicated clause
-  // to the golden; every other byte still guards the original claim contract.
+  // to the predicate; the report-recovery SET clauses preserve sent-offer
+  // authority only on the same Runtime. The whole statement stays byte-exact.
   it("keeps the claim SELECT byte-identical to the routing golden", () => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({
@@ -781,7 +782,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     } finally {
       (db as unknown as { query: (sql: string) => unknown }).query = original;
     }
-    const claim = queries.find((sql) => sql.includes("SET status = 'dispatched'"));
+    const claim = queries.find((sql) => sql.startsWith("UPDATE multiremi_tasks")
+      && sql.includes("status = 'dispatched'") && sql.includes("SELECT t.id"));
     expect(claim).toBeDefined();
     expect(claim).toBe(MUL449_CLAIM_SQL_GOLDEN);
   });
