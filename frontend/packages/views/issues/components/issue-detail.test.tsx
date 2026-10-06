@@ -766,6 +766,7 @@ describe("IssueDetail (shared)", () => {
     expect(phases.every(p => p.state === "ready")).toBe(true);
     expect(document.querySelector("[data-agent-card-slot]")).toHaveClass("min-h-20");
     expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("min-h-16");
+    expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("h-16", "overflow-y-auto");
   });
 
   it("keeps the detail skeleton until member and child gates resolve", async () => {

@@ -323,7 +323,10 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
           {t($ => $.activity.jump_to_latest)}
         </button>
       </div>}
-      <div className="min-h-16" data-agent-stream-slot>
+      {/* Deferred task rows must fit the reservation used by the initial bottom
+          anchor. A minimum alone grows with queued runs after reveal and makes
+          the outer stick-to-bottom observer move the visible comment. */}
+      <div className="h-16 min-h-16 overflow-y-auto" data-agent-stream-slot>
         {revealed && <SessionAgentStreamRow issueId={issueId} issueSessionId={sessionId} />}
       </div>
       <div className="mt-4 min-h-32"><CommentInput key={`${issueId}:${sessionId}`} issueId={issueId} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}

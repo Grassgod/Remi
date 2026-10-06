@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { DaemonProtocolLayer, type DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
+import { registerDaemonReportHandlers } from "@multiremi/api/daemon-protocol/report-handlers.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -33,6 +34,9 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
   });
   const app = createMultiremiApp({ store, authToken: "heartbeat-test-root" });
   const protocol = new DaemonProtocolLayer({ store });
+  // Recovery claims execute real tasks: the start ACK must bind/authorize their
+  // usage run, just as the normal API does, before the inert provider is called.
+  registerDaemonReportHandlers(protocol, store);
   const clock = new ManualDaemonProtocolClock();
   pollingClock = clock;
   let pollingNow = Date.now();

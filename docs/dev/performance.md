@@ -418,6 +418,8 @@ schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两�
 
 MUL-395 的图片回归由 [zero-jump-image-cases.ts](../../tests/integration/zero-jump-image-cases.ts) 扩展 fixture：真实 640×240 PNG 的晚到、404、canonical 元素锚点，以及有尺寸/快速加载对照。晚到请求以第一次正常揭示为条件屏障释放，图片和行高前后必须一致；位置仍由原收集器和零跳动判定检查。五类用例默认进入 CI，`--only detail-image-late` 等可以定向运行，关闭 SSR cookie 可复核 CSR。不改原 fixture 延迟或 allowlist。
 
+`detail-f398::cold` 默认进入同一 CI：带 `#` 标题的长描述、20 段正文、4 条评论、20 条 queued dispatch、60 次标题/优先级更新，覆盖延后挂载的多任务 footer。任务槽保持 64px，更多任务在槽内滚动，避免揭示后的挂载触发外层贴底补偿。回归沿用完整锚点与零跳动判定，并验证空槽和 20 行挂载后的高度相同、所有行保留且末行可滚到。活动偏好关闭是默认；`--only detail-f398-system-details` 验证打开偏好，`--no-ssr-cookie` 验证 CSR。
+
 - **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
 - **收件箱通知深链使用 `/{slug}/inbox?issue=…&session=…`。** 这条入口由 inbox 面板把通知 comment 传给 `IssueDetail`，不能用普通详情 URL 替代。独立详情深链现支持 `/issues/:id?comment=…`，由 SSR/CSR 的 locate 窗口提供目标锚点；`detail-locate` 和 `detail-image-element` 单独验证该路径。
 
@@ -569,4 +571,4 @@ S7 默认带 SSR cookie，并在普通独立详情的 cold 轮次断言实际 SS
 
 S1 的 `--ssr-cookie` 默认开启，仅在目标 origin 的浏览器内存 context 设置 HttpOnly `multimira_auth`；`--no-ssr-cookie` 用于 CSR 对照。开关不代表播种成功，逐轮以实际日志 DOM 的 seed 标记报告 SSR/CSR。`renderMs` 只量目标 Session 的窗口 `responseEnd` 到首次正常 fresh 揭示，warm 沿用 click 原点；SSR seed 没有浏览器窗口 responseEnd，缺观测或 forced 揭示记 null 并说明原因。各来源单列分位数；compare 不对不同 Cookie/实际来源或混合来源做差。
 
-S7 整轮等待延后 API 与真实 Hub `stream.ack` 处理安静后才统计回读、附件和跳动；使用原波次算法与 8ms 容差。SSR 普通详情 warm 的揭示前波次 ≤2 为阻塞项；日志提前与去重后的 CSR warm 以 ≤2 为目标，未达到时逐波保留链路与原因，10/9 生产 S1 决定最终达标。cold、运行中 warm 和收件箱未读通知深链 warm 的波次只记录，保留逐请求及逐波链路；这些场景的回读=0、同附件 content≤1、跳动=0 和非强制揭示仍严格检查。`detail-locate` 验证独立详情 `?comment`，`detail-child` 验证带父 Issue 的详情，均可分别跑 SSR/CSR。150ms 渲染目标仅记录，剩余同步布局/面板注册热点不在本批改动范围内。
+S7 整轮等待延后 API 与真实 Hub `stream.ack` 处理安静后才统计回读、附件和跳动。CI 的揭示前波次由 [zero-jump-waves.ts](../../tests/integration/zero-jump-waves.ts) 按在飞区间分组：请求直接或经其他请求重叠时为同一波，上一波全部结束后发出的请求才开下一波，结束与开始同一时刻视为不重叠；链路用每波最后结束的请求连接。S1 测速的 `computeWaves` 与 8ms 容差保持原样，历史数字仍可对比，S7 的新波次不能与旧口径直接做差。SSR 普通详情 warm 的揭示前波次 ≤2 为阻塞项；日志提前与去重后的 CSR warm 以 ≤2 为目标，未达到时逐波保留链路与原因，10/9 生产 S1 决定最终达标。cold、运行中 warm 和收件箱未读通知深链 warm 的波次只记录，保留逐请求及逐波链路；这些场景的回读=0、同附件 content≤1、跳动=0 和非强制揭示仍严格检查。`detail-locate` 验证独立详情 `?comment`，`detail-child` 验证带父 Issue 的详情，均可分别跑 SSR/CSR。150ms 渲染目标仅记录，剩余同步布局/面板注册热点不在本批改动范围内。

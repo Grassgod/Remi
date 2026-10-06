@@ -452,6 +452,7 @@ daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随�
 （start 仍是独立可靠帧，因为 workspace 准备可能先进入 `wait_local_directory`）；否则
 `res{ok:false, code}`，code 取 `capacity` / `claims_paused` / `draining` /
 `binary_skill_files_unsupported`。
+daemon 停止时立即取消尚未获授权的 start 等待；在发送 start 前、获 ACK 后、异步摘要配置与工作区准备后以及首次 provider 调用前复查停止信号，停止后不再新启动 provider。尚未进入 provider 的启动被停机取消时，关闭可选摘要器而不发起终态摘要请求，释放其用量完成范围，保留 durable fail 与已接受 run。已进入 provider 的执行仍使用原任务信号并按原有规则排空，包含辅助摘要及其迟到用量，不因取消启动等待而中断。服务端已提交 start 但 ACK 丢失时，停机仅取消本地等待，已绑定的 run 与未确认的 outbox start 记录保留用于重放。
 
 reject、30 s 未应答、或未确认 offer 的连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
 （内存态）。仅 `capacity` 拒绝可提前结束冷却：daemon 释放本地任务槽位后立即补发已有的

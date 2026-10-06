@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -89,20 +89,43 @@ test("runtime list/detail uses canonical facts across repeated reads, revisions,
   } finally { await database.dispose(); }
 });
 
-test("unchanged open usage has bounded bridge bytes and mutations remain immediately visible", async () => {
-  const database = await openHotspotDatabase();
-  const db = database.db, store = new MultiremiStore(db);
-  try {
+describe("runtime list open-usage fixture", () => {
+  let database: Awaited<ReturnType<typeof openHotspotDatabase>> | undefined;
+  let db: SqlDatabase;
+  let store: MultiremiStore;
+  const disposeFixture = async () => {
+    const resource = database;
+    database = undefined;
+    await resource?.dispose();
+  };
+
+  // Creating a disposable PG database and installing the full platform schema
+  // is fixture setup, independent of the list/read and mutation checks below.
+  beforeAll(async () => {
+    try {
+      database = await openHotspotDatabase();
+      db = database.db;
+      store = new MultiremiStore(db);
+    } catch (error) {
+      await disposeFixture();
+      throw error;
+    }
+  });
+  afterAll(disposeFixture);
+
+  test("unchanged open usage has bounded bridge bytes and mutations remain immediately visible", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "open usage golden", provider: "codex" });
     for (let i = 0; i < 10; i++) store.registerRuntime({ id: `rt_open_${i}`, name: `open ${i}`, provider: "codex", maxConcurrency: 32 });
-    for (let i = 0; i < 200; i++) { db.run(`INSERT INTO multiremi_tasks
-      (id, workspace_id, agent_id, runtime_id, status, prompt, usage, created_at, updated_at)
-      VALUES (?, 'local', ?, ?, 'running', 'golden', ?, '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z')`,
-      `tsk_open_${i}`, agent.id, `rt_open_${i % 10}`, JSON.stringify([{ inputTokens: 1234, output_tokens: 567,
-        cacheReadTokens: 89, cache_write_tokens: 10, model: "m".repeat(300) }]));
-      persist(db, `tsk_open_${i}`, JSON.stringify([{ inputTokens: 1234, outputTokens: 567, cacheReadTokens: 89, cacheWriteTokens: 10 }]));
-    }
+    db.transaction(() => {
+      for (let i = 0; i < 200; i++) { db.run(`INSERT INTO multiremi_tasks
+        (id, workspace_id, agent_id, runtime_id, status, prompt, usage, created_at, updated_at)
+        VALUES (?, 'local', ?, ?, 'running', 'golden', ?, '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z')`,
+        `tsk_open_${i}`, agent.id, `rt_open_${i % 10}`, JSON.stringify([{ inputTokens: 1234, output_tokens: 567,
+          cacheReadTokens: 89, cache_write_tokens: 10, model: "m".repeat(300) }]));
+        persist(db, `tsk_open_${i}`, JSON.stringify([{ inputTokens: 1234, outputTokens: 567, cacheReadTokens: 89, cacheWriteTokens: 10 }]));
+      }
+    })();
     const compare = () => {
       const before = readProcessDbCounters();
       const runtimes = store.listRuntimesForWorkspace("local");
@@ -130,7 +153,7 @@ test("unchanged open usage has bounded bridge bytes and mutations remain immedia
     db.run("DELETE FROM multiremi_tasks WHERE id = 'tsk_open_5'"); compare();
     db.run("DELETE FROM multiremi_tasks WHERE runtime_id = 'rt_open_6'"); compare();
     if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
-  } finally { await database.dispose(); }
+  });
 });
 
 test("native telemetry rejects unsafe counts and scalar totals preserve large safe integers", async () => {

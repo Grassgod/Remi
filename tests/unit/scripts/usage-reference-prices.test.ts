@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "../../../packages/server/src/store/db/postgres.js";
 import { ensureUsageAccountingSchema } from "../../../packages/server/src/store/usage-accounting.js";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { applyReferencePlan, buildReferencePlan, catalogDigest, databaseTarget, digest, observeSkus, priceRepository, referenceCatalog, type ObservedSku, type ReferencePlan, type ReferenceRoute } from "../../../scripts/import-usage-reference-prices.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import type { SetUsagePriceInput } from "../../../packages/contracts/src/usage-accounting.js";
 
 afterEach(resetMultiremiTestEnv);
 const target = "postgres://127.0.0.1:55486/postgres";
+const referenceAdminUrl = process.env.MULTIREMI_TEST_REFERENCE_DATABASE_URL ?? process.env.MULTIREMI_TEST_POSTGRES_URL;
 const from = referenceCatalog.applicability.earliest_effective_from;
 const route = (overrides: Partial<ReferenceRoute> = {}): ReferenceRoute => ({ provider: "claude", connection_id: "test-gateway", evidence: "Dummy unit-test reviewed gateway route", catalog_commit: referenceCatalog.source.commit, effective_from: from, effective_to: null, ...overrides });
 const observed = (overrides: Partial<ObservedSku> = {}): ObservedSku => ({ provider: "claude", model: "deepseek-chat", model_source: "provider_reported", connection_id: "test-gateway", units: 1, first_at: from, last_at: from, ...overrides });
@@ -18,6 +19,53 @@ function plan(rows: ObservedSku[] = [observed()], overrides: Partial<Parameters<
 }
 function configured(overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput {
   return { ...plan().decisions[0]!.price!, source: "configured", source_url: null, effective_from: "2026-09-01T00:00:00.000Z", input_per_million: 7, ...overrides };
+}
+
+async function withReferenceDatabase(run: (url: string) => Promise<void>): Promise<void> {
+  if (!referenceAdminUrl) throw new Error("Reference PostgreSQL test URL is required");
+  let url: URL;
+  try { url = new URL(referenceAdminUrl); } catch { throw new Error("Invalid reference PostgreSQL test target"); }
+  if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || url.pathname.length < 2) throw new Error("Invalid reference PostgreSQL test target");
+  const name = `multiremi_reference_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  if (!/^multiremi_reference_test_[a-f0-9]{32}$/.test(name)) throw new Error("Invalid isolated reference database name");
+  const admin = new Bun.SQL(referenceAdminUrl, { max: 1, connectionTimeout: 5 });
+  let created = false;
+  try {
+    try {
+      expect(await admin.unsafe("SELECT datname FROM pg_database WHERE datname=$1", [name])).toHaveLength(0);
+      await admin.unsafe(`CREATE DATABASE ${name}`);
+    } catch (error) { throw safeDatabaseFailure(error, "create"); }
+    created = true;
+    url.pathname = `/${name}`;
+    await run(url.toString());
+  } finally {
+    try {
+      // Drop only a database whose CREATE succeeded in this invocation. Active
+      // connections or any other cleanup error fail the test; never force-drop.
+      if (created) {
+        try { await admin.unsafe(`DROP DATABASE ${name}`); }
+        catch (error) { throw safeDatabaseFailure(error, "cleanup"); }
+      }
+    } finally {
+      try { await admin.end(); } catch (error) { throw safeDatabaseFailure(error, "close"); }
+    }
+  }
+}
+
+function safeDatabaseFailure(error: unknown, operation: string): Error {
+  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" && /^[A-Z0-9_]{1,64}$/.test(error.code) ? error.code : "UNKNOWN";
+  return new Error(`Reference PostgreSQL fixture ${operation} failed (${code})`);
+}
+
+function removeReferenceDirectory(dir: string): void {
+  const resolved = realpathSync(dir);
+  if (lstatSync(dir).isSymbolicLink() || !lstatSync(dir).isDirectory()
+    || dirname(resolved) !== realpathSync(tmpdir()) || !basename(resolved).startsWith("reference-cli-")) throw new Error("Invalid reference fixture directory");
+  for (const name of readdirSync(resolved)) {
+    const entry = lstatSync(join(resolved, name));
+    if (!["routes.json", "plan.json"].includes(name) || entry.isSymbolicLink() || !entry.isFile()) throw new Error("Unexpected reference fixture cleanup target");
+  }
+  rmSync(resolved, { recursive: true });
 }
 
 describe("pinned public gateway reference prices", () => {
@@ -134,36 +182,31 @@ describe("pinned public gateway reference prices", () => {
     expect(report.summary).toMatchObject({ actual_total_tokens: 4000000, priced_tokens: 0, unpriced_tokens: 4000000, known_cost_by_currency: {}, reference_cost_by_currency: { USD: 0.7 }, complete: false });
     expect(report.coverage.token_ratio).toBe(0);
   });
-  it.skipIf(!process.env.MULTIREMI_TEST_REFERENCE_DATABASE_URL)("serializes with a real PostgreSQL configured writer, rejects stale review and reimports unchanged", async () => {
-    const url = process.env.MULTIREMI_TEST_REFERENCE_DATABASE_URL!;
-    // This opt-in test is deliberately restricted to the authorized dummy local database.
-    if (url !== "postgres://usage_test:usage_test@127.0.0.1:55486/postgres") throw new Error("Reference test requires the isolated dummy database URL");
-    const schema = `reference_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  it.skipIf(referenceAdminUrl === undefined)("serializes with a real PostgreSQL configured writer, rejects stale review and reimports unchanged", async () => withReferenceDatabase(async url => {
+    const ownTarget = databaseTarget(url);
     const pg = new PostgresSyncDatabase(url);
     let child: ReturnType<typeof Bun.spawn> | undefined;
     try {
-      pg.exec(`CREATE SCHEMA ${schema}`);
-      pg.exec(`SET search_path TO ${schema}`);
       pg.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_tasks(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
       pg.run("INSERT INTO multiremi_workspaces(id,updated_at) VALUES('local',?)", [from]);
       ensureUsageAccountingSchema(pg);
-      const p = plan();
+      const p = plan(undefined, { target: ownTarget });
       const scriptUrl = new URL("../../../scripts/import-usage-reference-prices.ts", import.meta.url).pathname;
       const pgUrl = new URL("../../../packages/server/src/store/db/postgres.ts", import.meta.url).pathname;
       const code = `import { PostgresSyncDatabase } from ${JSON.stringify(pgUrl)};
         import { priceRepository } from ${JSON.stringify(scriptUrl)};
-        const db = new PostgresSyncDatabase(${JSON.stringify(url)});
-        try { db.exec(${JSON.stringify(`SET search_path TO ${schema}`)});
+        const db = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_REFERENCE_OWN_URL!);
+        try {
           db.transaction(() => { const { ctx, repo } = priceRepository(db); ctx.lockWorkspaceRuntimeLifecycle('local');
             repo.setPrice('local', ${JSON.stringify(configured())});
             process.stdout.write('locked\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
           })();
         } finally { db.close(); }`;
-      child = Bun.spawn([process.execPath, "--eval", code], { stdout: "pipe", stderr: "pipe" });
+      child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env, MULTIREMI_TEST_REFERENCE_OWN_URL: url }, stdout: "pipe", stderr: "pipe" });
       const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
       const ready = await reader.read();
       expect(new TextDecoder().decode(ready.value)).toContain("locked");
-      expect(() => applyReferencePlan(pg, p, target, "local")).toThrow("preconditions changed");
+      expect(() => applyReferencePlan(pg, p, ownTarget, "local")).toThrow("preconditions changed");
       expect(await child.exited).toBe(0);
       const { repo } = priceRepository(pg);
       const saved = repo.listPrices("local");
@@ -171,25 +214,19 @@ describe("pinned public gateway reference prices", () => {
       expect(saved[0]!.source).toBe("configured");
       expect(saved[0]!.effective_to).toBeNull();
       // A separate exact SKU remains eligible; existing configured row survives both imports.
-      const next = plan([observed({ model: "deepseek-reasoner" })], { existing: saved });
-      expect(applyReferencePlan(pg, next, target, "local")).toEqual({ inserted: 1, already_present: 0 });
-      expect(applyReferencePlan(pg, next, target, "local")).toEqual({ inserted: 0, already_present: 1 });
+      const next = plan([observed({ model: "deepseek-reasoner" })], { target: ownTarget, existing: saved });
+      expect(applyReferencePlan(pg, next, ownTarget, "local")).toEqual({ inserted: 1, already_present: 0 });
+      expect(applyReferencePlan(pg, next, ownTarget, "local")).toEqual({ inserted: 0, already_present: 1 });
       expect(repo.listPrices("local").find(r => r.id === saved[0]!.id)).toEqual(saved[0]);
     } finally {
-      child?.kill();
-      pg.exec(`DROP SCHEMA ${schema} CASCADE`); pg.close();
+      if (child) { child.kill(); await child.exited; }
+      pg.close();
     }
-  }, 20000);
-  it.skipIf(!process.env.MULTIREMI_TEST_REFERENCE_DATABASE_URL)("CLI plans read-only and applies only reviewed published rows to an isolated database", async () => {
-    const adminUrl = process.env.MULTIREMI_TEST_REFERENCE_DATABASE_URL!;
-    if (adminUrl !== "postgres://usage_test:usage_test@127.0.0.1:55486/postgres") throw new Error("Reference test requires the isolated dummy database URL");
-    const name = `reference_cli_${crypto.randomUUID().replaceAll("-", "")}`;
-    const admin = new PostgresSyncDatabase(adminUrl);
+  }), 20000);
+  it.skipIf(referenceAdminUrl === undefined)("CLI plans read-only and applies only reviewed published rows to an isolated database", async () => withReferenceDatabase(async url => {
     const dir = mkdtempSync(join(tmpdir(), "reference-cli-"));
     let own: PostgresSyncDatabase | undefined;
     try {
-      admin.exec(`CREATE DATABASE ${name}`);
-      const url = `postgres://usage_test:usage_test@127.0.0.1:55486/${name}`;
       own = new PostgresSyncDatabase(url);
       own.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_tasks(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
       own.run("INSERT INTO multiremi_workspaces(id,updated_at) VALUES('local',?)", [from]);
@@ -204,7 +241,9 @@ describe("pinned public gateway reference prices", () => {
       async function invoke(extra: string[]) {
         const child = Bun.spawn([...common, ...extra], { env: { ...process.env, MULTIREMI_DATABASE_URL: url }, stdout: "pipe", stderr: "pipe" });
         const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-        if (code) throw new Error(`CLI exited ${code}: ${stderr}`);
+        const password = decodeURIComponent(new URL(url).password);
+        if ([stdout, stderr].some(text => text.includes(url) || (password && text.includes(password)))) throw new Error("CLI exposed database connection credentials");
+        if (code) throw new Error(`Reference CLI exited ${code}`);
         return JSON.parse(stdout);
       }
       const dry = await invoke([`--routes=${routes}`, `--out=${output}`]);
@@ -217,8 +256,7 @@ describe("pinned public gateway reference prices", () => {
       expect(priceRepository(own).repo.listPrices("local")[0]!.source).toBe("published");
     } finally {
       own?.close();
-      admin.exec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); admin.close();
-      rmSync(dir, { recursive: true, force: true });
+      removeReferenceDirectory(dir);
     }
-  }, 20000);
+  }), 20000);
 });
