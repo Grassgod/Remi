@@ -20,6 +20,11 @@ Evidence JSONL files have mode 0600; their directory defaults to
 The `provider_input` event proves delivery to this process; `actual_read` records
 the server receipt; `provider_complete` precedes the daemon terminal report and
 does not itself establish terminal success. Repeated reads retain `read_count`.
+`provider_cancelled` records the cancellation of an ACP prompt, not a failed
+daemon turn. The final evidence includes actual reads across all ACP prompts in
+the same attempt; a continuation starts at the last actual range read, while a
+new attempt starts at its own projection. An inline input acknowledgement is
+not substituted for an actual range read.
 
 Set the test agent's `PPE_ACP_PAUSE` to any comma-separated subset of
 `before-read,after-read,before-complete`. Each `paused` event advertises a unique
@@ -35,8 +40,26 @@ without publishing a successful reply. Unreleased pauses fail after 120 seconds;
 For queue editing, pause a blocker before reading, create the queued request,
 edit/delete it through the normal UI/CLI, then resume the blocker and inspect the
 next actual provider input. For running injection, pause after reading, inject a
-new marker and wait for the offered head before resuming. Verify a single read
-per new marker and the correct final reply; a failed receipt blocks F01.
+new marker and wait for the offered head before resuming. The daemon may
+soft-cancel that prompt and start a continuation in the same provider session.
+Release each new `paused` event using its own advertised control file: the
+cancelled prompt's file cannot release the continuation. Wait for its new
+`actual_read` and `after-read` pause before releasing that file. Verify a single
+read per marker across the attempt, the terminal reply and an empty agent queue;
+a failed receipt blocks F01.
+
+The fixture deliberately rejects overlapping `session/prompt` with
+`ppe_session_busy`. Do not make it accept concurrent prompts to qualify F04.
+[ACP cancellation](https://agentclientprotocol.com/protocol/v1/prompt-turn#cancellation)
+finishes through the original prompt's response after pending operations and
+updates drain. The daemon must await that response before its steering prompt.
+The pinned [Codex ACP 2.1.1 implementation](https://github.com/agentclientprotocol/codex-acp/blob/v2.1.1/src/CodexAcpServer.ts)
+likewise awaits the previous prompt's completion before starting an externally
+triggered turn (`startNewTurnFromExternalPrompt`); cancellation waits for the
+native `turn/completed` event. This fixture exercises that serial contract, not
+the provider's separate steering extensions or a real model.
+
+Local regression: `bun run test tests/integration/daemon-protocol-v2/running-chat-interrupts.test.ts`.
 
 The PPE image runs the source CLI with Bun; the fixture detects
 `/app/apps/remi/main.ts` and uses that same entry. Other environments use `remi`

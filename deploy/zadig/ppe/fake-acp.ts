@@ -14,9 +14,11 @@ const pauses = new Set((process.env.PPE_ACP_PAUSE ?? "").split(","));
 const pauseTimeout = Number(process.env.PPE_ACP_PAUSE_TIMEOUT_MS ?? 120_000);
 const markers = (text: string): string[] => [...new Set(text.match(/MUL-493\/PROBE\/[A-Za-z0-9_.:-]{1,128}/g) ?? [])];
 const digest = (text: string): string => createHash("sha256").update(text).digest("hex");
-type Probe = { sessionId: string; cancelled: boolean; stage: string | null; release: boolean };
+type Probe = { sessionId: string; cancelled: boolean; stage: string | null; release: boolean; onCancelled?: () => void };
 const active = new Map<string, Probe>();
 const consumed = new Map<string, number>();
+// A soft cancellation continues the same daemon attempt in another ACP prompt.
+const readHistory = new Map<string, { attemptId: string; reads: Array<Record<string, unknown>> }>();
 
 async function cli(args: string[]): Promise<any> {
   const entry = process.env.PPE_ACP_REMI_ENTRY ?? (existsSync("/app/apps/remi/main.ts") ? "/app/apps/remi/main.ts" : undefined);
@@ -45,6 +47,7 @@ async function probeInput(request: RpcRequest, prompt: string, probe: Probe): Pr
     appendFileSync(evidenceFile, line + "\n", { mode: 0o600 });
     process.stderr.write(line + "\n");
   };
+  probe.onCancelled = () => record("provider_cancelled", { request_id: request.id });
   const pause = async (stage: string): Promise<boolean> => {
     if (!pauses.has(stage)) return false;
     if (!Number.isFinite(pauseTimeout) || pauseTimeout <= 0) throw new Error("ppe_invalid_pause_timeout");
@@ -69,12 +72,17 @@ async function probeInput(request: RpcRequest, prompt: string, probe: Probe): Pr
   };
   record("provider_input", { prompt_sha256: digest(prompt), markers: markers(prompt), request_id: request.id });
   await pause("before-read");
-  const reads: Array<Record<string, unknown>> = [];
+  let history = readHistory.get(probe.sessionId);
+  if (history?.attemptId !== attemptId) {
+    history = { attemptId, reads: [] };
+    readHistory.set(probe.sessionId, history);
+  }
+  const reads = history.reads;
   let readTo: number | undefined;
   const read = async () => {
     if (probe.cancelled) throw new Error("ppe_cancelled");
     const before = await detail();
-    const from = readTo ?? Number(before.attempt.projection_from_seq ?? before.turn.input_from_seq ?? 0);
+    const from = readTo ?? Number(reads.at(-1)?.to_seq ?? before.attempt.projection_from_seq ?? before.turn.input_from_seq ?? 0);
     const to = Number(before.attempt.projection_to_seq ?? before.turn.wake_seq ?? 0);
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from) throw new Error("ppe_invalid_range");
     const entries = await cli(["message", "list", before.turn.session_id, "--from", String(from), "--to", String(to)]);
@@ -180,12 +188,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       void (async () => {
         try {
           const text = markers(prompt).length ? await probeInput(request, prompt, probe) : "PPE daemon ACP smoke test completed.";
-          if (probe.cancelled) { result({ stopReason: "cancelled" }); return; }
+          if (probe.cancelled) { probe.onCancelled?.(); result({ stopReason: "cancelled" }); return; }
           send({ jsonrpc: "2.0", method: "session/update", params: { sessionId,
             update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } });
           result({ stopReason: "end_turn" });
         } catch (error) {
-          if (probe.cancelled) result({ stopReason: "cancelled" });
+          if (probe.cancelled) { probe.onCancelled?.(); result({ stopReason: "cancelled" }); }
           else send({ jsonrpc: "2.0", id: request.id, error: { code: -32000,
             message: error instanceof Error && /^ppe_[a-z_]+$/.test(error.message) ? error.message : "ppe_probe_failed" } });
         } finally { active.delete(sessionId); }
