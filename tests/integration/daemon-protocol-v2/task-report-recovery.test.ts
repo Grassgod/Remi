@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.js";
+import { actualUnit } from "@acp/usage-collector.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 for (const confirmed of [false, true]) {
@@ -21,7 +22,11 @@ for (const confirmed of [false, true]) {
           await finishing;
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "synthetic answer" }] } as any;
         },
-        getLastResponse: () => ({ text: "synthetic answer", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
+        getLastResponse: () => ({ text: "synthetic answer", sessionId: "fixture-session", usage: [], toolCalls: [], metadata: {
+          usageUnits: [actualUnit({ unitId: "recovered-request", provider: "claude", model: "fixture-opus",
+            scope: "request", source: "provider_request", accuracy: "exact", inputTokens: 10, outputTokens: 2,
+            cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12 })],
+        } } as any),
         close: async () => {},
       }),
       beforeSend(frame, socket, harness) {
@@ -57,6 +62,7 @@ for (const confirmed of [false, true]) {
       const issue = h.store.createIssue({ title: "Recovered report", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
       const task = h.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "inert recovery", maxAttempts: 1 });
       await waitFor(() => droppedStart && h.client.connectionState() === "disconnected", "first start disconnected", 5_000);
+      expect(runs).toBe(0);
       if (confirmed) {
         expect(h.store.getTask(task.id)?.acceptedAt).not.toBeNull();
         expect(h.store.getTask(task.id)?.status).toBe("dispatched");
@@ -71,6 +77,8 @@ for (const confirmed of [false, true]) {
       await waitFor(() => h.daemon.outboxStats()?.pending === 0, "start acknowledgement", 5_000);
       expect(h.store.getTask(task.id)?.status).toBe("running");
       expect(h.store.getTask(task.id)?.startedAt).not.toBeNull();
+      const usageRunId = h.ledger.find(entry => entry.type === "task.start" && entry.partition === task.id)!.frame.p.usage_run_id as string;
+      expect(h.store.getTaskUsageRunRuntime(task.id, usageRunId)).toBe(runtimeId);
       await waitFor(() => runs === 1, "inert provider starts once", 5_000);
       await waitFor(() => (h.daemon as unknown as { serverDrainActive: boolean }).serverDrainActive, "daemon applies drain", 5_000);
       h.clock.advance(15_000);
@@ -95,6 +103,7 @@ for (const confirmed of [false, true]) {
       expect(comments.filter(comment => comment.body === "synthetic answer")).toHaveLength(1);
       expect(h.store.listSessionEvents(session)).toEqual(events);
       expect(h.store.getTask(task.id)!.attempt).toBe(attempts);
+      expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(12);
       expect(h.store.listWorkspaceAgentRunCounts()).toEqual(counters);
       expect(cards.filter(id => id === task.id)).toHaveLength(1);
       expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
@@ -161,7 +170,7 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     const initial = send("First immutable input", "initial-input");
     const oldTaskId = initial.task!.id;
     await waitFor(() => droppedStart && h.client.connectionState() === "disconnected"
-      && h.store.getTask(oldTaskId)?.status === "queued" && prompts.length === 1,
+      && h.store.getTask(oldTaskId)?.status === "queued" && prompts.length === 0,
     "real Issue offer disconnect and requeue", 5_000);
     const oldTask = h.store.getTask(oldTaskId)!;
     const oldBound = h.store.getBoundIssueLogToSeq(oldTaskId);
@@ -172,10 +181,11 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     expect(h.store.getTask(oldTaskId)).toMatchObject({ prompt: oldTask.prompt,
       triggerCommentId: oldTask.triggerCommentId });
     expect(h.store.getBoundIssueLogToSeq(oldTaskId)).toBe(oldBound);
-    expect(prompts[0]).toContain("First immutable input");
-    expect(prompts[0]).not.toContain(next.entry.body_md);
     await h.reconnect();
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "running", "old Issue turn recovered", 5_000);
+    await waitFor(() => prompts.length === 1, "accepted old turn enters its provider", 5_000);
+    expect(prompts[0]).toContain("First immutable input");
+    expect(prompts[0]).not.toContain(next.entry.body_md);
     finish();
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "completed"
       && h.store.listTasksForIssue(issue.id).some(task => task.id !== oldTaskId)
@@ -326,7 +336,7 @@ for (const replacement of ["cancelled", "assigned elsewhere"] as const) {
 
 for (const terminalReport of ["complete", "fail"] as const) {
 for (const accepted of [true, false]) {
-test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} when its start write was lost`, async () => {
+test(`a real ${accepted ? "accepted" : "requeued"} offer accepts legacy ${terminalReport} while a modern daemon waits for its lost start`, async () => {
   let finish!: () => void;
   const finishing = new Promise<void>(resolve => { finish = resolve; });
   let droppedStart = false;
@@ -362,10 +372,10 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const agent = h.store.createAgent({ name: "Completion without start", provider: "claude", runtimeId });
     const task = h.store.createTask({ agentId: agent.id, prompt: "Inert accepted completion", maxAttempts: 1 });
-    await waitFor(() => droppedStart && runs === 1
+    await waitFor(() => droppedStart && runs === 0
       && (accepted ? h.store.getTask(task.id)?.acceptedAt != null
         : h.client.connectionState() === "disconnected" && h.store.getTask(task.id)?.status === "queued"),
-      "real offer received, local provider running, start absent", 5_000);
+      "real offer received, provider gated, start absent", 5_000);
     expect(h.store.getTask(task.id)).toMatchObject({ status: accepted ? "dispatched" : "queued", startedAt: null });
     if (!accepted) {
       h.store.beginPlatformDrain({ operationId: `terminal-${terminalReport}`, ttlMs: 120_000 });
@@ -387,7 +397,7 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
     await waitFor(() => h.daemon.outboxStats()?.pending === 0
       && h.ledger.some(entry => entry.partition === task.id && entry.type === "task.start"),
     "lost start retries against the now-terminal task and drains", 5_000);
-    expect(runs).toBe(1);
+    expect(runs).toBe(0);
     // The ledger observes state writes for complete; fail is asserted directly
     // against its persisted terminal row, and neither report reruns the provider.
     if (terminalReport === "complete") expect(h.effectiveLedger.filter(entry => entry.partition === task.id && entry.type === "task.complete")).toHaveLength(1);

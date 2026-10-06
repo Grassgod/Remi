@@ -65,6 +65,7 @@ import type {
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { UsageAccountingRepo, type UsageReportInput } from "@multiremi/store/repos/usage-accounting-repo.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { afterCommit } from "@multiremi/store/db/postgres.js";
 import { ensureUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
 import type { TaskUsageSnapshot, SetUsagePriceInput, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
