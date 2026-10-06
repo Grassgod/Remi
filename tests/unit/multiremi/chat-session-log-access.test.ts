@@ -64,6 +64,9 @@ for (const creator of ["runtime-owner", "other-user"] as const) test(`a task rea
   const { chat, first, task, headers } = await ownChat(f, creator === "runtime-owner" ? f.runtime.ownerId! : f.creator.id);
   expect(chat.creatorId).toBe(creator === "runtime-owner" ? f.runtime.ownerId! : f.creator.id);
   expect(task.chatSessionId).toBe(chat.id);
+  const offer = daemonTaskClaimResponse(f.store, task, f.store.getTaskTriggerMetadata(task));
+  useTaskSessionInput(f.store, task, offer);
+  const inputRange = JSON.parse((offer.session_projection as { jsonl: string }).jsonl.split("\n")[0]!);
   const to = f.store.getConversationLogHead(chat.id)!.headSeq;
   expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
   await verifyExpansions(f, chat.id, first.message.id, "FIRST_UNREAD", headers);
@@ -71,6 +74,8 @@ for (const creator of ["runtime-owner", "other-user"] as const) test(`a task rea
   expect(response.status).toBe(200);
   const page = await response.json();
   expect(page).toMatchObject({ session_id: chat.id, from_seq: 0, to_seq: to });
+  expect(page.from_seq).toBeLessThanOrEqual(inputRange.from_seq);
+  expect(page.to_seq).toBeGreaterThanOrEqual(inputRange.to_seq);
   expect(page.entries.map((entry: { seq: number }) => entry.seq)).toEqual([1, 2]);
   expect(page.entries.map((entry: { body_md: string }) => entry.body_md)).toEqual(["FIRST_UNREAD", "SECOND_UNREAD"]);
   expect(page.next_cursor).toBeNull();
@@ -297,4 +302,12 @@ test("Issue task credentials still read Issue ranges and persist unread progress
   expect(response.status).toBe(200);
   expect((await response.json()).entries).toContainEqual(expect.objectContaining({ body_md: "ISSUE_UNREAD" }));
   expect(f.store.getSessionAgentReadProgress(session.id, f.agent.id)).toEqual({ seq: to, offset: 0 });
+  const workspace = f.store.createWorkspace({ name: "Foreign issues", slug: "foreign-issues" });
+  const foreignIssue = f.store.createIssue({ workspaceId: workspace.id, title: "Foreign unread issue" });
+  const foreignSession = f.store.getOrCreateDefaultIssueSession(foreignIssue.id);
+  const denied = await f.app.request(`/api/sessions/${foreignSession.id}/log/entry?from=0&to=1`,
+    { headers: { Authorization: `Bearer ${credential.token}` } });
+  expect(denied.status).toBe(404);
+  expect(await denied.json()).toEqual({ error: "workspace not found" });
+  expect(f.store.getSessionAgentReadProgress(foreignSession.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
 });
