@@ -1,15 +1,12 @@
-// MUL-473 (S9-2, PR2): guards for `GET /api/inbox/summary` and
+// MUL-473 (S9-2, PR2): guards for canonical `GET /api/inbox` counts and
 // `GET /api/attachments/:id/content`.
 //
 // Both routes were hotspots for the same reason the PR1 routes were: work
 // proportional to the number of rows, not to the answer.
 //
-//   1. `/api/inbox/summary` walked every unarchived inbox row across the bridge
-//      and de-duplicated/counted in JavaScript. It is now one aggregate plus a
-//      read of the successful-run payloads. The golden below is compared
-//      against a verbatim copy of the pre-change implementation running on the
-//      same fixture, so attention rules and the autopilot date-group merge are
-//      asserted against the old code, not against a restatement of the new one.
+//   1. Canonical inbox counts aggregate the unread message log independently
+//      of the paginated payload. Retired notification timezone folds do not
+//      participate in unread or attention counts.
 //   2. `/api/attachments/:id/content` re-sent the whole file on every request
 //      with `Cache-Control: no-store`. It now streams with an `ETag` and an
 //      immutable cache directive, and answers `304` when the client already has
@@ -196,22 +193,34 @@ describe("MUL-473 inbox summary", () => {
   },20000);
 
   it("bounds canonical inbox hydration at every scale", async () => {
+    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 900 });
+    // Each scale measures the first authenticated request, including its
+    // last-used stamp, just as the former independent fixtures did.
+    const credentials = await Promise.all([50, 300, 900].map(inboxRows => harness.store.createAccessToken({
+      name: `Inbox scale ${inboxRows}`, type: "pat", userId: harness.fixture.readerUserId,
+      workspaceId: harness.fixture.workspaceId, purpose: "session",
+    })));
+    const session = harness.store.getOrCreateDefaultIssueSession(harness.fixture.issueIds[0]!).id;
+    const firstSeq = Number((harness.db.query(`SELECT MIN(seq) AS seq FROM multiremi_conversation_log
+      WHERE session_id=? AND to_member_id=?`).get(session, harness.fixture.readerMemberId) as { seq: number | string }).seq);
     const measurements: Array<{ inboxRows: number; statements: number; bytes: number }> = [];
+    // Vary the visible population in one fixture; database bootstrap is not
+    // part of the measured route's query or bridge-byte budget.
     for (const inboxRows of [50, 300, 900]) {
-      const harness = await createHarness({ sessions: 1, agents: 1, inboxRows });
+      harness.headers.Authorization = `Bearer ${credentials[measurements.length]!.token}`;
+      harness.db.run(`UPDATE multiremi_conversation_log SET visibility=CASE WHEN seq<? THEN 'shown' ELSE 'hidden' END
+        WHERE session_id=? AND to_member_id=?`, firstSeq + inboxRows, session, harness.fixture.readerMemberId);
       const summary = await getInboxSummary(harness, 0);
       expect(summary.body).toEqual(
-        {unread:harness.fixture.counts.inboxUnread,attention:harness.fixture.counts.inboxAttention},
+        {unread:inboxRows,attention:inboxRows / 5 * 2},
       );
       measurements.push({ inboxRows, statements: summary.statements, bytes: summary.bytes });
     }
-    // Auth (token read + `last_used_at` + membership), the aggregate, and the
-    // completed-run payload read: a constant that never sees the row count.
+    // Auth, inbox aggregates, and one payload page stay within a constant
+    // statement budget regardless of the unread population.
     for (const point of measurements) expect(point.statements).toBeLessThanOrEqual(8);
     expect(measurements[0]!.statements).toBe(measurements[2]!.statements);
-    // One fifth of the fixture's rows are successful runs, so dbb grows with
-    // those rows alone; the pre-change route moved every row. The issue's budget
-    // is dbb < 100 KB, which the whole fixture must stay under.
+    // The payload page caps bridge bytes while counts cover the full population.
     for (const point of measurements) expect(point.bytes).toBeLessThan(100 * 1024);
     const perRow = measurements.map((point) => point.bytes / point.inboxRows);
     expect(perRow[2]!).toBeLessThan(perRow[0]! * 2);
