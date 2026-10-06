@@ -5,6 +5,7 @@ import {
 } from "../agent-templates.js";
 import {
   canCurrentUserAccessAgent,
+  canCurrentUserAccessAgentChecker,
   canCurrentUserAccessChatTask,
   denyCurrentUserWorkspaceAccess,
   isFirstAgentInWorkspace,
@@ -29,6 +30,7 @@ import {
 } from "../helpers.js";
 import {
   agentCompatibilityResponse,
+  agentCompatibilityResponses,
   agentEnvResponse,
   currentTaskAccessToken,
   currentRequestUserId,
@@ -221,12 +223,13 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const agents = store.listAgents({
+    const canAccess = canCurrentUserAccessAgentChecker(c, store);
+    const agents = store.listAgentCompatibilityCandidates(workspaceId, {
       includeArchived: c.req.query("include_archived") === "true" || c.req.query("includeArchived") === "true",
     }).filter((agent) =>
-      agent.workspaceId === workspaceId && canCurrentUserAccessAgent(c, store, agent)
+      agent.workspaceId === workspaceId && canAccess(agent)
     );
-    return c.json(agents.map((agent) => agentCompatibilityResponse(store, agent, c)));
+    return c.json(agentCompatibilityResponses(store, agents, c));
   });
   app.post("/api/agents", async (c) => {
     const body = await readJsonStrict<CreateAgentInput>(c);

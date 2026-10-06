@@ -1,7 +1,7 @@
 // Wire serializers for the agents domain, moved verbatim out of api.ts.
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
-import type { MultiremiAgent } from "@multiremi/contracts/types.js";
+import type { MultiremiAgent, MultiremiSkill } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
   cleanString,
@@ -11,9 +11,12 @@ import {
 } from "./context.js";
 import { agentSkillCompatibilitySummary, daemonClaimSkillResponse } from "./skills.js";
 
-export function agentCompatibilityResponse(store: MultiremiStore, agent: MultiremiAgent, c?: any): Record<string, unknown> {
+export function agentCompatibilityResponse(store: MultiremiStore, agent: MultiremiAgent, c?: any, listData?: {
+  skills: MultiremiSkill[];
+  mcpConfig: { value: unknown | null; redacted: boolean };
+}): Record<string, unknown> {
   const customEnvKeyCount = Object.keys(agent.customEnv ?? {}).length;
-  const mcpConfig = agentMcpConfigForRequest(store, agent, c);
+  const mcpConfig = listData?.mcpConfig ?? agentMcpConfigForRequest(store, agent, c);
   return {
     id: agent.id,
     workspace_id: agent.workspaceId,
@@ -42,12 +45,37 @@ export function agentCompatibilityResponse(store: MultiremiStore, agent: Multire
     role: agent.role,
     supervisor: agent.supervisor === true,
     owner_id: agent.ownerId,
-    skills: store.listAgentSkills(agent.id, { includeFiles: false }).map(agentSkillCompatibilitySummary),
+    skills: (listData?.skills ?? store.listAgentSkills(agent.id, { includeFiles: false })).map(agentSkillCompatibilitySummary),
     created_at: agent.createdAt,
     updated_at: agent.updatedAt,
     archived_at: agent.archivedAt,
     archived_by: null,
   };
+}
+
+/** Batch only the list serializer; single-resource/native responses keep their contracts. */
+export function agentCompatibilityResponses(store: MultiremiStore, agents: MultiremiAgent[], c: any): Record<string, unknown>[] {
+  const skills = store.listAgentSkillSummaries(agents);
+  const secretAccess = new Map<string, { alwaysRedact: boolean; admin: boolean }>();
+  const agentCredential = Boolean(cleanString(c.req?.header?.("X-Agent-ID")));
+  const userId = currentRequestUserId(c);
+  return agents.map(agent => {
+    let mcpConfig: { value: unknown | null; redacted: boolean } = { value: null, redacted: false };
+    if (agent.mcpConfig != null) {
+      if (agentCredential) mcpConfig = { value: null, redacted: true };
+      else {
+        let access = secretAccess.get(agent.workspaceId);
+        if (!access) {
+          const role = currentWorkspaceRoleStrict(c, store, agent.workspaceId);
+          access = { alwaysRedact: workspaceAlwaysRedactSecrets(store.getWorkspace(agent.workspaceId)?.settings), admin: role === "owner" || role === "admin" };
+          secretAccess.set(agent.workspaceId, access);
+        }
+        const allowed = !access.alwaysRedact && (access.admin || agent.ownerId === userId);
+        mcpConfig = { value: allowed ? agent.mcpConfig : null, redacted: !allowed };
+      }
+    }
+    return agentCompatibilityResponse(store, agent, c, { skills: skills.get(agent.id) ?? [], mcpConfig });
+  });
 }
 
 export function agentBroadcastCompatibilityResponse(store: MultiremiStore, agent: MultiremiAgent): Record<string, unknown> {

@@ -549,3 +549,7 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 ### S9-6：活跃 Issue 任务读
 
 `GET /api/issues/:id/active-task` 先按活跃状态及 Chat creator/task capability 在 SQL 中筛选，再只读取完整公开任务字段；公开 prompt/result/usage/plugin 与 queue blocker、顺序保持原形状。Issue workspace 已授权且一致的行无需逐行重复权限读取，历史 workspace 不一致的行保留旧权限守卫。终态任务和私有执行 profile 不跨桥。正式测试 `first-screen-hotspots-s96-active.test.ts` 对双方言、状态、空/不存在/无权 Issue、Chat/非 Chat、任务凭证逐字段对拍。
+
+### S9-6：Agent 列表批量水合
+
+`GET /api/agents` 按 workspace/归档条件取未水合候选，先过滤可见 Agent，再批量读取技能关联（有界 IN 批次，不读 Skill files）；结构化技能优先、关联创建时间/名称排序和 inline fallback 去重不变。MCP 配置的 workspace 设置/角色每 workspace 只查一次，保留 X-Agent-ID、owner/admin、Agent owner 与 always_redact_env 规则；custom_env 仍只输出键数量。native 列表和单 Agent 详情保留原路径。双方言正式对拍覆盖角色、私有/其他 workspace、两种归档参数和脱敏。

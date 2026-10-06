@@ -1452,6 +1452,14 @@ runMigrations(this.db);
     return this.agents.listAgents(options);
   }
 
+  listAgentCompatibilityCandidates(workspaceId: string, options?: { includeArchived?: boolean }): MultiremiAgent[] {
+    return this.agents.listAgentCompatibilityCandidates(workspaceId, options);
+  }
+
+  listAgentSkillSummaries(agents: readonly MultiremiAgent[]): Map<string, MultiremiSkill[]> {
+    return this.agents.listAgentSkillSummaries(agents);
+  }
+
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MultiremiWorkspaceMember {
     return this.workspaces.createWorkspaceMember(input);
   }
