@@ -9,6 +9,7 @@ import { MultiremiDaemonHttpError } from "./client.js";
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import { DAEMON_FRAME_MAX_BYTES, DAEMON_UPLINK_WINDOW_FRAMES, DAEMON_UPLINK_WINDOW_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { outboxRecordBytes } from "./report-frames.js";
+import { splitUsageReport } from "./usage-report-chunks.js";
 import {
   coalesceTaskMessages,
   DEFAULT_TASK_MESSAGE_BATCH_COUNT,
@@ -144,9 +145,14 @@ export class MultiremiTaskReportOutbox {
       CREATE TABLE IF NOT EXISTS outbox_discarded_tasks (
         task_id TEXT PRIMARY KEY,
         keep_terminal INTEGER NOT NULL,
+        keep_usage INTEGER NOT NULL DEFAULT 0,
         discarded_at TEXT NOT NULL
       );
     `);
+    const discardedColumns = this.db.query("PRAGMA table_info(outbox_discarded_tasks)").all() as Array<{ name: string }>;
+    if (!discardedColumns.some(column => column.name === "keep_usage")) {
+      this.db.exec("ALTER TABLE outbox_discarded_tasks ADD COLUMN keep_usage INTEGER NOT NULL DEFAULT 0");
+    }
     this.deliver = options.deliver;
     this.canSend = options.canSend ?? (() => true);
     this.prepareDelivery = options.prepareDelivery ?? (record => record);
@@ -160,11 +166,21 @@ export class MultiremiTaskReportOutbox {
   /** Persist a report and wake the task's delivery pump. Never throws on queue pressure. */
   enqueue(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): number | null {
     if (this.closed) throw new Error("outbox is closed");
+    const snapshot = payload.usageSnapshot as import("@multiremi/contracts/usage-accounting.js").TaskUsageSnapshot | undefined;
+    if (kind === "usage" && snapshot?.version === 2 && Array.isArray(snapshot.units)) {
+      const chunks = splitUsageReport(snapshot);
+      if (chunks.length > 1) {
+        let lastId: number | null = null;
+        for (const chunk of chunks) lastId = this.enqueue(taskId, kind, { ...payload, usageSnapshot: chunk });
+        return lastId;
+      }
+    }
     const terminal = TERMINAL_KINDS.has(kind);
     const discarded = this.db.query(
-      "SELECT keep_terminal FROM outbox_discarded_tasks WHERE task_id = ?",
-    ).get(taskId) as { keep_terminal: number } | null;
-    if (discarded && !(Number(discarded.keep_terminal) === 1 && terminal)) {
+      "SELECT keep_terminal, keep_usage FROM outbox_discarded_tasks WHERE task_id = ?",
+    ).get(taskId) as { keep_terminal: number; keep_usage: number } | null;
+    if (discarded && !(Number(discarded.keep_terminal) === 1 && terminal)
+      && !(Number(discarded.keep_usage) === 1 && kind === "usage")) {
       const total = Number(this.readMeta("dropped_total") ?? 0) + 1;
       this.writeMeta("dropped_total", String(total));
       log.debug(`outbox discarded ${kind} report for tombstoned task ${taskId}`);
@@ -179,6 +195,8 @@ export class MultiremiTaskReportOutbox {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [randomUUID(), taskId, kind, JSON.stringify(oversized ? {} : payload), id, terminal ? 1 : 0, blocked ? "blocked" : "pending", new Date().toISOString()],
     );
+    // A complete marker may follow multiple bounded chunks. It never proves
+    // that one body contains older units, so pending usage deltas are retained.
     if (oversized) this.blockPartition(taskId, "protocol_violation: encoded report exceeds 1 MiB");
     this.enforceSizeCap();
     this.ensurePump(taskId);
@@ -296,27 +314,28 @@ export class MultiremiTaskReportOutbox {
    * producers from recreating them. A terminal-only tombstone is useful when
    * callers still need to preserve a completion/failure report.
    */
-  purgeTask(taskId: string, options: { keepTerminal?: boolean } = {}): number {
+  purgeTask(taskId: string, options: { keepTerminal?: boolean; keepUsage?: boolean } = {}): number {
     if (this.closed) return 0;
     const keepTerminal = options.keepTerminal === true;
+    const keepUsage = options.keepUsage === true;
     const discardedAt = new Date().toISOString();
     const cutoff = new Date(Date.now() - DISCARDED_TASK_TTL_MS).toISOString();
     const purge = this.db.transaction(() => {
       this.db.run("DELETE FROM outbox_discarded_tasks WHERE discarded_at < ?", [cutoff]);
       this.db.run(
-        `INSERT INTO outbox_discarded_tasks (task_id, keep_terminal, discarded_at)
-         VALUES (?, ?, ?)
+        `INSERT INTO outbox_discarded_tasks (task_id, keep_terminal, keep_usage, discarded_at)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(task_id) DO UPDATE SET
            keep_terminal = MIN(outbox_discarded_tasks.keep_terminal, excluded.keep_terminal),
+           keep_usage = MIN(outbox_discarded_tasks.keep_usage, excluded.keep_usage),
            discarded_at = excluded.discarded_at`,
-        [taskId, keepTerminal ? 1 : 0, discardedAt],
+        [taskId, keepTerminal ? 1 : 0, keepUsage ? 1 : 0, discardedAt],
       );
       const tombstone = this.db.query(
-        "SELECT keep_terminal FROM outbox_discarded_tasks WHERE task_id = ?",
-      ).get(taskId) as { keep_terminal: number };
-      const result = Number(tombstone.keep_terminal) === 1
-        ? this.db.run("DELETE FROM outbox_events WHERE task_id = ? AND terminal = 0", [taskId])
-        : this.db.run("DELETE FROM outbox_events WHERE task_id = ?", [taskId]);
+        "SELECT keep_terminal, keep_usage FROM outbox_discarded_tasks WHERE task_id = ?",
+      ).get(taskId) as { keep_terminal: number; keep_usage: number };
+      const result = this.db.run("DELETE FROM outbox_events WHERE task_id = ? AND NOT (terminal = 1 AND ? = 1) AND NOT (kind = 'usage' AND ? = 1)",
+        [taskId, Number(tombstone.keep_terminal), Number(tombstone.keep_usage)]);
       return Number(result.changes);
     });
     const purged = purge();
@@ -658,7 +677,7 @@ const DROPPABLE_KINDS = new Set<MultiremiOutboxKind>(["progress", "session_pin",
 function isDeliveredEquivalent(error: unknown, record: MultiremiOutboxRecord): boolean {
   if (error instanceof DaemonProtocolRpcError) return record.kind === "start" && error.code === "start_replayed";
   if (!(error instanceof MultiremiDaemonHttpError)) return false;
-  if (record.kind === "start" && error.status === 400) return true;
+  if (record.kind === "start" && error.status === 400 && !record.payload.usage_run_id) return true;
   if (DROPPABLE_KINDS.has(record.kind) && error.status >= 400 && error.status < 500) {
     log.warn(`outbox dropped rejected ${record.kind} report for task ${record.taskId}: ${error.message}`);
     return true;

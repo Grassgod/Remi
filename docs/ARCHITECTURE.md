@@ -72,6 +72,8 @@ bot 控制指令携带版本和期望状态。[concierge supervisor](../packages
 
 ## 存储与事务
 
+用量由 [collector](../packages/acp/src/usage-collector.ts) 和可靠 task usage ledger 产生可修订单位，写入 [规范化标量表](../packages/server/src/store/usage-accounting.ts)；[UsageAccountingRepo](../packages/server/src/store/repos/usage-accounting-repo.ts)统一 SQL 聚合及价格版本匹配，Web 与 CLI 共用 report。消费按单位发生时间、任务状态与耗时按独立生命周期时间归属；run 保存执行 Runtime/项目，不从 task 最新绑定改写旧消费。启动只建表，历史受控回填完成前 report 返回 503。字段、计价来源和维护命令见[统一用量与价格](usage-accounting.md)。
+
 当前 Store 使用同步 `SqlDatabase` 接口。[openMultiremiDatabase](../packages/server/src/store/db/postgres.ts)
 根据 `MULTIREMI_DATABASE_URL` 选择 PostgreSQL，否则使用本地 SQLite。
 SQLite handle 统一由 [openSqliteDatabase](../packages/server/src/store/db/sqlite.ts) 创建并标记

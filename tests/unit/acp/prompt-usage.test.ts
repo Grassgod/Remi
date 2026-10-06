@@ -1,6 +1,6 @@
 // MUL-92/MUL-196: Claude settles whole-turn usage, while Codex settles only its
 // last model request. Remi's patched Codex stream carries each request's split;
-// the unpatched fallback sums `used` and stays totals-only.
+// context occupancy is never used as actual token consumption.
 import { describe, expect, it } from "bun:test";
 import { accumulateUsage, createPromptUsageState, resolvePromptUsage } from "@acp/provider.js";
 import { responseToUsage } from "@multiremi/worker/acp-event-mapper.js";
@@ -41,21 +41,21 @@ describe("resolvePromptUsage", () => {
     expect(resolved.totalTokens).toBe(5110);
   });
 
-  it("keeps the streamed numbers when the bridge settles without usage", () => {
+  it("does not bill streamed context occupancy when the bridge settles without usage", () => {
     const streamed = streamedOnly();
     expect(resolvePromptUsage(streamed, undefined, "turn")).toMatchObject({
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      totalTokens: 78048,
+      totalTokens: 0,
     });
     expect(resolvePromptUsage(streamed, null, "turn")).toMatchObject({
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      totalTokens: 78048,
+      totalTokens: 0,
     });
   });
 
@@ -86,7 +86,7 @@ describe("resolvePromptUsage", () => {
     }, "turn");
     expect(resolved.inputTokens).toBe(0);
     expect(resolved.outputTokens).toBe(0);
-    expect(resolved.totalTokens).toBe(100);
+    expect(resolved.totalTokens).toBe(0); // invalid details do not prove the reported total is consumption
   });
 
   it("accumulates patched codex request splits and ignores the last-request settle", () => {
@@ -105,11 +105,11 @@ describe("resolvePromptUsage", () => {
       outputTokens: 28,
       cacheReadTokens: 250,
       cacheWriteTokens: 0,
-      totalTokens: 340,
+      totalTokens: 318, // reasoning is already included in output; inconsistent totals remain diagnostics
     });
   });
 
-  it("sums unpatched codex used snapshots into a totals-only result", () => {
+  it("uses partial last-request settle without summing unpatched context occupancy", () => {
     const usage = createPromptUsageState();
     accumulateUsage(usage, { sessionUpdate: "usage_update", used: 100, size: 200000 });
     accumulateUsage(usage, { sessionUpdate: "usage_update", used: 240, size: 200000 });
@@ -120,15 +120,15 @@ describe("resolvePromptUsage", () => {
       cachedReadTokens: 180,
       totalTokens: 240,
     }, "last-request")).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
+      inputTokens: 25,
+      outputTokens: 20,
+      cacheReadTokens: 180,
       cacheWriteTokens: 0,
-      totalTokens: 340,
+      totalTokens: 225,
     });
   });
 
-  it("degrades a mixed detailed/fallback codex stream to an honest total-only result", () => {
+  it("keeps actual request consumption in a mixed detailed/context stream", () => {
     const usage = createPromptUsageState();
     accumulateUsage(usage, codexUsageUpdate(100, 15, 70, 8, 7));
     accumulateUsage(usage, { sessionUpdate: "usage_update", used: 240, size: 200000 });
@@ -139,11 +139,11 @@ describe("resolvePromptUsage", () => {
       cachedReadTokens: 180,
       totalTokens: 240,
     }, "last-request")).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
+      inputTokens: 15,
+      outputTokens: 8,
+      cacheReadTokens: 70,
       cacheWriteTokens: 0,
-      totalTokens: 340,
+      totalTokens: 93,
     });
   });
 
@@ -161,7 +161,7 @@ describe("resolvePromptUsage", () => {
       outputTokens: 8,
       cacheReadTokens: 70,
       cacheWriteTokens: 0,
-      totalTokens: 100,
+      totalTokens: 93,
     });
   });
 

@@ -7,6 +7,7 @@ import type {
   ReportPlatformOperationInput,
 } from "@multiremi/contracts";
 import { DrainAbortedError, type PlatformDrainGate } from "./drain.js";
+import { resolveHealthTimeoutMs, waitForHealthyUrl } from "./health-check.js";
 import type { CommandRunner, PlatformDeploymentDriver, PlatformInspection } from "./types.js";
 
 interface ComposeConfig {
@@ -15,6 +16,7 @@ interface ComposeConfig {
   stateDir: string;
   apiHealthUrl: string;
   webHealthUrl: string;
+  healthTimeoutMs?: number;
   /**
    * Overrides `MULTIREMI_PLATFORM_CORE_SERVICES` for tests and embedders.
    * `null`/absent means the environment decides.
@@ -69,8 +71,10 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
   private readonly coreServices: readonly string[];
   private readonly pullServices: readonly string[];
   private readonly extraHealthUrls: readonly string[];
+  private readonly healthTimeoutMs: number;
 
   constructor(private readonly config: ComposeConfig, private readonly runner: CommandRunner) {
+    this.healthTimeoutMs = resolveHealthTimeoutMs(config.healthTimeoutMs ?? process.env.MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS);
     // Unset is not "use the default list": it means this installation was never
     // told about a split topology, so it must pull, switch and report exactly
     // what it did before these knobs existed. Only an explicit list changes the
@@ -277,7 +281,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
 
   private async verify(): Promise<void> {
     const urls = [this.config.apiHealthUrl, this.config.webHealthUrl, ...this.extraHealthUrls];
-    await Promise.all(urls.map((url) => verifyUrl(url)));
+    await Promise.all(urls.map((url) => waitForHealthyUrl(url, this.healthTimeoutMs)));
   }
 
   private async compose(args: string[]) {
@@ -326,14 +330,6 @@ function toRelease(value: ComposeManifest): MultiremiPlatformRelease {
 
 async function readRelease(path: string): Promise<MultiremiPlatformRelease | null> {
   try { return JSON.parse(await readFile(path, "utf8")) as MultiremiPlatformRelease; } catch { return null; }
-}
-
-async function verifyUrl(url: string): Promise<void> {
-  for (let attempt = 0; attempt < 24; attempt += 1) {
-    try { const response = await fetch(url, { signal: AbortSignal.timeout(5_000) }); if (response.ok) return; } catch {}
-    await Bun.sleep(2_500);
-  }
-  throw new Error(`${url} did not become healthy`);
 }
 
 function safeFile(value: string): string {

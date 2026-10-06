@@ -1,0 +1,119 @@
+/** Patches only upstream values, never context occupancy or inferred prices. */
+export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v3";
+export const CLAUDE_USAGE_PATCH_VERSION = "claude-usage-v2";
+
+export function codexUsagePatch(source: string): string | null {
+  if (source.includes(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH_VERSION}";`)) return source;
+  const start = source.indexOf("  createUsageUpdate(params) {");
+  const end = source.indexOf("\n  handleRateLimitsUpdated(params)", start);
+  if (start < 0 || end < 0) return null;
+  return source.slice(0, start) + `  createUsageUpdate(params) {
+    const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH_VERSION}";
+    const previous = this.sessionState.remiUsageAccounting?.baseline ?? this.sessionState.totalTokenUsage;
+    this.handleTokenUsageUpdated(params);
+    const current = this.sessionState.totalTokenUsage;
+    const last = this.sessionState.lastTokenUsage;
+    if (!current || !last) return null;
+    const fields = ["inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"];
+    const valid = value => value && fields.filter(key => key !== "reasoningOutputTokens").every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
+      && value.inputTokens + value.cachedInputTokens + value.outputTokens === value.totalTokens;
+    const state = this.sessionState.remiUsageAccounting ??= { baseline: previous, seen: new Set(previous ? [JSON.stringify(previous)] : []), epoch: 0 };
+    const fingerprint = JSON.stringify(current);
+    if (!valid(current) || !valid(last)) {
+      this.sessionState.totalTokenUsage = state.baseline;
+      return { sessionUpdate: "usage_update", used: last.totalTokens, size: this.sessionState.modelContextWindow ?? 0,
+        _meta: { remiUsagePatch: CODEX_USAGE_PATCH, remiUncertainUsage: { reportedTotalTokens: current.totalTokens, reason: "ambiguous_compaction_total" } } };
+    }
+    if (state.seen.has(fingerprint)) { this.sessionState.totalTokenUsage = state.baseline; return null; }
+    // On session/load the bridge has no baseline but thread totals include
+    // previous prompts. Only last belongs to the newly observed request.
+    const delta = state.baseline ? Object.fromEntries(fields.map(key => [key, current[key] - state.baseline[key]])) : last;
+    // Identical cumulative notifications are replay, not another request.
+    if (fields.every(key => delta[key] === 0)) return null;
+    const reset = fields.some(key => delta[key] < 0);
+    if (reset) { state.epoch++; state.seen.clear(); }
+    state.seen.add(fingerprint);
+    state.baseline = current;
+    return {
+      sessionUpdate: "usage_update",
+      used: last.totalTokens,
+      size: this.sessionState.modelContextWindow ?? 0,
+      _meta: {
+        remiUsagePatch: CODEX_USAGE_PATCH,
+        remiTokenUsage: {
+          ...(reset ? last : delta),
+          scope: "delta",
+          source: "codex_thread_token_usage",
+          accuracy: reset || !previous ? "partial" : "exact",
+          // Thread totals carry no per-model breakdown. The selected model
+          // is evidence of routing, not proof that child requests used it.
+          model: null,
+          requestedModel: this.sessionState.currentModelId ?? null,
+          modelSource: this.sessionState.currentModelId ? "session_acknowledged" : "unknown",
+          id: String(params.threadId ?? this.sessionState.sessionId) + ":epoch:" + state.epoch + ":" + fingerprint,
+          threadId: params.threadId,
+          turnId: params.turnId ?? this.sessionState.currentTurnId,
+          cumulative: current
+        }
+      }
+    };
+  }` + source.slice(end);
+}
+
+export function claudeUsagePatch(source: string): string | null {
+  if (source.includes(`const CLAUDE_USAGE_PATCH = "${CLAUDE_USAGE_PATCH_VERSION}";`)) return source;
+  const anchor = "                if (session.emitRawSDKMessages &&";
+  if (!source.includes(anchor)) return null;
+  const oldHook = source.indexOf("                const CLAUDE_USAGE_PATCH = ");
+  if (oldHook >= 0) {
+    const oldEnd = source.indexOf(anchor, oldHook);
+    if (oldEnd < 0) return null;
+    source = source.slice(0, oldHook) + source.slice(oldEnd);
+  }
+  const hook = `                const CLAUDE_USAGE_PATCH = "${CLAUDE_USAGE_PATCH_VERSION}";
+                // Preserve each upstream request snapshot before any cancellation
+                // or failure handling can abandon the active prompt.
+                session.remiUsageRequests ??= new Map();
+                if (message.type === "result" && Number.isFinite(message.total_cost_usd) && message.total_cost_usd >= 0) {
+                    await this.client.sessionUpdate({ sessionId: params.sessionId, update: {
+                        sessionUpdate: "usage_update", used: 0, size: 0,
+                        cost: { amount: message.total_cost_usd, currency: "USD" },
+                        _meta: { remiUsagePatch: CLAUDE_USAGE_PATCH, remiCostUsage: { scope: "turn", source: "sdk_estimate" } }
+                    } });
+                }
+                const lane = message.parent_tool_use_id ?? "main";
+                let request = null;
+                if (message.type === "stream_event") {
+                    const event = message.event;
+                    if (event.type === "message_start" && event.message.model !== "<synthetic>") {
+                        request = { id: event.message.id, model: event.message.model, usage: event.message.usage, accuracy: "partial" };
+                        session.remiUsageRequests.set(lane, request);
+                    } else if (event.type === "message_delta") {
+                        const previous = session.remiUsageRequests.get(lane);
+                        if (previous) request = { ...previous, usage: { ...previous.usage, ...Object.fromEntries(Object.entries(event.usage).filter(([, value]) => value != null)) } };
+                        if (request) session.remiUsageRequests.set(lane, request);
+                    }
+                } else if (message.type === "assistant" && message.message.model !== "<synthetic>") {
+                    request = { id: message.message.id, model: message.message.model, usage: message.message.usage, accuracy: "exact" };
+                    if (session.remiUsageRequests.get(lane)?.id === request.id) session.remiUsageRequests.delete(lane);
+                }
+                if (request?.id && request.usage) {
+                    const usage = request.usage;
+                    const inputTokens = usage.input_tokens ?? 0;
+                    const outputTokens = usage.output_tokens ?? 0;
+                    const cachedInputTokens = usage.cache_read_input_tokens ?? 0;
+                    const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+                    await this.client.sessionUpdate({ sessionId: params.sessionId, update: {
+                        sessionUpdate: "usage_update", used: 0, size: 0,
+                        _meta: { remiUsagePatch: CLAUDE_USAGE_PATCH, remiTokenUsage: {
+                            id: request.id, model: request.model, scope: "request_snapshot",
+                            source: "claude_assistant_usage", accuracy: request.accuracy,
+                            parentToolUseId: message.parent_tool_use_id ?? null,
+                            inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens,
+                            totalTokens: inputTokens + outputTokens + cachedInputTokens + cacheWriteTokens
+                        } }
+                    } });
+                }
+`;
+  return source.replace(anchor, hook + anchor);
+}

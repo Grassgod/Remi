@@ -1,151 +1,76 @@
-import { beforeEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import {
-  applyCodexUsageBackfill,
-  buildCodexUsageBackfillPlan,
-  summarizeCodexUsageBackfill,
-} from "../../../scripts/backfill-codex-task-usage.js";
+import { describe, expect, it } from "bun:test";
+import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, type HistoricalTaskBoundary } from "../../../scripts/usage-evidence.js";
+import { unitActualTotal } from "../../../packages/acp/src/usage-collector.js";
 
-let db: Database;
+const at = "2026-10-01T01:00:00.000Z";
+const jsonl = (...rows: unknown[]) => rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+const counts = (input: number, output: number, cached = 0) => ({ input_tokens: input, output_tokens: output, cached_input_tokens: cached, total_tokens: input + output });
+const token = (total: unknown, last = total, timestamp = at) => ({ type: "event_msg", timestamp, payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: last } } });
 
-beforeEach(() => {
-  db = openSqliteDatabase(":memory:");
-  db.exec(`
-    CREATE TABLE multiremi_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-    CREATE TABLE multiremi_tasks (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      provider TEXT,
-      status TEXT NOT NULL,
-      usage TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE multiremi_task_messages (
-      task_id TEXT NOT NULL,
-      seq INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      meta TEXT
-    );
-  `);
-  db.run("INSERT INTO multiremi_agents (id, name) VALUES (?, ?), (?, ?)", ["agt_worker", "Worker", "agt_qa", "QA"]);
-});
-
-describe("Codex task usage backfill", () => {
-  it("rebuilds one total-only codex row while preserving other provider rows", () => {
-    insertTask("tsk_1", "agt_worker", "completed", [
-      usage("claude", "opus", 10, 5, 20, 2, 37),
-      usage("codex", "gpt-5.6-sol", 900, 210, 4000, 0, 5110),
-    ]);
-    insertUsage("tsk_1", 1, 100);
-    insertUsage("tsk_1", 2, 240);
-
-    const plan = buildCodexUsageBackfillPlan(db as never);
-    expect(plan.updates).toHaveLength(1);
-    expect(plan.updates[0]).toMatchObject({
-      taskId: "tsk_1",
-      eventCount: 2,
-      beforeTotalTokens: 5110,
-      afterTotalTokens: 340,
-      usage: [
-        usage("claude", "opus", 10, 5, 20, 2, 37),
-        usage("codex", "gpt-5.6-sol", 0, 0, 0, 0, 340),
-      ],
-    });
-    expect(summarizeCodexUsageBackfill(plan, "dry-run")).toMatchObject({
-      mode: "dry-run",
-      affectedTasks: 1,
-      beforeTotalTokens: 5110,
-      afterTotalTokens: 340,
-      byAgent: [{ agentId: "agt_worker", agentName: "Worker", affectedTasks: 1 }],
-    });
-
-    expect(applyCodexUsageBackfill(db as never, plan, "2026-08-29T00:00:00.000Z")).toBe(1);
-    const stored = db.query("SELECT usage, updated_at FROM multiremi_tasks WHERE id = 'tsk_1'").get() as {
-      usage: string;
-      updated_at: string;
-    };
-    expect(JSON.parse(stored.usage)[1]).toEqual(usage("codex", "gpt-5.6-sol", 0, 0, 0, 0, 340));
-    expect(stored.updated_at).toBe("2026-08-29T00:00:00.000Z");
+describe("historical consumption evidence", () => {
+  it("preserves context peaks as diagnostics and rejects all-zero compaction pseudo usage", () => {
+    const context = parseRawUsageEvidence({ provider: "codex", meta: { used: 78048, size: 200000,
+      _meta: { remiTokenUsage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, totalTokens: 78048 } } }, occurredAt: at, evidenceRef: "raw:1" });
+    expect(context.rejected).toBe(1);
+    expect(context.units).toHaveLength(1);
+    expect(context.units[0]).toMatchObject({ source: "context_snapshot", contextTokens: 78048, inputTokens: null, actualUnsplitTokens: null });
+    expect(context.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(0);
+    const raw = parseRawUsageEvidence({ provider: "codex", meta: { used: 120, size: 200000,
+      _meta: { remiTokenUsage: { inputTokens: 10, outputTokens: 10, cachedInputTokens: 100, totalTokens: 120 } } }, occurredAt: at, evidenceRef: "raw:2" });
+    expect(raw.units[1]).toMatchObject({ model: null, requestedModel: null, accuracy: "partial", inputTokens: 10, cacheReadTokens: 100 });
+    expect(raw.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(120);
   });
 
-  it("is idempotent and skips unsafe or unrecoverable rows", () => {
-    insertTask("tsk_correct", "agt_worker", "completed", [usage("codex", "gpt", 0, 0, 0, 0, 300)]);
-    insertUsage("tsk_correct", 1, 100);
-    insertUsage("tsk_correct", 2, 200);
-
-    insertTask("tsk_running", "agt_worker", "running", [usage("codex", "gpt", 1, 2, 3, 0, 6)]);
-    insertUsage("tsk_running", 1, 100);
-
-    insertTask("tsk_ambiguous", "agt_qa", "completed", [
-      usage("codex", "gpt-a", 1, 2, 3, 0, 6),
-      usage("codex", "gpt-b", 4, 5, 6, 0, 15),
-    ]);
-    insertUsage("tsk_ambiguous", 1, 100);
-
-    insertTask("tsk_no_events", "agt_qa", "failed", [usage("codex", "gpt", 1, 2, 3, 0, 6)]);
-    insertTask("tsk_no_row", "agt_qa", "cancelled", [usage("claude", "opus", 1, 2, 3, 4, 10)]);
-    db.run(
-      "INSERT INTO multiremi_tasks (id, agent_id, provider, status, usage, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["tsk_claude", "agt_qa", "claude", "completed", JSON.stringify([usage("claude", "opus", 1, 2, 3, 4, 10)]), "old"],
-    );
-
-    const plan = buildCodexUsageBackfillPlan(db as never);
-    expect(plan.updates).toEqual([]);
-    expect(plan.skipped).toEqual({
-      nonTerminal: 1,
-      missingCodexUsage: 1,
-      ambiguousCodexModels: 1,
-      missingUsageEvents: 1,
-      alreadyCorrect: 1,
-    });
+  it("recovers Claude requests once with actual child models and cumulative output revisions", () => {
+    const message = (id: string, model: string, output: number, timestamp = at) => ({ type: "assistant", timestamp,
+      sessionId: "session-one", message: { id, model, usage: { input_tokens: 10, output_tokens: output,
+        cache_read_input_tokens: 30, cache_creation_input_tokens: 5 } } });
+    const result = parseNativeUsageEvidence("claude", jsonl(message("main", "opus", 1), message("main", "opus", 8),
+      message("main", "opus", 8), message("child", "haiku", 4)), "archive:test");
+    expect(result.replayed).toBe(1);
+    expect(result.units.map(unit => [unit.model, unitActualTotal(unit)])).toEqual([["opus", 53], ["haiku", 49]]);
+    expect(result.units.every(unit => unit.modelSource === "provider_reported" && unit.evidenceRef?.startsWith("archive:test#line="))).toBe(true);
+    expect(parseNativeUsageEvidence("claude", jsonl(message("main", "opus", 8)).trimEnd(), "crashed").units).toEqual([]);
   });
 
-  it("ignores malformed usage messages instead of inventing totals", () => {
-    insertTask("tsk_bad", "agt_worker", "completed", [usage("codex", "gpt", 1, 2, 3, 0, 6)]);
-    db.run("INSERT INTO multiremi_task_messages (task_id, seq, type, meta) VALUES (?, ?, 'usage', ?)", ["tsk_bad", 1, "not-json"]);
-    db.run("INSERT INTO multiremi_task_messages (task_id, seq, type, meta) VALUES (?, ?, 'usage', ?)", ["tsk_bad", 2, JSON.stringify({ used: -1 })]);
-
-    const plan = buildCodexUsageBackfillPlan(db as never);
-    expect(plan.updates).toEqual([]);
-    expect(plan.skipped.missingUsageEvents).toBe(1);
+  it("recovers Codex cumulative deltas without cache or reasoning double counting and skips replays", () => {
+    const first = counts(100, 20, 80), second = counts(130, 27, 90);
+    const result = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "thread-one" } },
+      { type: "turn_context", payload: { model: "gateway-request" } }, token(first), token(first),
+      token({ input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, total_tokens: 90000 }),
+      token(second, counts(30, 7, 10))), "archive:codex");
+    expect(result.replayed).toBe(1);
+    expect(result.rejected).toBe(1);
+    expect(result.units.map(unit => unitActualTotal(unit))).toEqual([120, 37]);
+    expect(result.units[1]).toMatchObject({ inputTokens: 20, outputTokens: 7, cacheReadTokens: 10,
+      actualUnsplitTokens: 0, model: null, requestedModel: "gateway-request", modelSource: "session_acknowledged" });
   });
 
-  it("refuses to overwrite usage that changed after the plan was built", () => {
-    insertTask("tsk_race", "agt_worker", "completed", [usage("codex", "gpt", 1, 2, 3, 0, 6)]);
-    insertUsage("tsk_race", 1, 100);
-    const plan = buildCodexUsageBackfillPlan(db as never);
-    db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_race'", [JSON.stringify([usage("codex", "gpt", 9, 9, 9, 0, 27)])]);
+  it("does not import whole resumed history, and uses valid last counts as partial after a reset", () => {
+    const result = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "resumed" } },
+      token(counts(100000, 2000, 90000), counts(30, 4, 10)), token(counts(100, 5, 80), counts(10, 5, 0))), "archive:resume");
+    expect(result.units.map(unit => [unitActualTotal(unit), unit.accuracy])).toEqual([[34, "partial"], [15, "partial"]]);
+  });
 
-    expect(() => applyCodexUsageBackfill(db as never, plan, "2026-08-29T00:00:00.000Z"))
-      .toThrow("task usage changed after dry-run plan: tsk_race");
-    const stored = db.query("SELECT usage FROM multiremi_tasks WHERE id = 'tsk_race'").get() as { usage: string };
-    expect(JSON.parse(stored.usage)[0].totalTokens).toBe(27);
+  it("does not let reordered replay corrupt later deltas or reuse prior-epoch identities", () => {
+    const rows = [counts(100, 10), counts(200, 20), counts(100, 10), counts(300, 30)];
+    const parsed = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } }, ...rows.map(total => token(total, counts(100, 10)))), "reordered");
+    expect(parsed.replayed).toBe(1);
+    expect(parsed.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(330);
+    const reset = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } }, token(counts(100, 10)), token(counts(10, 1)), token(counts(100, 10))), "reset");
+    expect(reset.units).toHaveLength(3);
+    expect(new Set(reset.units.map(unit => unit.unitId)).size).toBe(3);
+  });
+
+  it("assigns shared session history only within one unambiguous task interval", () => {
+    const boundary = (id: string, start: string, finish: string): HistoricalTaskBoundary => ({ id, provider: "claude",
+      session_id: "native-session", issue_session_id: "root", started_at: start, completed_at: finish, failed_at: null, cancelled_at: null });
+    const unit = parseNativeUsageEvidence("claude", jsonl({ type: "assistant", timestamp: at,
+      message: { id: "r", model: "opus", usage: { input_tokens: 1, output_tokens: 1 } } }), "archive:shared").units[0]!;
+    const first = boundary("first", "2026-10-01T00:00:00Z", "2026-10-01T01:00:00Z");
+    const second = boundary("second", "2026-10-01T01:00:00Z", "2026-10-01T02:00:00Z");
+    expect(assignHistoricalUnit(unit, [first, second])?.id).toBe("second");
+    expect(assignHistoricalUnit(unit, [second, { ...second, id: "overlap" }])).toBeNull();
+    expect(assignHistoricalUnit(unit, [{ ...second, started_at: null }])).toBeNull();
   });
 });
-
-function insertTask(id: string, agentId: string, status: string, entries: ReturnType<typeof usage>[]): void {
-  db.run(
-    "INSERT INTO multiremi_tasks (id, agent_id, provider, status, usage, updated_at) VALUES (?, ?, 'codex', ?, ?, ?)",
-    [id, agentId, status, JSON.stringify(entries), "old"],
-  );
-}
-
-function insertUsage(taskId: string, seq: number, used: number): void {
-  db.run(
-    "INSERT INTO multiremi_task_messages (task_id, seq, type, meta) VALUES (?, ?, 'usage', ?)",
-    [taskId, seq, JSON.stringify({ used, size: 200000 })],
-  );
-}
-
-function usage(
-  provider: string,
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-  totalTokens: number,
-) {
-  return { provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens };
-}

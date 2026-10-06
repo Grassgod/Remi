@@ -1,80 +1,122 @@
 {
   "title": "使用量",
-  "subtitle": "このワークスペース全体のトークン消費とエージェントの活動です。",
+  "subtitle": "実際の消費量、コンテキスト診断とバージョン管理された費用。",
   "filter": {
-    "project_label": "プロジェクト",
+    "project": "プロジェクト",
     "all_projects": "すべてのプロジェクト",
-    "period_label": "期間"
-  },
-  "kpi": {
-    "cost_label": "コスト · {{days}}日",
-    "tokens_label": "トークン · {{days}}日",
-    "tokens_hint": "入力 {{input}} · 出力 {{output}} · キャッシュ読み取り {{cacheRead}} · キャッシュ書き込み {{cacheWrite}}",
-    "run_time_label": "実行時間 · {{days}}日",
-    "run_time_hint": "{{tasks}} 件のタスク全体",
-    "tasks_label": "タスク · {{days}}日",
-    "tasks_hint": "{{failed}} 件失敗",
-    "unavailable_hint": "読み込みに失敗したため、値を表示できません（0 ではありません）",
-    "not_collected": "{{tasks}} 件のタスクが実行されましたが、トークン使用量は記録されていません",
-    "no_tasks": "期間内にタスクはありません",
-    "cost_unpriced": "使用モデルの価格情報がないため、費用を算出できません",
-    "cost_total_only": "トークン総量のみが記録されているため、費用を算出できません",
-    "total_only_notice": "旧バージョンのランタイムが記録したトークン {{tokens}} は総量のみで入力/出力の内訳がなく、費用集計には含まれていません。新しい実行では内訳を記録するため、この数値は今後増えません。"
-  },
-  "dim": {
-    "label": "単位",
+    "runtime": "Runtime",
+    "all_runtimes": "すべての Runtime",
+    "period": "期間",
+    "all_history": "全履歴",
+    "dimension": "集計単位",
     "daily": "日別",
     "weekly": "週別"
   },
-  "daily": {
-    "title_cost": "日別コスト",
-    "title_tokens": "日別トークン",
-    "title_time": "日別実行時間",
-    "title_tasks": "日別タスク",
-    "metric_cost": "コスト",
-    "metric_tokens": "トークン",
-    "metric_time": "時間",
-    "metric_tasks": "タスク",
-    "no_data": "この期間に使用量はありません。",
-    "no_tasks": "選択した期間内にタスクはありません。",
-    "load_failed": "このデータの読み込みに失敗しました。値は利用不可であり、0 ではありません。",
-    "not_collected": "期間内にタスクは実行されましたが、トークン使用量は記録されていません。",
-    "cost_unpriced": "トークンは記録されていますが、使用モデルの価格情報がないため費用を算出できません。",
-    "cost_total_only": "トークン総量のみが記録され、入力/出力の内訳がないため費用を算出できません。",
-    "total_only_legend": "総量のみ"
+  "summary": {
+    "time_hint": "トークンと費用は消費時刻に、終了状態と実行時間は完了・失敗・キャンセル時刻に基づきます。実行中と待機中は現在のスナップショットです。",
+    "actual": "記録済み実消費トークン",
+    "known_cost": "既知費用の小計",
+    "coverage": "トークン価格適用率",
+    "unknown": "使用量不明のタスク",
+    "context": "コンテキスト最大値",
+    "context_hint": "コンテキスト占有量は診断情報であり、実消費トークンには含みません。",
+    "tasks": "重複を除くタスク",
+    "run_time": "実行時間",
+    "partial": "使用量または価格の一部が不明です。表示値は既知の小計です。",
+    "complete": "使用量と価格情報は完全です。",
+    "reference_cost": "公開参考価格の推定",
+    "reference_hint": "適用条件は未確認です。既知の小計と価格カバレッジには含まれません。",
+    "sdk_estimate": "SDK 報告の推定"
   },
-  "weekly": {
-    "title_cost": "週別コスト",
-    "title_tokens": "週別トークン",
-    "title_time": "週別実行時間",
-    "title_tasks": "週別タスク",
-    "partial_label": "{{range}} (一部 · 7日中 {{covered}}日)"
+  "statuses": {
+    "completed": "完了",
+    "failed": "失敗",
+    "cancelled": "キャンセル",
+    "active": "実行中",
+    "queued": "待機中"
   },
-  "leaderboard": {
-    "title": "リーダーボード",
-    "caption": "{{count}} 件のエージェント",
-    "header_agent": "エージェント",
-    "header_tokens": "トークン",
-    "header_cost": "コスト",
-    "header_time": "時間",
-    "header_tasks": "タスク",
-    "no_data": "この期間にエージェントの活動はありません。",
-    "load_failed": "ランキングデータの読み込みに失敗しました。値は利用不可であり、0 ではありません。",
-    "total_only_tooltip": "このうち {{tokens}} は総量のみで入力/出力の内訳がなく、費用には含まれていません。"
+  "views": {
+    "daily": "日付別",
+    "agents": "エージェント別",
+    "models": "モデル別",
+    "runtimes": "Runtime 別",
+    "counts_hint": "各グループ内でタスクを重複排除します。複数の日付やモデルにまたがるタスクは複数グループに表示されるため、合計は概要を参照してください。"
   },
-  "empty": {
-    "title": "まだ使用量はありません",
-    "body": "ここでエージェントがタスクを実行し始めると、トークンの消費と実行時間がこの画面に表示されます。",
-    "zero_hint": "選択した期間内に実行されたタスクはありません。この 0 は実測値です。"
+  "table": {
+    "group": "グループ",
+    "total": "実消費合計",
+    "input": "入力",
+    "output": "出力",
+    "cache_read": "キャッシュ読み取り",
+    "cache_write": "キャッシュ書き込み",
+    "unsplit": "実消費・内訳不明",
+    "context": "コンテキスト最大値",
+    "cost": "既知費用の小計",
+    "coverage": "トークン適用率",
+    "unknown": "不明タスク",
+    "tasks": "タスク",
+    "statuses": "状態別件数"
   },
-  "duration": {
-    "less_than_minute": "1分未満",
-    "zero": "0分"
+  "trend": {
+    "title": "消費の推移",
+    "tokens": "実消費トークン",
+    "cost": "既知費用",
+    "unknown": "この系列には測定済みの使用量がありません。",
+    "subtotal_hint": "費用は通貨別に表示し、価格不明の消費を除外します。"
+  },
+  "price": {
+    "requested": "要求モデル",
+    "reported_model": "提供元報告モデル",
+    "session_model": "セッション確認済み要求",
+    "configured_model": "設定された要求モデル",
+    "requested_model": "要求されたモデル（実際のモデルは未報告）",
+    "requested_alias": "要求されたモデルを明示的な設定価格の別名として使用",
+    "open": "価格を管理",
+    "title": "モデル価格のバージョン",
+    "description": "価格はプロバイダー、モデル、接続に正確に一致します。開始日時を指定して新しいバージョンを追加し、過去のバージョンは保持します。",
+    "model": "モデル",
+    "provider": "呼び出しエンジン",
+    "connection": "接続",
+    "unknown_model": "実際のモデル不明",
+    "currency": "通貨",
+    "effective_from": "適用開始（ISO日時）",
+    "version": "バージョン",
+    "source": "価格の出典",
+    "configured": "設定済み",
+    "published": "公開参考価格",
+    "provider_reported": "提供元の報告金額",
+    "mixed": "複数の出典",
+    "unknown": "不明",
+    "rates": "100万トークンあたりの料金。空欄は不明、0は確認済みの無料料金です。",
+    "save": "バージョンを保存",
+    "cancel": "キャンセル",
+    "invalid": "モデル、有効な日時、非負の料金を入力してください。不明な料金は空欄にします。",
+    "save_error": "価格を保存できませんでした。下書きは保持されています。",
+    "history": "価格履歴",
+    "source_url": "公開出典URL",
+    "progress_summary": "進捗サマリー"
   },
   "error": {
-    "title": "使用量データを利用できません",
-    "body": "使用量データの読み込みに失敗しました。使用量が 0 という意味ではありません。再試行してください。",
-    "partial": "一部の使用量データの読み込みに失敗しました。該当する値は 0 ではなく「—」で表示されます。",
+    "title": "使用量データを取得できません",
+    "body": "使用量を読み込めませんでした。不明な測定値はゼロではありません。",
     "retry": "再試行"
+  },
+  "empty": {
+    "title": "使用量はありません",
+    "body": "この期間にはタスクや記録済みの消費量がありません。"
+  },
+  "common": {
+    "scope_live": "実行記録の所属",
+    "scope_task_record": "履歴タスク記録の所属",
+    "scope_trace_owner": "保存済み Trace の所属",
+    "scope_archive": "Archive manifest の所属",
+    "scope_unknown": "実行所属不明",
+    "scope_mixed": "複数の所属証拠",
+    "export_csv": "CSV を出力",
+    "unknown": "不明",
+    "no_runtime": "不明 / 未割り当て Runtime",
+    "updated": "更新",
+    "price_revision": "価格リビジョン",
+    "refresh": "更新"
   }
 }

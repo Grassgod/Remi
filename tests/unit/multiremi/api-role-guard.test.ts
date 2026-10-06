@@ -14,7 +14,7 @@
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 768 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -59,6 +59,7 @@ function captureConsoleLog<T>(run: () => Promise<T> | T): Promise<{ lines: strin
 
 const GOLDEN_PATH = join(import.meta.dir, "../../../scripts/api-routes.golden.json");
 const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string[] };
+const UI_USAGE_ROUTES = ["GET /api/usage/report", "GET /api/usage/prices", "POST /api/usage/prices", "PATCH /api/usage/prices/:id"];
 
 /**
  * What the plan's guard table says, written out literally.
@@ -388,6 +389,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
     expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
+    for (const route of UI_USAGE_ROUTES) {
+      expect(statuses.has(route)).toBe(true);
+      expect(statuses.get(route), `${route} belongs to the browser/CLI process`).not.toBe(421);
+    }
     expect(misdirected, routeCountHint("ui")).toHaveLength(63);
     // daemon/ws and trace/ws are tested as real upgrades below.
     expect(misdirected.length + 2, routeCountHint("ui")).toBe(65);
@@ -403,7 +408,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     }
     // The two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 696. Every browser route main added before MUL-462 sits outside
+    // total includes two refusals beyond the HTTP sweep. Browser routes sit outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
@@ -425,12 +430,15 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // C12 removes two browser Chat GET routes; workspace abandonment adds one.
     // The v2-A merge removes three daemon HTTP request routes and adds two
     // runtime-only upgrade/claim routes; neither changes runtime refusals.
+    // The four usage report/price browser and CLI routes sit outside every
+    // runtime allowlist path; ui serves all four, taking 695 -> 699 refusals.
     const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
     expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(695);
-    expect(refused + 2, routeCountHint("runtime")).toBe(697);
+    for (const route of UI_USAGE_ROUTES) expect(statuses.get(route), `${route} belongs to ui`).toBe(421);
+    expect(refused, routeCountHint("runtime")).toBe(699);
+    expect(refused + 2, routeCountHint("runtime")).toBe(701);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

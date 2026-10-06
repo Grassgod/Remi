@@ -20,6 +20,7 @@ import { agentPluginKeys } from "../../plugins/queries";
 import { chatKeys } from "../../chat/queries";
 import { onInboxInvalidate } from "../../inbox/ws-updaters";
 import { workspaceKeys } from "../../workspace/queries";
+import { usageKeys } from "../../usage/queries";
 import type { SyncContext } from "./types";
 
 const PREFIX_REFRESH_DELAY_MS = 100;
@@ -56,6 +57,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.list(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.last30d(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.last30d(wsId) });
+    qc.invalidateQueries({ queryKey: usageKeys.all(wsId) });
   };
 
   const refreshMap: Record<string, () => void> = {
@@ -188,6 +190,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       // shape as the tasks invalidation above — any task lifecycle
       // event shifts the aggregated usage numbers.
       qc.invalidateQueries({ queryKey: ["issues", "usage"] });
+      qc.invalidateQueries({ queryKey: usageKeys.all(wsId) });
       // Squad members-status reads the same task lifecycle to flip
       // working ↔ idle for each agent member.
       invalidateSquadMemberStatusQueries(qc, wsId);

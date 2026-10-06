@@ -63,6 +63,10 @@ import type {
   ScmSnapshotEventWriteResult,
 } from "@multiremi/scm/types.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
+import { UsageAccountingRepo, type UsageReportInput } from "@multiremi/store/repos/usage-accounting-repo.js";
+import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { ensureUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
+import type { TaskUsageSnapshot, SetUsagePriceInput, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import {
@@ -711,6 +715,11 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  /** Required cutover gate; call after schema migration and before API/jobs. */
+  ensureUsageAccountingStartup(): void {
+    ensureUsageAccountingStartup(this.db);
   }
 
   getPlatformState() {
@@ -3565,6 +3574,47 @@ runMigrations(this.db);
     return this.usage.listRuntimeUsage(runtimeId);
   }
 
+  getUsageReport(input: UsageReportInput): UsageReport {
+    return new UsageAccountingRepo(this.ctx).report(input);
+  }
+
+  listUsagePrices(workspaceId: string): UsagePrice[] {
+    return new UsageAccountingRepo(this.ctx).listPrices(workspaceId);
+  }
+
+  setUsagePrice(workspaceId: string, input: SetUsagePriceInput): UsagePrice {
+    return new UsageAccountingRepo(this.ctx).setPrice(workspaceId, input);
+  }
+
+  closeUsagePrice(workspaceId: string, id: string, effectiveTo: string): UsagePrice {
+    return new UsageAccountingRepo(this.ctx).closePrice(workspaceId, id, effectiveTo);
+  }
+
+  reportTaskUsageSnapshot(taskId: string, snapshot: TaskUsageSnapshot): MultiremiTask {
+    const changed = writeUsageSnapshot(this.ctx.db, taskId, snapshot);
+    const task = this.getTask(taskId)!;
+    if (changed) this.ctx.notifyTaskEvent("task:usage", task);
+    return task;
+  }
+
+  getTaskUsageRunRuntime(taskId: string, runId: string): string | null {
+    const row = this.ctx.db.query("SELECT runtime_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(taskId, runId) as { runtime_id: string | null } | null;
+    return row?.runtime_id ?? null;
+  }
+
+  isTaskUsageExecutionAuthorized(taskId: string, runId: string, runtimeId: string): boolean {
+    return !!this.ctx.db.query(`SELECT t.id FROM multiremi_tasks t JOIN multiremi_usage_task_scopes s ON s.task_id=t.id
+      JOIN multiremi_usage_runs r ON r.task_id=t.id AND r.run_id=s.active_run_id
+      WHERE t.id=? AND t.runtime_id=? AND t.status='running' AND s.active_run_id=? AND r.complete=0`).get(taskId, runtimeId, runId);
+  }
+
+  /** Deprecated transport replay check; never a reporting/statistics source. */
+  getLegacyTaskUsageForIngestion(taskId: string): unknown {
+    const row = this.ctx.db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(taskId) as { usage: unknown } | null;
+    return row?.usage ?? null;
+  }
+
+
   listUsageDaily(input: {
     workspaceId?: string | null;
     projectId?: string | null;
@@ -5681,8 +5731,8 @@ runMigrations(this.db);
     return this.tasks.requeueTaskOffer(taskId, runtimeId);
   }
 
-  startTask(taskId: string): MultiremiTask {
-    return this.tasks.startTask(taskId);
+  startTask(taskId: string, usageRunId?: string, expectedRuntimeId?: string): MultiremiTask {
+    return this.tasks.startTask(taskId, usageRunId, expectedRuntimeId);
   }
 
   renewTaskDispatchLease(taskId: string): MultiremiTask {

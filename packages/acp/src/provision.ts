@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { installRuntimeBundle, runtimeBundlePrefix, runtimePackageSatisfied, verifyRuntimeExecutable } from "./runtime-bundle.js";
 import { releaseRuntimeVersions } from "./runtime-versions.js";
+import { claudeUsagePatch, codexUsagePatch, CLAUDE_USAGE_PATCH_VERSION, CODEX_USAGE_PATCH_VERSION } from "./usage-bridge-patches.js";
 export { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 
 export type ProvisionProvider = "claude" | "codex";
@@ -36,31 +37,11 @@ const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
 };
 // Release pins provide a tested baseline. Automatic updates retain a newer,
 // validated stable selection across restarts.
-export const CODEX_USAGE_PATCH = "codex-usage-v1";
+export const CODEX_USAGE_PATCH = CODEX_USAGE_PATCH_VERSION;
+export const CLAUDE_USAGE_PATCH = CLAUDE_USAGE_PATCH_VERSION;
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
 
 const CODEX_USAGE_PATCH_MARKER = `const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH}";`;
-const CODEX_USAGE_UPDATE_ANCHOR = `    return {
-      sessionUpdate: "usage_update",
-      used,
-      size
-    };`;
-const CODEX_USAGE_UPDATE_REPLACEMENT = `    ${CODEX_USAGE_PATCH_MARKER}
-    return {
-      sessionUpdate: "usage_update",
-      used,
-      size,
-      _meta: {
-        remiUsagePatch: CODEX_USAGE_PATCH,
-        remiTokenUsage: {
-          inputTokens: this.sessionState.lastTokenUsage.inputTokens,
-          cachedInputTokens: this.sessionState.lastTokenUsage.cachedInputTokens,
-          outputTokens: this.sessionState.lastTokenUsage.outputTokens,
-          reasoningOutputTokens: this.sessionState.lastTokenUsage.reasoningOutputTokens,
-          totalTokens: this.sessionState.lastTokenUsage.totalTokens
-        }
-      }
-    };`;
 
 function remiHome(): string {
   return process.env.REMI_HOME ?? join(homedir(), ".remi");
@@ -113,24 +94,28 @@ export function bridgeSatisfied(provider: ProvisionProvider): boolean {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
     return pkg.version === releaseRuntimeVersions(provider).acp
       && runtimePackageSatisfied(provider, dir)
-      && (provider !== "codex" || codexUsagePatchSatisfied(dir));
+      && usagePatchSatisfied(provider, dir);
   } catch {
     return false;
   }
 }
 
 function codexUsagePatchSatisfied(packageDir: string): boolean {
+  return usagePatchSatisfied("codex", packageDir);
+}
+
+function usagePatchSatisfied(provider: ProvisionProvider, packageDir: string): boolean {
   try {
-    return readFileSync(join(packageDir, "dist", "index.js"), "utf8").includes(CODEX_USAGE_PATCH_MARKER);
+    const file = provider === "codex" ? "index.js" : "acp-agent.js";
+    const marker = provider === "codex" ? CODEX_USAGE_PATCH_MARKER : `const CLAUDE_USAGE_PATCH = "${CLAUDE_USAGE_PATCH}";`;
+    return readFileSync(join(packageDir, "dist", file), "utf8").includes(marker);
   } catch {
     return false;
   }
 }
 
 /**
- * Add a per-request token split to codex-acp's usage_update extension point.
- * Best-effort: modelContextWindow=null makes upstream return no update at all,
- * and this patch intentionally leaves that upstream limitation unchanged.
+ * Emit actual consumption deltas independently of context-window availability.
  */
 export function patchCodexUsageBridge(
   log: Logger = (m) => console.error(`[provision] ${m}`),
@@ -145,11 +130,11 @@ export function patchCodexUsageBridge(
   try {
     const source = readFileSync(distPath, "utf8");
     if (source.includes(CODEX_USAGE_PATCH_MARKER)) return true;
-    if (!source.includes(CODEX_USAGE_UPDATE_ANCHOR)) {
+    const patched = codexUsagePatch(source);
+    if (patched == null) {
       log(`codex usage patch skipped: anchor missing in ${distPath}`);
       return false;
     }
-    const patched = source.replace(CODEX_USAGE_UPDATE_ANCHOR, CODEX_USAGE_UPDATE_REPLACEMENT);
     writeFileSync(tempPath, patched, { mode: statSync(distPath).mode });
     renameSync(tempPath, distPath);
     if (!codexUsagePatchSatisfied(packageDir)) {
@@ -161,6 +146,30 @@ export function patchCodexUsageBridge(
   } catch (err) {
     try { rmSync(tempPath, { force: true }); } catch {}
     log(`codex usage patch failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+export function patchClaudeUsageBridge(
+  log: Logger = (m) => console.error(`[provision] ${m}`),
+  packageDir: string | null = locateBridgePackage("claude"),
+): boolean {
+  if (!packageDir) return false;
+  const distPath = join(packageDir, "dist", "acp-agent.js");
+  const tempPath = `${distPath}.remi-patch-${process.pid}`;
+  try {
+    const source = readFileSync(distPath, "utf8");
+    const patched = claudeUsagePatch(source);
+    if (patched == null) throw new Error("Claude usage patch anchor missing");
+    if (source !== patched) {
+      writeFileSync(tempPath, patched, { mode: statSync(distPath).mode });
+      renameSync(tempPath, distPath);
+      log(`applied ${CLAUDE_USAGE_PATCH} to Claude ACP bridge`);
+    }
+    return usagePatchSatisfied("claude", packageDir);
+  } catch (error) {
+    try { rmSync(tempPath, { force: true }); } catch {}
+    log(`Claude usage patch failed: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 }
@@ -319,6 +328,9 @@ export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) =
   installRuntimeBundle(provider, node, (bridge) => {
     if (provider === "codex" && !patchCodexUsageBridge(log, bridge)) {
       throw new Error("Codex usage patch verification failed");
+    }
+    if (provider === "claude" && !patchClaudeUsageBridge(log, bridge)) {
+      throw new Error("Claude usage patch verification failed");
     }
   });
   if (provider === "codex" && options.activate !== false) {

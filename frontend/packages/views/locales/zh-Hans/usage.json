@@ -1,80 +1,122 @@
 {
   "title": "用量",
-  "subtitle": "查看当前 Workspace 的 token 消耗和智能体运行情况。",
+  "subtitle": "实际消耗、上下文诊断和版本化费用。",
   "filter": {
-    "project_label": "项目",
-    "all_projects": "全部项目",
-    "period_label": "时间范围"
-  },
-  "kpi": {
-    "cost_label": "费用 · {{days}}天",
-    "tokens_label": "Token · {{days}}天",
-    "tokens_hint": "输入 {{input}} · 输出 {{output}} · 缓存读取 {{cacheRead}} · 缓存写入 {{cacheWrite}}",
-    "run_time_label": "运行时长 · {{days}}天",
-    "run_time_hint": "共 {{tasks}} 个任务",
-    "tasks_label": "任务数 · {{days}}天",
-    "tasks_hint": "失败 {{failed}} 个",
-    "unavailable_hint": "加载失败 · 数值不可用，并非 0",
-    "not_collected": "区间内有 {{tasks}} 个任务，但未采集到 token 用量",
-    "no_tasks": "区间内没有任务",
-    "cost_unpriced": "所用模型缺少定价，费用不可用",
-    "cost_total_only": "仅记录了 token 总量，费用不可用",
-    "total_only_notice": "有 {{tokens}} 个 token 由旧版运行时记录，只有总量、没有输入/输出拆分，未计入费用统计。新版本已记录拆分，该数字不会再增长。"
-  },
-  "dim": {
-    "label": "维度",
+    "project": "项目",
+    "all_projects": "所有项目",
+    "runtime": "Runtime",
+    "all_runtimes": "所有 Runtime",
+    "period": "时间范围",
+    "all_history": "全部历史",
+    "dimension": "维度",
     "daily": "按天",
     "weekly": "按周"
   },
-  "daily": {
-    "title_cost": "每日费用",
-    "title_tokens": "每日 Token",
-    "title_time": "每日运行时长",
-    "title_tasks": "每日任务数",
-    "metric_cost": "费用",
-    "metric_tokens": "Token",
-    "metric_time": "运行时长",
-    "metric_tasks": "任务数",
-    "no_data": "所选时间范围内暂无消耗。",
-    "no_tasks": "所选时间范围内没有任务。",
-    "load_failed": "该数据加载失败——数值不可用，并非 0。",
-    "not_collected": "区间内有任务运行，但未采集到 token 用量。",
-    "cost_unpriced": "已记录 token，但所用模型缺少定价，无法折算费用。",
-    "cost_total_only": "仅记录了 token 总量，没有输入/输出拆分，无法折算费用。",
-    "total_only_legend": "仅总量"
+  "summary": {
+    "time_hint": "Token 和费用按实际消耗时间归属；终态和时长按完成、失败或取消时间归属。运行中和排队中为当前快照。",
+    "actual": "已记录实际 Token",
+    "known_cost": "已知费用小计",
+    "coverage": "Token 计价覆盖率",
+    "unknown": "用量未知任务",
+    "context": "上下文峰值",
+    "context_hint": "上下文占用仅用于诊断，不计入实际 Token 消耗。",
+    "tasks": "去重任务数",
+    "run_time": "运行时长",
+    "partial": "部分用量或价格未知，当前数字为已知小计。",
+    "complete": "用量和计价完整。",
+    "reference_cost": "公开参考价估算",
+    "reference_hint": "适用条件未确认，不计入已知小计和计价覆盖率。",
+    "sdk_estimate": "SDK 报告估算"
   },
-  "weekly": {
-    "title_cost": "每周费用",
-    "title_tokens": "每周 Token",
-    "title_time": "每周运行时长",
-    "title_tasks": "每周任务数",
-    "partial_label": "{{range}}（未满 · 已过 {{covered}} / 7 天）"
+  "statuses": {
+    "completed": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "active": "运行中",
+    "queued": "排队中"
   },
-  "leaderboard": {
-    "title": "排行榜",
-    "caption": "{{count}} 个智能体",
-    "header_agent": "智能体",
-    "header_tokens": "Token",
-    "header_cost": "费用",
-    "header_time": "运行时长",
-    "header_tasks": "任务数",
-    "no_data": "所选时间范围内暂无智能体活动。",
-    "load_failed": "排行榜数据加载失败——数值不可用，并非 0。",
-    "total_only_tooltip": "其中 {{tokens}} 仅记录了总量，没有输入/输出拆分，未计入费用。"
+  "views": {
+    "daily": "按日期",
+    "agents": "按云友",
+    "models": "按模型",
+    "runtimes": "按 Runtime",
+    "counts_hint": "每组任务数分别去重。跨日期或跨模型任务可能出现在多组中，任务总数以汇总为准。"
   },
-  "empty": {
-    "title": "暂无消耗数据",
-    "body": "当智能体在这里开始执行任务后，它们的 token 消耗和运行时长将出现在此处。",
-    "zero_hint": "所选时间范围内确实没有任务运行，这里的 0 是真实测量值。"
+  "table": {
+    "group": "分组",
+    "total": "实际总量",
+    "input": "输入",
+    "output": "输出",
+    "cache_read": "缓存读取",
+    "cache_write": "缓存写入",
+    "unsplit": "实际未拆分",
+    "context": "上下文峰值",
+    "cost": "已知费用小计",
+    "coverage": "Token 覆盖率",
+    "unknown": "未知任务",
+    "tasks": "任务",
+    "statuses": "状态计数"
   },
-  "duration": {
-    "less_than_minute": "<1分钟",
-    "zero": "0 分钟"
+  "trend": {
+    "title": "消耗趋势",
+    "tokens": "实际 Token",
+    "cost": "已知费用",
+    "unknown": "该序列没有已确认的用量。",
+    "subtotal_hint": "不同币种分别展示，费用不含未计价消耗。"
+  },
+  "price": {
+    "requested": "请求模型",
+    "reported_model": "提供商上报模型",
+    "session_model": "会话确认的请求模型",
+    "configured_model": "配置的请求模型",
+    "requested_model": "请求模型（实际模型未上报）",
+    "requested_alias": "将请求模型明确配置为计价别名",
+    "open": "管理价格",
+    "title": "模型价格版本",
+    "description": "价格精确匹配供应商、模型和连接。新增版本需指定生效起点，旧版本保留在历史中。",
+    "model": "模型",
+    "provider": "调用引擎",
+    "connection": "连接",
+    "unknown_model": "实际模型未知",
+    "currency": "币种",
+    "effective_from": "生效时间（ISO 时间戳）",
+    "version": "版本",
+    "source": "价格来源",
+    "configured": "已配置",
+    "published": "官方参考价",
+    "provider_reported": "提供商报告金额",
+    "mixed": "混合来源",
+    "unknown": "未知",
+    "rates": "每百万 Token 费率。留空表示未知，0 表示确认免费。",
+    "save": "保存版本",
+    "cancel": "取消",
+    "invalid": "请填写模型、有效时间戳和非负费率。未知费率留空。",
+    "save_error": "价格版本保存失败，草稿已保留。",
+    "history": "价格历史",
+    "source_url": "官方来源链接",
+    "progress_summary": "进度摘要"
   },
   "error": {
     "title": "用量数据不可用",
-    "body": "用量数据加载失败，这不代表用量为 0。请重试。",
-    "partial": "部分用量数据加载失败，相关数值以「—」显示，并非 0。",
+    "body": "用量数据加载失败，未知不代表零。",
     "retry": "重试"
+  },
+  "empty": {
+    "title": "暂无用量",
+    "body": "当前时间范围内没有任务或已记录消耗。"
+  },
+  "common": {
+    "scope_live": "执行记录归属",
+    "scope_task_record": "历史任务记录归属",
+    "scope_trace_owner": "已保存 Trace 归属",
+    "scope_archive": "Archive manifest 归属",
+    "scope_unknown": "执行归属未知",
+    "scope_mixed": "混合归属证据",
+    "export_csv": "导出 CSV",
+    "unknown": "未知",
+    "no_runtime": "未知或未分配 Runtime",
+    "updated": "更新时间",
+    "price_revision": "价格版本",
+    "refresh": "刷新"
   }
 }

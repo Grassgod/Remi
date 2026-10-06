@@ -27,6 +27,22 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("reconciles additive usage and currencies from one report without adding distinct model task counts", async () => {
+    useCliEnv();
+    const spec = specById("dashboard.usage.reconcile");
+    const metrics = { actual_input_tokens: 10, actual_output_tokens: 2, actual_cache_read_tokens: 0, actual_cache_write_tokens: 0, actual_unsplit_tokens: 0, actual_total_tokens: 12, priced_tokens: 10, unpriced_tokens: 2, task_count: 1, known_cost_by_currency: { USD: 0.2, CNY: 0 } };
+    const report = { summary: metrics, daily: [metrics], by_agent: [metrics], by_runtime: [metrics],
+      by_model: [{ ...metrics, actual_input_tokens: 5, actual_output_tokens: 1, actual_total_tokens: 6, priced_tokens: 5, unpriced_tokens: 1, known_cost_by_currency: { USD: 0.1 } }, { ...metrics, actual_input_tokens: 5, actual_output_tokens: 1, actual_total_tokens: 6, priced_tokens: 5, unpriced_tokens: 1, known_cost_by_currency: { USD: 0.1, CNY: 0 } }],
+      as_of: "2026-10-01T00:00:00Z", pricing_revision: "1", window: { tz: "UTC" } };
+    globalThis.fetch = capabilityFetch(spec.id, request => {
+      const url = new URL(request.url); expect(url.pathname).toBe("/api/usage/report"); expect(url.searchParams.get("days")).toBe("all"); expect(url.searchParams.get("runtime_id")).toBe("runtime-old");
+      return Response.json(report);
+    });
+    const output = await capture(() => registryFor([spec]).execute(["dashboard", "usage", "reconcile", "--days", "all", "--runtime", "runtime-old", "--json"]));
+    expect(JSON.parse(output.stdout)).toMatchObject({ reconciled: true, distinct_task_count: 1, discrepancies: [] });
+    report.by_model[0]!.actual_total_tokens = 7;
+    await expect(capture(() => registryFor([spec]).execute(["dashboard", "usage", "reconcile", "--days", "all", "--runtime", "runtime-old", "--json"]))).rejects.toThrow("do not reconcile");
+  });
   it("returns an agent's capability states and model default without losing metadata", async () => {
     useCliEnv();
     const spec = specById("runtime.model.catalog");

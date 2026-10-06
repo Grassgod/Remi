@@ -28,6 +28,37 @@ function fixture() {
 }
 
 describe("v2 reports", () => {
+  it("freezes an authenticated run at start and accepts only its original runtime's late usage", async () => {
+    const { db, store, task, runtime, report } = fixture();
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, execution_authorized: true });
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, code: "start_replayed", execution_authorized: true });
+    const other = store.registerRuntime({ id: "other", name: "retry", provider: "claude", daemonId: "other-daemon" });
+    db.run("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", [other.id, task.id]);
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, code: "start_replayed", execution_authorized: false });
+    const usageSnapshot = { version: 2, runId: "accepted-run", revision: 1, complete: true, units: [{
+      unitId: "request", revision: 1, provider: "claude", model: "opus", scope: "request", source: "provider_request", accuracy: "exact",
+      inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: 12,
+      contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-10-01T00:00:00Z",
+    }] };
+    expect(await report("task.usage", { usageSnapshot })).toEqual({ ok: true });
+    expect(db.query("SELECT runtime_id FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ runtime_id: runtime.id });
+    expect(await reportFrame(store, "task.usage", { task_id: task.id, usageSnapshot }, { runtimeId: other.id })).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(store.getRuntime(runtime.id)?.inputTokens).toBe(10);
+    expect(store.getRuntime(other.id)?.inputTokens).toBe(0);
+    expect(store.getTask(task.id)?.usage[0]?.totalTokens).toBe(12);
+    expect(store.getTaskStatusSnapshot(task.id)?.usage[0]?.totalTokens).toBe(12);
+  });
+
+  it("makes infrastructure failures retryable while rejecting malformed snapshots", async () => {
+    const { store, report } = fixture();
+    const usageSnapshot = { version: 2, runId: "run", revision: 1, complete: false, units: [] };
+    const write = spyOn(store, "reportTaskUsageSnapshot").mockImplementation(() => { throw new Error("temporary database outage"); });
+    try {
+      expect(await report("task.usage", { usageSnapshot })).toMatchObject({ ok: false, code: "server_error", retryable: true });
+      expect(await report("task.usage", { usageSnapshot: { ...usageSnapshot, revision: -1 } })).toEqual({ ok: false, code: "invalid_report", retryable: false });
+    } finally { write.mockRestore(); }
+  });
+
   it("absorbs identical progress and normalized usage subset replays before Store writes", async () => {
     const { store, task, report } = fixture();
     store.startTask(task.id);

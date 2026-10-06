@@ -1,5 +1,6 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import { normalizeTaskUsageEntries } from "@multiremi/store/helpers.js";
+import { UsageValidationError, validateUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { normalizeTaskUsageEntries, parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
@@ -119,14 +120,38 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
       if (frame.type.startsWith("task.")) {
         const taskId = string(p.task_id);
         if (!taskId) reject();
-        const task = authorizeReportTask(store, session, taskId, frame.rt);
+        let task;
+        if ((frame.type === "task.usage" && p.usageSnapshot !== undefined) || (frame.type === "task.start" && p.usage_run_id !== undefined)) {
+          let runId: string;
+          if (frame.type === "task.usage") {
+            try { runId = validateUsageSnapshot(p.usageSnapshot).runId; }
+            catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
+          } else {
+            if (typeof p.usage_run_id !== "string" || !p.usage_run_id.trim() || p.usage_run_id.length > 256) reject();
+            runId = p.usage_run_id;
+          }
+          const owner = store.getTaskUsageRunRuntime(taskId, runId);
+          if (owner) {
+            if (frame.rt && frame.rt !== owner) reject("authority_revoked");
+            authorizeReportRuntime(store, session, owner);
+            task = store.getTask(taskId);
+            if (!task) reject("task_not_found");
+          } else task = authorizeReportTask(store, session, taskId, frame.rt);
+        } else task = authorizeReportTask(store, session, taskId, frame.rt);
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
         const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
         switch (frame.type) {
           case "task.start":
-            if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
-            store.startTask(taskId);
+            if (p.usage_run_id !== undefined) {
+              if (typeof p.usage_run_id !== "string" || !p.usage_run_id.trim() || p.usage_run_id.length > 256) reject();
+              const existingOwner = store.getTaskUsageRunRuntime(taskId, p.usage_run_id);
+              if (existingOwner) return { ok: true, code: "start_replayed", execution_authorized: store.isTaskUsageExecutionAuthorized(taskId, p.usage_run_id, existingOwner) };
+            }
+            if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed", ...(p.usage_run_id !== undefined ? { execution_authorized: false } : {}) };
+            try { store.startTask(taskId, typeof p.usage_run_id === "string" ? p.usage_run_id : undefined, task.runtimeId!); }
+            catch (error) { if (error instanceof UsageValidationError) reject("authority_revoked"); throw error; }
+            if (typeof p.usage_run_id === "string") return { ok: true, execution_authorized: store.isTaskUsageExecutionAuthorized(taskId, p.usage_run_id, task.runtimeId!) };
             break;
           case "task.prompt":
             if (!["bootstrap", "delta"].includes(string(p.mode)) || typeof p.prompt !== "string" || typeof p.sha256 !== "string") reject();
@@ -149,10 +174,15 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             break;
           }
           case "task.usage": {
+            if (p.usageSnapshot !== undefined) {
+              try { store.reportTaskUsageSnapshot(taskId, validateUsageSnapshot(p.usageSnapshot)); }
+              catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
+              break;
+            }
             const usage = daemonTaskUsageEntries(p.usage);
             const keyed = (entries: unknown) => new Map(normalizeTaskUsageEntries(entries)
               .map(entry => [JSON.stringify([entry.provider, entry.model]), entry]));
-            const current = keyed(task.usage);
+            const current = keyed(parseTaskUsageEntries(store.getLegacyTaskUsageForIngestion(taskId)));
             if ([...keyed(usage)].every(([key, entry]) => isDeepStrictEqual(current.get(key), entry))) break;
             store.reportTaskUsage(taskId, usage);
             break;

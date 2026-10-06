@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
 import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
 import { outboxRecordBytes } from "@multiremi/worker/report-frames.js";
+import { DAEMON_FRAME_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { actualUnit } from "@acp/usage-collector.js";
+import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import {
   MultiremiTaskReportOutbox,
   type MultiremiOutboxKind,
@@ -24,6 +27,7 @@ afterEach(async () => {
   outboxes = [];
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
+  resetMultiremiTestEnv();
 });
 
 function tempPath(): string {
@@ -42,6 +46,61 @@ function httpError(status: number, path = "/api/daemon/tasks/x"): MultiremiDaemo
 }
 
 describe("MultiremiTaskReportOutbox", () => {
+  it("replays over 3000 request facts after an outage with bounded final chunks and delivers terminal last", async () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ name: "long-usage", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "long-usage", provider: "claude", runtimeId: runtime.id, workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Long task", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    const units = Array.from({ length: 3500 }, (_, i) => ({ ...actualUnit({ unitId: `request-${i}`, provider: "claude", model: i % 2 ? "opus" : "haiku",
+      scope: "request", source: "provider_request", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0,
+      totalTokens: 2, evidenceRef: "upstream_request" }), occurredAt: "2026-10-01T01:00:00.000Z" }));
+    for (const [index, unit] of units.entries()) first.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-run", revision: index + 1, complete: false, units: [unit] } });
+    first.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-run", revision: 3501, complete: true, units } });
+    first.enqueue(task.id, "complete", { output: "done" });
+    expect(first.stats().blocked).toBe(0);
+    await first.close();
+    const kinds: string[] = [];
+    const reopened = track(new MultiremiTaskReportOutbox({ path, deliver: async record => {
+      expect(outboxRecordBytes(record)).toBeLessThanOrEqual(DAEMON_FRAME_MAX_BYTES);
+      kinds.push(record.kind);
+      if (record.kind === "usage") store.reportTaskUsageSnapshot(task.id, record.payload.usageSnapshot as any);
+      else if (record.kind === "complete") store.completeTask(task.id, { output: "done" });
+    } }));
+    expect(await reopened.waitForTaskDrain(task.id)).toBe("delivered");
+    expect(kinds.at(-1)).toBe("complete");
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary.actual_total_tokens).toBe(7000);
+    expect(report.by_model.map(row => row.actual_total_tokens).sort()).toEqual([3500, 3500]);
+  }, 30_000);
+  it("keeps v2 usage through cancellation and restart without discarding deltas behind a complete marker", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("offline"); } }));
+    const snapshot = (runId: string, revision: number, complete = false) => ({ usageSnapshot: { version: 2, runId, revision, complete, units: [] } });
+    first.enqueue("task", "messages", { messages: [] });
+    first.enqueue("task", "usage", snapshot("run1", 1));
+    first.enqueue("task", "usage", snapshot("run1", 2));
+    first.enqueue("task", "usage", snapshot("run2", 1));
+    first.purgeTask("task", { keepUsage: true });
+    expect(first.enqueue("task", "complete", {})).toBeNull();
+    expect(first.enqueue("task", "usage", snapshot("run1", 3, true))).not.toBeNull();
+    expect(first.stats().pending).toBe(4);
+    await first.close();
+    const delivered: Array<[unknown, unknown]> = [];
+    const reopened = track(new MultiremiTaskReportOutbox({ path, deliver: async (record) => {
+      const value = record.payload.usageSnapshot as any;
+      delivered.push([value.runId, value.revision]);
+    } }));
+    expect(reopened.enqueue("task", "messages", { messages: [] })).toBeNull();
+    expect(await reopened.waitForTaskDrain("task")).toBe("delivered");
+    expect(delivered).toEqual([["run1", 1], ["run1", 2], ["run2", 1], ["run1", 3]]);
+    reopened.purgeTask("task"); // deletion takes precedence over cancellation's allowance
+    expect(reopened.enqueue("task", "usage", snapshot("run1", 4))).toBeNull();
+  });
   it("retries through an API outage and delivers strictly in seq order, terminal last", async () => {
     const delivered: string[] = [];
     let apiDown = true;
