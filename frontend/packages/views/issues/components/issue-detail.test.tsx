@@ -240,6 +240,7 @@ const mockApiObj = vi.hoisted(() => ({
   }]),
   listSessionTasks: vi.fn().mockResolvedValue([]),
   listIssueSessionResults: vi.fn().mockResolvedValue([]),
+  getIssueWorkspace: vi.fn().mockResolvedValue({ workspace: null }),
   createIssueSession: vi.fn(),
   addSessionParticipant: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
@@ -691,6 +692,16 @@ describe("IssueDetail (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  it("keeps optional log metadata behind this detail reveal while its body is pending", async () => {
+    mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
+    renderIssueDetail();
+    await act(async () => {});
+    expect(mockApiObj.listIssueSessionResults).not.toHaveBeenCalled();
+    expect(mockApiObj.getIssueWorkspace).not.toHaveBeenCalled();
+    expect(mockApiObj.listIssueSessionArchives).not.toHaveBeenCalled();
+    expect(mockApiObj.getActiveTasksForIssue).not.toHaveBeenCalled();
   });
 
   describe("first-screen dependencies (MUL-499)", () => {

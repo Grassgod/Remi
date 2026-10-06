@@ -94,7 +94,16 @@ export function IssueDetail({
   const queryClient = useQueryClient();
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
-  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const routeAfterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  // Inbox changes its selected detail without changing the pathname. The
+  // already-open route gate cannot stand in for this detail's own reveal.
+  const visit = `${id}:${initialIssueSessionId ?? ""}:${highlightCommentId ?? ""}`;
+  const [revealedVisit, setRevealedVisit] = useState({ visit, ready: false });
+  if (revealedVisit.visit !== visit) setRevealedVisit({ visit, ready: false });
+  const afterFirstScreen = routeAfterFirstScreen && revealedVisit.visit === visit && revealedVisit.ready;
+  const onDetailRevealed = useCallback(() => {
+    setRevealedVisit(current => current.visit === visit && !current.ready ? { visit, ready: true } : current);
+  }, [visit]);
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
   const resolveDeepLinkSession = Boolean(highlightCommentId && !initialIssueSessionId
     && initialLog?.missingCommentId !== highlightCommentId
@@ -244,7 +253,7 @@ export function IssueDetail({
 
   // Token usage — sidebar only, but queried here so the mobile sheet doesn't
   // have to be opened before the numbers start loading.
-  const { data: usage } = useQuery(issueUsageOptions(id));
+  const { data: usage } = useQuery({ ...issueUsageOptions(id), enabled: afterFirstScreen });
 
   // Sub-issue queries
   const parentIssueId = issue?.parent_issue_id;
@@ -284,7 +293,7 @@ export function IssueDetail({
   // Labels live in their own query (not on the issue body) — fetch the count
   // here so seeding can decide whether the "Labels" optional row should be
   // shown for an issue that already has labels attached.
-  const { data: attachedLabels = [] } = useQuery(issueLabelsOptions(wsId, id));
+  const { data: attachedLabels = [] } = useQuery({ ...issueLabelsOptions(wsId, id), enabled: afterFirstScreen });
   const optionalProps = useOptionalProps(issue, attachedLabels.length);
 
   const handleToggleSidebar = useCallback(() => {
@@ -339,6 +348,7 @@ export function IssueDetail({
     <IssueDetailSidebar
       issue={issue}
       issueId={id}
+      queriesEnabled={afterFirstScreen}
       sections={sections}
       optionalProps={optionalProps}
       onUpdateField={actions.updateField}
@@ -356,6 +366,7 @@ export function IssueDetail({
 
   const detailContent = (
     <IssueDetailMain
+      onRevealed={onDetailRevealed}
       issue={issue}
       issueId={id}
       parentIssue={parentIssue}

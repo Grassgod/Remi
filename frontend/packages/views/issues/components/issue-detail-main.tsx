@@ -34,6 +34,7 @@ interface IssueDetailMainProps {
   breadcrumbProject: Project | null;
   actions: UseIssueActionsResult;
   onDone?: () => void;
+  onRevealed?: () => void;
   onDeletedNavigateTo?: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -72,6 +73,7 @@ export function IssueDetailMain({
   breadcrumbProject,
   actions,
   onDone,
+  onRevealed,
   onDeletedNavigateTo,
   sidebarOpen,
   onToggleSidebar,
@@ -106,8 +108,9 @@ export function IssueDetailMain({
     return () => clearTimeout(timer);
   }, [readyKey, readiness.ready]);
   const onContentReady = useCallback(() => {
+    onRevealed?.();
     setReadiness(current => current.key === readyKey && !current.ready ? { ...current, ready: true } : current);
-  }, [readyKey]);
+  }, [readyKey, onRevealed]);
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const updateIssue = useUpdateIssue();

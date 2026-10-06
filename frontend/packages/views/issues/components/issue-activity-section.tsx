@@ -124,7 +124,9 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       if (row && root.contains(row)) root.scrollTop += row.getBoundingClientRect().top - anchor.top;
     }
   }, [showSystemDetails]);
-  const results = useVisibleResults(issueId);
+  const [revealedVisit, setRevealedVisit] = useState<string | null>(null);
+  const revealed = revealedVisit === displayVisit;
+  const results = useVisibleResults(issueId, revealed);
   const resultsById = useMemo(() => new Map(results.map(result => [result.id, result])), [results]);
   const actorNames = useMemo(() => new Map<string, string>([
     ...agents.map(agent => [`agent:${agent.id}`, agent.name] as const),
@@ -132,8 +134,6 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   ]), [agents, members]);
   const getActorName = useCallback((type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "", [actorNames]);
   const [promptRow, setPromptRow] = useState<SessionLogRow | null>(null);
-  const [revealedVisit, setRevealedVisit] = useState<string | null>(null);
-  const revealed = revealedVisit === displayVisit;
   const onRevealed = useCallback(() => {
     setRevealedVisit(displayVisit);
     onContentReady?.();

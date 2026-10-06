@@ -78,9 +78,9 @@ function useResultTitle(result: SessionResult): string {
 
 const EMPTY_RESULTS: SessionResult[] = [];
 
-export function useVisibleResults(issueId: string): SessionResult[] {
-  const { data: results = EMPTY_RESULTS } = useQuery(issueSessionResultsOptions(issueId));
-  const { data: workspace, isPending: workspacePending } = useQuery(issueWorkspaceOptions(issueId));
+export function useVisibleResults(issueId: string, enabled = true): SessionResult[] {
+  const { data: results = EMPTY_RESULTS } = useQuery({ ...issueSessionResultsOptions(issueId), enabled });
+  const { data: workspace, isPending: workspacePending } = useQuery({ ...issueWorkspaceOptions(issueId), enabled });
   return useMemo(() => {
     if (workspacePending) return EMPTY_RESULTS;
     if (!workspace) return results;
@@ -94,13 +94,15 @@ export function useVisibleResults(issueId: string): SessionResult[] {
 export function IssueKeyResultsSection({
   issueId,
   sessions,
+  enabled = true,
 }: {
   issueId: string;
   sessions: IssueSession[];
+  enabled?: boolean;
 }) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
-  const results = useVisibleResults(issueId);
+  const results = useVisibleResults(issueId, enabled);
 
   if (results.length === 0) return null;
 

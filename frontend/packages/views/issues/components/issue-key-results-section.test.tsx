@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { IssueSession, SessionResult } from "@multiremi/core/types";
@@ -57,6 +57,7 @@ vi.mock("../../editor", () => ({
 
 import {
   IssueKeyResultsSection,
+  useVisibleResults,
   IssueResultActivityLines,
 } from "./issue-key-results-section";
 
@@ -310,5 +311,29 @@ describe("IssueResultActivityLines", () => {
     expect(
       await screen.findByText('published the result "Untitled result"'),
     ).toBeInTheDocument();
+  });
+});
+
+
+describe("result metadata reveal gate", () => {
+  it("defers empty-cache reads until reveal and retains cached content with the gate closed", async () => {
+    mockApiObj.listIssueSessionResults.mockClear(); mockApiObj.getIssueWorkspace.mockClear();
+    const results = [makeResult()];
+    mockApiObj.listIssueSessionResults.mockResolvedValue(results);
+    mockApiObj.getIssueWorkspace.mockResolvedValue({ workspace: null });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+    const view = renderHook((enabled: boolean) => useVisibleResults("issue-1", enabled), { wrapper, initialProps: false });
+    expect(view.result.current).toEqual([]);
+    expect(mockApiObj.listIssueSessionResults).not.toHaveBeenCalled();
+    expect(mockApiObj.getIssueWorkspace).not.toHaveBeenCalled();
+    view.rerender(true);
+    await waitFor(() => expect(view.result.current).toEqual(results));
+    expect(mockApiObj.listIssueSessionResults).toHaveBeenCalledOnce();
+    expect(mockApiObj.getIssueWorkspace).toHaveBeenCalledOnce();
+    view.rerender(false);
+    expect(view.result.current).toEqual(results);
+    expect(mockApiObj.listIssueSessionResults).toHaveBeenCalledOnce();
+    view.unmount(); qc.clear();
   });
 });

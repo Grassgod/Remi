@@ -54,10 +54,10 @@ const CHECKS_ICON: Record<
   pending: { icon: CircleDashed, className: "text-warning" },
 };
 
-export function ChangeRequestList({ issueId }: { issueId: string }) {
+export function ChangeRequestList({ issueId, enabled = true }: { issueId: string; enabled?: boolean }) {
   const { t } = useT("issues");
   const [expanded, setExpanded] = useState(false);
-  const { data, isLoading } = useQuery(issueChangeRequestsOptions(issueId));
+  const { data, isLoading } = useQuery({ ...issueChangeRequestsOptions(issueId), enabled: enabled && Boolean(issueId) });
   const changeRequests = data?.changeRequests ?? [];
 
   if (isLoading) {
