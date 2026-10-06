@@ -15,7 +15,7 @@ summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Mess
 - **自动话题**：[工作区配置](../packages/server/src/issue-topics/config.ts)默认关闭，启用需目标群 `chat_id`，可按 `project_ids` 限制；空项目列表表示不限制项目。配置写入要求人类工作区管理员，[workspace CLI](../apps/remi/cli/commands/workspace.ts)提供 `remi workspace issue-topics get/set`。话题创建还需 bot 在线，根消息进入持久化 outbox；缺少条件不代表以后会自动补建。群消息自动建单另受发送者与 Agent 提议策略约束。
 - **增量上下文**：[AgentIssueUpdatesRepo](../packages/server/src/store/repos/agent-issue-updates-repo.ts)仅对有效飞书 Issue 话题及已启用的通知通道合并活动，过滤目标会话自己的回声。更新写成待投递消息，不逐条唤醒 Agent；[claim wire](../packages/server/src/api/wire/tasks.ts)按预算附加该话题的 Issue 与摘要。普通私聊不接收这些播报，摘要不能替代 Issue 详情与评论查询。
 - **轮次推送**：负责人 Issue Session 任务完成并满足活跃任务条件时，[TasksRepo](../packages/server/src/store/repos/tasks-repo.ts)准备话题总结；需要人工输入时也可准备话题提醒。领取、投递与完成均核对绑定、Issue、工作区、Chat 和 Agent 的一致性，失配不继续发送。话题总结本身不自动修改 Issue 状态或追加 Issue 评论。
-- **出站投递**：daemon 心跳领取带租约的 delivery，经 [concierge host](../apps/remi/cli/multiremi.ts)发送并回报；失败按持久化 outbox 规则重试。[send.ts](../packages/connectors/src/feishu/send.ts)使用 delivery 幂等键，根消息成功后以返回的消息 ID 固定话题目标；这不等于真实飞书端已验证恰好一次投递。
+- **出站投递**：控制面只在已落库的 bot 状态为 `online` 且 revision 匹配时领取带租约的 delivery，通过 daemon 下发，经 [concierge host](../apps/remi/cli/multiremi.ts)发送并回报；失败按持久化 outbox 规则重试。bot 状态改为确认落库的 RPC 上报并独立随心跳补报，防止丢失 `online` 后无人领取。[send.ts](../packages/connectors/src/feishu/send.ts)使用 delivery 幂等键，根消息成功后以返回的消息 ID 固定话题目标；这不等于真实飞书端已验证恰好一次投递。
 
 ### 斜杠命令与「结束任务」
 

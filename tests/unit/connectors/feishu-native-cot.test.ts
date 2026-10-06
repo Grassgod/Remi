@@ -13,7 +13,8 @@ function renderer(h: ReturnType<typeof nativeHarness>, extra: Record<string, unk
 }
 
 describe("native CoT Task presentation", () => {
-  it.each(["final", undefined] as const)("restores checkpointed %s answer chunks without repeating process or request cards", async phase => {
+  it.each([["final", undefined], ["final", true], [undefined, undefined], [undefined, true]] as const)(
+    "restores checkpointed %s answer chunks with waitingFinished=%s without repeating process or request cards", async (phase, waitingFinished) => {
     const h = nativeHarness();
     const prefix = [
       taskEvent(1, "text", { content: "Checking now.", meta: { phase: "commentary" } }),
@@ -40,8 +41,9 @@ describe("native CoT Task presentation", () => {
     expect(h.checkpoint?.throughSeq).toBe(8);
     const before = h.events().filter(event => !["RUN_STARTED", "RUN_FINISHED"].includes(event.event_type));
     const checkpoint = structuredClone(h.checkpoint!);
-    checkpoint.interactions = { approved: { messageId: "om_approved", receiptStatus: "responded" },
-      answered: { messageId: "om_answered", receiptStatus: "responded" } };
+    const waiting = waitingFinished ? { waitingStarted: true, waitingFinished } : {};
+    checkpoint.interactions = { approved: { messageId: "om_approved", receiptStatus: "responded", ...waiting },
+      answered: { messageId: "om_answered", receiptStatus: "responded", ...waiting } };
     let requestReads = 0;
     async function* resumed() {
       // The production presentation restart likewise replays from trace seq 0.

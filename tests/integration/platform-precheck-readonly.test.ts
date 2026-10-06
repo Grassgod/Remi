@@ -320,11 +320,11 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
         expect(f.audit.writes[0]).toEqual({ sql: authWrite, changes: 1 });
         const stateWrites = f.audit.writes.filter((write) => write.sql.includes("multiremi_platform_state"));
         const maintenanceWrites = f.audit.writes.filter((write) => write.sql.includes("multiremi_platform_maintenance"));
-        expect(stateWrites.map((write) => write.changes)).toEqual([scenario === "missing-state" ? 1 : 0]);
+        expect(stateWrites.map((write) => write.changes)).toEqual(scenario === "missing-state" ? [1] : []);
         expect(maintenanceWrites.map((write) => write.changes)).toEqual(
           scenario === "expired-drain" ? [0, 1] : [scenario === "missing-state" ? 1 : 0],
         );
-        expect(f.audit.writes).toHaveLength(scenario === "expired-drain" ? 4 : 3);
+        expect(f.audit.writes).toHaveLength(scenario === "active-operation" ? 2 : 3);
         if (scenario === "active-operation") {
           expect(f.snapshot()).toEqual(f.before);
         } else {

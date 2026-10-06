@@ -29,9 +29,10 @@
  * The design draft described five categories because it folded `res` into the
  * rpc class and treated `hb` as the only best-effort frame. Both are wrong in
  * code: a reply has a different validation path than a request, and
- * `runtime.ready` / `concierge.status` are best effort for exactly the same
- * reason `hb` is - each is recomputed from local state, so losing one costs
- * nothing. Category decides the envelope; trace-head reliability is separate
+ * `runtime.ready` and the legacy `concierge.status` are best effort. New
+ * concierge status reports use `concierge.status_report` RPC: outbound delivery
+ * is gated on the persisted online state, so losing one is not harmless.
+ * Category decides the envelope; trace-head reliability is separate
  * from the event sequence and window, so the classification lives here as data.
  */
 
@@ -120,6 +121,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
 export const DAEMON_UPLINK_RPC_FRAMES = [
+  "concierge.status_report",
   "steer.consume",
   "human_request.create",
   "human_request.get",

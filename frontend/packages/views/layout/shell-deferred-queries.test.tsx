@@ -388,8 +388,8 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     const view = render(<Shell />, { wrapper: wrapper(client) });
     try {
       await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
-      // A persisted reply suppresses the live observer, so this guards the
-      // nested historical observer with the real virtualized row mounted.
+      // A persisted reply suppresses the live observer and keeps historical
+      // trace lazy even with the real virtualized row mounted.
       await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(view.getByText("Cached reply")).toBeTruthy());
       act(() => { useChatStore.getState().setOpen(false); });
@@ -421,7 +421,6 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       }
       act(() => { useChatStore.getState().setOpen(true); });
       await waitFor(() => {
-        expect(getTaskTrace).toHaveBeenCalledTimes(1);
         expect(listTaskHumanRequests).toHaveBeenCalledTimes(1);
         expect(subscribeStream).toHaveBeenCalledTimes(1);
         expect(getPendingChatTask).toHaveBeenCalledTimes(1);
@@ -429,6 +428,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
           expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(true);
         }
       });
+      expect(getTaskTrace).not.toHaveBeenCalled();
       // The 444 replica keeps its window across minimisation; reopening only
       // reconnects the stream and never falls back to the removed page API.
       expect(getSessionLog).not.toHaveBeenCalled();
