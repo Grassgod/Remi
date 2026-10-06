@@ -20,6 +20,15 @@ import type {
   TaskTraceArchivePointer,
   TaskTracePointerRejection,
 } from "@multiremi/store/repos/task-traces-repo.js";
+import { hydrateTaskTrace } from "@multiremi/store/repos/task-traces-repo.js";
+import {
+  canonicalRecoveryJson,
+  assertNativeExecutionBinding,
+  NativeTraceRecoveryError,
+  nativeRecoveryMetadata,
+  type NativeTraceRecoveryTask,
+  type NativeTraceRecoveryTaskSnapshot,
+} from "@multiremi/session-archive/native-recovery.js";
 
 type Row = Record<string, unknown>;
 
@@ -86,6 +95,18 @@ export interface TraceBackfillCommitResult {
   pointerCount: number;
   /** Every member the swap rule refused, with the pointer it kept. */
   rejectedPointers: TaskTracePointerRejection[];
+}
+
+export interface NativeTraceRecoveryCommitInput extends Omit<TraceBackfillCommitInput, "archive" | "noneTaskIds"> {
+  archive: TraceBackfillArchiveInput;
+  algorithmVersion: string;
+  tasks: readonly NativeTraceRecoveryTask[];
+}
+
+export interface NativeTraceRecoveryCommitResult {
+  archive: MultiremiSessionArchive;
+  pointerCount: number;
+  replayed: boolean;
 }
 
 /** A daemon upload that went `ready`; refused members stay on their pointer. */
@@ -663,6 +684,110 @@ export class SessionArchivesRepo {
     const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
     for (const taskId of input.noneTaskIds) this.ctx.taskTraces().markTaskTraceNone(taskId);
     return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
+  }
+
+  /** Read-only operator snapshot; large prompt/result/usage fields are never loaded. */
+  getNativeTraceRecoveryTaskSnapshot(taskId: string): NativeTraceRecoveryTaskSnapshot | null {
+    const row = this.ctx.db.query(
+      `SELECT id, workspace_id, agent_id, runtime_id, provider, status,
+              issue_id, issue_session_id, chat_session_id, session_id,
+              started_at, completed_at, failed_at, cancelled_at, updated_at
+       FROM multiremi_tasks WHERE id = ?`,
+    ).get(taskId) as Row | null;
+    if (!row || !["completed", "failed", "cancelled"].includes(String(row.status))) return null;
+    const nullable = (key: string) => row[key] == null ? null : String(row[key]);
+    return {
+      taskId: String(row.id), workspaceId: String(row.workspace_id), agentId: String(row.agent_id),
+      runtimeId: String(row.runtime_id ?? ""), provider: String(row.provider ?? ""),
+      status: String(row.status) as NativeTraceRecoveryTaskSnapshot["status"],
+      issueId: nullable("issue_id"), issueSessionId: nullable("issue_session_id"), chatSessionId: nullable("chat_session_id"),
+      sessionId: nullable("session_id"), startedAt: nullable("started_at"),
+      completedAt: nullable("completed_at"), failedAt: nullable("failed_at"), cancelledAt: nullable("cancelled_at"),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  /**
+   * Operator recovery only. Source is lower-priority `trace_backfill`, but this
+   * path never compares native sequences with any existing archive's sequences.
+   * Original task/turn statistics and legacy backfill bookkeeping are untouched.
+   */
+  commitNativeTraceRecoveryWithinTransaction(input: NativeTraceRecoveryCommitInput): NativeTraceRecoveryCommitResult {
+    const metadata = nativeRecoveryMetadata(input.algorithmVersion, input.tasks);
+    if (canonicalRecoveryJson(input.archive.metadata) !== canonicalRecoveryJson(metadata)) {
+      throw new NativeTraceRecoveryError("native recovery provenance differs from the verified plan");
+    }
+    const forUpdate = this.ctx.db.dialect === "postgres" ? " FOR UPDATE" : "";
+    const workspace = this.ctx.db.query(`SELECT id FROM multiremi_workspaces WHERE id = ?${forUpdate}`)
+      .get(input.workspaceId);
+    if (!workspace) throw new NativeTraceRecoveryError("native recovery workspace is missing");
+    // Same lifecycle lock order as an upload, without no-op UPDATEs on replay.
+    if (input.subjectKind === "issue") {
+      const issue = this.ctx.db.query(`SELECT workspace_id, lifecycle_state FROM multiremi_issues WHERE id = ?${forUpdate}`)
+        .get(input.subjectId) as Row | null;
+      if (!issue || issue.workspace_id !== input.workspaceId || String(issue.lifecycle_state ?? "active") !== "active") {
+        throw new NativeTraceRecoveryError("native recovery Issue is missing, moved or deleting");
+      }
+    } else if (input.subjectKind === "chat") {
+      const chat = this.ctx.db.query(`SELECT workspace_id FROM multiremi_chat_sessions WHERE id = ?${forUpdate}`)
+        .get(input.subjectId) as Row | null;
+      if (!chat || chat.workspace_id !== input.workspaceId) throw new NativeTraceRecoveryError("native recovery Chat is missing or moved");
+    }
+    const pointers = new Map(input.pointers.map((pointer) => [pointer.taskId, pointer]));
+    if (pointers.size !== input.tasks.length || pointers.size !== input.pointers.length) {
+      throw new NativeTraceRecoveryError("native recovery members differ from the verified task set");
+    }
+    const existing = this.get(input.archive.id);
+    if (existing && (existing.status !== "ready" || existing.sourceRevision !== input.archive.sourceRevision
+      || existing.sha256 !== input.archive.sha256 || canonicalRecoveryJson(existing.metadata) !== canonicalRecoveryJson(metadata))) {
+      throw new NativeTraceRecoveryError("native recovery archive already exists with different provenance");
+    }
+    for (const candidate of [...input.tasks].sort((a, b) => a.task.taskId.localeCompare(b.task.taskId))) {
+      const expected = candidate.task;
+      const pointer = pointers.get(expected.taskId);
+      if (!pointer || pointer.archiveId !== input.archive.id || pointer.runtimeId !== input.archive.runtimeId
+        || expected.workspaceId !== input.workspaceId || expected.runtimeId !== input.archive.runtimeId) {
+        throw new NativeTraceRecoveryError(`native recovery ownership mismatch: ${expected.taskId}`);
+      }
+      const runtime = this.ctx.db.query(`SELECT workspace_id, provider, daemon_id FROM multiremi_runtimes WHERE id = ?${forUpdate}`)
+        .get(expected.runtimeId) as Row | null;
+      if (!runtime || runtime.workspace_id !== input.workspaceId || runtime.provider !== expected.provider
+        || runtime.daemon_id !== input.archive.daemonId) {
+        throw new NativeTraceRecoveryError(`native recovery Runtime changed: ${expected.taskId}`);
+      }
+      this.ctx.db.query(`SELECT id FROM multiremi_tasks WHERE id = ?${forUpdate}`).get(expected.taskId);
+      const currentTask = this.getNativeTraceRecoveryTaskSnapshot(expected.taskId);
+      if (!currentTask || canonicalRecoveryJson(currentTask) !== canonicalRecoveryJson(expected)) {
+        throw new NativeTraceRecoveryError(`native recovery terminal task changed: ${expected.taskId}`);
+      }
+      assertNativeExecutionBinding(this.ctx.db, candidate);
+      this.assertTraceBackfillTask({ ...input, noneTaskIds: [] }, expected.taskId);
+      const row = this.ctx.db.query(`SELECT * FROM multiremi_task_traces WHERE task_id = ?${forUpdate}`)
+        .get(expected.taskId) as Row | null;
+      const currentPointer = row ? hydrateTaskTrace(row) : null;
+      if (existing) {
+        // Only the identical imported archive is an idempotent replay. Any
+        // later daemon archive, even a shorter one, must retain ownership.
+        if (!currentPointer || currentPointer.location !== "archive" || row?.source !== "trace_backfill"
+          || currentPointer.archiveId !== existing.id || currentPointer.runtimeId !== pointer.runtimeId
+          || currentPointer.memberPath !== pointer.memberPath || currentPointer.sha256 !== pointer.sha256
+          || currentPointer.dataOffset !== pointer.dataOffset || currentPointer.compressedSize !== pointer.compressedSize
+          || currentPointer.uncompressedSize !== pointer.uncompressedSize || currentPointer.headSeq !== pointer.headSeq
+          || currentPointer.eventCount !== pointer.eventCount || currentPointer.closed !== pointer.closed) {
+          throw new NativeTraceRecoveryError(`native recovery pointer changed since import: ${expected.taskId}`);
+        }
+      } else if (!currentPointer || currentPointer.location !== "daemon"
+        || canonicalRecoveryJson(currentPointer) !== canonicalRecoveryJson(candidate.expectedPointer)) {
+        throw new NativeTraceRecoveryError(`native recovery daemon pointer changed: ${expected.taskId}`);
+      }
+    }
+    if (existing) return { archive: existing, pointerCount: 0, replayed: true };
+    const archive = this.insertTraceBackfillArchive({ ...input, noneTaskIds: [] }, input.archive);
+    const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
+    if (written.written !== input.tasks.length || written.rejected.length) {
+      throw new NativeTraceRecoveryError("native recovery pointer update did not match the locked plan");
+    }
+    return { archive, pointerCount: written.written, replayed: false };
   }
 
   private assertTraceBackfillSubject(input: TraceBackfillCommitInput): void {

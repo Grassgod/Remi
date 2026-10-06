@@ -610,6 +610,7 @@
     "copy_action": "コピー",
     "copied_toast": "コピーしました",
     "transcript_tooltip": "実行記録を表示",
+    "transcript_refresh_failed": "タスクの状態を更新できませんでした。読み込み済みの実行記録は引き続き表示できます。",
     "edit_action": "編集",
     "update_failed": "コメントを更新できませんでした",
     "send_failed": "コメントを送信できませんでした",

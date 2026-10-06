@@ -1,11 +1,13 @@
 /**
  * @vitest-environment jsdom
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import { setApiInstance, type ApiClient } from "../api";
+import { taskDetailKeys, taskDetailOptions } from "../agents/queries";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -90,6 +92,37 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(keys).not.toContainEqual(["chat", "ws-1"]);
   });
 
+  it.each(["onReconnect", "onResync", "workspace-switch"] as const)(
+    "refreshes cached task completion after %s without a later lifecycle event",
+    async (source) => {
+      const first = createMockWs();
+      let recover: (() => void) | undefined;
+      if (source !== "workspace-switch") {
+        vi.mocked(first[source]).mockImplementation((callback: () => void) => {
+          recover = callback;
+          return () => { recover = undefined; };
+        });
+      }
+      const getTask = vi.fn().mockResolvedValue({ id: "task-1", status: "completed" });
+      setApiInstance({ getTask } as unknown as ApiClient);
+      qc.setQueryData(taskDetailKeys.detail("task-1"), { id: "task-1", status: "running" });
+      const { result, rerender } = renderHook(({ ws }) => {
+        useRealtimeSync(ws, stores);
+        return useQuery(taskDetailOptions("task-1"));
+      }, { initialProps: { ws: first }, wrapper: createWrapper(qc) });
+      expect(result.current.data?.status).toBe("running");
+      expect(getTask).not.toHaveBeenCalled();
+
+      if (source === "workspace-switch") rerender({ ws: createMockWs() });
+      else act(() => { recover?.(); });
+
+      await waitFor(() => expect(result.current.data?.status).toBe("completed"));
+      expect(getTask).toHaveBeenCalledExactlyOnceWith("task-1");
+      expect(invalidateSpy.mock.calls.filter((call: [{ queryKey?: unknown }, ...unknown[]]) => JSON.stringify(call[0]?.queryKey) === JSON.stringify(taskDetailKeys.all())))
+        .toHaveLength(1);
+    },
+  );
+
   it("skips invalidation on first non-null ws instance", () => {
     const ws = createMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {
@@ -137,7 +170,7 @@ describe("useRealtimeSync — ws instance change", () => {
 
     // Should have called invalidateQueries for all workspace-scoped keys,
     // including task and Product Session caches affected by daemon retirement.
-    expect(invalidateSpy).toHaveBeenCalledTimes(24);
+    expect(invalidateSpy).toHaveBeenCalledTimes(25);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -173,6 +206,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["workspaces", "ws-1", "invitations"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "agent-plugins"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "agent-tasks"]);
+    expect(calls).toContainEqual(taskDetailKeys.all());
     expect(calls).toContainEqual(["runtimes", "models", "fleet", "ws-1"]);
     expect(calls).toContainEqual(["runtimes", "daemons", "inventory", "ws-1"]);
     expect(calls).toContainEqual(["issues", "workspace"]);

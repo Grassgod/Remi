@@ -20,6 +20,7 @@ import {
   agentActivityKeys,
   agentRunCountsKeys,
   agentTasksKeys,
+  taskDetailKeys,
 } from "../agents/queries";
 import { inboxKeys } from "../inbox/queries";
 import { workspaceKeys } from "../workspace/queries";
@@ -59,6 +60,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient, includeChat = true): 
     qc.invalidateQueries({ queryKey: autopilotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: taskDetailKeys.all() });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
     if (includeChat) qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });

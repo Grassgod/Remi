@@ -233,7 +233,7 @@ describe("task trace dialog", () => {
   });
 
   it("shows an offline runtime and retries without removing the dialog", async () => {
-    getTaskTrace.mockResolvedValueOnce(page({ state: "unreachable", runtime_name: "Runtime A", retryable: true }))
+    getTaskTrace.mockResolvedValueOnce(page({ state: "unreachable", reason: "daemon_unreachable", runtime_name: "Runtime A", retryable: true }))
       .mockResolvedValueOnce(page({ state: "ok", events: [event(1)], next_after_seq: 1, head: 1 }));
     renderTrace();
     expect(await screen.findByRole("alert")).toHaveTextContent("Runtime A is offline");
@@ -241,6 +241,54 @@ describe("task trace dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("1 tool call")).toBeInTheDocument();
     expect(getTaskTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports an archive read failure without blaming an offline runtime and can retry", async () => {
+    getTaskTrace.mockResolvedValueOnce(page({ state: "unreachable", source: "archive", reason: "archive_read_failed",
+      runtime_name: "Old Runtime", last_seen_at: "2026-08-07T00:00:00Z", retryable: true }))
+      .mockResolvedValueOnce(page({ source: "archive", closed: true, events: [event(1)], next_after_seq: 1, head: 1 }));
+    renderTrace({ status: "completed" });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could not read the archived execution trace. Please retry.");
+    expect(alert).not.toHaveTextContent("offline");
+    expect(alert).not.toHaveTextContent("Last online");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("1 tool call")).toBeInTheDocument();
+    expect(getTaskTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the archive failure reason when source metadata is missing", async () => {
+    getTaskTrace.mockResolvedValue(page({ state: "unreachable", source: null, reason: "archive_read_failed" }));
+    renderTrace({ status: "completed" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not read the archived execution trace. Please retry.");
+  });
+
+  it.each(["daemon_timeout", "daemon_busy", "daemon_read_failed", "pointer_missing", "runtime_missing", "future_reason", undefined])(
+    "does not claim the runtime is offline for unavailable reason %s", async (reason) => {
+      getTaskTrace.mockResolvedValue(page({ state: "unreachable", reason, runtime_name: "Runtime A", last_seen_at: "2026-08-07T00:00:00Z" }));
+      renderTrace();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Execution trace is temporarily unavailable. Please retry.");
+      expect(alert).not.toHaveTextContent("offline");
+      expect(alert).not.toHaveTextContent("Last online");
+    },
+  );
+
+  it("shows a complete generic offline message when the runtime identifiers are empty", async () => {
+    getTaskTrace.mockResolvedValue(page({ state: "unreachable", reason: "daemon_unreachable", runtime_name: "  ", runtime_id: "", last_seen_at: "not-a-date" }));
+    renderTrace();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The execution runtime is offline; execution trace is temporarily unavailable");
+    expect(alert).not.toHaveTextContent("Last online");
+    expect(alert).not.toHaveTextContent("Invalid Date");
+  });
+
+  it("falls back to the runtime ID and preserves a valid last-online timestamp", async () => {
+    getTaskTrace.mockResolvedValue(page({ state: "unreachable", reason: "daemon_unreachable", runtime_name: "", runtime_id: "rt-recorded", last_seen_at: "2026-08-07T00:00:00Z" }));
+    renderTrace();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Runtime rt-recorded is offline");
+    expect(alert).toHaveTextContent("Last online");
   });
 
   it("stops subscribing when a finished trace reports closed", async () => {

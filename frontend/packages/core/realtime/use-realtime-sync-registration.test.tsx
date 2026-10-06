@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { setApiInstance, type ApiClient } from "../api";
 import { issueKeys } from "../issues/queries";
+import { taskDetailKeys, taskDetailOptions } from "../agents/queries";
 import type { WSEventType, WSMessage } from "../types/events";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
@@ -365,6 +366,35 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       "workspaces", "ws-1", "agent-run-counts", "30d",
     ]))).toHaveLength(1);
   });
+
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "refreshes an open task detail on task:%s through one debounced lifecycle invalidation",
+    async (status) => {
+      const getTask = vi.fn().mockResolvedValue({ id: "task-1", status });
+      setApiInstance({ getTask } as unknown as ApiClient);
+      qc.setQueryData(taskDetailKeys.detail("task-1"), { id: "task-1", status: "running" });
+      qc.setQueryData(taskDetailKeys.detail("closed-task"), { id: "closed-task", status: "running" });
+      const mock = createRecordingWs();
+      const invalidate = vi.spyOn(qc, "invalidateQueries");
+      const { result } = renderHook(() => {
+        useRealtimeSync(mock.ws, stores);
+        useQuery(taskDetailOptions("closed-task", { enabled: false }));
+        return useQuery(taskDetailOptions("task-1"));
+      }, { wrapper: createWrapper(qc) });
+      expect(result.current.data?.status).toBe("running");
+      expect(getTask).not.toHaveBeenCalled();
+
+      act(() => {
+        mock.emit("task:progress", { task_id: "task-1" });
+        mock.emit(`task:${status}`, { task_id: "task-1" });
+      });
+      await waitFor(() => expect(result.current.data?.status).toBe(status));
+      expect(getTask).toHaveBeenCalledExactlyOnceWith("task-1");
+      expect(invalidate.mock.calls.filter(call => JSON.stringify(call[0]?.queryKey) === JSON.stringify(taskDetailKeys.all())))
+        .toHaveLength(1);
+      expect(qc.getQueryState(taskDetailKeys.detail("closed-task"))?.isInvalidated).toBe(true);
+    },
+  );
 
   it("invalidates all daemon-owned state when a daemon is retired", () => {
     vi.useFakeTimers();

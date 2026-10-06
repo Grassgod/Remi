@@ -55,6 +55,7 @@ import {
   SessionArchiveTraceOwnershipError,
   TraceBackfillSubjectError,
   type TraceBackfillCommitResult,
+  type NativeTraceRecoveryCommitResult,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import type {
   TraceBackfillProgressInput,
@@ -63,6 +64,16 @@ import type {
   TraceBackfillTurnSummary,
 } from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
+import { checkTraceFileLines, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import { readZipMemberBody } from "@shared/zip/reader.js";
+import {
+  NativeTraceRecoveryError,
+  nativeRecoveryEndedAt,
+  nativeRecoveryMetadata,
+  nativeRecoverySessionId,
+  nativeRecoveryStartedAt,
+  type NativeTraceRecoveryTask,
+} from "@multiremi/session-archive/native-recovery.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -116,6 +127,15 @@ export interface TraceBackfillIngestInput {
   taskDigests: readonly TraceBackfillTaskDigest[];
   /** One per rendered and `none` task; written onto the tasks' `turn` cards. */
   turnSummaries: readonly TraceBackfillTurnSummary[];
+}
+
+type OperatorTraceArchiveInput = Pick<TraceBackfillIngestInput,
+  "workspaceId" | "subject" | "runtimeId" | "daemonId" | "archivePath" | "sourceRevision" | "sha256" | "sizeBytes" | "fileCount" | "metadata">;
+
+/** Local operator-only entry point; does not add a public HTTP/CLI capability. */
+export interface NativeTraceRecoveryIngestInput extends Omit<OperatorTraceArchiveInput, "metadata"> {
+  algorithmVersion: string;
+  tasks: readonly NativeTraceRecoveryTask[];
 }
 
 export interface SessionArchiveVerifyResult {
@@ -1231,6 +1251,88 @@ export class SessionArchiveService {
   async ingestTraceBackfill(
     input: TraceBackfillIngestInput,
   ): Promise<TraceBackfillCommitResult & { turnCards: TraceBackfillTurnCardCounts }> {
+    return this.ingestOperatorTraceArchive(input, (archive, ingest) => this.store.commitTraceBackfill({
+      workspaceId: input.workspaceId,
+      subjectKind: input.subject.kind,
+      subjectId: input.subject.id,
+      archive: { ...archive, fileCount: archive.fileCount ?? input.fileCount },
+      pointers: buildTracePointers(archive, ingest.traces),
+      noneTaskIds: input.noneTaskIds,
+      progress: input.progress,
+      taskDigests: input.taskDigests,
+      turnSummaries: input.turnSummaries,
+    }));
+  }
+
+  /** Publish verified native recovery without changing any task, card or old backfill record. */
+  async ingestNativeTraceRecovery(input: NativeTraceRecoveryIngestInput): Promise<NativeTraceRecoveryCommitResult> {
+    const metadata = nativeRecoveryMetadata(input.algorithmVersion, input.tasks);
+    return this.ingestOperatorTraceArchive({ ...input, metadata }, (archive, ingest) => this.store.commitNativeTraceRecovery({
+      workspaceId: input.workspaceId,
+      subjectKind: input.subject.kind,
+      subjectId: input.subject.id,
+      archive: { ...archive, fileCount: archive.fileCount ?? input.fileCount },
+      pointers: buildTracePointers(archive, ingest.traces),
+      algorithmVersion: input.algorithmVersion,
+      tasks: input.tasks,
+    }), (ingest) => this.validateNativeTraceRecovery(input, ingest));
+  }
+
+  /** Read-only validation for the operator's already hash/index-verified staged archive. */
+  async validateNativeTraceRecovery(input: NativeTraceRecoveryIngestInput, ingest: ArchiveIngestVerification): Promise<void> {
+    const tasks = new Map(input.tasks.map((task) => [task.task.taskId, task]));
+    if (ingest.traces.length !== tasks.size || ingest.index.members.length !== tasks.size + 1
+      || ingest.index.members.some((member) => member.kind !== "trace" && member.path !== "manifest.json")) {
+      throw new NativeTraceRecoveryError("native recovery archive must contain exactly the planned trace members");
+    }
+    const handle = await open(input.archivePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      for (const member of ingest.traces) {
+        const candidate = member.task_id ? tasks.get(member.task_id) : undefined;
+        if (!candidate) throw new NativeTraceRecoveryError("native recovery archive contains an unplanned task");
+        const { bytes } = await readZipMemberBody(handle, {
+          dataOffset: member.data_offset, compressedSize: member.compressed_size,
+          uncompressedSize: member.uncompressed_size, sha256: member.sha256,
+        });
+        const lines = bytes.toString("utf8").split("\n");
+        if (lines.at(-1) === "") lines.pop();
+        const { task, evidence } = candidate;
+        const checked = checkTraceFileLines(lines, {
+          taskId: task.taskId, sessionId: nativeRecoverySessionId(task), incompleteTail: bytes.at(-1) !== 10,
+        });
+        if (!checked.ok || !checked.value.closed || checked.value.event_count === 0
+          || checked.value.head !== checked.value.event_count || member.head !== checked.value.head
+          || member.event_count !== checked.value.event_count || member.closed !== true) {
+          throw new NativeTraceRecoveryError(`native recovery trace framing/counts invalid: ${task.taskId}`);
+        }
+        const header = JSON.parse(lines[0]!) as TraceFileHeader;
+        const trailer = JSON.parse(lines.at(-1)!) as TraceFileTrailer;
+        if (header.agent_id !== task.agentId || header.runtime_id !== task.runtimeId || header.provider !== task.provider
+          || header.started_at !== nativeRecoveryStartedAt(candidate) || trailer.end.status !== task.status
+          || trailer.end.ended_at !== nativeRecoveryEndedAt(task)) {
+          throw new NativeTraceRecoveryError(`native recovery trace identity differs from task: ${task.taskId}`);
+        }
+        const kinds = [...new Set(lines.slice(1, -1).map((line) => String(JSON.parse(line).type)))].sort();
+        const binding = evidence.nativeExecutionBinding;
+        if (binding && lines.slice(1, -1).some((line) => {
+          const at = Date.parse(String(JSON.parse(line).ts));
+          return at < Date.parse(binding.nativeStartedAt) || at > Date.parse(binding.nativeCompletedAt);
+        })) throw new NativeTraceRecoveryError(`recovered event lies outside the proven native execution: ${task.taskId}`);
+        if (JSON.stringify(kinds) !== JSON.stringify([...new Set(evidence.recoveredEventKinds)].sort())) {
+          throw new NativeTraceRecoveryError(`native recovery event kinds differ from proof: ${task.taskId}`);
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** Shared immutable publication; caller owns its narrow atomic database commit. */
+  private async ingestOperatorTraceArchive<Result>(
+    input: OperatorTraceArchiveInput,
+    commit: (archive: MultiremiSessionArchive, ingest: ArchiveIngestVerification) => Result,
+    verify?: (ingest: ArchiveIngestVerification) => Promise<void>,
+  ): Promise<Result> {
     const { subject } = input;
     if (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(subject.id)) {
       throw new SessionArchiveError("subject_id must be a plain identifier", 400, "session_archive_invalid_subject");
@@ -1282,27 +1384,7 @@ export class SessionArchiveService {
     };
     this.assertArchiveHash(await hashFile(input.archivePath, input.sizeBytes), staged);
     const ingest = await this.validateArchiveIngest(input.archivePath, staged);
-    const commit = (archive: MultiremiSessionArchive) => this.store.commitTraceBackfill({
-      workspaceId: input.workspaceId,
-      subjectKind: subject.kind,
-      subjectId: subject.id,
-      archive: {
-        id: archive.id,
-        runtimeId: archive.runtimeId,
-        daemonId: archive.daemonId,
-        sourceRevision: archive.sourceRevision,
-        sha256: archive.sha256,
-        sizeBytes: archive.sizeBytes,
-        fileCount: archive.fileCount ?? input.fileCount,
-        relativePath: archive.relativePath,
-        metadata: archive.metadata,
-      },
-      pointers: buildTracePointers(archive, ingest.traces),
-      noneTaskIds: input.noneTaskIds,
-      progress: input.progress,
-      taskDigests: input.taskDigests,
-      turnSummaries: input.turnSummaries,
-    });
+    await verify?.(ingest);
 
     const existing = this.store.listSessionArchivesForSubject(subject.kind, subject.id)
       .find((archive) => archive.sourceRevision === input.sourceRevision && archive.sha256 === input.sha256);
@@ -1314,7 +1396,7 @@ export class SessionArchiveService {
         );
       }
       await this.verifiedFinalHash(await this.resolveArchivePath(existing.relativePath, false), existing);
-      const result = this.translateTraceBackfillError(() => commit(existing));
+      const result = this.translateTraceBackfillError(() => commit(existing, ingest));
       await unlink(input.archivePath).catch(() => {});
       return result;
     }
@@ -1350,7 +1432,7 @@ export class SessionArchiveService {
       const manifestTemp = await this.writeManifest(finalPath, archive, input.sizeBytes);
       await rename(manifestTemp, join(directory, "manifest.json"));
       await this.syncDirectory(directory);
-      const result = this.translateTraceBackfillError(() => commit(archive));
+      const result = this.translateTraceBackfillError(() => commit(archive, ingest));
       committed = true;
       await unlink(marker).catch((error) => {
         log.warn(`Failed to clear trace backfill marker for ${id}: ${String(error)}`);

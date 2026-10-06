@@ -617,6 +617,7 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "transcript_tooltip": "View transcript",
+    "transcript_refresh_failed": "Couldn't refresh task status. Loaded execution records are still available.",
     "edit_action": "Edit",
     "update_failed": "Failed to update comment",
     "send_failed": "Failed to send comment",

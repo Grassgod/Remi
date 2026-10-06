@@ -13,6 +13,7 @@ import {
   agentActivityKeys,
   agentRunCountsKeys,
   agentTasksKeys,
+  taskDetailKeys,
 } from "../../agents/queries";
 import { scmKeys } from "../../scm/queries";
 import { larkKeys } from "../../lark/queries";
@@ -172,6 +173,10 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
     task: () => {
       const wsId = getCurrentWsId();
       if (!wsId) return;
+      // Open execution dialogs read individual task metadata. Refresh through
+      // this existing debounce so completion updates their status; closed
+      // comment links stay disabled and only become stale until next opened.
+      qc.invalidateQueries({ queryKey: taskDetailKeys.all() });
       // Per-agent task list (Activity tab "Recent work"). Prefix match
       // catches every agent's list — the per-agent detail key sits
       // under agentTasks/<wsId>/<agentId>.

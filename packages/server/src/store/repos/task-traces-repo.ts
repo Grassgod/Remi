@@ -63,7 +63,7 @@ export interface TaskTracePointerWriteResult {
   rejected: TaskTracePointerRejection[];
 }
 
-function hydrate(row: Row): MultiremiTaskTrace {
+export function hydrateTaskTrace(row: Row): MultiremiTaskTrace {
   return {
     taskId: String(row.task_id),
     location: String(row.location) as MultiremiTaskTraceLocation,
@@ -99,7 +99,7 @@ export class TaskTracesRepo {
 
   get(taskId: string): MultiremiTaskTrace | null {
     const row = this.query("SELECT * FROM multiremi_task_traces WHERE task_id = ?", [taskId]);
-    return row ? hydrate(row) : null;
+    return row ? hydrateTaskTrace(row) : null;
   }
 
   /** A claim transfers a still-hot trace to the runtime that accepted the task. */
@@ -139,7 +139,7 @@ export class TaskTracesRepo {
   listForArchive(archiveId: string): MultiremiTaskTrace[] {
     return (this.ctx.db.query(
       "SELECT * FROM multiremi_task_traces WHERE archive_id = ? ORDER BY task_id ASC",
-    ).all(archiveId) as Row[]).map(hydrate);
+    ).all(archiveId) as Row[]).map(hydrateTaskTrace);
   }
 
   /**
