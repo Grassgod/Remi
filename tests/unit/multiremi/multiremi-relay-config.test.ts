@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -84,12 +87,14 @@ describe("relay config store", () => {
   });
 
   it("upgrades existing snapshots without treating the old inventory as an authoritative native catalog", () => {
-    const store = createStore();
-    store.saveGatewayModels("local", "codex", {
-      sourceRevision: 4, models: [{ id: "legacy-inventory", label: "Legacy" }],
-    });
-    db!.exec("ALTER TABLE multiremi_gateway_models DROP COLUMN native_catalog_status");
-    const upgraded = new MultiremiStore(db!);
+    const legacy = openSqliteDatabase(":memory:");
+    try {
+    bootstrapPreUnifiedSchema(legacy);
+    historicalWriters(legacy);
+    legacy.exec("ALTER TABLE multiremi_gateway_models DROP COLUMN native_catalog_status");
+    legacy.run(`INSERT INTO multiremi_gateway_models(workspace_id,engine,models,source_revision,updated_at)
+      VALUES('local','codex',?,4,?)`, [JSON.stringify([{ id: "legacy-inventory", label: "Legacy" }]), new Date().toISOString()]);
+    const upgraded = new MultiremiStore(legacy);
     expect(upgraded.getGatewayModels("local", "codex")?.models[0].id).toBe("legacy-inventory");
     expect(upgraded.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBeUndefined();
     upgraded.saveGatewayModels("local", "codex", { sourceRevision: 4, nativeCatalogStatus: "ready", models: [] });
@@ -98,6 +103,7 @@ describe("relay config store", () => {
     upgraded.saveGatewayModels("local", "codex", { sourceRevision: 4, nativeCatalogStatus: "error", error: "catalog HTTP 503" });
     expect(upgraded.getGatewayModels("local", "codex")?.nativeCatalogStatus).toBe("error");
     expect(upgraded.getGatewayModels("local", "codex")?.lastError).toBe("catalog HTTP 503");
+    } finally { legacy.close(); }
   });
 });
 

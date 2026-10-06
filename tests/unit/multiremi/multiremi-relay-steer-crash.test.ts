@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,7 +78,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }
 
     for (const phase of ["before-insert", "after-insert", "after-commit"] as const) {
-      it(`${phase}: system message and steer row commit together`, async () => {
+      it(`${phase}: relay message and running turn input commit together`, async () => {
         const agent = store.createAgent({ name: "Crash relay", provider: "codex" });
         const issue = store.createIssue({ title: "Crash relay", status: "in_progress" });
         const chat = store.createChatSession({ agentId: agent.id });
@@ -87,12 +88,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           body: "Initial report", source: { issueId: issue.id },
         }, [], createCommitEventQueue()))()[0]!;
         expect(initial.action).toBe("created");
-        db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [initial.task!.id]);
+        const runtime = store.registerRuntime({ id: "relay-crash", name: "relay-crash", provider: "codex" });
+        expect(store.claimTask(runtime.id)?.id).toBe(initial.task!.id);
+        store.startTask(initial.task!.id);
         await killAt(phase, issue.id);
-        const system = db.query("SELECT id FROM multiremi_chat_messages WHERE chat_session_id = ? AND role = 'system' AND body = ?")
+        const system = db.query("SELECT id FROM multiremi_conversation_log WHERE session_id = ? AND kind = 'message' AND body_md = ?")
           .all(chat.id, marker);
-        const steers = db.query("SELECT id FROM multiremi_task_steer_messages WHERE task_id = ? AND content = ?")
-          .all(initial.task!.id, marker);
+        const input = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(initial.task!.id)!);
+        const steers = input.input_messages.filter(row => system.some((message: any) => message.id === row.id));
         expect(system).toHaveLength(phase === "after-commit" ? 1 : 0);
         expect(steers).toHaveLength(system.length);
       }, 40_000);

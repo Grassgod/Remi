@@ -1,6 +1,10 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -123,13 +127,19 @@ describe("Execution groups", () => {
   });
 
   it("leaves work in its group when a member departs and migrates legacy pins without weakening them", () => {
-    const store = createStore();
-    const first = store.registerRuntime({ name: "A", provider: "codex", daemonId: "a", executionGroupId: "original" });
-    const second = store.registerRuntime({ name: "B", provider: "codex", daemonId: "b", executionGroupId: "original" });
-    const legacy = store.createAgent({ name: "Legacy", provider: "codex", runtimeId: first.id });
-    db!.run("UPDATE multiremi_agents SET execution_group_id = NULL WHERE id = ?", [legacy.id]);
-    db!.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["execution_groups_v1"]);
-    const reopened = new MultiremiStore(db!);
+    const database = openSqliteDatabase(":memory:");
+    try {
+    bootstrapPreUnifiedSchema(database);
+    const h = historicalWriters(database);
+    const first = { id: "rt_legacy_group_a" }, second = { id: "rt_legacy_group_b" };
+    const at = new Date().toISOString();
+    for (const [id, name, daemon] of [[first.id, "A", "a"], [second.id, "B", "b"]]) {
+      database.run("INSERT INTO multiremi_runtimes(id,name,provider,workspace_id,daemon_id,execution_group_id,created_at,updated_at) VALUES(?,?,'codex','local',?,'original',?,?)", [id, name, daemon, at, at]);
+    }
+    const legacy = h.createAgent({ name: "Legacy", provider: "codex" });
+    database.run("UPDATE multiremi_agents SET runtime_id = ?, execution_group_id = NULL WHERE id = ?", [first.id, legacy.id]);
+    database.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["execution_groups_v1"]);
+    const reopened = new MultiremiStore(database);
     expect(reopened.getAgent(legacy.id)).toMatchObject({ runtimeId: first.id, executionGroupId: "original" });
     const task = reopened.createTask({ agentId: legacy.id, prompt: "Legacy remains pinned" });
     expect(reopened.claimTask(second.id)).toBeNull();
@@ -138,6 +148,7 @@ describe("Execution groups", () => {
     reopened.updateRuntime(first.id, { executionGroupId: "departed" });
     expect(reopened.claimTask(first.id)).toBeNull();
     expect(reopened.claimTask(second.id)?.id).toBe(task.id);
+    } finally { database.close(); }
   });
 
   it("reclaims a lost dispatch only within its group after the original member leaves", () => {
@@ -148,7 +159,7 @@ describe("Execution groups", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "Lost claim response" });
     expect(store.claimTask(first.id)?.id).toBe(task.id);
     store.updateRuntime(first.id, { executionGroupId: "departed" });
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     expect(store.claimTask(first.id)).toBeNull();
     expect(store.getTask(task.id)?.status).toBe("queued");
     expect(store.claimTask(second.id)?.id).toBe(task.id);
@@ -175,7 +186,7 @@ describe("Execution groups", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "Not started" });
     expect(store.claimTask(first.id)?.id).toBe(task.id);
     store.updateAgent(agent.id, { executionGroupId: "target" });
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     expect(store.getTask(task.id)?.status).toBe("cancelled");
     expect(store.claimTask(first.id)).toBeNull();
     expect(store.claimTask(second.id)).toBeNull();

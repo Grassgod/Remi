@@ -158,7 +158,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
       expect(store.listTasks().some((task) => task.parentTaskId === exhaustedTask.id)).toBeFalse();
       expect(store.listTasks().some((task) => task.parentTaskId === directTask.id)).toBeFalse();
       expect(store.getAutopilotRun(run.id)?.status).toBe("failed");
-      expect(issueIds.map((id) => store.getIssue(id)?.status)).toEqual(issuesBefore);
+      expect(issueIds.map((id) => store.getIssue(id)?.status)).toEqual([issuesBefore[0], issuesBefore[1], "blocked"]);
       expect(turnIdentities(db)).toEqual(turnsBefore);
       expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_turn_attempts").get().n)).toBe(attemptsBefore + 2);
       expectReplacement(db, retryTask.id, issueRetry!.id);

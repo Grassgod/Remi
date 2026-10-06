@@ -1,3 +1,5 @@
+import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { normalizeDaemonClaimTask } from "@multiremi/client.js";
@@ -66,7 +68,7 @@ describe("binary Skill daemon claim compatibility", () => {
     const { store, runtime, task } = createFixture();
     store.claimTask(runtime.id, { supportsBinarySkillFiles: true });
     const oldDispatchTime = "2000-01-01T00:00:00.000Z";
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", [oldDispatchTime, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", [oldDispatchTime, task.id]);
     const stale = store.getTask(task.id);
     expect(() => store.claimTask(runtime.id)).toThrow(BinarySkillFilesUnsupportedError);
     expect(store.getTask(task.id)).toEqual(stale);
@@ -83,7 +85,7 @@ describe("binary Skill daemon claim compatibility", () => {
     const { store, runtime, task } = createFixture();
     for (let attempt = 0; attempt < 3; attempt++) {
       const offer = await receiveTaskOffer(store, runtime.id, { reply: { ok: false, code: "binary_skill_files_unsupported" } });
-      expect(offer?.id).toBe(task.id);
+      expect(offer?.attempt_id).toBe(task.id);
       expect(offer?.agent.skills[0].files[0]).toEqual(png);
       expect(store.getTask(task.id)?.status).toBe("queued");
     }
@@ -99,12 +101,12 @@ describe("binary Skill daemon claim compatibility", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "Use text" });
     const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
-    expect((await response.json()).task.id).toBe(task.id);
+    expect((await response.json()).task.attempt_id).toBe(task.id);
   });
 
   it("preserves binary encoding through offer normalization", async () => {
     const { store, runtime, task } = createFixture("codex");
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.agent?.skills[0]?.files?.[0]).toEqual(png);
   });

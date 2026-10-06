@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -101,7 +102,7 @@ describe("Issue Session workspace leases", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(second.id);
   });
 
-  it("reports the blocker for a dispatched task that has not started", () => {
+  it("coalesces unread requests before a dispatched turn starts", () => {
     const store = createStore();
     const { runtime, firstAgent, issue } = seed(store);
     const session = store.createIssueSession(issue.id, { title: "One discussion", holdsWorkspace: false });
@@ -120,21 +121,12 @@ describe("Issue Session workspace leases", () => {
     });
 
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
-    // Simulate the daemon having claimed the second task before its execution
-    // lock is free; it must still report what it is waiting on.
-    db!.run(
-      "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ? WHERE id = ?",
-      [runtime.id, new Date().toISOString(), new Date().toISOString(), second.id],
-    );
-
-    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
-      taskId: first.id,
-      agentId: firstAgent.id,
-      agentName: "First",
-      issueSessionId: session.id,
-      issueSessionTitle: "One discussion",
-      reason: "session",
-    });
+    expect(second.id).toBe(first.id);
+    expect(store.getTask(second.id)?.status).toBe("dispatched");
+    expect(store.getTaskQueueBlocker(second.id)).toBeNull();
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.listConversationLogEntries(session.id).filter(row => row.kind === "message")
+      .map(row => row.body_md)).toEqual(["First", "Second"]);
   });
 
   it("keeps the same Agent context in one Session serialized", () => {
@@ -157,16 +149,12 @@ describe("Issue Session workspace leases", () => {
 
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.getTask(second.id)?.status).toBe("queued");
-    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
-      taskId: first.id,
-      issueSessionId: session.id,
-      issueSessionTitle: "One discussion",
-      reason: "session",
-    });
+    expect(second.id).toBe(first.id);
+    expect(store.getTask(second.id)?.status).toBe("dispatched");
+    expect(store.getTaskQueueBlocker(second.id)).toBeNull();
   });
 
-  it("keeps historical Issue Tasks serialized within the same Agent", () => {
+  it("binds issue requests without an explicit Session to one default conversation", () => {
     const store = createStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const first = store.createTask({
@@ -180,10 +168,11 @@ describe("Issue Session workspace leases", () => {
       issueId: issue.id,
       prompt: "Legacy B",
     });
-    db!.run("UPDATE multiremi_tasks SET issue_session_id = NULL WHERE id IN (?, ?)", [first.id, second.id]);
-
+    expect(first.issueSessionId).toBe(store.getOrCreateDefaultIssueSession(issue.id).id);
+    expect(second.issueSessionId).toBe(first.issueSessionId);
+    expect(second.id).toBe(first.id);
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.getTask(second.id)?.status).toBe("queued");
+    expect(store.getTask(second.id)?.status).toBe("dispatched");
   });
 });

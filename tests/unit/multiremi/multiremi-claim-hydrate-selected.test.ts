@@ -1,3 +1,5 @@
+import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // MUL-389: the claim hydrates the selected task and nothing else.
 //
 // The eligibility loops used to call the full `getAgent` (Skills + Skill files) for every
@@ -12,7 +14,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { receiveTaskOffer } from "../../fixtures/task-offer.js";
-import { createStore, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
 
@@ -147,8 +149,8 @@ describe("claim hydrates only the selected task", () => {
     const { store, runtime } = fixture({ agents: 2 });
     const dispatched = store.claimTask(runtime.id, { supportsBinarySkillFiles: true })!;
     const stale = "2000-01-01T00:00:00.000Z";
-    (store as unknown as { db: { run(sql: string, ...args: unknown[]): unknown } })
-      .db.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", [stale, dispatched.id]);
+    runTurnExecutionMutation((store as unknown as { db: import("@multiremi/store/db/postgres.js").SqlDatabase })
+      .db, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", [stale, dispatched.id]);
 
     const recovered = store.claimTask(runtime.id, { supportsBinarySkillFiles: true });
     expect(recovered?.id).toBe(dispatched.id);
@@ -197,13 +199,13 @@ describe("claim hydrates only the selected task", () => {
     const { store, runtime } = fixture({ agents: 3 });
     const expected = store.listTasks().find((task) => task.priority === 100)!.id;
     const body = { task: (await receiveTaskOffer(store, runtime.id))! };
-    expect(body.task.id).toBe(expected);
+    expect(body.task.attempt_id).toBe(expected);
     expect(body.task.agent.skills[0]!.files).toHaveLength(1);
   });
 
   it("keeps daemon task normalization working against the v2 offer payload", async () => {
     const { store, runtime } = fixture({ agents: 2 });
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
     expect(claimed?.id).toBe(store.listTasks().find((task) => task.priority === 100)!.id);
     expect(claimed?.agent?.skills).toHaveLength(1);
   });

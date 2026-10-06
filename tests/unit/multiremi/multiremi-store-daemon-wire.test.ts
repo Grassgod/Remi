@@ -1,3 +1,5 @@
+import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { taskOfferResponse, receiveTaskOffer, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
 // The exact payload shapes the Go daemon expects from pending/claim polling,
 // plus the issue-update paths that dispatch a task.
@@ -7,8 +9,10 @@ import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { MultiremiDaemonClient, normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { prepareFeishuIssueTopic as prepareIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
-import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
+import { configureRepositoryWikiAutomation, createLocalStore as createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 import { captureReports } from "../../fixtures/report-session.js";
+import { readOfferedTurnInput } from "../../fixtures/turn-report.js";
+import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -17,10 +21,10 @@ async function readOfferHistory(app: ReturnType<typeof createMultiremiApp>, wire
 }>> {
   const range = JSON.parse(wire.session_projection.jsonl.split("\n")[0]);
   expect(range).toMatchObject({ type: "unread_range", from_seq: 0 });
-  const command = range.instruction.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+  const command = range.instruction.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
   expect(command[1]).toBe(wire.session_projection.session_id);
   expect(command[2]).toBe("0");
-  const response = await app.request(`/api/sessions/${command[1]}/log/entry?from=${command[2]}&to=${command[3]}`,
+  const response = await app.request(`/api/sessions/${command[1]}/messages?from=${command[2]}&to=${command[3]}`,
     { headers: { Authorization: `Bearer ${wire.auth_token}` } });
   expect(response.status).toBe(200);
   const page = await response.json() as any;
@@ -44,7 +48,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.chatProjectId).toBe(project.id);
     expect(claimed?.issue).toBeNull();
@@ -169,12 +173,12 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const low = store.createTask({ agentId: boundAgent.id, workspaceId: "local", prompt: "low", priority: 1 });
     const eligibleUnbound = store.createTask({ agentId: unboundAgent.id, workspaceId: "local", prompt: "eligible but unbound", priority: 99 });
     const otherBound = store.createTask({ agentId: otherBoundAgent.id, workspaceId: "local", prompt: "other runtime", priority: 20 });
-    db!.run("UPDATE multiremi_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ? WHERE id = ?", [
       "2026-01-01T00:00:00.000Z",
       "2026-01-01T00:00:00.000Z",
       sameOld.id,
     ]);
-    db!.run("UPDATE multiremi_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ? WHERE id = ?", [
       "2026-01-01T00:00:01.000Z",
       "2026-01-01T00:00:01.000Z",
       sameNew.id,
@@ -209,6 +213,12 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       "runtime_id",
       "started_at",
       "status",
+      "trigger_author_name",
+      "trigger_author_type",
+      "trigger_comment_content",
+      "trigger_comment_id",
+      "trigger_summary",
+      "trigger_thread_id",
       "workspace_id",
     ]);
     expect(pendingBody[0]).toMatchObject({
@@ -230,7 +240,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       error: null,
       attempt: 1,
       max_attempts: 3,
-      kind: "direct",
+      kind: "comment",
       plugin_snapshot: [],
     });
     expect(pendingBody[0].execution_fingerprint).toMatch(/^[0-9a-f]{64}$/);
@@ -308,15 +318,15 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(claim.status).toBe(200);
     const claimTask = (await claim.json()).task;
     expect(claimTask).toMatchObject({
-      id: first.id,
+      attempt_id: first.id,
       agent_id: agent.id,
       runtime_id: runtime.id,
       issue_id: issue.id,
       issue_session_generation: 1,
       workspace_id: "local",
       status: "dispatched",
-      prompt: expect.stringContaining("Respond to the triggering messages"),
-      kind: "direct",
+      input_messages: expect.arrayContaining([expect.objectContaining({ body_md: expect.stringContaining("First claim") })]),
+      kind: "comment",
       agent: {
         id: agent.id,
         name: "Claim Shape Codex",
@@ -377,7 +387,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
     const client = new MultiremiDaemonClient("https://remi.example");
-    const normalized = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const normalized = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
     expect(normalized).toMatchObject({
       id: second.id,
       agentId: agent.id,
@@ -385,7 +395,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       issueId: secondIssue.id,
       issueSessionGeneration: 1,
       workspaceId: "local",
-      prompt: expect.stringContaining("Respond to the triggering messages"),
+      prompt: expect.stringContaining("Second claim"),
       agent: {
         id: agent.id,
         customEnv: { CLAIM_SECRET: "present" },
@@ -467,7 +477,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
 
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.issue?.attachments).toEqual([
@@ -548,7 +558,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.project?.instructions).toBe(latestInstructions);
@@ -598,7 +608,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
+    const claimed = normalizeDaemonTurnOffer((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.squadContext).toMatchObject({
@@ -681,10 +691,10 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       expect(claim.status).toBe(200);
       claimed.push((await claim.json()).task);
     }
-    const byId = new Map(claimed.map((task) => [task.id, task]));
+    const byId = new Map(claimed.map((task) => [task.attempt_id, task]));
 
     expect(byId.get(firstChat.task.id)).toMatchObject({
-      id: firstChat.task.id,
+      attempt_id: firstChat.task.id,
       kind: "chat",
       chat_session_id: chat.id,
       workspace_context: "Use the workspace TypeScript conventions.",
@@ -693,12 +703,14 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     expect(byId.get(firstChat.task.id).chatMessage).toBeUndefined();
     expect(byId.get(firstChat.task.id).chat_message).toBeUndefined();
-    expect(byId.get(firstChat.task.id).session_projection.jsonl).toContain('"body":"Check Shanghai weather"');
-    expect(byId.get(firstChat.task.id).session_projection.jsonl).not.toContain("and Qingdao too");
-    expect(store.getTask(queuedChat.task.id)?.status).toBe("queued");
+    expect(byId.get(firstChat.task.id).input_messages.map((row: any) => store.getMessage(row.id)!.body_md))
+      .toEqual(["Check Shanghai weather", "and Qingdao too"]);
+    expect(byId.get(firstChat.task.id).session_projection.jsonl).toContain("and Qingdao too");
+    expect(queuedChat.task.id).toBe(firstChat.task.id);
+    expect(store.getTask(queuedChat.task.id)?.status).toBe("dispatched");
 
     expect(byId.get(run.taskId!)).toMatchObject({
-      id: run.taskId,
+      attempt_id: run.taskId,
       kind: "autopilot",
       autopilot_run_id: run.id,
       autopilot_id: autopilot.id,
@@ -711,19 +723,18 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(byId.get(run.taskId!).autopilotTitle).toBeUndefined();
 
     expect(byId.get(quick.task.id)).toMatchObject({
-      id: quick.task.id,
+      attempt_id: quick.task.id,
       issue_id: quick.issue.id,
       project_id: project.id,
       quick_create_prompt: "Create onboarding screenshot follow-up",
     });
     expect(byId.get(quick.task.id).quickCreatePrompt).toBeUndefined();
 
+    readOfferedTurnInput(store, firstChat.task.id);
     store.startTask(firstChat.task.id);
     store.completeTask(firstChat.task.id, { output: "Shanghai checked", sessionId: "chat-queue-session" });
-    const queuedClaim = (await (await taskOfferResponse(store, runtime.id)).json()).task;
-    expect(queuedClaim.id).toBe(queuedChat.task.id);
-    expect(queuedClaim.session_projection.jsonl).toContain('"body":"and Qingdao too"');
-    expect(queuedClaim.session_projection.jsonl).not.toContain('"body":"Check Shanghai weather"');
+    expect((await (await taskOfferResponse(store, runtime.id)).json()).task).toBeNull();
+    expect(store.getTask(firstChat.task.id)?.status).toBe("completed");
 
     mockFetch(() => jsonResponse({
       task: {
@@ -814,12 +825,16 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(retry.session_projection.mode).toBe("bootstrap");
     expect(retry.session_projection.jsonl).not.toContain("Original question");
     expect(retry.session_projection.jsonl).not.toContain("Original answer");
-    expect(retry.session_projection.jsonl).not.toContain("Continue from that");
-    expect(retry.chat_message).toBe("Continue from that");
+    expect(retry.session_projection.jsonl).toContain("Continue from that");
+    expect(retry.input_messages.map((row: any) => store.getMessage(row.id)!.body_md))
+      .toEqual(["Original question", "Original answer", "Continue from that"]);
+    expect(retry.input_messages.map((row: any) => row.body_md).join("\n")).toContain("Original question");
+    expect(retry.input_messages.map((row: any) => row.body_md).join("\n")).not.toContain("Original answer");
     expect(retry).not.toHaveProperty("chat_bootstrap_transcript");
     const history = await readOfferHistory(app, retry);
     expect(history.map(entry => entry.body_md)).toContain("Original question");
-    expect(history).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ final_reply_md: "Original answer" }) }));
+    expect(store.getMessage(store.getTurnForAttempt(first.task.id)!.reply_message_id!)?.body_md).toBe("Original answer");
+    expect(history.map(entry => entry.body_md)).not.toContain("Original answer");
   });
 
   it.each([false, true])("cold-bootstraps a stale detached private Chat dispatch (legacy Issue Session: %s)", async (legacyIssueSession) => {
@@ -840,22 +855,23 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     const pending = store.sendChatMessage(chat.id, { body: "Continue our conversation" });
     expect(store.claimTask(runtime.id)?.id).toBe(pending.task.id);
-    // Model a claimed task retained for audit across the ownership migration.
-    // The Chat lineage is reset, while dispatched tasks keep their old row.
-    db!.run("UPDATE multiremi_tasks SET issue_id = ?, issue_session_id = ?, dispatched_at = ? WHERE id = ?", [
-      issue.id,
-      legacyIssueSession ? store.getOrCreateDefaultIssueSession(issue.id).id : null,
-      "2020-01-01T00:00:00.000Z", pending.task.id,
+    // Ownership migration retains old bindings as audit data, never as this turn's conversation.
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ?, execution_fingerprint = ? WHERE id = ?",
+      ["2020-01-01T00:00:00.000Z", CHAT_ISSUE_DECOUPLED_FINGERPRINT, pending.task.id]);
+    db!.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", [
+      JSON.stringify({ historical_issue_id: issue.id,
+        historical_issue_session_id: legacyIssueSession ? store.getOrCreateDefaultIssueSession(issue.id).id : null }), pending.message.id,
     ]);
     db!.run(`UPDATE multiremi_chat_sessions
       SET session_id = NULL, session_runtime_id = NULL, session_provider = NULL,
           session_execution_fingerprint = NULL WHERE id = ?`, [chat.id]);
+    db!.run("UPDATE multiremi_session_lanes SET provider_session_id=NULL, runtime_id=NULL WHERE session_id=? AND reader_type='agent' AND reader_id=?", [chat.id, agent.id]);
 
     const app = createMultiremiApp({ store });
     const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
     const wire = (await response.json()).task;
-    expect(wire.id).toBe(pending.task.id);
+    expect(wire.attempt_id).toBe(pending.task.id);
     expect(wire.issue_id).toBe("");
     expect(wire).not.toHaveProperty("bound_issue");
     expect(wire).not.toHaveProperty("session_id");
@@ -867,7 +883,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(wire.session_projection.jsonl).not.toContain("UNRELATED_ISSUE_HISTORY_MUST_NOT_SHIP");
     const history = await readOfferHistory(app, wire);
     expect(history.map(entry => entry.body_md)).toContain("Our earlier private question");
-    expect(history).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ final_reply_md: "Our earlier private answer" }) }));
+    expect(store.getMessage(store.getTurnForAttempt(first.task.id)!.reply_message_id!)?.body_md).toBe("Our earlier private answer");
+    expect(history.map(entry => entry.body_md)).not.toContain("Our earlier private answer");
     expect(JSON.stringify(history)).not.toContain("UNRELATED_ISSUE_HISTORY_MUST_NOT_SHIP");
     expect(store.getTask(pending.task.id)?.sessionId).toBe("legacy_issue_context_session");
   });
@@ -895,14 +912,14 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(store.getAgentChatNotificationChannel(chat.id)).toBeNull();
     // A queued task can predate the migration that dropped its private Chat
     // binding. Its persisted old Issue association must not leak at claim time.
-    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue.id, sent.task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [issue.id, sent.task.id]);
     expect(store.getTask(sent.task.id)?.issueId).toBe(issue.id);
 
     const app = createMultiremiApp({ store });
     const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
     const wire = (await response.json()).task;
-    expect(wire.id).toBe(sent.task.id);
+    expect(wire.attempt_id).toBe(sent.task.id);
     expect(wire.issue_id).toBe("");
     for (const field of [
       "issue", "issue_session", "issue_session_id",
@@ -937,19 +954,20 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(firstResponse.status).toBe(200);
     const firstClaim = (await firstResponse.json()).task;
     expect(firstClaim.session_projection.mode).toBe("bootstrap");
-    const firstPrompt = buildTaskPrompt(normalizeDaemonClaimTask(firstClaim)!);
+    const firstPrompt = buildTaskPrompt(normalizeDaemonTurnOffer(firstClaim));
     expect(firstPrompt.match(/First bound request/g)).toHaveLength(1);
     expect(firstPrompt).toContain("## Agent Instructions");
     expect(firstPrompt).toContain("## Skills");
 
     store.startTask(first.task.id);
+    readOfferedTurnInput(store, first.task.id);
     store.completeTask(first.task.id, { output: "First answer", sessionId: "sess_chat_delta" });
     const second = store.sendChatMessage(chat.id, { body: "Second bound request" });
     const secondResponse = await taskOfferResponse(store, runtime.id);
     expect(secondResponse.status).toBe(200);
     const secondClaim = (await secondResponse.json()).task;
     expect(secondClaim.session_projection.mode).toBe("delta");
-    const secondPrompt = buildTaskPrompt(normalizeDaemonClaimTask(secondClaim)!);
+    const secondPrompt = buildTaskPrompt(normalizeDaemonTurnOffer(secondClaim));
     expect(secondPrompt).toContain("# Delta Prompt");
     expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
     expect(secondPrompt.match(/Second bound request/g)).toHaveLength(1);
@@ -982,7 +1000,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status: ${issue.status}).`);
     expect(boundPrompt).toContain("The Bound Issue Log covers the interval shown above.");
     expect(boundPrompt).toContain(`remi issue get ${issue.id} --output json`);
-    expect(boundPrompt).toContain(`remi comment list ${issue.id} --recent 30 --output json`);
+    expect(boundPrompt).toContain("remi message list <issue-session-id> --output json");
     expect(boundPrompt).not.toContain("--tail");
 
     const unboundChat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Unbound topic" });
@@ -1156,7 +1174,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const previousStartedAt = "2025-01-01T00:00:00.000Z";
     expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
     store.startTask(previous.id);
-    db!.run("UPDATE multiremi_tasks SET started_at = ?, updated_at = ? WHERE id = ?", [previousStartedAt, previousStartedAt, previous.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET started_at = ?, updated_at = ? WHERE id = ?", [previousStartedAt, previousStartedAt, previous.id]);
     store.completeTask(previous.id, { output: "done" });
 
     const root = store.createIssueComment(issue.id, {
@@ -1200,19 +1218,19 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       trigger_comment_content: body,
       trigger_author_type: "member",
       trigger_author_name: "Alice Reviewer",
-      new_comment_count: 2,
+      new_comment_count: 3,
       new_comments_since: previousStartedAt,
     });
 
     const claim = await taskOfferResponse(store, runtime.id);
     const claimBody = await claim.json();
     expect(claimBody.task).toMatchObject({
-      id: task.id,
+      attempt_id: task.id,
       trigger_comment_id: comment.id,
       trigger_thread_id: root.id,
       trigger_author_type: "member",
       trigger_author_name: "Alice Reviewer",
-      new_comment_count: 2,
+      new_comment_count: 3,
       new_comments_since: previousStartedAt,
     });
     expect(claimBody.task.trigger_comment_content).toBeUndefined();

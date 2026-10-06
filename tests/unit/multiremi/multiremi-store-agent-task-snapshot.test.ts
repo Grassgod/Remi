@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiTask, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { isActiveTaskStatus } from "@multiremi/store/helpers.js";
@@ -33,12 +34,9 @@ function setTaskState(input: {
   completedAt?: string | null;
   failedAt?: string | null;
 }): void {
-  db!.run(
-    `UPDATE multiremi_tasks
+  runTurnExecutionMutation(db!, `UPDATE multiremi_turn_execution_records
      SET status = ?, created_at = ?, updated_at = ?, completed_at = ?, failed_at = ?
-     WHERE id = ?`,
-    [input.status, input.createdAt, input.updatedAt, input.completedAt ?? null, input.failedAt ?? null, input.id],
-  );
+     WHERE id = ?`, [input.status, input.createdAt, input.updatedAt, input.completedAt ?? null, input.failedAt ?? null, input.id]);
 }
 
 function expectSnapshotMatchesLegacy(store: MultiremiStore, workspaceId: string): void {
@@ -130,8 +128,8 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
     const runId = "apr_large_snapshot";
     db!.run(
       `INSERT INTO multiremi_autopilot_runs (
-        id, autopilot_id, source, status, task_id, triggered_at, created_at
-      ) VALUES (?, ?, 'api', 'running', ?, ?, ?)`,
+        id, autopilot_id, source, turn_id, triggered_at, created_at
+      ) VALUES (?, ?, 'api', ?, ?, ?)`,
       [runId, "apl_large_snapshot", tasks.at(-1)!.id, "2026-09-10T00:00:00.000Z", "2026-09-10T00:00:00.000Z"],
     );
 

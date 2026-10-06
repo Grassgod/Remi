@@ -17,6 +17,7 @@ import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -151,12 +152,12 @@ function seed(store: MultiremiStore, db: SqlDatabase) {
   const insert = (runtimeId: string, status: string, usage: string) => {
     index += 1;
     const createdAt = new Date(Date.UTC(2026, 8, 24) + index * 1000).toISOString();
-    db.run(
-      `INSERT INTO multiremi_tasks
+    runTurnExecutionMutation(db,
+      `INSERT INTO multiremi_turn_execution_records
          (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
-          created_at, updated_at, runtime_id, usage)
-       VALUES (?, 'direct', ?, 'local', ?, 0, ?, 1, 3, 1, ?, ?, ?, ?)`,
-      [`tsk_mul366_${index}`, agent.id, status, `usage fixture ${index}`, createdAt, createdAt, runtimeId, usage],
+          created_at, updated_at, runtime_id, usage, execution_scope)
+       VALUES (?, 'direct', ?, 'local', ?, 0, ?, 1, 3, 1, ?, ?, ?, ?, ?)`,
+      [`tsk_mul366_${index}`, agent.id, status, `usage fixture ${index}`, createdAt, createdAt, runtimeId, usage, `usage:${index}`],
     );
   };
   for (const [status, usage] of RUNTIME_A_TASKS) insert(runtimeA.id, status, usage);
@@ -199,13 +200,15 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     await admin.end();
   });
 
-  const LEGACY_SCAN = "SELECT id, status, usage FROM multiremi_tasks";
+  const LEGACY_SCAN = "SELECT id, status, usage FROM multiremi_turn_execution_records";
   type Runtimes = ReturnType<typeof seed>;
 
   /** Applies the same raw write to both backends. */
   function mutate(sql: string, params: (runtimes: Runtimes) => string[]) {
-    pg.run(sql, params(pgRuntimes));
-    sqlite.run(sql, params(sqliteRuntimes));
+    for (const [db, runtimes] of [[pg, pgRuntimes], [sqlite, sqliteRuntimes]] as const) {
+      if (sql.startsWith("DELETE")) db.run(sql, params(runtimes));
+      else runTurnExecutionMutation(db, sql, params(runtimes));
+    }
   }
 
   function expectBackendsAgree(...keys: Array<keyof Runtimes>) {
@@ -262,38 +265,41 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     };
     // Unsettled usage is read live, so its changes need no re-read.
     expect(settledRereads(() => mutate(
-      "UPDATE multiremi_tasks SET usage = ? WHERE id = ?",
+      "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?",
       () => [JSON.stringify([{ inputTokens: 40, outputTokens: 4 }]), "tsk_mul366_4"],
     ))).toBe(0);
     expect(settledRereads(() => mutate(
-      "UPDATE multiremi_tasks SET usage = ? WHERE id = ?",
+      "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?",
       () => [JSON.stringify([{ inputTokens: 5000, cacheReadTokens: 9 }]), "tsk_mul366_1"],
     ))).toBe(1);
     expect(settledRereads(() => mutate(
-      "UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?",
+      "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?",
       () => ["tsk_mul366_4"],
     ))).toBe(1);
     // Rewriting a settled row with identical values is still a new row version.
     expect(settledRereads(() => mutate(
-      "UPDATE multiremi_tasks SET usage = usage WHERE id = ?",
+      "UPDATE multiremi_turn_execution_records SET usage = usage WHERE id = ?",
       () => ["tsk_mul366_2"],
     ))).toBe(1);
-    expect(settledRereads(() => mutate("DELETE FROM multiremi_tasks WHERE id = ?", () => ["tsk_mul366_2"]))).toBe(1);
+    expect(settledRereads(() => mutate("DELETE FROM multiremi_turn_attempts WHERE id = ?", () => ["tsk_mul366_2"]))).toBe(1);
     // Moving a settled task changes both runtimes.
     expect(settledRereads(() => mutate(
-      "UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?",
+      "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?",
       (runtimes) => [runtimes.runtimeB, "tsk_mul366_1"],
     ))).toBe(2);
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).inputTokens).toBe(6000);
-    expect(settledRereads(() => mutate(
-      `INSERT INTO multiremi_tasks
-         (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
-          created_at, updated_at, runtime_id, usage)
-       SELECT 'tsk_mul366_new', task_kind, agent_id, workspace_id, 'cancelled', priority, prompt, attempt, max_attempts,
-              holds_workspace, created_at, updated_at, runtime_id, ?
-       FROM multiremi_tasks WHERE id = ?`,
-      () => [JSON.stringify([{ inputTokens: 70 }]), "tsk_mul366_3"],
-    ))).toBe(1);
+    expect(settledRereads(() => {
+      for (const db of [pg, sqlite]) {
+        const source = db.query("SELECT * FROM multiremi_turn_execution_records WHERE id = ?").get("tsk_mul366_3");
+        runTurnExecutionMutation(db, `INSERT INTO multiremi_turn_execution_records
+          (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
+           created_at, updated_at, runtime_id, usage, execution_scope)
+          VALUES ('tsk_mul366_new', ?, ?, ?, 'cancelled', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'usage:new')`,
+          [source.task_kind, source.agent_id, source.workspace_id, source.priority, source.prompt, source.attempt,
+           source.max_attempts, source.holds_workspace, source.created_at, source.updated_at, source.runtime_id,
+           JSON.stringify([{ inputTokens: 70 }])]);
+      }
+    })).toBe(1);
     expect(pg.statements.some((sql) => sql.includes(LEGACY_SCAN))).toBe(false);
 
     // Nothing changed since: no settled usage is read again.
@@ -307,9 +313,9 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
       const racingStore = new MultiremiStore(racing);
       const settle = [JSON.stringify([{ inputTokens: 800, outputTokens: 8 }]), "tsk_mul366_5"];
       racing.afterSummaryQuery = () => {
-        racing.run("UPDATE multiremi_tasks SET status = 'completed', usage = ? WHERE id = ?", settle);
+        runTurnExecutionMutation(racing, "UPDATE multiremi_turn_execution_records SET status = 'completed', usage = ? WHERE id = ?", settle);
       };
-      sqlite.run("UPDATE multiremi_tasks SET status = 'completed', usage = ? WHERE id = ?", settle);
+      runTurnExecutionMutation(sqlite, "UPDATE multiremi_turn_execution_records SET status = 'completed', usage = ? WHERE id = ?", settle);
       racing.statements.length = 0;
       const summary = usageSummary(racingStore.getRuntime(pgRuntimes.runtimeA));
       expect(racing.afterSummaryQuery).toBeNull();
@@ -324,17 +330,17 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
 
   it("does not cache settled totals read between two writes in one transaction", () => {
     expectBackendsAgree("runtimeA");
-    const sql = "UPDATE multiremi_tasks SET usage = ? WHERE id = ?";
+    const sql = "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?";
     const usage = (inputTokens: number) => [JSON.stringify([{ inputTokens }]), "tsk_mul366_10"];
     pg.transaction(() => {
-      pg.run(sql, usage(111));
+      runTurnExecutionMutation(pg, sql, usage(111));
       pg.statements.length = 0;
       pgStore.getRuntime(pgRuntimes.runtimeA);
       expect(pg.statements.some((statement) => statement.includes("settled_usage"))).toBe(true);
       // Same row, same transaction: the row keeps the `xmin` the read above saw.
-      pg.run(sql, usage(222));
+      runTurnExecutionMutation(pg, sql, usage(222));
     })();
-    sqlite.run(sql, usage(222));
+    runTurnExecutionMutation(sqlite, sql, usage(222));
     expectBackendsAgree("runtimeA");
   });
 });
