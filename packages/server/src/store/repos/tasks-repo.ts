@@ -2715,7 +2715,7 @@ export class TasksRepo {
       // Unbound Chat discovers repositories through the CLI. Bound Chat keeps
       // the existing Project catalog for display and on-demand checkout; its
       // separate explicit-only list controls automatic checkout in the worker.
-      repos: task.runtimeWorkspaceId || scheduleTarget || (task.holdsWorkspace === false && !issueSession?.withCode) || (task.chatSessionId && !task.issueId && !project)
+      repos: task.runtimeWorkspaceId || scheduleTarget || (task.holdsWorkspace === false && !issueSession?.withCode && !task.chatSessionId) || (task.chatSessionId && !task.issueId && !project)
         ? []
         : projectContexts.length
           ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
