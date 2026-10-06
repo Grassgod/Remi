@@ -168,6 +168,7 @@ describe("daemon Session archive GC orchestration", () => {
     });
     const events: string[] = [];
     Object.assign(daemon, {
+      pollAbort: new AbortController(),
       activeTaskCount: 0,
       activeTaskIds: new Set<string>(),
       activeTaskAborts: new Set<AbortController>(),

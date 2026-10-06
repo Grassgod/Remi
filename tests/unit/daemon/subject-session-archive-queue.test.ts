@@ -36,6 +36,7 @@ it("a delayed archive does not hold handleTask or its active task slot", async (
   let archiveEntered = false;
   const queue = new SubjectSessionArchiveQueue(root, "rt", () => {}, async () => { archiveEntered = true; return blocked; });
   const daemon = Object.assign(Object.create(MultiremiDaemon.prototype), {
+    pollAbort: new AbortController(),
     options: { taskTimeoutMs: 0, workspacesRoot: root }, subjectArchiveQueue: queue,
     activeTaskCount: 0, activeTaskIds: new Set(), activeTaskAborts: new Set(),
     taskDownlinks: { observeCancellation: () => () => {}, release: () => {} },
