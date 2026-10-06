@@ -569,6 +569,8 @@ S7 默认带 SSR cookie，并在普通独立详情的 cold 轮次断言实际 SS
 
 Issue 页以 `data-ssr-seed` 输出当前服务端渲染的播种结果枚举；S7 分别记录初始文档结果和最终 DOM，并核对文档/Flight 的 `initialLog` / `initialData` 和旧日志预定位标记。CSR 选中默认 Session 后可能通过现有 `router.replace` 发出 RSC，使文档的 `no-cookie` / `timeout` 更新为最终 `soft-nav`，两次结果都必须正确，后续 SSR GET 仍为 0。普通 warm 和 `--only detail-child-warm`（从父详情原生链接进入）必须是 `soft-nav`、空 seed；真实 RSC 与 Link 预取通过仅供 SSR 的本地代理记账，记录 `Accept` / `Sec-Fetch-Dest`，所有软导航 SSR GET 必须为 0（包括取消的 prefetch 和晚到工作），浏览器 rewrites 仍直连内存 API。`--only detail-ssr-timeout` 显式指定 Session，仅将 SSR Issue 读取延迟 1200ms，文档和最终 DOM 必须均为 `timeout` 并由 Bearer CSR 正常读取。warm、超时及 no-cookie 的客户端首次读取不计为 seed 补读；所有场景仍要求零跳动、anchorVisible=ready、无骨架和真实 Hub ack。
 
+软导航的 pending 骨架挂载 200ms 后显示，快速 warm 保留可见骨架帧为 0 的断言。`--only detail-soft-slow` 对未访问 Issue 的 CSR 请求延迟 650ms；`--only detail-session-switch` 从默认 Session 切到未缓存侧会话；`--only detail-session-return` 先执行并验证慢速侧会话加载，再以同样延迟测切回默认会话，cookie 开时入口文档必须确实播种。现有会话日志释放后切回可重新读取窗口，不能假定必然命中缓存；`--only detail-session-return-fast` 在切回时撤掉人工延迟，仍要求可见骨架帧为 0。逐帧 `loadingSamples` 记录各 pending 占位的年龄与可见性，慢加载必须观测到 200ms 后的可见帧，持续超过 350ms 的每个占位都必须显示过；使用「必须捕获骨架可见帧」口径，不以空白推测代替。显式 slow 场景允许 pending 阶段骨架，最终 ready 骨架仍为 0；零跳动、锚点和补读断言保留。
+
 无 cookie 的 S7 文档/RSC 拦截仍保留浏览器 Bearer 鉴权，并仅向本地 Web origin 授予 `local-network-access` 权限，避免 Chromium 对被拦截文档的地址空间检查阻断本机 WebSocket。所有路径仍必须观测真实 Hub `stream.ack`，无 ack 或请求未安静均失败；没有关闭浏览器安全策略或放宽等待断言。
 
 S1 的 `--ssr-cookie` 默认开启，仅在目标 origin 的浏览器内存 context 设置 HttpOnly `multimira_auth`；`--no-ssr-cookie` 用于 CSR 对照。开关不代表播种成功，逐轮以实际日志 DOM 的 seed 标记报告 SSR/CSR。`renderMs` 只量目标 Session 的窗口 `responseEnd` 到首次正常 fresh 揭示，warm 沿用 click 原点；SSR seed 没有浏览器窗口 responseEnd，缺观测或 forced 揭示记 null 并说明原因。各来源单列分位数；compare 不对不同 Cookie/实际来源或混合来源做差。

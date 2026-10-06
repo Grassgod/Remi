@@ -23,9 +23,7 @@ export default async function IssueDetailPage({ params, searchParams }: {
     if (initial.parentIssue) queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, initial.parentIssue.id), initial.parentIssue);
   }
   return (
-    <div className={status === "soft-nav"
-      ? "contents [&_[data-issue-detail-loading]]:invisible [&_[data-session-log-scroll]_[data-slot=skeleton]]:invisible" : "contents"}
-      data-issue-page="" data-ssr-seed={status}>
+    <div className="contents" data-issue-page="" data-ssr-seed={status}>
       <HydrationBoundary state={dehydrate(queries)}>
         <IssuePageClient issueId={id} initialIssueSessionId={sessionId ?? initial?.log.sessionId} highlightCommentId={commentId}
           initialLog={initial?.log} initialData={initial ?? undefined} />

@@ -38,7 +38,7 @@ Issue 与工作区 SSR 预取只服务文档请求。Next 16 的 `headers()` 和
 
 日志根的旧 `data-ssr-initial` 是有初始日志且会话/锚点匹配时的预定位门禁，空属性值表示开启；`data-ssr-positioned=1` 是定位脚本确认的位置状态，根 layout 的同名 SSR 脚本始终存在。它们都不是播种结果诊断。检查播种先读 `data-ssr-seed`，并核对 Flight 的 `initialLog` / `initialData`，不能因脚本存在或旧位置标记就断言播种成功。
 
-软导航的 Issue 路由只隐藏 `data-issue-detail-loading` 标记的全页占位骨架与日志窗口的待就绪骨架，原 CSR 查询、缓存和日志揭示照常运行；这避免查询等待时骨架短闪，不增加服务端请求或延后客户端读取。硬导航及其他 Issue 容器保留原加载展示。
+软导航的 Issue 加载占位在挂载后延迟 200ms 显示：[custom.css](../../frontend/apps/web/app/custom.css) 仅匹配 `data-issue-detail-loading`、`data-issue-timeline-loading`、`data-session-log-loading` 三类 pending 占位，延迟结束后恢复可见；揭示完成即卸载，占位在后续 Session 切换时重新挂载并计时。页面没有永久隐藏骨架的 class，其他骨架不受影响。原 CSR 查询、缓存和日志揭示照常运行；快速加载避免短闪，慢加载保留反馈，不增加服务端请求或延后客户端读取。硬导航及其他 Issue 容器保留原加载展示。
 
 Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，揭示只等待 Issue、会话和日志窗口；运行卡片用缓存与预留槽位首绘，active-task reconcile、订阅者和本地目录资源在揭示后读取，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 

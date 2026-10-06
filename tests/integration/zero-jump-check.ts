@@ -178,6 +178,12 @@ function findFreePort(start: number): number {
 }
 
 interface Scenario {
+  csrDelayMs?: number;
+  expectSlowLoading?: boolean;
+  entrySessionId?: string;
+  clickSessionId?: string;
+  prepareSessionId?: string;
+  fastReturn?: boolean;
   ssrTimeout?: boolean;
   parentEntryIssueId?: string;
   /** F398 also verifies that all deferred rows remain reachable inside the slot. */
@@ -189,7 +195,7 @@ interface Scenario {
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
-  entry: "issues-list" | "inbox" | "parent-issue";
+  entry: "issues-list" | "inbox" | "parent-issue" | "session-issue";
   /** Issue row to click, or the inbox row id for the deep link. */
   clickIssueId: string | null;
   inboxItemId: string | null;
@@ -245,6 +251,24 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
       ssrTimeout: true,
       path: `/issues/${encodeURIComponent(fixture.shortIssueId)}?session=${encodeURIComponent(fixture.shortSessionId)}`,
     }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-soft-slow") ? detail("detail-soft-slow", fixture.shortIssueId, {
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-switch") ? detail("detail-session-switch", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longSessionIds[1],
+      path: `/issues/${fixture.longIssueId}?session=${fixture.longSessionIds[1]}`,
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-return") ? detail("detail-session-return", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longDefaultSessionId,
+      prepareSessionId: fixture.longSessionIds[1], path: `/issues/${fixture.longIssueId}?session=${fixture.longDefaultSessionId}`,
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-return-fast") ? detail("detail-session-return-fast", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longDefaultSessionId,
+      prepareSessionId: fixture.longSessionIds[1], path: `/issues/${fixture.longIssueId}?session=${fixture.longDefaultSessionId}`,
+      csrDelayMs: 650, fastReturn: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
       path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
@@ -305,9 +329,12 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
+  loadingSamples: Array<{ t: number; age: number; id: number; kind: string; visible: boolean }>;
+  preparedSession?: { visibleFrames: number; jumpCount: number | null; anchorVisibleMs: number | null; readyMs: number | null };
   skeletonFlashFrames: number;
   ssrSeedStatus: string | null;
   documentSsrSeedStatus: string | null;
+  rscRequestCount: number;
   legacySsrMarker: boolean;
   ssrApiReads: Array<{ path: string; query: string; startedAt: number }>;
   softNavigationSsrReads: Array<{ path: string; query: string; startedAt: number }>;
@@ -550,6 +577,8 @@ async function runRound(input: {
     ssrSeed: false,
     ssrSeedRereads: [],
     ssrSeedStatus: null, documentSsrSeedStatus: null, legacySsrMarker: false, ssrApiReads: [], softNavigationSsrReads: [], navigationResponses: [], skeletonFlashFrames: 0,
+    loadingSamples: [],
+    rscRequestCount: 0,
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -616,8 +645,20 @@ async function runRound(input: {
   });
   await context.addInitScript(() => {
     const skeletonFrames: number[] = [];
+    const loadingSamples: RoundResult["loadingSamples"] = [];
+    const mounted = new WeakMap<Element, { t: number; id: number }>();
+    let loadingId = 0;
     (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames = skeletonFrames;
+    (window as unknown as { __s7LoadingSamples: typeof loadingSamples }).__s7LoadingSamples = loadingSamples;
     const sampleSkeletons = () => {
+      const now = performance.now();
+      for (const element of document.querySelectorAll<HTMLElement>("[data-issue-page] :is([data-issue-detail-loading], [data-issue-timeline-loading], [data-session-log-loading])")) {
+        if (!mounted.has(element)) mounted.set(element, { t: now, id: ++loadingId });
+        const first = mounted.get(element)!;
+        loadingSamples.push({ t: now, age: now - first.t, id: first.id,
+          kind: element.hasAttribute("data-session-log-loading") ? "log" : element.hasAttribute("data-issue-timeline-loading") ? "timeline" : "detail",
+          visible: element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) });
+      }
       if ([...document.querySelectorAll<HTMLElement>('[data-issue-page] [data-slot="skeleton"]')].some(element =>
         element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))) skeletonFrames.push(performance.now());
       requestAnimationFrame(sampleSkeletons);
@@ -731,6 +772,15 @@ async function runRound(input: {
     ? null
     : await readInboxItem(apiOrigin, token, scenario.inboxItemId);
   const collectors = attachCollectors(page, round, scenario.key, [slug], { inboxTarget });
+  let delayEnabled = scenario.entry !== "session-issue";
+  if (scenario.csrDelayMs) await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (delayEnabled && route.request().method() === "GET" && (path === `/api/issues/${scenario.expectIssueId}`
+      || path === `/api/issues/${scenario.expectIssueId}/sessions` || /^\/api\/sessions\/[^/]+\/log$/.test(path))) {
+      await page.waitForTimeout(scenario.csrDelayMs!);
+    }
+    await route.fallback();
+  });
   if (scenario.taskCacheEmpty) await page.route("**/api/issues/*/task-runs", async route => {
     // Functional fault injection only: hold the real task response until the
     // first normal reveal has exposed the empty card. Then resume the same
@@ -748,11 +798,43 @@ async function runRound(input: {
     if (scenario.mode === "cold") {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
     } else {
-      const entryPath = scenario.entry === "parent-issue" ? `/issues/${scenario.parentEntryIssueId}`
+      const entryPath = scenario.entry === "session-issue" ? `/issues/${scenario.expectIssueId}?session=${scenario.entrySessionId}`
+        : scenario.entry === "parent-issue" ? `/issues/${scenario.parentEntryIssueId}`
         : scenario.entry === "inbox" ? "/inbox" : "/issues";
       await page.goto(`${webOrigin}/${slug}${entryPath}`, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
-      if (scenario.entry === "parent-issue") await page.locator('[data-perf-scroll="issue-detail"][data-perf-state="ready"]').waitFor();
-      await clickEntryRow(page, scenario, slug);
+      if (scenario.entry === "parent-issue" || scenario.entry === "session-issue") {
+        await page.locator('[data-perf-scroll="issue-detail"][data-perf-state="ready"]').waitFor();
+      }
+      if (scenario.entry === "session-issue") {
+        delayEnabled = true;
+        if (scenario.prepareSessionId) {
+          await page.evaluate(name => (window as unknown as Record<string, { reset: () => void }>)[name]!.reset(), RECORDER_GLOBAL);
+          await page.locator(`[data-issue-session-select="${scenario.prepareSessionId}"]`).click();
+          const from = (await readRecorder(page))?.clicks.at(-1)?.t ?? await page.evaluate(() => performance.now());
+          await page.locator(`[data-session-log-id="${scenario.prepareSessionId}"]`).waitFor({ state: "attached" });
+          // The previous Session can stay visible while the RSC transition starts.
+          // Its ready frames are not the new Session's first visible position.
+          await page.evaluate(([name, from]) => (window as unknown as Record<string, { reset: (t: number) => void }>)[name as string]!.reset(from as number), [RECORDER_GLOBAL, from] as const);
+          await page.locator(`[data-session-log-id="${scenario.prepareSessionId}"][data-perf-state="ready"]`).waitFor();
+          await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
+          const preparedDeadline = performance.now() + ROUND_TIMEOUT_MS;
+          while (performance.now() < preparedDeadline && (pendingApi.size || pendingNavigation.size
+            || performance.now() - Math.max(lastApiChange, lastHubChange) < 500)) await page.waitForTimeout(50);
+          if (pendingApi.size || pendingNavigation.size) throw new Error("prepared Session did not settle");
+          const buffer = await readRecorder(page);
+          const frames = (buffer?.frames ?? []).filter(frame => frame.t >= from).map(frame => ({ ...frame, t: frame.t - from }));
+          const firstRealMs = computeFirstRealMs(frames, profile.name);
+          const ready = computeReadyWindow(frames, { profile, firstRealMs });
+          const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs });
+          const visibleFrames = await page.evaluate(from => (window as unknown as { __s7LoadingSamples: RoundResult["loadingSamples"] })
+            .__s7LoadingSamples.filter(sample => sample.t >= from && sample.age >= 200 && sample.visible).length, from);
+          result.preparedSession = { visibleFrames, jumpCount: jumps.jumpCount, readyMs: ready.readyMs, anchorVisibleMs: ready.anchorVisibleMs };
+          if (!visibleFrames || jumps.jumpCount !== 0 || ready.readyMs === null || ready.readyMs !== ready.anchorVisibleMs) throw new Error(`prepared Session loading gate failed: ${JSON.stringify(result.preparedSession)}`);
+          if (scenario.fastReturn) delayEnabled = false;
+        }
+        await page.locator(`[data-issue-session-select="${scenario.clickSessionId}"]`).click();
+        await page.locator(`[data-session-log-id="${scenario.clickSessionId}"]`).waitFor({ state: "attached" });
+      } else await clickEntryRow(page, scenario, slug);
       // The click has to be in the buffer before the app can navigate; resetting
       // at its timestamp keeps the reported clock on the page's own timeline.
       const clickT = await page
@@ -769,6 +851,9 @@ async function runRound(input: {
           recorder?.reset?.(from as number);
         }, [RECORDER_GLOBAL, clickT] as const);
       }
+    }
+    if (scenario.entry === "session-issue") {
+      await page.locator(`[data-session-log-id="${scenario.clickSessionId}"][data-perf-state="ready"]`).waitFor();
     }
     await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
     // Finish the entire deferred/Hub phase, rather than truncating at reveal.
@@ -795,6 +880,7 @@ async function runRound(input: {
   result.ssrSeed = result.ssrSeedStatus === "ok";
   result.ssrApiReads = input.ssrProbe.reads.slice(ssrReadStart);
   const rscResponses = result.navigationResponses.filter(response => response.rsc);
+  result.rscRequestCount = rscStarts.length;
   const documentResponse = result.navigationResponses.find(response => !response.rsc);
   result.documentSsrSeedStatus = documentResponse?.seedStatus ?? null;
   const expectedDocumentStatus = !ssrCookie ? "no-cookie" : scenario.ssrTimeout ? "timeout" : "ok";
@@ -843,6 +929,8 @@ async function runRound(input: {
   result.navStartMs = navStartMs;
   result.skeletonFlashFrames = await page.evaluate(from =>
     (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames.filter(t => t >= from).length, navStartMs);
+  result.loadingSamples = await page.evaluate(from => (window as unknown as { __s7LoadingSamples: RoundResult["loadingSamples"] })
+    .__s7LoadingSamples.filter(sample => sample.t >= from), navStartMs);
   const frames = (buffer?.frames ?? []).filter(frame => frame.t >= navStartMs).map(frame => ({ ...frame, t: frame.t - navStartMs }));
   if (buffer && frames.length > 0) {
     const firstRealMs = computeFirstRealMs(frames, profile.name);
@@ -913,18 +1001,24 @@ async function runRound(input: {
       ? `unexpected SSR seed status: ${result.ssrSeedStatus}` : null,
     scenario.ssrTimeout && ssrCookie && result.ssrSeedStatus !== "timeout"
       ? "explicit-session timeout marker was lost" : null,
-    scenario.entry !== "inbox" && scenario.mode === "cold" && (result.documentSsrSeedStatus !== expectedDocumentStatus
+    scenario.entry !== "inbox" && (scenario.mode === "cold" || scenario.entry === "session-issue") && (result.documentSsrSeedStatus !== expectedDocumentStatus
       || documentResponse?.initialLog !== (expectedDocumentStatus === "ok")
       || documentResponse?.initialData !== (expectedDocumentStatus === "ok"))
       ? `document seed outcome/props mismatch: ${result.documentSsrSeedStatus}` : null,
     scenario.entry !== "inbox" && result.legacySsrMarker !== result.ssrSeed ? "legacy SSR marker contradicts seed status" : null,
-    scenario.entry !== "inbox" && (scenario.mode === "cold" || result.navigationResponses.some(response => response.seedStatus))
+    scenario.entry !== "inbox" && (scenario.mode === "cold" || rscResponses.some(response => response.seedStatus))
       && !result.navigationResponses.some(response => response.seedStatus === result.ssrSeedStatus
       && response.initialLog === result.ssrSeed && response.initialData === result.ssrSeed)
       ? "Flight/document seed props contradict the result marker" : null,
-    scenario.entry !== "inbox" && ((scenario.mode === "warm" && !rscResponses.length) || result.softNavigationSsrReads.length)
-      ? `soft navigation SSR GETs: ${result.softNavigationSsrReads.length}, RSC responses: ${rscResponses.length}` : null,
-    scenario.mode === "warm" && result.skeletonFlashFrames ? `visible warm skeleton frames: ${result.skeletonFlashFrames}` : null,
+    scenario.entry !== "inbox" && ((scenario.mode === "warm" && !result.rscRequestCount) || result.softNavigationSsrReads.length)
+      ? `soft navigation SSR GETs: ${result.softNavigationSsrReads.length}, RSC requests: ${result.rscRequestCount}` : null,
+    scenario.mode === "warm" && !scenario.expectSlowLoading && result.skeletonFlashFrames ? `visible warm skeleton frames: ${result.skeletonFlashFrames}` : null,
+    scenario.expectSlowLoading && !result.loadingSamples.some(sample => sample.age >= 200 && sample.visible)
+      ? "slow CSR did not display a pending skeleton after 200ms" : null,
+    scenario.expectSlowLoading && [...new Set(result.loadingSamples.map(sample => sample.id))].some(id => {
+      const samples = result.loadingSamples.filter(sample => sample.id === id);
+      return samples.some(sample => sample.age >= 350) && !samples.some(sample => sample.age >= 200 && sample.visible);
+    }) ? "a long pending placeholder stayed invisible" : null,
     result.ssrSeedRereads.length ? `SSR seed rereads: ${JSON.stringify(result.ssrSeedRereads)}` : null,
     scenario.queuedTasks && (!stream || !stream.samples.length || !stream.samples.some(sample => sample.rows === 0)
       || !stream.samples.some(sample => sample.rows === scenario.queuedTasks) || stream.rows !== scenario.queuedTasks

@@ -4,6 +4,18 @@
  * @multiremi/ui/styles/base.css
  * ============================================================================= */
 
+/* Each pending placeholder mounts anew, including after a Session switch. */
+[data-issue-page][data-ssr-seed="soft-nav"] :is(
+    [data-issue-detail-loading], [data-issue-timeline-loading], [data-session-log-loading]
+) {
+    visibility: hidden;
+    animation: issue-loading-appear 0s linear 200ms forwards;
+}
+
+@keyframes issue-loading-appear {
+    to { visibility: visible; }
+}
+
 /* The landing route tree is intentionally always-light (hero/cli/cloud
  * sections use hardcoded dark/light palettes). Shared components rendered
  * inside (e.g. CloudWaitlistExpand on /download) use semantic tokens that

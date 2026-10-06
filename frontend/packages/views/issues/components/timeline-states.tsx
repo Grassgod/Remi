@@ -7,7 +7,7 @@ import { useT } from "../../i18n";
 
 export function TimelineSkeleton() {
   return (
-    <div className="mt-4 flex flex-col gap-3">
+    <div data-issue-timeline-loading="" className="mt-4 flex flex-col gap-3">
       {[0, 1].map((i) => (
         <div key={i} className="flex gap-3 p-4">
           <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
