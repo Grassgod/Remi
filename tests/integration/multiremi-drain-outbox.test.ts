@@ -309,7 +309,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     let rejectComplete = true;
     let completeAttempts = 0;
     const proxy = apiProxy(server.port, () => null, (frame, direction, socket) => {
-      if (direction === "up" && frame.t === "task.complete") {
+      if (direction === "up" && frame.t === "turn.complete") {
         completeAttempts++;
         if (rejectComplete) {
           socket.send(JSON.stringify({ v: 2, t: "res", re: String(frame.seq), ts: Date.now(),
@@ -379,7 +379,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       if (request.method === "GET" && url.pathname === `/api/daemon/tasks/${task.id}/status`) statusReads++;
       return null;
     }, (frame, direction) => {
-      if (direction === "up" && frame.t === "task.complete") completeSeq = String(frame.seq);
+      if (direction === "up" && frame.t === "turn.complete") completeSeq = String(frame.seq);
       if (direction === "down" && frame.t === "res" && frame.re === completeSeq) return false;
     });
     const outboxPath = join(root, "outbox.db");
@@ -783,6 +783,11 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "already finished locally" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
+    const bridge = store.getDaemonTurnBridge();
+    const input = bridge.offerInput(store.getTaskWithAgent(task.id)!);
+    expect(bridge.rpc("turn.input", { turn_id: input.turn_id, attempt_id: task.id,
+      input_to_seq: input.input_to_seq, message_ids: input.input_messages.map(message => message.id) },
+    { runtimeId: runtime.id, daemonId, workspaceId: "local" }).ok).toBe(true);
 
     const outboxPath = join(root, "outbox.db");
     const historical = new MultiremiTaskReportOutbox({
@@ -793,10 +798,12 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     historical.enqueue(task.id, "messages", {
       messages: [{ seq: 1, type: "text", content: "last buffered message" }],
     });
-    historical.enqueue(task.id, "complete", {
-      output: "replayed completion",
-      sessionId: "sess-terminal-replay",
-      workDir: root,
+    historical.enqueue(task.id, "turn.complete", {
+      turn_id: input.turn_id,
+      input_to_seq: input.input_to_seq,
+      reply: { body_md: "replayed completion", message_kind: "final" },
+      session_id: "sess-terminal-replay",
+      work_dir: root,
     });
     await Bun.sleep(20);
     await historical.close();
@@ -815,7 +822,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       if (request.method === "POST" && url.pathname.includes("recover-orphans")) recoverOrphansCalls++;
       return null;
     }, (frame, direction, socket) => {
-      if (direction === "up" && frame.t === "task.complete") {
+      if (direction === "up" && frame.t === "turn.complete") {
         completeAttempts++;
         heldComplete = { frame, socket };
         return false;
