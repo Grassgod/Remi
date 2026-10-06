@@ -100,7 +100,7 @@ export function AccountTab() {
               </div>
             </div>
 
-            <div>
+            <div data-perf-item={user ? "setting" : undefined} data-perf-key="account-name">
               <Label className="text-xs text-muted-foreground">{t(($) => $.account.name_label)}</Label>
               <Input
                 type="search"

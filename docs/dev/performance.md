@@ -291,12 +291,13 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 | 项 | 口径 |
 | --- | --- |
-| 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
+| 终点 | 详情/深链：anchor（detail-running 必须 agent-stream，非运行详情为 latest-comment；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
 | 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
 | 列表页滚动根 | 11 个列表页没有自己的滚动根，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根）。列表 *根* 不在两种表之间分开，`selectorEquivalence.scrollRoot` 才能继续读 `same` |
 | 列表页就绪标记（MUL-472 第 5 项） | issues / my-issues / inbox / projects / agents / runtimes / skills / autopilots / workbench 的列表容器由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在自己那条列表请求 `status === "success"` 且不是 `keepPreviousData` 占位数据时才写 `data-perf-scroll="list"`。`--selectors auto` 从 `[data-perf-scroll]` 判定，所以带标记的列表轮从此记 `contract`（此前 09-28 两轮 32/32 行都是 `legacy`）；标记出现即代表「屏幕上的行是本轮自己那次请求的答案」，事件量是 `mounted && listPerfFresh(query)`，脚本无需再加时钟 |
 | 首屏请求 gate（MUL-472 返工） | [use-after-first-screen.ts](../../frontend/packages/core/platform/use-after-first-screen.ts) 等当前路由主内容就绪，再经下一帧和 `requestIdleCallback({ timeout: 1000 })` 打开。列表由上述同一个标记条件发布，空成功、失败也发布；Issue 详情正常等 timeline reveal，空日志或失败立即发布，日志或会话持续 pending 时由详情自身在 2s 上限发布 ready，列表骨架与 reveal 仍独立。未接入发布者的路由从路由开始等 2s 再进 idle；其他有发布者的慢请求不会被共享兜底抢先打开。默认页面级每次切页关闭，首个 render 即 false；`scope: "shell"` 会话内只等一次。筛选依赖 snapshot 时立即取，数据未到不显示空列表，也不写就绪标记 |
 | 跳动 | 首次出现目标页真实内容之后，相邻帧中同一 `data-perf-key` 且同一 DOM 元素的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格。入口页行换成目标页行是导航，不能把两个不同锚点的坐标差计作同一行的位移 |
+| 缺观测（S9-6） | `firstRealMs = null` 时 jumpCount/jumpPx/jumpScrollPx 均为 null，MD/HTML/compare 显示「未观测」；stats 保留 jumpObserved/jumpUnobserved 和 n，不算作零跳动通过。contract 列表用 fresh 的 `[data-perf-scroll="list"] [data-perf-item]`，设置页标真实账号控件。Chat 使用现有 chat/session-log 滚动根、选有消息的会话并等待 latest-message，空 chat 单列跳过 |
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
 | 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
@@ -335,7 +336,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### 选择器回退：contract / legacy
 
-生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+当前前端已经提供 `data-perf-*`；为读取历史基线， [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
 
 | 用途 | legacy 选择器 / 规则 |
 | --- | --- |
@@ -345,13 +346,13 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | target-comment | `#comment-<id>` |
 | 骨架 | `[data-slot="skeleton"]` |
 | issue 列表行 | `[data-slot="sidebar-inset"] a[href$="/issues/<issueId>"]` |
-| inbox 行 | `section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]`。**不可靠**：QA 在 209 上实测未加作用域的形式匹配到工具栏按钮（`cmt_3d2bb3s7ceeh`）；该表只保留给等价性比对，**不得用它驱动点击**，深链 warm 的行序由 `core/inbox/grouping.ts` 的纯函数给出 |
-| agent-stream | **没有稳定钩子**，禁止用 class 选择器凑：legacy 下 `detail-running` 以 latest-comment 为 anchor，记 `anchorRule: legacy-latest-comment` |
+| inbox 行 | `section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]`。**不可靠**：QA 在 209 上实测未加作用域的形式匹配到工具栏按钮（`cmt_3d2bb3s7ceeh`）；该表只保留给等价性比对，**不得用它驱动点击**，深链 warm 直接按目标通知 `data-perf-key` 选择行根，不用 API 行号或子链接驱动点击 |
+| agent-stream | `detail-running` 两种采样表均要求现有 `[data-perf-anchor="agent-stream"]`，缺失记 anchor-mismatch；目标预选先核对实际可见运行行，不能降级 latest-comment |
 | chat | 退回 `h1-no-skeleton`，记 `anchor: none` |
 
 **等价性证明**不用比较两次运行的时间（噪声太大），而是比较**同一 DOM 上元素的同一性**：contract 模式的每一轮在就绪时刻同时用 legacy 表求值，记 `selectorEquivalence: { scrollRoot, anchor: same|differs, itemsContractOnly, itemsLegacyOnly }`，元素用 `===` 比较。两个门槛：
 
-1. 本地端到端：除 `detail-running`（anchor 已知不同）外全部 `anchor: same` 且 `itemsLegacyOnly = 0`，否则不推送。
+1. 本地端到端：详情/深链核对 anchor 对应元素；列表 contract 真实行与 legacy H1 是不同口径，`anchor: absent`、`itemsContractOnly > 0` 是预期，必须独立验证真实行。两种列表采样仍共享滚动根。
 2. 209 上第一次 contract 运行（高峰基线或终验）由 QA 复核同一字段；不通过则对应场景的 legacy 基线标 `invalid` 并重跑。
 
 两版基线按实际 `selectorMode` 如实标注；`--compare` 遇到模式不同**只警告不拒绝**。

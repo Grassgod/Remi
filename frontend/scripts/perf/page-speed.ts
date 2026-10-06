@@ -66,6 +66,7 @@ import {
   type StubbedWrite,
 } from "./lib/harness";
 import {
+  CONTRACT,
   anchorPlan,
   isEntryFailure,
   inboxDomRowIndex,
@@ -73,6 +74,7 @@ import {
   issueRowSelector,
   LEGACY,
   profilesFor,
+  cssEscape,
   type PageShape,
   type SelectorMode,
   type SelectorModeOption,
@@ -137,7 +139,7 @@ const URL_COMMIT_TIMEOUT_MS = 10_000;
 const AUTOPILOT_INBOX_TYPES = ["autopilot_run", "autopilot_run_report", "autopilot"];
 
 const READING_RULE =
-  "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
+  "详情/深链：anchor（运行详情必须 agent-stream；其他详情 latest-comment；深链 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 的 H1 仅为历史口径；没有真实行时跳动记未观测。";
 
 // ── Scenario model ───────────────────────────────────────────────────────────
 
@@ -145,6 +147,7 @@ interface Scenario {
   key: string;
   mode: "cold" | "warm";
   shape: PageShape;
+  chatSessionId?: string;
   /** Cold-start URL path, relative to the workspace slug. */
   path: string;
   targetCommentId: string | null;
@@ -506,38 +509,32 @@ async function probeRunningIssue(options: {
   token: string;
   explicitIssueId: string | null;
   excludedIssueIds: Set<string>;
+  browser: Browser;
+  slug: string;
 }): Promise<RunningIssue | null> {
-  const { baseUrl, token, explicitIssueId, excludedIssueIds } = options;
-  const headers = { Authorization: `Bearer ${token}` };
-
-  if (explicitIssueId) {
-    if (excludedIssueIds.has(explicitIssueId)) return null;
-    // The explicit target is trusted even when the task list has not caught up:
-    // a caller pinning `--issue-running` is asserting the issue is live, and a
-    // zero count here would otherwise silently drop the scenario.
-    const tasks = await fetchJson<{ tasks?: Array<TaskListRow> }>(
-      `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
-      headers,
-    ).catch(() => null);
-    const count = (tasks?.tasks ?? []).filter((task) => taskIssueId(task) === explicitIssueId).length;
-    return { issueId: explicitIssueId, identifier: explicitIssueId, taskCount: count };
-  }
-
   const body = await fetchJson<{ tasks?: Array<TaskListRow> }>(
-    `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
-    headers,
+    `${options.baseUrl}/api/multiremi/tasks?status=running&limit=200`,
+    { Authorization: `Bearer ${options.token}` },
   ).catch(() => null);
   const counts = new Map<string, number>();
   for (const task of body?.tasks ?? []) {
-    const issueId = taskIssueId(task);
-    if (!issueId) continue;
-    if (excludedIssueIds.has(issueId)) continue;
-    counts.set(issueId, (counts.get(issueId) ?? 0) + 1);
+    const id = taskIssueId(task);
+    if (!id || options.excludedIssueIds.has(id) || (options.explicitIssueId && id !== options.explicitIssueId)) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
   }
-  for (const [issueId, taskCount] of counts) {
-    return { issueId, identifier: issueId, taskCount };
-  }
-  return null;
+  const context = await mktContext(options.browser, options.token, [], options.baseUrl);
+  try {
+    const page = await context.newPage();
+    attachCollectors(page, 0, "running-target-probe", []);
+    for (const [issueId, taskCount] of counts) {
+      await page.goto(workspaceUrl(options.baseUrl, options.slug, `/issues/${encodeURIComponent(issueId)}`),
+        { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS }).catch(() => {});
+      const rendered = await page.locator(CONTRACT.anchor("agent-stream")).first()
+        .waitFor({ state: "visible", timeout: 8_000 }).then(() => true, () => false);
+      if (rendered) return { issueId, identifier: issueId, taskCount };
+    }
+    return null;
+  } finally { await context.close(); }
 }
 
 /** Every issue id that must stay out of the running-issue pick: MUL-383 and its children. */
@@ -589,9 +586,9 @@ function blankRound(round: number, url: string): RoundMeasurement {
     appReadyMs: null,
     appReadyForced: false,
     dataFreshAtReady: false,
-    jumpCount: 0,
-    jumpPx: 0,
-    jumpScrollPx: 0,
+    jumpCount: null,
+    jumpPx: null,
+    jumpScrollPx: null,
     jumps: [],
     layoutShiftCount: 0,
     cls: 0,
@@ -732,7 +729,7 @@ async function measureRound(options: {
   // a warm in-app navigation is covered without re-injecting.
   const context = await mktContext(browser, options.token, [], baseUrl);
   await installRecorderOnContext(context, {
-    profiles: profilesFor({ modes: ["contract", "legacy"], shape: scenario.shape, targetCommentId: scenario.targetCommentId }),
+    profiles: profilesFor({ modes: ["contract", "legacy"], shape: scenario.shape, targetCommentId: scenario.targetCommentId, requireAgentStream: scenario.key === "detail-running" }),
   });
   const page = await context.newPage();
   const collectors = attachCollectors(page, round, scenario.key, knownIds, {
@@ -760,6 +757,7 @@ async function measureRound(options: {
       const warm = await clickWarmTarget(page, scenario, opts, options.token, activity, entryStartedAt);
       measurement.urlCommitMs = warm.urlCommitMs;
       measurement.clickedRowText = warm.clickedRowText;
+      measurement.clickedRowKey = warm.clickedRowKey;
       measurement.entryReadyMs = warm.entryReadyMs;
       measurement.entrySettled = warm.entrySettled;
       measurement.entryInflightAtClick = warm.inflightAtClick;
@@ -770,8 +768,8 @@ async function measureRound(options: {
           return clicks.length > 0 ? clicks[clicks.length - 1]!.t : null;
         }, RECORDER_GLOBAL)
         .catch(() => null);
-      measurement.clickT = clickT;
-      measurement.navStartMs = clickT ?? 0;
+      measurement.clickT = warm.navigationClickT ?? clickT;
+      measurement.navStartMs = measurement.clickT ?? 0;
       // The click has to be in the buffer before the app can navigate; resetting
       // at its timestamp keeps the reported clock on the page's own timeline.
       if (measurement.clickT !== null) await resetRecorderAt(page, measurement.clickT);
@@ -839,6 +837,7 @@ async function measureRound(options: {
   }
 
   await freezeRecorder(page);
+  measurement.finalUrl = page.url();
   const buffer = await readRecorderBuffer(page);
   const vitals = await readWebVitals(page);
   const resources = await readResourceEntries(page, baseUrl, knownIds);
@@ -974,10 +973,12 @@ async function clickWarmTarget(
   entryReadyMs: number;
   inflightAtClick: number | null;
   entrySettled: boolean | null;
+  navigationClickT: number | null;
+  clickedRowKey: string | null;
 }> {
   const selectors: string[] = [];
   if (scenario.shape === "issue-detail" && scenario.inboxItemId !== null) {
-    selectors.push(inboxRowSelector("contract"), inboxRowSelector("legacy"));
+    selectors.push(inboxRowSelector("contract", scenario.inboxItemId));
   } else if (scenario.clickIssueId) {
     selectors.push(issueRowSelector("contract", scenario.clickIssueId), issueRowSelector("legacy", scenario.clickIssueId));
   } else if (scenario.sidebarPath) {
@@ -1000,15 +1001,12 @@ async function clickWarmTarget(
       .count()
       .catch(() => 0);
     if (skeletons === 0) {
-      // The inbox row index is recomputed here, at click time, from the list the
-      // page has actually rendered. A probe-time index goes stale: the production
-      // inbox is a rolling window and the four detail rounds in between took about
-      // a minute, which moved the target from row 7 to row 8 and made the click
-      // land on an unrelated notification (MUL-384 `cmt_cxrxocj4vp3q`).
+      // Deep links address the exact notification root. The browser can inject a
+      // page-five item into page one, so API indices cannot describe this DOM.
       for (const selector of selectors) {
         const count = await page.locator(selector).count().catch(() => 0);
         if (count === 0) continue;
-        const fresh = await resolveWarmRowIndex(scenario, opts, token, count);
+        const fresh = scenario.inboxItemId ? 0 : await resolveWarmRowIndex(scenario, opts, token, count);
         if (fresh === null) continue;
         chosen = { selector, index: fresh, count };
         break;
@@ -1034,18 +1032,21 @@ async function clickWarmTarget(
 
   let lastError: string | null = null;
   let clickedRowText: string | null = null;
+  let clickedRowKey: string | null = null;
   let clicked = false;
   for (const selector of [chosen.selector, ...selectors.filter((candidate) => candidate !== chosen!.selector)]) {
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
     if (count === 0) continue;
-    const index = await resolveWarmRowIndex(scenario, opts, token, count) ?? Math.min(chosen.index, count - 1);
+    const index = scenario.inboxItemId ? 0 : await resolveWarmRowIndex(scenario, opts, token, count);
+    if (index === null) continue;
     const row = locator.nth(index);
     try {
       await row.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
       await row.hover({ timeout: 5_000 });
       await page.waitForTimeout(opts.hoverLeadMs);
       const text = await row.innerText().catch(() => "");
+      clickedRowKey = await row.getAttribute("data-perf-key");
       await row.click({ timeout: 5_000 });
       clickedRowText = text.slice(0, 200);
       clicked = true;
@@ -1059,12 +1060,22 @@ async function clickWarmTarget(
     throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
   }
 
+  const navigationClickT = await page.evaluate((name) => {
+    const recorder = (window as unknown as Record<string, { read(): { clicks: Array<{ t: number }> } }>)[name];
+    return recorder?.read().clicks.at(-1)?.t ?? null;
+  }, RECORDER_GLOBAL);
+  if (scenario.chatSessionId) {
+    const sessionRow = page.locator(`[data-perf-chat-session="${cssEscape(scenario.chatSessionId)}"]`).first();
+    await sessionRow.waitFor({ state: "visible", timeout: WARM_ENTRY_TIMEOUT_MS });
+    await sessionRow.click({ timeout: 5_000 });
+  }
+
   // The click only counts once the app has selected the intended issue. The URL
   // commit is asynchronous (`replace` runs inside `startTransition`) and, while the
   // guard is fulfilling the auto mark-read, it can take seconds; 10 s is the agreed
   // bound. This is a correctness check on the click, never part of `readyMs`.
   if (scenario.expectIssueId === null) {
-    return { urlCommitMs: null, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
+    return { urlCommitMs: null, clickedRowText, entryReadyMs, inflightAtClick, entrySettled, navigationClickT, clickedRowKey };
   }
   const startedAt = Date.now();
   const issueParam = await waitForUrlIssue(page, scenario.expectIssueId, URL_COMMIT_TIMEOUT_MS);
@@ -1074,7 +1085,7 @@ async function clickWarmTarget(
       `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
     );
   }
-  return { urlCommitMs, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
+  return { urlCommitMs, clickedRowText, entryReadyMs, inflightAtClick, entrySettled, navigationClickT, clickedRowKey };
 }
 
 /**
@@ -1172,6 +1183,7 @@ function buildRoundMeasurement(input: {
     mode,
     shape: scenario.shape,
     targetCommentId: scenario.targetCommentId,
+    requireAgentStream: scenario.key === "detail-running",
     navStartMs: measurement.navStartMs,
     frames: buffer?.frames ?? [],
     shifts: buffer?.shifts ?? [],
@@ -1181,6 +1193,9 @@ function buildRoundMeasurement(input: {
     profileReady: summary?.profiles[mode]?.ready ?? null,
   });
   Object.assign(measurement, computed);
+  if (scenario.key === "detail-running" && (computed.anchorName !== "agent-stream" || computed.anchorVisibleMs === null)) {
+    measurement.error = "anchor-mismatch: required agent-stream";
+  }
   measurement.lcpMs = vitals.lcpMs;
 
   const timeline = timelineInfo(collectors.timelineBodies, scenario.targetCommentId);
@@ -1466,6 +1481,8 @@ async function main(): Promise<void> {
       token,
       explicitIssueId: opts.issueRunning,
       excludedIssueIds: excluded,
+      browser,
+      slug: identity.workspaceSlug,
     });
     phase("probeRunningIssue", phaseStarted);
 
@@ -1524,7 +1541,7 @@ async function main(): Promise<void> {
       deepLink: deepLinkProbe.target,
       deepLinkSkip: deepLinkProbe.skipped,
       runningIssue: running,
-      runningSkip: "all-running-issues-in-mul383-family",
+      runningSkip: "no-rendered-agent-stream",
       issueShort: opts.issueShort,
       issueLong: opts.issueLong,
       issueXlong: opts.issueXlong,
@@ -1534,6 +1551,19 @@ async function main(): Promise<void> {
       pinnedInboxItem: opts.inboxItem,
       deepLinkAuto: deepLinkProbe.target !== null,
     });
+
+    const chatSessions = await fetchJson<Array<{ id: string; status: string; last_message: unknown }>>(
+      `${opts.baseUrl}/api/chat/sessions`, { Authorization: `Bearer ${token}` },
+    ).catch(() => []);
+    const chat = chatSessions.find(session => session.status !== "archived" && session.last_message != null);
+    for (const scenario of scenarios.filter(scenario => scenario.key === "page-chat")) {
+      if (!chat) scenario.skipReason = "no-chat-with-messages";
+      else {
+        scenario.path = `/chat?session=${encodeURIComponent(chat.id)}`;
+        scenario.chatSessionId = chat.id;
+        scenario.target = { identifier: chat.id, note: "latest-message" };
+      }
+    }
 
     if (running) {
       process.stdout.write(`  detail-running: ${label(running.issueId)} (${running.taskCount} running task(s))\n`);
@@ -1833,6 +1863,7 @@ function anchorRulePreview(scenario: Scenario): string {
     mode: "contract",
     shape: scenario.shape,
     targetCommentId: scenario.targetCommentId,
+    requireAgentStream: scenario.key === "detail-running",
   });
   return plan.anchorRule;
 }

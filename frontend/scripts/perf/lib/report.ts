@@ -38,14 +38,18 @@ export interface ReportRoundSummary {
   readyMs: number | null;
   readyTimeout: boolean;
   firstRealMs: number | null;
+  firstRealKeys?: string[];
+  observedFrames?: number;
+  finalUrl?: string;
+  clickedRowKey?: string | null;
   anchorVisibleMs: number | null;
   anchorName: string | null;
   anchorRule: string;
   appReadyMs: number | null;
   appReadyForced: boolean;
   dataFreshAtReady: boolean;
-  jumpCount: number;
-  jumpPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
   /** Per-jump detail: a bare count cannot say where or in which direction. */
   jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
   layoutShiftCount: number;
@@ -258,7 +262,7 @@ export function buildMarkdown(report: {
     const stats = scenario.stats;
     const status = scenario.skipped ? `skipped: ${scenario.skipReason ?? "unknown"}` : "measured";
     lines.push(
-      `| ${scenario.key} | ${scenario.mode} | ${status} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "-"} | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
+      `| ${scenario.key} | ${scenario.mode} | ${status} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "未观测"}（${stats.jumpObserved ?? scenario.rounds.filter(r => r.firstRealMs !== null).length}/${stats.n}） | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
     );
   }
   lines.push("");
@@ -286,7 +290,7 @@ export function buildMarkdown(report: {
         ? `${rect.top}/${rect.bottom}/${rect.height}/${rect.rootHeight}`
         : "-";
       lines.push(
-        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.inboxInjected ? "注入" : "-"} | ${round.inboxPageRequestsBeforeStub ?? "-"} | ${(round.clickedRowText ?? "-").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 60)} | ${round.error ?? "-"} |`,
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount ?? "未观测"} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.inboxInjected ? "注入" : "-"} | ${round.inboxPageRequestsBeforeStub ?? "-"} | ${(round.clickedRowText ?? "-").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 60)} | ${round.error ?? "-"} |`,
       );
     }
   }
@@ -426,7 +430,7 @@ export function buildHtml(report: {
       <td class="num">${fmtMs(stats.readyMax)}</td>
       <td class="num">${stats.timeouts}</td>
       <td class="num">${fmtMs(stats.firstRealP50)}</td>
-      <td class="num${bad ? " bad" : " good"}">${stats.jumpsMax ?? "-"}</td>
+      <td class="num${bad ? " bad" : stats.jumpsMax === null ? "" : " good"}">${stats.jumpsMax ?? "未观测"}（${stats.jumpObserved ?? scenario.rounds.filter(r => r.firstRealMs !== null).length}/${stats.n}）</td>
       <td class="num">${fmtMs(stats.jumpPxMax)}</td>
       <td class="num">${stats.serialDepthMax ?? "-"}</td>
       <td class="num">${fmtMs(stats.apiFirstScreenP50)}</td>
@@ -518,7 +522,7 @@ ${body}
         ? `${round.anchorRectAtReady.top}/${round.anchorRectAtReady.bottom}/${round.anchorRectAtReady.height}/${round.anchorRectAtReady.rootHeight}`
         : "-"}</td>
       <td class="num">${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""}</td>
-      <td class="num${round.jumpCount > 0 ? " bad" : " good"}">${round.jumpCount}</td>
+      <td class="num${(round.jumpCount ?? 0) > 0 ? " bad" : round.jumpCount === null ? "" : " good"}">${round.jumpCount ?? "未观测"}</td>
       <td class="num">${fmtMs(round.jumpPx)}</td>
       <td class="num">${round.cls}</td>
       <td class="num">${fmtMs(round.lcpMs)}</td>
@@ -615,7 +619,7 @@ ${body}
       <td>${esc(row.beforeMode ?? "-")} → ${esc(row.afterMode ?? "-")}</td>
       <td class="num">${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)}</td><td class="num">${delta(row.beforeReadyP75, row.afterReadyP75)}</td>
       <td class="num">${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)}</td><td class="num">${delta(row.beforeReadyP95, row.afterReadyP95)}</td>
-      <td class="num">${row.beforeJumpsMax ?? "-"} → ${row.afterJumpsMax ?? "-"}</td>
+      <td class="num">${row.beforeJumpsMax ?? "未观测"} → ${row.afterJumpsMax ?? "未观测"}</td>
       <td class="num">${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"}</td>
       <td class="num">${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)}</td>
     </tr>`;
@@ -908,8 +912,8 @@ export function buildCompare(
       afterReadyP75: withhold ? null : b?.stats.readyP75 ?? null,
       beforeReadyP95: withhold ? null : a?.stats.readyP95 ?? null,
       afterReadyP95: withhold ? null : b?.stats.readyP95 ?? null,
-      beforeJumpsMax: withhold ? null : a?.stats.jumpsMax ?? null,
-      afterJumpsMax: withhold ? null : b?.stats.jumpsMax ?? null,
+      beforeJumpsMax: withhold || !a?.rounds.some(r => r.firstRealMs !== null) ? null : a?.stats.jumpsMax ?? null,
+      afterJumpsMax: withhold || !b?.rounds.some(r => r.firstRealMs !== null) ? null : b?.stats.jumpsMax ?? null,
       beforeSerialDepthMax: withhold ? null : a?.stats.serialDepthMax ?? null,
       afterSerialDepthMax: withhold ? null : b?.stats.serialDepthMax ?? null,
       beforeApiFirstScreenP50: withhold ? null : a?.stats.apiFirstScreenP50 ?? null,
@@ -970,7 +974,7 @@ export function buildCompare(
     const delta = (beforeValue: number | null, afterValue: number | null): string =>
       beforeValue === null || afterValue === null ? "-" : `${afterValue - beforeValue > 0 ? "+" : ""}${(afterValue - beforeValue).toFixed(1)}`;
     lines.push(
-      `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | ${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)} | ${delta(row.beforeReadyP75, row.afterReadyP75)} | ${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)} | ${delta(row.beforeReadyP95, row.afterReadyP95)} | ${row.beforeJumpsMax ?? "-"} → ${row.afterJumpsMax ?? "-"} | ${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"} | ${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)} |`,
+      `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | ${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)} | ${delta(row.beforeReadyP75, row.afterReadyP75)} | ${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)} | ${delta(row.beforeReadyP95, row.afterReadyP95)} | ${row.beforeJumpsMax ?? "未观测"} → ${row.afterJumpsMax ?? "未观测"} | ${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"} | ${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)} |`,
     );
   }
   if (warnings.length > 0) {

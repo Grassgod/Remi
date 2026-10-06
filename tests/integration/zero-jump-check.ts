@@ -268,8 +268,8 @@ interface RoundResult {
   anchorName: string | null;
   anchorRectAtReady: { top: number; bottom: number; height: number; rootHeight: number } | null;
   jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
-  jumpCount: number;
-  jumpPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
   skeletons: number;
   /** The app's own verdict read off `data-perf-state` / `data-perf-fresh`. */
   appReadyMs: number | null;
@@ -295,8 +295,8 @@ function violationsForRound(round: RoundResult): ZeroJumpViolation[] {
     // fixture turns into a green gate. Reported as every kind it could have hit.
     return ["jumps", "anchor", "skeleton", "perf-state"];
   }
-  if (round.jumpCount > 0) violations.push("jumps");
-  if (round.readyTimeout || round.readyMs === null) violations.push("anchor");
+  if ((round.jumpCount ?? 0) > 0) violations.push("jumps");
+  if (round.readyTimeout || round.readyMs === null || round.firstRealMs === null) violations.push("anchor");
   if (round.skeletons > 0) violations.push("skeleton");
   // The plan's assertion is `data-perf-state === "ready"` with `ready-forced`
   // explicitly not a pass, and only `ready` + `fresh=1` once MUL-443 publishes
@@ -441,8 +441,8 @@ async function runRound(input: {
     anchorName: null,
     anchorRectAtReady: null,
     jumps: [],
-    jumpCount: 0,
-    jumpPx: 0,
+    jumpCount: null,
+    jumpPx: null,
     skeletons: 0,
     appReadyMs: null,
     appReadyForced: false,
