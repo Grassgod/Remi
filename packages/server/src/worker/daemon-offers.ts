@@ -1,10 +1,9 @@
-import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import { normalizeDaemonClaimTask } from "./client.js";
 import type { DaemonProtocolClient } from "./daemon-protocol-client.js";
 import type { DaemonParsedFrame } from "../api/daemon-protocol/frames.js";
 import type { DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
 
-export type DaemonTurnTask = MultiremiTaskWithAgent & DaemonTurnInput;
+export type DaemonTurnTask = NonNullable<ReturnType<typeof normalizeDaemonClaimTask>> & DaemonTurnInput;
 
 /** No prompt/id fallback: old offers cannot enter the execution loop. */
 export function normalizeDaemonTurnOffer(payload: Record<string, unknown>): DaemonTurnTask {
