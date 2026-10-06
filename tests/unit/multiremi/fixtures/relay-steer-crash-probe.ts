@@ -22,7 +22,8 @@ function pauseAt(point: string): void {
 }
 
 db.run = (sql, params) => {
-  const steerInsert = sql.includes("INSERT INTO multiremi_task_steer_messages");
+  const steerInsert = sql.includes("INSERT INTO multiremi_conversation_log")
+    && Array.isArray(params) && params.includes(marker);
   if (steerInsert && phase === "before-insert") pauseAt(phase);
   const result = originalRun(sql, params);
   if (steerInsert && phase === "after-insert") pauseAt(phase);

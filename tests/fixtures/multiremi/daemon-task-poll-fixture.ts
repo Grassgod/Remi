@@ -15,6 +15,8 @@
 //     a non-owner is still refused.
 import { createHash } from "node:crypto";
 import { MultiremiStore } from "@multiremi/store.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import type { StoreContext } from "@multiremi/store/context.js";
 
 export const DAEMON_TASK_POLL_PROMPT_BYTES = 131_072;
 export const DAEMON_TASK_POLL_EXTERNAL_MESSAGE_ID = "om_mul474_receipt";
@@ -251,10 +253,14 @@ export async function seedDaemonTaskPollResultCases(
       runtimeId: DAEMON_TASK_POLL_RUNTIME_ID,
       prompt: "result case",
     });
-    run(
-      "UPDATE multiremi_tasks SET result = ?, session_id = ?, work_dir = ?, started_at = ? WHERE id = ?",
+    const ctx = (store as unknown as { ctx: StoreContext }).ctx;
+    ctx.db.transaction(() => {
+    ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    runTurnExecutionMutation(ctx.db,
+      "UPDATE multiremi_turn_execution_records SET result = ?, session_id = ?, work_dir = ?, started_at = ? WHERE id = ?",
       [testCase.result, testCase.sessionId, testCase.workDir, "2026-09-27T00:00:00.000Z", testCase.taskId],
     );
+    })();
   }
   return DAEMON_TASK_POLL_RESULT_CASES.map((testCase) => ({ ...testCase }));
 }

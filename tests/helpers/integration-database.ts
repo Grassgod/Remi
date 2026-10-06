@@ -4,6 +4,7 @@ import { TwoProcessResources } from "./two-process.js";
 
 export interface IntegrationDatabase {
   db: SqlDatabase;
+  url?: string;
   close(): Promise<void>;
 }
 
@@ -21,7 +22,7 @@ export async function openIntegrationDatabase(): Promise<IntegrationDatabase> {
   try {
     const database = await resources.freshDatabase();
     const db = new PostgresSyncDatabase(database.url);
-    return { db, async close() {
+    return { db, url: database.url, async close() {
       try { db.close(); } finally { await resources.cleanup(); }
     } };
   } catch (error) {
