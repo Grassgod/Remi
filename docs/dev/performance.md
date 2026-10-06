@@ -35,7 +35,7 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 ## 收件箱已具备的加载边界
 
 - [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx) 通过 [inboxPageOptions](../../frontend/packages/core/inbox/queries.ts) 每页读取 50 条；[listInboxItemsPage](../../packages/server/src/store/repos/issues-repo.ts) 按 `created_at DESC, id DESC` 使用游标，SQL 读取 `limit + 1` 判断后续页，服务端上限 100。`hydrateInboxRows` 已按最多 400 个 issue ID 批量补全关联对象，不能再将收件箱描述为逐行 `getIssue`。
-- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue。普通通知按 selection key 取最新行并聚合；成功自动运行在 SQL 中提取字符串 `autopilot_id`，按用户时区的 today/yesterday/this_week/earlier 桶去重并统计未读。两个聚合各只返回一行，`details` 和逐 run 行均不跨桥；SQL 扫描工作仍随未归档记录数增长。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
+- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue。普通通知按 selection key 取最新行并聚合；成功自动运行在 SQL 中提取字符串 `autopilot_id`，按用户时区的 today/yesterday/this_week/earlier 桶去重并统计未读。PG 对普通 JSON 走安全校验后的字段提取；NUL/孤立代理项等不能解码成 PG text 的合法 JSON 走词法提取，仅将最后一个顶层字符串字段规范成 UTF-16 分组键，保持 JS JSON.parse 的重复键与转义语义。SQLite 保留 json_each 最后键语义；非法 JSON/缺失或非字符串字段按独立行计数。两个聚合各只返回一行，`details` 和逐 run 行均不跨桥；SQL 扫描工作仍随未归档记录数增长。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
 - 测量时分别记录首屏、摘要、追加页、定位较后页通知，以及 mutation/WS 失效后的刷新。来源筛选和展示折叠仅处理已加载项；URL 定位可能连续读取多页，不能把 50 条默认页大小当作每次页面交互的总工作量。当前没有这些场景的延迟或内存基线。
 
 ## 请求级观测：Server-Timing 与两类日志（MUL-367）

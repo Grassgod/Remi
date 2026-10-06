@@ -29,6 +29,7 @@ import type { ChildStatusChange, ChildStatusChangeCollector, TriggerCommentRecov
 import { DelegationRoundTripLimitError, pairRoundTripLimit } from "./tasks-repo.js";
 import type { Envelope } from "@multiremi/contracts/inbox.js";
 import { envelopeSummary } from "../envelope-body.js";
+import { postgresJsonStringGroupingKey } from "../json-string-grouping-key.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -6004,12 +6005,9 @@ export class IssuesRepo {
     // crosses the synchronous bridge; the reply is a single scalar even when
     // thousands of completed runs carry large transcripts in details.
     const postgres = this.ctx.db.dialect === "postgres";
-    const safeDetails = postgres
-      ? "CASE WHEN details IS JSON THEN details::json ELSE NULL END"
-      : "CASE WHEN json_valid(details) THEN details ELSE NULL END";
+    const safeDetails = "CASE WHEN json_valid(details) THEN details ELSE NULL END";
     const autopilotId = postgres
-      ? `CASE WHEN json_typeof((${safeDetails})->'autopilot_id') = 'string'
-              THEN (${safeDetails})->>'autopilot_id' ELSE NULL END`
+      ? postgresJsonStringGroupingKey("details", "autopilot_id")
       : `(SELECT CASE WHEN entry.type = 'text' THEN entry.value ELSE NULL END
           FROM json_each(${safeDetails}) entry WHERE entry.key = 'autopilot_id'
           ORDER BY entry.id DESC LIMIT 1)`;
