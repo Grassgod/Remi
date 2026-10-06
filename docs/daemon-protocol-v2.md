@@ -163,15 +163,17 @@ JSON 文本帧，不用二进制：
 | 类别 | 帧 | 可靠性与重放 |
 |---|---|---|
 | `handshake` | `hello` / `welcome` / `reject` | 每连接一次 |
-| `best_effort` | `hb`、`runtime.ready`、`concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
+| `best_effort` | `hb`、`runtime.ready`、旧版 `concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
 | `event` | 见下 §1.4 | 带 `seq`，未确认前重放 |
 | `rpc` | 见下 §1.5 | 按 `id`/`re` 配对，由调用方重试 |
 | `reply` | `res` | 答复某个 rpc |
 | `ack` | `ack` | 独立累计确认 |
 
 设计初稿曾把这些压成五类，把 `res` 并进 rpc、把 `hb` 当作唯一的尽力而为帧。两者在代码里都不成立：
-应答与请求的校验路径不同，而 `runtime.ready` 与 `concierge.status` 之所以尽力而为，与 `hb`
-是同一个理由——它们都能从本地状态重算，丢一帧没有代价。
+应答与请求的校验路径不同。`runtime.ready` 可由本地状态重算；旧版 `concierge.status`
+虽也能重算，但丢失 `online` 会阻塞飞书出站领取，故新版改为收到持久化确认才算成功的
+`concierge.status_report` RPC。旧帧仍接受以支持 API 先升级、daemon 后升级；新 daemon 遇到
+旧服务端的 `unknown_frame` 时暂时回退到旧帧，并持续随心跳补报。
 
 `best_effort` 与 `rpc` 都不参与滑动窗口，也不带 `seq`。
 trace 组不是窗口可靠帧：上行 `trace.append` 用 RPC 的 `id`/`re` 关联，可靠性来自 task trace
@@ -198,7 +200,7 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 ### 1.5 RPC 清单
 
-**daemon → server**：`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
+**daemon → server**：`concierge.status_report`、`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
 `trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
@@ -206,6 +208,12 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `{ "ok": false, "code": <错误码>, "message": "人话", "retryable": <bool> }`。
+
+`concierge.status_report` 使用原 `concierge.status` 的无凭据载荷，成功应答表示控制面已持久化状态。
+daemon 每次状态变化立即上报，并在心跳确认后独立于配置下发定期补报；超时或断线保留本地
+connector，下一次心跳重试当前状态。服务端在同一条连接里对不变的 `feishu.directive` 只下发
+一次，不能把它当作周期性状态上报的触发器。部署时仍应先升级支持新 RPC 的 API，再升级 daemon，
+以避免回退窗口只有尽力而为保证。
 
 `human_request.get` 是只读 RPC，请求 `p:{task_id,request_id}`，成功应答 `p:{ok:true,request}`，
 其中 `request` 与原 GET 的 HTTP 200 载荷相同。执行端、绑定 Chat 的 bot host、Issue concierge

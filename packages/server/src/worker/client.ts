@@ -558,7 +558,18 @@ export class MultiremiDaemonClient {
       error_message?: string | null;
     },
   ): Promise<void> {
-    this.reportTransport?.bestEffort("concierge.status", { ...input, runtime_id: runtimeId });
+    if (!this.reportTransport) throw new Error("daemon WS report transport is not bound");
+    // A successful RPC means the control plane persisted the state. A silent
+    // best-effort drop could otherwise strand the outbox behind `starting`.
+    const payload = { ...input, runtime_id: runtimeId };
+    try {
+      await this.reportTransport.rpc("concierge.status_report", payload);
+    } catch (error) {
+      if (!(error instanceof DaemonProtocolRpcError) || error.code !== "unknown_frame") throw error;
+      // Daemon upgrades can race the API. Keep older servers functional until
+      // they support the acknowledged report; independent ticks still resend.
+      this.reportTransport.bestEffort("concierge.status", payload);
+    }
   }
 
   async reportFeishuBotOutboundResult(

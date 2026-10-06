@@ -1106,6 +1106,7 @@ export class MultiremiDaemon {
         if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;
         // A v2 runtime ack is not a full HTTP configuration snapshot.
         if (ack.status === "runtime_gone" || ack.runtime_gone) await this.handleHeartbeatAck(ack.runtime_id, ack);
+        else this.tickFeishuConcierge();
         this.wakeClaim();
       },
       probeUpgrade: async () => {
@@ -1967,11 +1968,11 @@ export class MultiremiDaemon {
   }
 
   /**
-   * Hand a heartbeat's concierge directive to the supervisor without waiting
+   * Hand a changed concierge directive to the supervisor without waiting
    * for it. Booting a Remi core takes seconds, and the heartbeat loop is also
    * what claims tasks — blocking it on a connector start would stall unrelated
-   * work. The supervisor serializes its own reconciles, so firing on every
-   * heartbeat cannot overlap two starts.
+   * work. This and the independent heartbeat tick share a serial queue, so
+   * they cannot overlap two starts.
    */
   private applyFeishuBotDirective(ack: MultiremiDaemonHeartbeatConfigAck): void {
     const supervisor = this.feishuConcierge;
@@ -1982,6 +1983,18 @@ export class MultiremiDaemon {
       .then(() => supervisor.apply(directive))
       .catch((error) => {
         log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
+
+  /** v2 only sends each unchanged directive once; retry from the heartbeat lane. */
+  private tickFeishuConcierge(): void {
+    const supervisor = this.feishuConcierge;
+    if (!supervisor) return;
+    this.feishuConciergeReconcile = this.feishuConciergeReconcile
+      .catch(() => {})
+      .then(() => supervisor.tick())
+      .catch((error) => {
+        log.warn(`Feishu concierge heartbeat reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
       });
   }
 
