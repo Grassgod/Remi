@@ -1686,11 +1686,16 @@ export class TasksRepo {
     let type=existing?.sender_type??(input.assignmentAuthorType==='system'?'platform':sourceTask?'agent':input.assignmentAuthorType==='agent'?'agent':'member');
     let senderId=existing?.sender_id??(type==='agent'?sourceTask?.agentId??input.assignmentAuthorId??null:type==='member'?input.assignmentAuthorId??null:null);
     if(type==='member')senderId=this.ctx.workspaces().getWorkspaceMemberByRef(senderId??'local',input.workspaceId??'local')?.id??senderId;
+    const delegationId=cleanOptionalString(input.delegationId??input.delegation_id);
+    const delegatedByAgentId=cleanOptionalString(input.delegatedByAgentId??input.delegated_by_agent_id);
+    // An omitted scope lets the message writer allocate or reuse an automatic
+    // delegation. Explicit lineage still preserves the delegator's empty scope.
+    const lineageScope=delegationId||delegatedByAgentId
+      ?taskExecutionScope({delegationId,delegatedByAgentId,agentId:input.agentId}):undefined;
     const result=sendMessageWithinTransaction(this.ctx,{id:existing?.id,session_id:sessionId,sender:{type,id:senderId},
       source_turn_id:existing?.task_id??sourceTurn?.turn_id??null,to:{type:'agent',ref:input.agentId},message_kind:'request',wake_requested:'now',
       body_md:existing?.body_md??input.prompt,execution_scope:scope??existing?.metadata.execution_scope as string|undefined
-        ??taskExecutionScope({delegationId:input.delegationId??input.delegation_id,
-          delegatedByAgentId:input.delegatedByAgentId??input.delegated_by_agent_id,agentId:input.agentId}),
+        ??lineageScope,
     },events,{...input,parentTaskId:null});
     const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
     if(!turn)throw Object.assign(new Error(`Message stored without scheduling: ${result.wake_reason}`),{message_result:result});
