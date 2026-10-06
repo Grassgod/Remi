@@ -273,7 +273,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
-  requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number }>;
+  requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number; transferBytes: number; encodedBytes: number; initiator: string; status: number | null; delivery: string | null }>;
   preRevealOptional: string[];
   cardSamples?: Array<{ t: number; height: number; contentHeight: number; textLength: number; state: string | null; scrollTop: number; anchorTop: number | null }>;
   preRevealWaves: number | null;
@@ -658,7 +658,10 @@ async function runRound(input: {
   if (!result.ssrSeed) result.waveGate = "record-only";
   const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
-    .map(entry => ({ path: new URL(entry.name).pathname, query: new URL(entry.name).search, startMs: entry.startTime, responseEndMs: entry.responseEnd })));
+    .map(entry => ({ path: new URL(entry.name).pathname, query: new URL(entry.name).search, startMs: entry.startTime, responseEndMs: entry.responseEnd,
+      transferBytes: entry.transferSize, encodedBytes: entry.encodedBodySize, initiator: entry.initiatorType,
+      status: (entry as PerformanceResourceTiming & { responseStatus?: number }).responseStatus ?? null,
+      delivery: (entry as PerformanceResourceTiming & { deliveryType?: string }).deliveryType ?? null })));
   result.requests = allRequests.filter(request => request.startMs >= navStartMs);
   result.logRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => /\/sessions\/[^/]+\/log\?/.test(entry.name))
