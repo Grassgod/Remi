@@ -5,8 +5,7 @@
 // messages; release restores claiming.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +17,7 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 
-let db: Database | null = null;
+let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;
 const daemons: TestMultiremiDaemon[] = [];
 const servers: ReturnType<typeof startFixtureServer>[] = [];
@@ -41,8 +40,8 @@ afterEach(async () => {
   for (const proxy of proxies.splice(0)) proxy.stop(true);
   for (const server of servers.splice(0)) server.stop(true);
   for (const layer of layers.splice(0)) await layer.drain();
-  db?.close();
-  db = null;
+  await database?.close();
+  database = null;
   if (workDir) {
     rmSync(workDir, { recursive: true, force: true });
     workDir = null;
@@ -57,10 +56,10 @@ function newServer(options: Parameters<typeof startMultiremiServer>[0]): ReturnT
   return startMultiremiServer({ ...options, backgroundJobs: false });
 }
 
-function testBed(prefix: string): { store: MultiremiStore; root: string } {
-  db = openSqliteDatabase(":memory:");
+async function testBed(prefix: string): Promise<{ store: MultiremiStore; root: string }> {
+  database = await openIntegrationDatabase();
   workDir = mkdtempSync(join(tmpdir(), prefix));
-  return { store: new MultiremiStore(db), root: workDir };
+  return { store: new MultiremiStore(database.db), root: workDir };
 }
 
 async function until(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000, label = "condition"): Promise<void> {
@@ -174,7 +173,7 @@ const RESPONSE: AgentResponse = {
 
 describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   it("pauses claims while draining, acks the generation over heartbeats, and resumes on release", async () => {
-    const { store, root } = testBed("multiremi-drain-claims-");
+    const { store, root } = await testBed("multiremi-drain-claims-");
     const agent = store.createAgent({ name: "Drain Claim Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait out the drain" });
     const daemonToken = await store.createAccessToken({ name: "drain daemon", type: "daemon", workspaceId: "local" });
@@ -234,7 +233,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 15_000);
 
   it("lets an already-claimed task run to completion while a drain waits for it", async () => {
-    const { store, root } = testBed("multiremi-drain-running-");
+    const { store, root } = await testBed("multiremi-drain-running-");
     const agent = store.createAgent({ name: "Drain Run Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "keep running through the drain" });
     const daemonToken = await store.createAccessToken({ name: "drain-run daemon", type: "daemon", workspaceId: "local" });
@@ -301,7 +300,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 20_000);
 
   it("keeps the ordered terminal result wait active so a CLI update remains blocked", async () => {
-    const { store, root } = testBed("multiremi-preterminal-active-");
+    const { store, root } = await testBed("multiremi-preterminal-active-");
     const agent = store.createAgent({ name: "Pre-terminal Active Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish after reports catch up" });
     const daemonToken = await store.createAccessToken({ name: "pre-terminal daemon", type: "daemon", workspaceId: "local" });
@@ -368,7 +367,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("retains a completed task's unacknowledged terminal row for reconnect replay without a status query", async () => {
-    const { store, root } = testBed("multiremi-terminal-report-purge-");
+    const { store, root } = await testBed("multiremi-terminal-report-purge-");
     const agent = store.createAgent({ name: "Terminal Purge Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish despite stale transcript reports" });
     const daemonToken = await store.createAccessToken({ name: "terminal purge daemon", type: "daemon", workspaceId: "local" });
@@ -389,7 +388,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       daemonId: "daemon-terminal-report-purge",
       provider: "claude",
       workspaceId: "local",
-      once: true,
+      once: false,
       pollIntervalMs: 25,
       daemonPort: 0,
       workspacesRoot: join(root, "workspaces"),
@@ -405,8 +404,13 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
         close: async () => {},
       }),
     });
+    const run = daemon.start();
     try {
-      await daemon.start();
+      await until(() => store.getTask(task.id)?.status === "completed", 5_000, "terminal report committed with its acknowledgement withheld");
+      await until(() => (daemon as unknown as { activeTaskCount: number }).activeTaskCount === 0,
+        5_000, "local terminal result wait expired");
+      daemon.stop();
+      await run;
 
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "done" });
       expect(statusReads).toBe(0);
@@ -415,13 +419,14 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       await persisted.close();
     } finally {
       daemon.stop();
+      await run;
       proxy.stop(true);
       server.stop(true);
     }
   }, 10_000);
 
   it("survives an API outage mid-stream: provider session lives on, messages land in order", async () => {
-    const { store, root } = testBed("multiremi-outage-");
+    const { store, root } = await testBed("multiremi-outage-");
     const agent = store.createAgent({ name: "Outage Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "stream through the outage" });
     const daemonToken = await store.createAccessToken({ name: "outage daemon", type: "daemon", workspaceId: "local" });
@@ -507,7 +512,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 20_000);
 
   it("purges queued reports and releases active execution when the server cancels a task", async () => {
-    const { store, root } = testBed("multiremi-outbox-cancel-");
+    const { store, root } = await testBed("multiremi-outbox-cancel-");
     const agent = store.createAgent({ name: "Cancelled Outbox Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait to be cancelled" });
     const daemonToken = await store.createAccessToken({ name: "cancel daemon", type: "daemon", workspaceId: "local" });
@@ -572,7 +577,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("does not probe status or purge reports after a transient connection loss", async () => {
-    const { store, root } = testBed("multiremi-outbox-transient-404-");
+    const { store, root } = await testBed("multiremi-outbox-transient-404-");
     const agent = store.createAgent({ name: "Transient 404 Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "survive one missing response" });
     const daemonToken = await store.createAccessToken({ name: "transient 404 daemon", type: "daemon", workspaceId: "local" });
@@ -647,7 +652,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("purges missing historical tasks from native task_not_found replies after startup reaches ready", async () => {
-    const { store, root } = testBed("multiremi-outbox-restart-");
+    const { store, root } = await testBed("multiremi-outbox-restart-");
     const outboxPath = join(root, "outbox.db");
     const historical = new MultiremiTaskReportOutbox({
       path: outboxPath,
@@ -700,7 +705,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("moves a finished agent into bounded drain accounting without losing its terminal report", async () => {
-    const { store, root } = testBed("multiremi-outbox-drain-accounting-");
+    const { store, root } = await testBed("multiremi-outbox-drain-accounting-");
     const agent = store.createAgent({ name: "Drain Accounting Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish while reports are offline" });
     const daemonToken = await store.createAccessToken({ name: "drain accounting daemon", type: "daemon", workspaceId: "local" });
@@ -769,7 +774,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("replays a persisted terminal result after bounded startup skips orphan recovery", async () => {
-    const { store, root } = testBed("multiremi-outbox-terminal-replay-");
+    const { store, root } = await testBed("multiremi-outbox-terminal-replay-");
     const daemonId = "daemon-terminal-replay";
     const runtime = store.registerRuntime({
       id: "rt_terminal_replay",
@@ -877,7 +882,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   }, 10_000);
 
   it("bounds startup replay while preserving reports for a non-terminal task", async () => {
-    const { store, root } = testBed("multiremi-outbox-startup-timeout-");
+    const { store, root } = await testBed("multiremi-outbox-startup-timeout-");
     const agent = store.createAgent({ name: "Startup Replay Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "stay queued during startup" });
     const outboxPath = join(root, "outbox.db");

@@ -5,8 +5,7 @@
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
-import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +18,7 @@ import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.j
 import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
-let db: Database | null = null;
+let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;
 let activeDaemon: MultiremiDaemon | null = null;
 const activeServers = new Set<{ stop(closeActiveConnections?: boolean): unknown }>();
@@ -29,18 +28,18 @@ afterEach(async () => {
   activeDaemon = null;
   for (const server of activeServers) server.stop(true);
   activeServers.clear();
-  db?.close();
-  db = null;
+  await database?.close();
+  database = null;
   if (workDir) {
     rmSync(workDir, { recursive: true, force: true });
     workDir = null;
   }
 });
 
-function testBed(prefix: string): { store: MultiremiStore; root: string } {
-  db = openSqliteDatabase(":memory:");
+async function testBed(prefix: string): Promise<{ store: MultiremiStore; root: string }> {
+  database = await openIntegrationDatabase();
   workDir = mkdtempSync(join(tmpdir(), prefix));
-  return { store: new MultiremiStore(db), root: workDir };
+  return { store: new MultiremiStore(database.db), root: workDir };
 }
 
 function daemonRuntimeIdForTest(daemonId: string, provider: string): string {
@@ -60,7 +59,7 @@ const chunk = (text: string) => ({
 
 describe("Bun Multiremi daemon steering", () => {
   it("injects a mid-run steer into the same provider session and completes", async () => {
-    const { store, root } = testBed("multiremi-daemon-steer-");
+    const { store, root } = await testBed("multiremi-daemon-steer-");
     const agent = store.createAgent({ name: "Steer Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Write the summary in English" });
     const daemonToken = await store.createAccessToken({ name: "Steer daemon", type: "daemon", workspaceId: "local" });
@@ -146,7 +145,7 @@ describe("Bun Multiremi daemon steering", () => {
   });
 
   it("a steer accepted just before natural turn end is injected, not stranded", async () => {
-    const { store, root } = testBed("multiremi-daemon-steer-late-");
+    const { store, root } = await testBed("multiremi-daemon-steer-late-");
     const agent = store.createAgent({ name: "Late Steer Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer briefly" });
     const daemonToken = await store.createAccessToken({ name: "Late steer daemon", type: "daemon", workspaceId: "local" });
@@ -217,7 +216,7 @@ describe("Bun Multiremi daemon steering", () => {
   });
 
   it("consumes a pushed steer after the completion barrier without HTTP steer calls", async () => {
-    const { store, root } = testBed("multiremi-steer-completion-rpc-");
+    const { store, root } = await testBed("multiremi-steer-completion-rpc-");
     const agent = store.createAgent({ name: "Completion race", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer briefly" });
     const token = await store.createAccessToken({ name: "Completion race daemon", type: "daemon", workspaceId: "local" });
@@ -269,7 +268,7 @@ describe("Bun Multiremi daemon steering", () => {
   });
 
   it("a delayed replayed steer push does not cancel the next turn", async () => {
-    const { store, root } = testBed("multiremi-daemon-steer-duppoll-");
+    const { store, root } = await testBed("multiremi-daemon-steer-duppoll-");
     const agent = store.createAgent({ name: "Dup Poll Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer in English" });
     const daemonToken = await store.createAccessToken({ name: "Dup poll daemon", type: "daemon", workspaceId: "local" });
@@ -360,7 +359,7 @@ describe("Bun Multiremi daemon steering", () => {
   });
 
   it("turn wrap-up finishes within the grace window even if the agent keeps going", async () => {
-    const { store, root } = testBed("multiremi-daemon-force-answer-");
+    const { store, root } = await testBed("multiremi-daemon-force-answer-");
     const agent = store.createAgent({ name: "Force Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Research deeply" });
     const turn = store.listTurns({ workspace_id: "local" }).find(value => value.current_attempt_id === task.id)!;
@@ -438,7 +437,7 @@ describe("Bun Multiremi daemon steering", () => {
   });
 
   it("cancel still cancels: no steer, no resurrection of the run", async () => {
-    const { store, root } = testBed("multiremi-daemon-steer-cancel-");
+    const { store, root } = await testBed("multiremi-daemon-steer-cancel-");
     const agent = store.createAgent({ name: "Cancel Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Long run" });
     const daemonToken = await store.createAccessToken({ name: "Cancel daemon", type: "daemon", workspaceId: "local" });
