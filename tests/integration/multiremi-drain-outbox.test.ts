@@ -376,11 +376,21 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     const daemonToken = await store.createAccessToken({ name: "terminal purge daemon", type: "daemon", workspaceId: "local" });
     const server = newServer({ store, scheduler: null, authToken: "root-terminal-purge-secret", hostname: "127.0.0.1", port: 0 });
     let completeSeq: string | null = null;
+    let startSeq: string | null = null;
+    let startAckReleased = false;
+    let startAckTimer: ReturnType<typeof setTimeout> | undefined;
     let statusReads = 0;
     const proxy = apiProxy(server.port, (request, url) => {
       if (request.method === "GET" && url.pathname === `/api/daemon/tasks/${task.id}/status`) statusReads++;
       return null;
-    }, (frame, direction) => {
+    }, (frame, direction, socket) => {
+      if (direction === "up" && frame.t === "task.start") startSeq = String(frame.seq);
+      if (direction === "down" && frame.t === "res" && frame.re === startSeq && !startAckReleased) {
+        // Startup authority uses the request budget, even with a 50ms terminal
+        // drain budget. The provider must await this deliberately slower ACK.
+        startAckTimer = setTimeout(() => { startAckReleased = true; socket.send(JSON.stringify(frame)); }, 100);
+        return false;
+      }
       if (direction === "up" && frame.t === "turn.complete") completeSeq = String(frame.seq);
       if (direction === "down" && frame.t === "res" && frame.re === completeSeq) return false;
     });
@@ -401,6 +411,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       taskDrainTimeoutMs: 50,
       providerFactory: () => ({
         async *sendStream() {
+          expect(startAckReleased).toBe(true);
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "done" }] } as any;
         },
         getLastResponse: () => RESPONSE,
@@ -427,6 +438,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     } finally {
       daemon.stop();
       await run;
+      clearTimeout(startAckTimer);
       proxy.stop(true);
       server.stop(true);
     }

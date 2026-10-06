@@ -3495,7 +3495,7 @@ export class MultiremiDaemon {
       startSignal.throwIfAborted();
       const startReply = await this.ensureOutbox().enqueueAndWait(task.id, "start", {
         usage_run_id: usageRunId, runtime_id: this.options.runtimeId,
-      }, this.options.taskDrainTimeoutMs, startSignal);
+      }, this.options.requestTimeoutMs, startSignal);
       if (startReply.execution_authorized !== true) throw new Error("Task execution start does not authorize this run to execute");
       startSignal.throwIfAborted();
       if (codexCatalogError) {
