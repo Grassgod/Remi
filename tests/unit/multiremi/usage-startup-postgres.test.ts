@@ -119,6 +119,19 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 0, complete: true });
   });
 
+  it("keeps missing prior-attempt usage when complete modern retry facts precede startup on PostgreSQL", async () => {
+    const agent = store.createAgent({ name: "retry before cutover pg", provider: "codex", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "old attempt unknown", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "modern-retry", revision: 1, complete: true,
+      units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" })] });
+    await prepareUsageAccountingStartup(db!);
+    await prepareUsageAccountingStartup(db!);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(task.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern-retry" }]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 1, complete: false });
+  });
+
   it("serializes two real UI/runtime startup processes without duplicate source versions", async () => {
     tasks(8);
     const childCode = `

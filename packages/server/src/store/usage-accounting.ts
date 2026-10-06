@@ -510,7 +510,7 @@ const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t
 // New protocol executions do not write the deprecated JSON column. A missing
 // checkpoint (or a changed lifecycle timestamp) for their null source must not
 // manufacture an empty legacy run and downgrade established consumption.
-const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR NOT EXISTS (
+const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR t.attempt>1 OR NOT EXISTS (
   SELECT 1 FROM multiremi_usage_runs modern WHERE modern.task_id=t.id AND modern.run_id NOT IN ('legacy','historical-evidence-v2')))`;
 const LEGACY_PENDING = `${LEGACY_SOURCE_EXISTS} AND (s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
 
@@ -553,7 +553,7 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       // proves neither overlap nor complete coverage of the old aggregate.
       // Only reviewed identity-based reconciliation may retire that evidence.
       if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return 0;
-      if ((row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
+      if (Number(row.attempt) <= 1 && (row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
         && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")) return 0;
       const timestamp = new Date().toISOString();
       db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);

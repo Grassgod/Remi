@@ -93,7 +93,7 @@ remi dashboard usage reconcile --workspace <id> --days all --tz Asia/Shanghai --
 
 生产准备允许先创建本范围 schema；历史 evidence 回填必须在停止旧 writers、排空旧上报并完成新代码切换后，重新生成和审核 source cohort 与恢复计划。仅写 JSON 的旧镜像不得与回填并行；若自动回滚后修改了受保护历史来源，下次新代码启动同样失败关闭。恢复演练与源码合入不代表已经部署、发版或在线修复。
 
-首次 attempt 的新 queued task 若旧来源为空、没有 dispatch/start/terminal 时间或此前执行 run，仅审计旧来源，不创建缺失消费的 legacy run。重启后其完整 v2 消费可正常成为已知；已有重试或旧执行迹象时仍保留未知消费，不能凭空确认先前消费为零。
+首次 attempt 的新 queued task 若旧来源为空、没有 dispatch/start/terminal 时间或此前执行 run，仅审计旧来源，不创建缺失消费的 legacy run。重启后其完整 v2 消费可正常成为已知；已有重试或旧执行迹象时，旧尝试覆盖缺证据仍保留 unknown，不增加 token 小计，也不能凭空确认先前消费为零。
 
 下面是数据库维护脚本，不是普通 API 的隐式写操作。先备份并在恢复克隆演练；`MULTIREMI_DATABASE_URL` 由维护环境显式设置，不通过 API 传数据库凭据。
 

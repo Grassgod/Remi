@@ -241,6 +241,20 @@ describe("automatic scalar usage cutover", () => {
     expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(task.id)).toEqual([{ run_id: "legacy" }, { run_id: "retry-known" }]);
   });
 
+  it("preserves missing prior-attempt usage when a complete modern retry already exists before scalar startup", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "retry before cutover", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "missing prior attempt", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    const observed = live("modern-retry-before-startup");
+    observed.units[0] = { ...observed.units[0]!, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" };
+    writeUsageSnapshot(db!, task.id, observed);
+    await prepareUsageAccountingStartup(db!);
+    await prepareUsageAccountingStartup(db!);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(task.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern-retry-before-startup" }]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 1, complete: false });
+  });
+
   it("a failed scalar transaction cannot establish readiness and retries cleanly", async () => {
     fixture();
     db!.exec("CREATE TRIGGER reject_usage_version BEFORE INSERT ON multiremi_usage_legacy_audit BEGIN SELECT RAISE(ABORT,'migration failed'); END");

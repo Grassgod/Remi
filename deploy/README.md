@@ -54,7 +54,8 @@ without loading old JSON payloads into the process. Null or default `[]`
 deprecated fields for new v2-only tasks do not create empty legacy runs.
 An empty first-attempt queued task with no dispatch/start/terminal evidence is
 audited without a phantom execution run, so its later complete v2 usage remains
-complete. Empty retries or prior execution evidence still retain unknown usage.
+complete. Empty retries or prior execution evidence still retain unknown coverage
+for the old attempt, without inventing any additional tokens.
 
 An optional `scripts/migrate-usage-accounting.ts --execute` preparation retains
 the original audit and all observed source versions, but does not write the
