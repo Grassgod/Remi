@@ -553,3 +553,7 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 ### S9-6：Agent 列表批量水合
 
 `GET /api/agents` 按 workspace/归档条件取未水合候选，先过滤可见 Agent，再批量读取技能关联（有界 IN 批次，不读 Skill files）；结构化技能优先、关联创建时间/名称排序和 inline fallback 去重不变。MCP 配置的 workspace 设置/角色每 workspace 只查一次，保留 X-Agent-ID、owner/admin、Agent owner 与 always_redact_env 规则；custom_env 仍只输出键数量。native 列表和单 Agent 详情保留原路径。双方言正式对拍覆盖角色、私有/其他 workspace、两种归档参数和脱敏。
+
+### S9-6：Project 列表投影
+
+`GET /api/projects` 使用专用摘要投影，保持原 issue/done/resource 聚合、排序、null/归档及权限行为；instructions、delta_instructions 和修订元数据不跨桥。详情、native 列表及搜索仍用完整 Project。正式双方言用例逐字段对拍，增大两条说明至各64KiB后摘要内容和回包字节不变，详情仍返回完整说明。

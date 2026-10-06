@@ -4751,6 +4751,10 @@ runMigrations(this.db);
     return this.projects.listProjects(workspaceId);
   }
 
+  listProjectSummaries(workspaceId: string): import("./repos/projects-repo.js").ProjectSummary[] {
+    return this.projects.listProjectSummaries(workspaceId);
+  }
+
   searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MultiremiProjectSearchResult[]; total: number } {
     return this.projects.searchProjects(input);
   }
