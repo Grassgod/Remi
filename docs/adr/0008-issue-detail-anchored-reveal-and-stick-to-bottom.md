@@ -147,3 +147,7 @@ so the mechanism cannot be owned by the issue timeline component.
 - **C9 redoes the wiring, not the rules.** The gates computed inside
   `issue-activity-section.tsx` are specific to the Virtuoso path and will be
   discarded when the list is replaced.
+
+### S9-6：SSR 首次定位等待侧栏实际宽度
+
+SSR 定位脚本在原有显示偏好门禁之外读取 SidebarProvider 的 `data-sidebar-width-ready`，等本地宽度恢复；展开的桌面侧栏仍在原 CSS 宽度动画中时，按实际 gap 宽度继续等待，再按原揭示契约的两帧稳定门禁等待正文宽度、滚动高度及滚动位置稳定，用最终布局首次定位；不改面板注册。每个日志根最多一个宽度等待帧链；已完成定位的根不重新定位。侧栏 DOM、动画、日志滚动状态机、预算和记录器阈值均未修改。带 seed 的 `detail-long-sidebar::cold` 与普通 CSR 分别验证；正式 SSR 脚本测试覆盖偏好完成但宽度未恢复，以及恢复值已写入而动画未完成两条路径。
