@@ -3464,11 +3464,15 @@ export class MultiremiDaemon {
       // Bind the run to the authenticated runtime before any provider can
       // consume tokens. A durable but unacknowledged start is not permission
       // to execute while the task may have been reassigned.
+      // Shutdown drains already-running providers, but must release an attempt
+      // that has not obtained execution authority before the socket closes.
+      const startSignal = AbortSignal.any([abort.signal, this.pollAbort.signal]);
+      startSignal.throwIfAborted();
       const startReply = await this.ensureOutbox().enqueueAndWait(task.id, "start", {
         usage_run_id: usageRunId, runtime_id: this.options.runtimeId,
-      }, this.options.taskDrainTimeoutMs, abort.signal);
+      }, this.options.taskDrainTimeoutMs, startSignal);
       if (startReply.execution_authorized !== true) throw new Error("Task execution start does not authorize this run to execute");
-      abort.signal.throwIfAborted();
+      startSignal.throwIfAborted();
       if (codexCatalogError) {
         this.enqueueTaskReport(task.id, "progress", {
           summary: `能力加载失败，已回退 Codex 内置目录：${codexCatalogError}`,
@@ -3480,6 +3484,7 @@ export class MultiremiDaemon {
         : relay?.auth_token ? `workspace:${task.workspaceId}:relay:${task.agent?.provider}` : null;
       usageLedger = new TaskUsageLedger(usageConnection, usageRunId);
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment, usageLedger, checkpointUsage);
+      startSignal.throwIfAborted();
       summary = await this.runAgent(
         task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
         progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
@@ -3495,6 +3500,7 @@ export class MultiremiDaemon {
         },
         usageRunId,
         usageLedger,
+        startSignal,
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -4237,6 +4243,7 @@ export class MultiremiDaemon {
     onUsage?: (usage: TaskUsageSnapshot) => void,
     usageRunId?: string,
     usageLedger?: TaskUsageLedger,
+    startupSignal: AbortSignal = signal,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4322,6 +4329,9 @@ export class MultiremiDaemon {
       config.addDirs = [...new Set([...(config.addDirs ?? []), codeWorkDir])];
     }
 
+    // Preparation above can yield after the start ACK. Shutdown must still
+    // prevent entering a provider, without aborting an already-running turn.
+    startupSignal.throwIfAborted();
     const provider = this.providerFactory({
       agentType: config.agentType,
       executable: config.executable,
@@ -4460,6 +4470,7 @@ export class MultiremiDaemon {
         let lastTurnMessage: { type: string; content?: string | null } | null = null;
         try {
           resetElicitationContextOffset();
+          if (turnIndex === 1) startupSignal.throwIfAborted();
           for await (const event of session.run(prompt)) {
             const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
             if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
