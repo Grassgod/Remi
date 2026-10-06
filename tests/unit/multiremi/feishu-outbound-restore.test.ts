@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -169,11 +169,14 @@ describe("C5 physical restore on SQLite", () => {
     const directory = mkdtempSync(join(tmpdir(), "m447-c5-sqlite-"));
     const path = join(directory, "restore.sqlite");
     try {
-      const db = openSqliteDatabase(path);
+      // Bootstrap in memory, then give the real CLI the exact serialized DB.
+      // Hundreds of migration fsyncs are unrelated to the restore guard.
+      const db = openSqliteDatabase(":memory:");
       seed(db);
       db.run(`UPDATE ${table} SET status = 'pending' WHERE id = 'sent-receipt'`);
       const before = rows(db);
       const indexes = db.query("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name").all();
+      writeFileSync(path, db.serialize());
       db.close();
 
       const result = spawnSync("sqlite3", [path], { input: sql, encoding: "utf8" });
