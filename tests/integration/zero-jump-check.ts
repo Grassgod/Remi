@@ -305,6 +305,7 @@ interface RoundResult extends RenderMeasurement {
   waveGate: "blocking" | "record-only";
   attachmentReads: Record<string, number>;
   settled: boolean;
+  hubAckType: "auth_ack" | "stream.ack";
   hubAckSeen: boolean;
   revealDispatchMs: number | null;
   fetchPhases: Array<{ path: string; t: number; state: string | null; fresh: string | null }>;
@@ -492,6 +493,8 @@ async function runRound(input: {
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
     requests: [], preRevealOptional: [], preRevealWaves: null, preRevealWaveRows: [], preRevealWaveChain: [], waveGate: scenario.mode === "warm" && !(["detail-running", "detail-deeplink"].includes(scenario.key)) ? "blocking" : "record-only", attachmentReads: {}, settled: false, hubAckSeen: false, revealDispatchMs: null, fetchPhases: [],
+    // Inbox message detail uses HTTP + workspace events, without a log stream.
+    hubAckType: scenario.entry === "inbox" ? "auth_ack" : "stream.ack",
     renderMs: null, renderSource: "unobserved", renderReason: "not measured", windowResponseEndMs: null,
     logSingleRowReads: 0,
     logRequests: [],
@@ -624,7 +627,7 @@ async function runRound(input: {
   page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
     if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
     lastHubChange = performance.now();
-    try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
+    try { const frame = JSON.parse(String(payload)); if (frame.type === result.hubAckType) result.hubAckSeen = true; } catch {}
   }));
   const seedReads: Promise<void>[] = [];
   page.on("response", response => {

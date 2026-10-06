@@ -355,6 +355,8 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 探测按原 opaque next_cursor 分页；测量只使用已准备第一页的 message ID。报告记录 inboxApiPage、inboxInjected、inboxApiIndex 与 inboxDomRowIndex。点击不发已读请求，所以 inboxPageRequestsBeforeStub 在没有桩写时为 null，不能解释为 0 次加载。
 
+CI 的 `detail-deeplink` 通过 `/inbox?item=<messageId>` 打开消息详情，读取 `/api/messages/:id`，以 `[data-inbox-message]` 为锚点。该页面使用工作区事件连接，不订阅 Issue 的 `log:` 流；收尾必须收到真实的 `auth_ack`，其他 Issue 详情场景仍必须收到 `stream.ack`。报告的 `hubAckType` 记录本轮要求的确认帧，`hubAckSeen` 记录是否收到；两类场景均继续要求 API 无在途请求、API/WS 连续静默 500 ms，并保留零跳动、目标锚点、无骨架及 `ready/fresh=1` 检查。
+
 ### 场景矩阵与参数
 
 详情页 `detail-short` / `detail-long` / `detail-running` / `deeplink-message` × {cold, warm}，外加 MUL-367 的 11 个页面 × {cold, warm}。
