@@ -2289,7 +2289,9 @@ describe("Bun Multiremi daemon smoke", () => {
       const continuedRange = prompts[4]!.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
       expect(continuedRange[1]).toBe(session.id);
       expect(continuedRange[2]).toBe(range[3]);
-      expect(Number(continuedRange[3])).toEqual(store.getTurnForAttempt(continued.task.id)!.input_to_seq);
+      const consumedTo = store.getTurnForAttempt(continued.task.id)!.input_to_seq;
+      expect(Number.isSafeInteger(consumedTo)).toBe(true);
+      expect(Number(continuedRange[3])).toBe(consumedTo!);
     } finally {
       unsubscribeRetries(); now.mockRestore();
       server.stop(true);
