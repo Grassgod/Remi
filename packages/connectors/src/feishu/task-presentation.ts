@@ -165,6 +165,13 @@ export class FeishuTaskPresentation {
       // Discard each acknowledged presentation sample as we rebuild state,
       // rather than collecting a whole historical native-event queue.
       this.timeline.drain();
+      // The process checkpoint may precede the independent card receipt and
+      // waiting-step completion. Resume that existing interaction on replay.
+      const entry = this.state.interactions[String(message.input?.request_id ?? "")];
+      if ((message.type === "permission_request" || message.type === "question_request")
+        && entry && (!entry.receiptStatus || (entry.waitingStarted && !entry.waitingFinished))) {
+        await this.interaction(message);
+      }
       return;
     }
     if (message.type === "execution" || message.type === "usage") return;
