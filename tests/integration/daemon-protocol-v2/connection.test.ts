@@ -17,6 +17,32 @@ afterEach(async () => {
   for (const h of fixtures.splice(0)) await h.dispose();
 });
 
+function localProgressSummary() {
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    requests++;
+    return Response.json({ model: "shutdown-summary-model", usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+      choices: [{ message: { content: '{"summary":"provider drained","step":3,"total":3}' } }] });
+  } });
+  const settings = {
+    MULTIREMI_PROGRESS_SUMMARY_DISABLED: "0",
+    MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: `http://127.0.0.1:${server.port}`,
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "shutdown-summary-model",
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "local-fixture-key",
+    MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "1000",
+    MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "45000",
+  };
+  const previous = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]]));
+  Object.assign(process.env, settings);
+  return { requests: () => requests, close() {
+    server.stop(true);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  } };
+}
+
 describe("daemon protocol v2 real connection", () => {
   it("handshakes all provider lanes on one socket and continuously heartbeats without HTTP heartbeats", async () => {
     const heartbeat = spyOn(MultiremiDaemonClient.prototype, "heartbeatRuntime");
@@ -173,6 +199,7 @@ describe("daemon protocol v2 real connection", () => {
   });
 
   it("does not enter the provider when shutdown occurs during preparation after the start ACK", async () => {
+    const summaryEndpoint = localProgressSummary();
     let providerCalls = 0;
     let preparing = false;
     let releasePreparation!: () => void;
@@ -193,7 +220,7 @@ describe("daemon protocol v2 real connection", () => {
       await h.startDaemon();
       const runtimeId = h.store.listRuntimes()[0]!.id;
       const agent = h.store.createAgent({ name: "stop during authorized preparation", provider: "claude", runtimeId });
-      const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Stop before provider entry" });
+      const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Stop before provider entry", maxAttempts: 1 });
       await waitFor(() => preparing, "post-ACK workspace preparation");
       expect(h.store.getTask(task.id)?.status).toBe("running");
       expect(h.db.query("SELECT active_run_id FROM multiremi_usage_task_scopes WHERE task_id=?").get(task.id))
@@ -204,11 +231,28 @@ describe("daemon protocol v2 real connection", () => {
       await waitFor(() => stopped, "shutdown after held preparation resumes", 1_000);
       await stopping;
       expect(providerCalls).toBe(0);
+      expect(summaryEndpoint.requests()).toBe(0);
+      const persisted = openSqliteDatabase((h.daemon as unknown as { outboxPath: string }).outboxPath);
+      try {
+        const pending = persisted.query("SELECT kind,payload FROM outbox_events WHERE task_id=? ORDER BY seq").all(task.id) as Array<{ kind: string; payload: string }>;
+        expect(pending.some(row => row.kind === "fail")).toBe(true);
+        const usage = pending.filter(row => row.kind === "usage").map(row => JSON.parse(row.payload).usageSnapshot);
+        expect(usage.at(-1)).toMatchObject({ complete: true, units: [] });
+      } finally { persisted.close(); }
       expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
-    } finally { releasePreparation(); prepare.mockRestore(); }
+      prepare.mockRestore();
+      await h.recreateDaemon();
+      await waitFor(() => h.store.getTask(task.id)?.status === "failed"
+        && (h.db.query("SELECT complete FROM multiremi_usage_runs WHERE task_id=?").get(task.id) as { complete: number })?.complete === 1,
+      "accepted run and closed summary scope to replay");
+      expect(providerCalls).toBe(0);
+      expect(summaryEndpoint.requests()).toBe(0);
+      expect(h.db.query("SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ n: 0 });
+    } finally { releasePreparation(); prepare.mockRestore(); summaryEndpoint.close(); }
   });
 
   it("drains an already-started provider on shutdown without aborting its execution", async () => {
+    const summaryEndpoint = localProgressSummary();
     let providerCalls = 0;
     let executionSignal: AbortSignal | undefined;
     let releaseProvider!: () => void;
@@ -227,7 +271,7 @@ describe("daemon protocol v2 real connection", () => {
     await h.startDaemon();
     const runtimeId = h.store.listRuntimes()[0]!.id;
     const agent = h.store.createAgent({ name: "graceful provider drain", provider: "claude", runtimeId });
-    h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Finish after shutdown begins" });
+    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Finish after shutdown begins", maxAttempts: 1 });
     try {
       await waitFor(() => providerCalls === 1, "authorized provider execution");
       expect(executionSignal).toBeDefined();
@@ -241,8 +285,24 @@ describe("daemon protocol v2 real connection", () => {
       await stopping;
       expect(providerCalls).toBe(1);
       expect(executionSignal!.aborted).toBe(false);
+      expect(summaryEndpoint.requests()).toBe(1);
+      const persisted = openSqliteDatabase((h.daemon as unknown as { outboxPath: string }).outboxPath);
+      try {
+        const pending = persisted.query("SELECT payload FROM outbox_events WHERE task_id=? AND kind='usage' ORDER BY seq").all(task.id) as Array<{ payload: string }>;
+        const usage = pending.map(row => JSON.parse(row.payload).usageSnapshot);
+        expect(usage.some(snapshot => snapshot.complete === false)).toBe(true);
+        expect(usage.at(-1).complete).toBe(true);
+        expect(usage.flatMap(snapshot => snapshot.units).find(unit => unit.purpose === "progress_summary" && unit.model === "shutdown-summary-model"))
+          .toMatchObject({ model: "shutdown-summary-model", inputTokens: 6, outputTokens: 4 });
+      } finally { persisted.close(); }
       expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
-    } finally { releaseProvider(); }
+      await h.recreateDaemon();
+      await waitFor(() => (h.db.query("SELECT complete FROM multiremi_usage_runs WHERE task_id=?").get(task.id) as { complete: number })?.complete === 1,
+        "late helper usage and its completion to replay");
+      expect(h.store.getUsageReport({ workspaceId: "local", days: null }).by_model
+        .find(row => row.purpose === "progress_summary" && row.model === "shutdown-summary-model")?.actual_total_tokens).toBe(10);
+      expect(summaryEndpoint.requests()).toBe(1);
+    } finally { releaseProvider(); summaryEndpoint.close(); }
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {

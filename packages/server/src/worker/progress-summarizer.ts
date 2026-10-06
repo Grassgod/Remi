@@ -516,11 +516,13 @@ async function callSummaryCli(input: {
   providerEnv?: Record<string, string>;
   spawnImpl: SummaryCliSpawn;
   onUsage?: SummaryUsageCallback;
+  beforeRequest?: () => void;
 }): Promise<ProgressSummaryResult> {
   const cwd = await mkdtemp(join(tmpdir(), "multiremi-progress-"));
   let processHandle: SummaryCliProcess | null = null;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    input.beforeRequest?.();
     const cliPrompt = `${SUMMARY_SYSTEM_PROMPT}\n\n${input.prompt}`;
     const recordUsage = beginSummaryUsage("claude", input.model, input.onUsage);
     processHandle = input.spawnImpl(
@@ -622,6 +624,8 @@ export class TaskProgressSummarizer {
   private inFlight: Promise<void> | null = null;
   private lastSummary: string | null = null;
   private finalized = false;
+  private closing: Promise<void> | null = null;
+  private suppressFinalSummary = false;
 
   constructor(private readonly options: TaskProgressSummarizerOptions) {
     this.now = options.now ?? Date.now;
@@ -658,14 +662,29 @@ export class TaskProgressSummarizer {
    * Forced terminal summary. Waits for an in-flight periodic call first so the
    * final write always lands last, then summarizes regardless of thresholds.
    */
-  async finalize(outcome: ProgressRunOutcome, detail?: string): Promise<void> {
-    if (this.finalized) return;
+  finalize(outcome: ProgressRunOutcome, detail?: string): Promise<void> {
+    return this.close(outcome, detail);
+  }
+
+  /** Close unused startup scope without issuing another billable request. */
+  closeWithoutSummary(): Promise<void> {
+    this.suppressFinalSummary = true;
+    return this.close();
+  }
+
+  private close(outcome?: ProgressRunOutcome, detail?: string): Promise<void> {
+    if (this.closing) return this.closing;
     this.finalized = true;
-    try {
-      if (this.inFlight) await this.inFlight.catch(() => undefined);
-      const { digest } = this.tracker.drain(this.now());
-      await this.summarizeAndReport(digest, outcome, detail);
-    } finally { this.options.onClosed?.(); }
+    this.closing = (async () => {
+      try {
+        if (this.inFlight) await this.inFlight.catch(() => undefined);
+        if (!this.suppressFinalSummary && outcome !== undefined) {
+          const { digest } = this.tracker.drain(this.now());
+          await this.summarizeAndReport(digest, outcome, detail);
+        }
+      } finally { this.options.onClosed?.(); }
+    })();
+    return this.closing;
   }
 
   private async summarizeAndReport(digest: string, outcome?: ProgressRunOutcome, detail?: string): Promise<void> {
@@ -688,6 +707,7 @@ export class TaskProgressSummarizer {
   }
 
   private async requestSummary(prompt: string): Promise<ProgressSummaryResult> {
+    this.assertRequestsAllowed();
     if (this.activeTransport === "cli") return this.requestSummaryWithCli(prompt);
     if (this.activeTransport === "openai") {
       try {
@@ -747,6 +767,11 @@ export class TaskProgressSummarizer {
       providerEnv: this.options.providerEnv,
       spawnImpl: this.spawnImpl,
       onUsage: this.options.onUsage,
+      beforeRequest: () => this.assertRequestsAllowed(),
     });
+  }
+
+  private assertRequestsAllowed(): void {
+    if (this.suppressFinalSummary) throw new Error("Progress summary closed before provider startup");
   }
 }

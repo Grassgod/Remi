@@ -3288,6 +3288,7 @@ export class MultiremiDaemon {
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
+    let providerEntered = false;
     let usageLedger: TaskUsageLedger | undefined;
     const checkpointUsage = (usage: TaskUsageSnapshot | null) => {
       if (!usage) return;
@@ -3501,6 +3502,7 @@ export class MultiremiDaemon {
         usageRunId,
         usageLedger,
         startSignal,
+        () => { providerEntered = true; },
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -3525,6 +3527,12 @@ export class MultiremiDaemon {
       this.finalizeTaskProgress(progressSummarizer, "completed", summary.output, task.id);
       await awaitFinalReportDrain();
     } catch (err) {
+      if (!providerEntered && this.pollAbort.signal.aborted) {
+        // Closing the optional helper releases its deferred usage scope. A
+        // failed startup must not create a new terminal-summary model call.
+        await progressSummarizer?.closeWithoutSummary();
+        progressSummarizer = null;
+      }
       const error = redactTaskError(timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err));
       if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
         if (serverTerminalStatus === "cancelled") {
@@ -4173,7 +4181,7 @@ export class MultiremiDaemon {
         log.info(`Progress summaries unavailable for task ${task.id}: no usable model credential`);
         return null;
       }
-      const closeUsageScope = usageLedger?.deferCompletion();
+      let closeUsageScope: ReturnType<TaskUsageLedger["deferCompletion"]> | undefined;
       const relayEngine = task.agent?.provider === "claude" || task.agent?.provider === "codex" ? task.agent.provider : null;
       const relayBaseUrl = relayEngine && relayFragment !== undefined ? extractBaseUrl(relayEngine, relayFragment) : null;
       const processCredentials = resolveSummarizerCredentials(undefined);
@@ -4189,7 +4197,7 @@ export class MultiremiDaemon {
         }
         return null;
       };
-      return new TaskProgressSummarizer({
+      const summarizer = new TaskProgressSummarizer({
         config,
         credentials: credentials ?? undefined,
         providerEnv,
@@ -4204,6 +4212,8 @@ export class MultiremiDaemon {
           await this.client.reportProgress(task.id, result.summary, result.step, result.total, { final });
         },
       });
+      closeUsageScope = usageLedger?.deferCompletion();
+      return summarizer;
     } catch (err) {
       log.warn(`Progress summarizer setup failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
@@ -4244,6 +4254,7 @@ export class MultiremiDaemon {
     usageRunId?: string,
     usageLedger?: TaskUsageLedger,
     startupSignal: AbortSignal = signal,
+    onProviderEntry?: () => void,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4470,7 +4481,10 @@ export class MultiremiDaemon {
         let lastTurnMessage: { type: string; content?: string | null } | null = null;
         try {
           resetElicitationContextOffset();
-          if (turnIndex === 1) startupSignal.throwIfAborted();
+          if (turnIndex === 1) {
+            startupSignal.throwIfAborted();
+            onProviderEntry?.();
+          }
           for await (const event of session.run(prompt)) {
             const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
             if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
