@@ -1,11 +1,13 @@
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { multiremiStateDir } from "@shared/home-paths.js";
 
 /** Docker mounts HOME as its writable api-home volume; /app is image code. */
 export function resolveMigrationReportDirectory(override = process.env.MULTIREMI_MIGRATION_REPORT_DIR): string {
-  return override?.trim() || join(homedir(), "reports", "migrations");
+  // The state-dir knob isolates tests. Its default is ~/.multiremi, so Docker's
+  // writable HOME still owns ~/reports/migrations rather than the image's /app.
+  return override?.trim() || join(dirname(multiremiStateDir()), "reports", "migrations");
 }
 
 /** Check the report's write/rename path before any startup schema mutation. */

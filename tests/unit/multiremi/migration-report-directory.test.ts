@@ -16,9 +16,25 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-test("resolves the HOME data directory and keeps an explicit report override", () => {
-  expect(resolveMigrationReportDirectory("")).toBe(join(homedir(), "reports", "migrations"));
-  expect(resolveMigrationReportDirectory(" /writable/custom ")).toBe("/writable/custom");
+test("uses the isolated state directory and keeps an explicit report override", () => {
+  const previous = process.env.MULTIREMI_STATE_DIR;
+  try {
+    process.env.MULTIREMI_STATE_DIR = "/isolated/state";
+    expect(resolveMigrationReportDirectory("")).toBe("/isolated/reports/migrations");
+    expect(resolveMigrationReportDirectory(" /writable/custom ")).toBe("/writable/custom");
+  } finally {
+    if (previous === undefined) delete process.env.MULTIREMI_STATE_DIR;
+    else process.env.MULTIREMI_STATE_DIR = previous;
+  }
+});
+
+test("keeps the production default in the writable HOME volume", () => {
+  const child = spawnSync(process.execPath, ["-e", `
+    import { resolveMigrationReportDirectory } from ${JSON.stringify(resolve(import.meta.dir, "../../../packages/server/src/store/migration-report-directory.ts"))};
+    console.log(resolveMigrationReportDirectory());
+  `], { env: { ...process.env, NODE_ENV: "production", MULTIREMI_STATE_DIR: undefined, MULTIREMI_MIGRATION_REPORT_DIR: undefined }, encoding: "utf8" });
+  expect(child.status).toBe(0);
+  expect(child.stdout.trim()).toBe(join(homedir(), "reports", "migrations"));
 });
 
 function databaseSnapshot(db: SqlDatabase) {
