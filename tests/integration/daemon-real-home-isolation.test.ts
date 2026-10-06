@@ -65,29 +65,34 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
       writeFileSync(path, contents, { mode: 0o600 });
     }
     const before = homeSnapshot(home);
-    const child = Bun.spawn([process.execPath, "test",
+    const files = [
       "tests/integration/multiremi-daemon-steer.test.ts",
       "tests/integration/multiremi-approval-e2e.test.ts",
       "tests/integration/multiremi-drain-outbox.test.ts",
-    ], {
-      cwd: REPO_ROOT,
-      env: childEnv(home, join(root, "cache")),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const timeout = setTimeout(() => child.kill(), 90_000);
+    ];
+    // Keep the same home and full coverage without serializing independent
+    // fresh-database fixtures inside one child's execution budget.
+    const children = files.map(file => Bun.spawn([process.execPath, "test", file], {
+      cwd: REPO_ROOT, env: childEnv(home, join(root, "cache")), stdout: "pipe", stderr: "pipe",
+    }));
+    const timeout = setTimeout(() => {
+      for (const child of children) if (child.exitCode === null) child.kill();
+    }, 90_000);
     try {
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-      if (exitCode !== 0) throw new Error(`Daemon/archive child exited ${exitCode}\n${stdout}\n${stderr}`);
+      const results = await Promise.all(children.map(async (child, index) => {
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+        ]);
+        return { file: files[index], exitCode, stdout, stderr };
+      }));
+      const failures = results.filter(result => result.exitCode !== 0);
+      if (failures.length) throw new Error(failures.map(result =>
+        `${result.file} exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`).join("\n"));
       expect(homeSnapshot(home)).toEqual(before);
     } finally {
       clearTimeout(timeout);
-      if (child.exitCode === null) child.kill();
-      await child.exited;
+      for (const child of children) if (child.exitCode === null) child.kill();
+      await Promise.all(children.map(child => child.exited));
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
