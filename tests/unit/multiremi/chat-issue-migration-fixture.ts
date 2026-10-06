@@ -3,12 +3,12 @@ import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema, runMigrations } from "@multiremi/store/migrations.js";
 
 export const CHAT_ISSUE_MIGRATION = "20260916_chat_issue_decoupling";
 
 /** Build both supported legacy schemas after bootstrapping the other store tables. */
-export function seedLegacyChatIssueFixture(db: SqlDatabase, tableForeignKey = false, migrate = runMigrations): void {
+export function seedLegacyChatIssueFixture(db: SqlDatabase, tableForeignKey = false, migrate = bootstrapPreUnifiedSchema): void {
   migrate(db);
   if (tableForeignKey) {
     const schema = String(db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'multiremi_chat_sessions'").get().sql);
@@ -111,7 +111,7 @@ export function classificationChatId(entry: ClassificationCase): string {
 }
 
 /** Legacy bindings did not persist chat_type, even for explicit p2p threads. */
-export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableForeignKey = false, migrate = runMigrations): void {
+export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableForeignKey = false, migrate = bootstrapPreUnifiedSchema): void {
   seedLegacyChatIssueFixture(db, tableForeignKey, migrate);
   const now = "2026-09-03T00:00:00.000Z";
   for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
@@ -331,7 +331,7 @@ export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new
   expect(store.claimTask(runtime.id)?.id).toBe(next.id);
 }
 
-export function assertLegacyChatWakeRollback(db: SqlDatabase, migrate = runMigrations): void {
+export function assertLegacyChatWakeRollback(db: SqlDatabase, migrate = bootstrapPreUnifiedSchema): void {
   const wrapped = new Proxy(db, {
     get(target, property) {
       if (property === "run") return (sql: string, params?: unknown[]) => {
@@ -571,6 +571,18 @@ export function assertWakeInvariantMatrix(db: SqlDatabase): void {
   // #3: S4 requires an explicitly drained pre-unified snapshot.
   db.run("UPDATE multiremi_tasks SET status='cancelled', completed_at=? WHERE status IN ('queued','dispatched','running','awaiting_human','waiting_local_directory')", [new Date().toISOString()]);
   db.run("UPDATE multiremi_task_steer_messages SET consumed_at=? WHERE consumed_at IS NULL", [new Date().toISOString()]);
+  if (db.dialect === "sqlite") {
+    // Negative destination cases intentionally contain dangling foreign keys.
+    // Cutover refuses that snapshot; remove the already-asserted corrupt fixtures
+    // before exercising the valid drained runtime below.
+    expect(() => runMigrations(db)).toThrow("foreign key check failed");
+    let invalid = db.query("PRAGMA foreign_key_check").all();
+    while (invalid.length) {
+      for (const row of invalid) db.run(`DELETE FROM "${row.table}" WHERE rowid=?`, [row.rowid]);
+      invalid = db.query("PRAGMA foreign_key_check").all();
+    }
+    expect(invalid).toEqual([]);
+  }
   const store = new MultiremiStore(db);
   const next = store.createTask({ agentId: "agt_chat_migration", workspaceId: "local",
     chatSessionId: "chat_matrix_null_no_push_null", prompt: "Cold start after explicit unbind without pushes" });

@@ -55,6 +55,13 @@ export function sentTask(store: MultiremiStore, result: { turn_id?: string }) {
   return store.getTask(turn.current_attempt_id)!;
 }
 
-export function mutateExecutionFixture(db: SqlDatabase | Database, sql: string, ...args: unknown[]) {
-  return runTurnExecutionMutation(db as unknown as SqlDatabase, sql, ...args);
+export function mutateExecutionFixture(source: SqlDatabase | Database | MultiremiStore, sql: string, ...args: unknown[]) {
+  if ("getTask" in source) {
+    const { db, ctx } = source as unknown as { db: SqlDatabase; ctx: import("@multiremi/store/context.js").StoreContext };
+    return db.transaction(() => {
+      ctx.lockWorkspaceRuntimeLifecycle("local");
+      return runTurnExecutionMutation(db, sql, ...args);
+    })();
+  }
+  return runTurnExecutionMutation(source as unknown as SqlDatabase, sql, ...args);
 }

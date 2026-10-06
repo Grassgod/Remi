@@ -27,6 +27,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 import { createId } from "@multiremi/ids.js";
 import type {
   MultiremiAgent,
@@ -45,6 +47,15 @@ let previousFetch: typeof globalThis.fetch | null = null;
 export function createStore(): MultiremiStore {
   db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
+}
+
+/** An offline snapshot; construct the current Store only after seeding/draining it. */
+export function createHistoricalDatabase(): Database {
+  db = openSqliteDatabase(":memory:");
+  bootstrapPreUnifiedSchema(db);
+  historicalWriters(db);
+  db.run("UPDATE multiremi_workspace_members SET role='owner' WHERE id='mem_local_local'");
+  return db;
 }
 
 /** `createStore()` plus the seeded `local` workspace, for surfaces that assume it exists. */
