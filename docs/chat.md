@@ -79,7 +79,8 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 队列是未读消息，按 seq 顺序读取。未读消息可编辑或删除，已进入轮输入的消息修改返回 409；编辑和删除留下日志标记。收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
 输入框在发送失败时保留草稿，删除失败时保持会话选择。
 
-聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文；无法续接时，Remi 使用有预算的聊天历史投影，
+聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文，输入范围从当前 agent lane 的实际读游标开始，
+包含尚未读取的请求和编辑后的 next_turn 正文，过滤已删除消息；无法续接时，Remi 使用有预算的聊天历史投影，
 截断会被标识。不能据此承诺每轮携带完整历史或底层工具的全部工作记忆。
 
 自动终态回复发给 Chat 创建者的工作区成员，成功结果和最终失败均进入该成员的收件箱。
@@ -123,3 +124,6 @@ remi turn list --chat <chat>
 [Chat 视图](../frontend/packages/views/chat) 与 [core/chat](../frontend/packages/core/chat)。
 验证方法遵循[测试指南](../TESTING.md)；`bun run smoke:chat` 启动隔离浏览器测试。
 单元测试、浏览器冒烟和真实 provider 执行分别报告结果。
+`tests/integration/daemon-protocol-v2/chat-unread-consumption.test.ts` 使用隔离的真实 daemon、API、SQLite、
+ACP 子进程与 CLI 范围读取，回归连续 warm 输入和 next_turn 编辑/删除的消息 ID、正文哈希、读取次数与持久回执。
+该测试使用测试 provider，不调用真实模型，也不代替 PPE 或浏览器验收。

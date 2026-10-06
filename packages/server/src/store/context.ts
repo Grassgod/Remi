@@ -719,6 +719,9 @@ export interface ChatSurface {
 }
 
 export interface ConversationLogSurface {
+  getSessionAgentReadProgress(
+    sessionId: string, agentId: string, attemptId?: string,
+  ): import("@multiremi/store/repos/conversation-log-repo.js").SessionAgentReadProgress;
   recordTurnCardCompletionFieldsWithinTransaction(
     taskId: string,
     fields: import("@multiremi/contracts/daemon-protocol.js").DaemonTaskCompletionFields | null,

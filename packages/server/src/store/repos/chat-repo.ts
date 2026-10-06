@@ -554,10 +554,10 @@ export class ChatRepo {
         targetAgentId: task.agentId,
         events,
         expandableSeqs,
-        // createTask persists session_id only when resolveTaskAffinity concluded
-        // that this exact provider lineage is resumable. Stored Chat messages are
-        // already in that lineage; the current request is rendered separately.
-        cursorSeq: warmProviderSessionId ? events.at(-1)?.seq ?? 0 : 0,
+        // Provider affinity permits resuming; only this reader's actual cursor
+        // establishes which queued requests that provider has already consumed.
+        cursorSeq: warmProviderSessionId
+          ? this.ctx.conversationLog().getSessionAgentReadProgress(session.id, task.agentId, task.id).seq : 0,
         providerSessionId: warmProviderSessionId,
         tokenBudget,
         currentTaskId: task.id,
