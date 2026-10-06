@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Agent, Attachment, IssueSession, MemberWithUser, TimelineEntry } from "@multiremi/core/types";
 import { useCreateComment, useUpdateComment, useDeleteComment, useResolveComment, useToggleCommentReaction } from "@multiremi/core/issues/comment-mutations";
 import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
 import { useActivityPreferences } from "@multiremi/core/issues/stores";
 import { Switch } from "@multiremi/ui/components/ui/switch";
-import { IssueActivityEntrySchema, SessionLogEntrySchema, type IssueLogBootstrap, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
+import { IssueActivityEntrySchema, type IssueLogBootstrap, type SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { AttachmentSchema, ReactionSchema } from "@multiremi/core/api/schemas";
 import { parseStrictResponse } from "@multiremi/core/api/schema";
 import { useWSEvent } from "@multiremi/core/realtime";
@@ -34,6 +34,7 @@ import { firstTaskResponses, isSystemDetail } from "./issue-log-presentation";
 import { IssueTaskPromptDialog } from "./issue-task-prompt-dialog";
 import { activityTrails, groupEvents, placeActivities } from "../utils/issue-activity-presentation";
 import { IssueActivityTrail } from "./issue-activity-trail";
+import { buildLogRowModel, TrailSignatureCache } from "../utils/log-row-model";
 
 export const STICK_PIN_THRESHOLD_PX = 24;
 
@@ -79,6 +80,9 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
   const withActivity = activeIssueSession?.is_default === true;
   const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, requestedCommentId ?? undefined, false, true, withActivity);
+  const rowModel = useMemo(() => buildLogRowModel(snapshot.entries), [snapshot.entries]);
+  const commentsById = useMemo(() => new Map(rowModel.rows.filter(row => row.kind === "message" && !isSystemDetail(row))
+    .map(row => [row.id, logRowToComment(row)])), [rowModel]);
   const activeCommentId = replica.missingCommentId === requestedCommentId ? null : requestedCommentId;
   const displayVisit = JSON.stringify([issueId, sessionId, currentUserId, activeCommentId]);
   const [manualDetails, setManualDetails] = useState<{ visit: string; value: boolean } | null>(null);
@@ -126,7 +130,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     ...agents.map(agent => [`agent:${agent.id}`, agent.name] as const),
     ...members.flatMap(member => [[`member:${member.user_id}`, member.name], [`member:${member.id}`, member.name]] as const),
   ]), [agents, members]);
-  const getActorName = (type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "";
+  const getActorName = useCallback((type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "", [actorNames]);
   const [promptRow, setPromptRow] = useState<SessionLogRow | null>(null);
   const [revealedVisit, setRevealedVisit] = useState<string | null>(null);
   const revealed = revealedVisit === displayVisit;
@@ -136,7 +140,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   }, [displayVisit, onContentReady]);
   const responseDecisions = useRef(new Map<string, SessionLogRow | null>());
   const { responseTurns, taskAgents } = useMemo(() => {
-    const rows = snapshot.entries.map(entry => SessionLogEntrySchema.parse(entry));
+    const rows = rowModel.rows;
     const candidates = firstTaskResponses(rows);
     const loadedIds = new Set(rows.map(row => row.id));
     const responseTurns = new Map<string, SessionLogRow>();
@@ -152,12 +156,13 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       if (turn && loadedIds.has(turn.id)) responseTurns.set(row.id, turn);
     }
     return { responseTurns, taskAgents };
-  }, [snapshot.entries, sessionId]);
+  }, [rowModel, sessionId]);
   const groupChoices = useRef(new Map<string, { expanded: boolean; showOlder: boolean; truncateOlder: boolean }>());
   const revealedGroups = useRef(new Set<string>());
   const [groupVersion, setGroupVersion] = useState(0);
+  const trailSignatures = useRef(new TrailSignatureCache());
   const presentation = useMemo(() => {
-    const rows = snapshot.entries.map(entry => SessionLogEntrySchema.parse(entry));
+    const rows = rowModel.rows;
     const view = activityTrails(groupEvents(placeActivities(rows, withActivity ? replica.window?.activities ?? [] : [], showSystemDetails)));
     for (const groups of view.trailers.values()) for (const group of groups) {
       const key = `${sessionId}:${group.id}`;
@@ -170,24 +175,27 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       }
     }
     return view;
-  }, [snapshot.entries, replica, withActivity, showSystemDetails, sessionId, activeCommentId, displayVisit, groupVersion]);
-  const transformEntries = useCallback((_entries: readonly SessionLogEntry[]) => presentation.entries.map(entry => {
+  }, [rowModel, replica, withActivity, showSystemDetails, sessionId, activeCommentId, displayVisit, groupVersion]);
+  const transformedEntries = useMemo(() => {
+    trailSignatures.current.retain(new Set(presentation.entries.map(entry => `${sessionId}:${entry.id}`)));
+    return presentation.entries.map(entry => {
       const trails = presentation.trailers.get(entry.id) ?? [];
-      const signature = trails.length ? `:trail:${JSON.stringify(trails.map(group => [group.id, groupChoices.current.get(`${sessionId}:${group.id}`), group.events.map(event =>
-        [event.entry.id, event.entry.created_at, event.kind === "log" ? event.entry.revision : [event.entry.details, event.entry.coalesced_count]])]))}` : "";
+      const signature = trailSignatures.current.signature(`${sessionId}:${entry.id}`, trails, id => groupChoices.current.get(`${sessionId}:${id}`));
       const capSignature = entry.seq === 0 ? `:activity-cap:${Boolean(replica.window?.activities_truncated)}` : "";
       entry = { ...entry, render_version: `${entry.render_version ?? ""}${signature}${capSignature}` };
       if (entry.seq > 0 && (entry.kind !== "message" || isSystemDetail(entry))) return eventLayoutEntry(entry);
       return responseTurns.has(entry.id) ? { ...entry, render_version: `${entry.render_version ?? ""}:issue-response-v1` } : entry;
-    }), [presentation, responseTurns, sessionId, replica]);
+    });
+  }, [presentation, responseTurns, sessionId, replica]);
+  const transformEntries = useCallback((_entries: readonly SessionLogEntry[]) => transformedEntries, [transformedEntries]);
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const [paging, setPaging] = useState(false);
   const resolved = useResolvedThreads();
   const create = useCreateComment(issueId, sessionId);
-  const update = useUpdateComment(issueId, sessionId);
-  const remove = useDeleteComment(issueId, sessionId);
-  const resolve = useResolveComment(issueId, sessionId);
-  const reaction = useToggleCommentReaction(issueId, sessionId);
+  const { mutateAsync: update } = useUpdateComment(issueId, sessionId);
+  const { mutateAsync: remove } = useDeleteComment(issueId, sessionId);
+  const { mutateAsync: resolve } = useResolveComment(issueId, sessionId);
+  const { mutateAsync: reaction } = useToggleCommentReaction(issueId, sessionId);
   const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
   useEffect(() => {
     if ((!sessionId && !sessionsPending) || (error && !snapshot.ready)
@@ -212,10 +220,10 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     if (parsed.success) replica.appendActivity(parsed.data);
   }, [withActivity, issueId, replica]);
   useWSEvent("activity:created", onActivity);
-  const run = async (action: () => Promise<unknown>) => {
+  const run = useCallback(async (action: () => Promise<unknown>) => {
     try { await action(); await replica.refreshVisible(); }
     catch (error) { toast.error(error instanceof Error ? error.message : t($ => $.comment.update_failed)); throw error; }
-  };
+  }, [replica, t]);
   const earlier = async () => {
     setPaging(true);
     try { await replica.earlier(); } catch { toast.error(t($ => $.comment.update_failed)); }
@@ -232,6 +240,35 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     catch { toast.error(t($ => $.comment.update_failed)); }
     finally { setPaging(false); }
   };
+  const renderedRows = useMemo(() => {
+    const renderRow = (row: SessionLogRow): ReactNode => {
+      if (row.seq === 0) return <IssueLogHead issueId={issueId} title={issueTitle} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
+      if (row.kind !== "message" || isSystemDetail(row)) {
+        if (row.metadata.type === "workspace_move_cleared") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
+          {formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
+            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)}
+        </div>;
+        return <IssueLogEventRow row={row} getActorName={getActorName} taskAgents={taskAgents}
+          results={resultsById} onShowKeyResults={onShowKeyResults} onOpenTask={setPromptRow} />;
+      }
+      const comment = commentsById.get(row.id)!;
+      if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
+      const parentRow = row.parent_id ? rowModel.byId.get(row.parent_id) : null;
+      return <CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentUserId}
+        canModerate={canModerateComments} onStartReply={setReplyTo}
+        assignmentRef={responseTurns.has(row.id) ? { title: eventSummary(responseTurns.get(row.id)!.body_md), onOpen: () => setPromptRow(responseTurns.get(row.id)!) } : undefined}
+        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}
+        hasReplies={rowModel.parentsWithReplies.has(row.id)}
+        onNavigateToParent={id => document.getElementById(`comment-${id}`)?.scrollIntoView({ block: "center" })}
+        onEdit={(id, content, attachmentIds) => run(() => update({ commentId: id, content, attachmentIds }))}
+        onDelete={id => run(() => remove(id))}
+        onResolveToggle={(id, value) => { resolved.clear(id); void run(() => resolve({ commentId: id, resolved: value })); }}
+        onCollapseResolved={row.resolved_at ? () => resolved.toggle(row.id, false) : undefined}
+        onToggleReaction={(id, emoji) => run(() => reaction({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentUserId) }))} />;
+    };
+    return new Map(rowModel.rows.map(row => [row.id, renderRow(row)]));
+  }, [rowModel, commentsById, issueId, issueTitle, currentUserId, canModerateComments, replica, getActorName, taskAgents, resultsById, onShowKeyResults, responseTurns, resolved.expanded, resolved.toggle, resolved.clear, run, update, remove, resolve, reaction, t]);
+  const renderLogEntry = useCallback(({ entry }: { entry: SessionLogEntry }) => renderedRows.get(entry.id), [renderedRows]);
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <><SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
@@ -273,33 +310,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         onToggle={() => { choice.expanded = !choice.expanded; setGroupVersion(version => version + 1); }}
         onShowOlder={() => { choice.showOlder = true; setGroupVersion(version => version + 1); }} />;
     })}</>}
-    renderEntry={({ entry }) => {
-      const row = SessionLogEntrySchema.parse(entry);
-      if (row.seq === 0) return <IssueLogHead issueId={issueId} title={issueTitle} entry={row} currentUserId={currentUserId} onSaved={() => replica.refreshHead()} />;
-      if (row.kind !== "message" || isSystemDetail(row)) {
-        if (row.metadata.type === "workspace_move_cleared") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
-          {formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
-            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)}
-        </div>;
-        return <IssueLogEventRow row={row} getActorName={getActorName} taskAgents={taskAgents}
-          results={resultsById} onShowKeyResults={onShowKeyResults} onOpenTask={setPromptRow} />;
-      }
-      const comment = logRowToComment(row);
-      if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
-      const parent = snapshot.entries.find(e => e.id === row.parent_id);
-      const parentRow = parent ? SessionLogEntrySchema.parse(parent) : null;
-      return <CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentUserId}
-        canModerate={canModerateComments} onStartReply={setReplyTo}
-        assignmentRef={responseTurns.has(row.id) ? { title: eventSummary(responseTurns.get(row.id)!.body_md), onOpen: () => setPromptRow(responseTurns.get(row.id)!) } : undefined}
-        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}
-        hasReplies={snapshot.entries.some(e => SessionLogEntrySchema.parse(e).parent_id === row.id)}
-        onNavigateToParent={id => document.getElementById(`comment-${id}`)?.scrollIntoView({ block: "center" })}
-        onEdit={(id, content, attachmentIds) => run(() => update.mutateAsync({ commentId: id, content, attachmentIds }))}
-        onDelete={id => run(() => remove.mutateAsync(id))}
-        onResolveToggle={(id, value) => { resolved.clear(id); void run(() => resolve.mutateAsync({ commentId: id, resolved: value })); }}
-        onCollapseResolved={row.resolved_at ? () => resolved.toggle(row.id, false) : undefined}
-        onToggleReaction={(id, emoji) => run(() => reaction.mutateAsync({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentUserId) }))} />;
-    }}
+    renderEntry={renderLogEntry}
     footer={<>
       {activeCommentId && <div className="flex h-8 items-center gap-4 text-xs">
         {replica.window?.has_more_after && <button type="button" data-log-newer disabled={paging} className="text-muted-foreground hover:text-foreground" onClick={() => void newer()}>
