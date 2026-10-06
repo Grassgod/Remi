@@ -128,8 +128,12 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   ]), [agents, members]);
   const getActorName = (type: string, id: string) => actorNames.get(`${type}:${id}`) ?? "";
   const [promptRow, setPromptRow] = useState<SessionLogRow | null>(null);
-  const [tasksReadySessionId, setTasksReadySessionId] = useState("");
-  const onTasksReady = useCallback(() => setTasksReadySessionId(sessionId), [sessionId]);
+  const [revealedVisit, setRevealedVisit] = useState<string | null>(null);
+  const revealed = revealedVisit === displayVisit;
+  const onRevealed = useCallback(() => {
+    setRevealedVisit(displayVisit);
+    onContentReady?.();
+  }, [displayVisit, onContentReady]);
   const responseDecisions = useRef(new Map<string, SessionLogRow | null>());
   const { responseTurns, taskAgents } = useMemo(() => {
     const rows = snapshot.entries.map(entry => SessionLogEntrySchema.parse(entry));
@@ -232,9 +236,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <><SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
     transformEntries={transformEntries}
-    onRevealed={onContentReady}
+    onRevealed={onRevealed}
     perfScroll="issue-detail" latestAnchor="latest-comment"
-    contentReady={initialLog?.sessionId === sessionId || tasksReadySessionId === sessionId}
     anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
     onReturnToLatest={activeCommentId ? () => void returnLatest() : undefined}
     initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
@@ -252,11 +255,13 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
           <span>{t($ => $.log_event.show_system_details)}</span>
           <Switch size="sm" checked={showSystemDetails} onCheckedChange={toggleSystemDetails} aria-label={t($ => $.log_event.show_system_details)} />
         </div>
-        <IssueSubscribersControl issueId={issueId} currentUserId={currentUserId} members={members} agents={agents} />
+        <div className="h-6 min-w-16">{revealed && <IssueSubscribersControl issueId={issueId} currentUserId={currentUserId} members={members} agents={agents} />}</div>
       </div>
-      <LocalDirectoryHint projectId={projectId} />
-      <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
-        onInitialReconcile={onTasksReady} />
+      <LocalDirectoryHint projectId={projectId} enabled={revealed} reserveSlot />
+      <div className="min-h-20" data-agent-card-slot>
+        <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
+          reconcileEnabled={revealed} />
+      </div>
       {replica.window?.activities_truncated && <div className="flex h-8 items-center text-xs text-muted-foreground">{t($ => $.activity.recent_limit)}</div>}
     </>}
     {presentation.trailers.get(entry.id)?.map(group => {
@@ -304,7 +309,9 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
           {t($ => $.activity.jump_to_latest)}
         </button>
       </div>}
-      <SessionAgentStreamRow issueId={issueId} issueSessionId={sessionId} />
+      <div className="min-h-16" data-agent-stream-slot>
+        {revealed && <SessionAgentStreamRow issueId={issueId} issueSessionId={sessionId} />}
+      </div>
       <div className="mt-4 min-h-32"><CommentInput key={`${issueId}:${sessionId}`} issueId={issueId} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
         placeholder={activeIssueSession ? t($ => $.comment.comment_in_session_placeholder, { session: getSessionDisplayName(t, activeIssueSession) }) : undefined}
         onSubmit={async (content, attachmentIds) => { await run(() => create.mutateAsync({ content, parentId: replyTo?.commentId, attachmentIds })); setReplyTo(null); }} /></div>

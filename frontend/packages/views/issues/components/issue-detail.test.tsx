@@ -722,6 +722,19 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
+  it("reveals without active-task reconciliation and starts optional reads afterwards", async () => {
+    const phases: Array<{ endpoint: string; state: string | null }> = [];
+    const record = (endpoint: string) => phases.push({ endpoint, state: document.querySelector("[data-perf-scroll='issue-detail']")?.getAttribute("data-perf-state") ?? null });
+    mockApiObj.getActiveTasksForIssue.mockImplementation(() => { record("active-task"); return new Promise(() => {}); });
+    mockApiObj.listIssueSubscribers.mockImplementation(async () => { record("subscribers"); return []; });
+    renderIssueDetail();
+    await waitFor(() => expect(document.querySelector("[data-perf-scroll='issue-detail']")).toHaveAttribute("data-perf-state", "ready"));
+    await waitFor(() => expect(phases.map(p => p.endpoint)).toEqual(expect.arrayContaining(["active-task", "subscribers"])));
+    expect(phases.every(p => p.state === "ready")).toBe(true);
+    expect(document.querySelector("[data-agent-card-slot]")).toHaveClass("min-h-20");
+    expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("min-h-16");
+  });
+
   it("keeps the detail skeleton until member and child gates resolve", async () => {
     let resolveMembers!: (members: Array<{ user_id: string; name: string; email: string; role: string }>) => void;
     let resolveChildren!: (value: { issues: Issue[] }) => void;

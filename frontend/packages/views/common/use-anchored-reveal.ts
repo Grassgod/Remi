@@ -64,6 +64,12 @@ function pendingImages(scrollEl: HTMLElement): HTMLImageElement[] {
   const waiting: HTMLImageElement[] = [];
   for (const image of scrollEl.querySelectorAll("img")) {
     if (image.complete) continue;
+    // A sized image already owns its layout slot; decoding cannot move the anchor.
+    const style = scrollEl.ownerDocument.defaultView?.getComputedStyle(image);
+    const hasDimensions = (image.width > 0 && image.height > 0)
+      || (image.naturalWidth > 0 && image.naturalHeight > 0)
+      || (style?.aspectRatio && style.aspectRatio !== "auto");
+    if (hasDimensions) continue;
     const rect = image.getBoundingClientRect();
     if (rect.bottom > rootRect.top && rect.top < rootRect.bottom) waiting.push(image);
   }

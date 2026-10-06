@@ -37,14 +37,23 @@ so the mechanism cannot be owned by the issue timeline component.
 1. **Hide, then position once.** The activity content stays
    `visibility: hidden` (layout preserved, so it can be measured) until five
    gates hold, then a single frame positions the scroll root and reveals it:
-   data ready, list layout settled (for the flat deep-link path, trivially
+   data ready (Issue, sessions and the target log window), list layout settled (for the flat deep-link path, trivially
    true), target position stable for two consecutive animation frames, images
-   inside the viewport complete or `imageWaitMs` elapsed, and the reveal budget
+   without intrinsic dimensions inside the viewport complete or `imageWaitMs` elapsed, and the reveal budget
    not exhausted. The budget is 800 ms by default; the main branch's flat
    deep-link path passes 1500 ms because a 250-comment page mounts every row
    synchronously there. Exhausting the budget still reveals, but publishes
    `data-perf-state="ready-forced"` and warns; CI and S1 treat `ready-forced`
    as a failure, so it is a diagnostic, not a fallback that counts as passing.
+
+   S9-6 (MUL-395) removes the live card's initial reconcile from the data gate.
+   Cached tasks can paint the card shell; `active-task`, subscribers and local
+   directory resources are reconciled after reveal. The card, subscriber control,
+   local hint and running row reserve layout slots before their late content
+   arrives. A running page's measurement endpoint remains the actual visible,
+   stable agent-stream row after reveal; an earlier ready attribute alone is
+   insufficient. Late growth beyond the reserved slot uses the same pin state
+   machine, including released readers and element anchors.
 
 2. **Stick to the bottom after the reveal.** A separate state machine
    (`pinned | released | returning`) compensates for content that arrives
