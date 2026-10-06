@@ -13,8 +13,24 @@ import { configureRepositoryWikiAutomation, createLocalStore as createStore, db,
 import { captureReports } from "../../fixtures/report-session.js";
 import { readOfferedTurnInput } from "../../fixtures/turn-report.js";
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
+
+pendingTurnBackendTests("Comment reply routing", fixture => {
+  it("keeps the canonical reply when routing an existing comment to an agent", () => {
+    const { store } = fixture();
+    const agent = store.createAgent({ name: "Reply reader", provider: "codex" });
+    const issue = store.createIssue({ title: "Reply route", assigneeType: "agent", assigneeId: agent.id });
+    const root = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "thread root" });
+    const reply = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "thread reply", parentId: root.id });
+    const message = store.getMessage(reply.id)!;
+    store.sendMessage({ id: reply.id, session_id: message.session_id, sender: { type: "member", id: "mem_local_local" },
+      to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: message.body_md });
+    expect(store.getMessage(reply.id)?.reply_to_id).toBe(root.id);
+    expect(store.listMessages(message.session_id, { thread: root.id }).map(entry => entry.id)).toEqual([root.id, reply.id]);
+  });
+});
 
 async function readOfferHistory(app: ReturnType<typeof createMultiremiApp>, wire: any): Promise<Array<{
   body_md: string; metadata: Record<string, unknown>;

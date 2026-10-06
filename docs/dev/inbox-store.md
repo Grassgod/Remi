@@ -14,6 +14,8 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 消息头在发送时冻结收件人。`source_turn_id` 验证发件轮的 agent 和工作区；`reply_to_id` 必须属于原对话。角色可能选择父单或委派来源对话。agent request 只有源为 Issue 轮、非旁支、目标在 Issue 上时才产生委派；符合条件的所有方向均为 `now / agent_dispatch`。self、不运行的收件人、依赖、来源和目标前置优先于派活规则。超过 `countDelegationPairHops` 的 `2L` 边界时消息保留，降为 `next_turn / pair_round_trip_limit`，不建或合并轮，说明通知和活动在同事务记录。L 默认 5，由 `MULTIREMI_AGENT_PAIR_ROUND_TRIP_LIMIT` 调整。
 
+评论追加收件人时会按原 ID 重新寻址。调用方未提供 `reply_to_id` 时保留已有回复引用，显式传入 `null` 才清空；引用仍须通过同对话验证，评论线程和 daemon 输入使用同一引用。
+
 用户 HTTP 发送会传入内部 `authorizeRecipient` 回调，在持有 workspace 锁且解析最终角色 agent 后、写消息之前执行访问检查。拒绝会回滚同事务上传的附件行，上传包装器清理文件。该回调不属于请求体或公共消息合约。提问答复进入 `answerMessageDecision` 后，permission/question response 先按原提问结构规范化并验证，包括嵌套 AskUserQuestion；answers 按问题文本绑定。超时保持 timeout，外部取消保持 cancelled；答复、来源 Issue 推导和事件复用最外层事务，PG 不另开 savepoint。无效结构不会消费请求或卡片 token。
 
 平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；完成路径只解析一次结论评论快照，重放沿用同一来源 ID。谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。

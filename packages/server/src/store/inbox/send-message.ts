@@ -57,6 +57,9 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     ??(sessionId.startsWith('auto_orphan_')&&createInput.id?createInput.workspaceId:null);
   if(!workspaceId)throw new Error('Message conversation not found');
   ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+  const existing=input.id?getMessage(ctx,input.id):null;
+  // Adding a recipient to an existing comment must preserve its reply link.
+  if(existing && input.reply_to_id===undefined)input={...input,reply_to_id:existing.reply_to_id};
   const issue=originalSession?ctx.issues().getIssue(originalSession.issueId):null;
   let source=input.source_turn_id?ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(input.source_turn_id):null;
   if(input.source_turn_id&&!source)throw new Error('Source turn not found');
@@ -171,7 +174,6 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     const key=metadata.human_request?'human_request':'decision_record';
     metadata[key]={status:'pending',...(metadata[key] as object)};
   }
-  const existing=input.id?getMessage(ctx,input.id):null;
   if(existing&&(existing.session_id!==sessionId||existing.sender_type!==input.sender.type||existing.sender_id!==input.sender.id))throw new Error('Cannot readdress a message owned by another sender');
   let entry;
   if(existing){
