@@ -48,6 +48,11 @@ import { inboxReportEntry } from "./inbox-test-assertions.js";
 
 import { CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, seedLegacyChatIssueClassificationFixture, seedLegacyChatWakeFixture, assertLegacyChatWakeSettlement, assertCancelledLegacyWakesCannotRun, assertLegacyChatWakeRollback, mintLegacyWakeTokens, assertLegacyWakeTokens, seedWakeInvariantMatrix, assertWakeInvariantMatrix, seedLegacyProactiveRetryMatrix, assertLegacyProactiveRetryMatrix } from "./chat-issue-migration-fixture.js";
 
+function workerEnv(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
+
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
 describe("translateSqliteToPg", () => {
@@ -2276,8 +2281,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
 
     const workerUrl = new URL("./fixtures/postgres-workspace-lease-claim-worker.ts", import.meta.url).href;
-    const firstWorker = new Worker(workerUrl);
-    const secondWorker = new Worker(workerUrl);
+    const firstWorker = new Worker(workerUrl, { env: workerEnv() });
+    const secondWorker = new Worker(workerUrl, { env: workerEnv() });
     const firstReady = waitForWorkerPhase(firstWorker, "ready");
     const secondReady = waitForWorkerPhase(secondWorker, "ready");
     const databaseUrl = pgDatabaseUrl(TEST_DB);
@@ -3120,6 +3125,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     const worker = new Worker(
       new URL("./fixtures/postgres-terminal-issue-worker.ts", import.meta.url).href,
+      { env: workerEnv() },
     );
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
@@ -3160,6 +3166,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     const worker = new Worker(
       new URL("./fixtures/postgres-session-projection-worker.ts", import.meta.url).href,
+      { env: workerEnv() },
     );
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
@@ -3189,6 +3196,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const fixture = createDelegationFixture();
     const worker = new Worker(
       new URL("./fixtures/postgres-comment-edit-worker.ts", import.meta.url).href,
+      { env: workerEnv() },
     );
     const ready = waitForWorkerPhase(worker, "ready");
     worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB) });
@@ -3243,6 +3251,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const { workspaceId, task } = createRunningSteerTask();
     const worker = new Worker(
       new URL("./fixtures/postgres-steer-race-worker.ts", import.meta.url).href,
+      { env: workerEnv() },
     );
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
@@ -3271,6 +3280,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const { workspaceId, task } = createRunningSteerTask();
     const worker = new Worker(
       new URL("./fixtures/postgres-steer-race-worker.ts", import.meta.url).href,
+      { env: workerEnv() },
     );
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
@@ -3586,7 +3596,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const barrierDir = mkdtempSync(join(tmpdir(), "mul409-conc-"));
       const barrier = join(barrierDir, "go");
       const workers = [first, second].map((issue) => {
-        const worker = new Worker(workerUrl, { type: "module" });
+        const worker = new Worker(workerUrl, { type: "module", env: workerEnv() });
         worker.postMessage({ type: "init", databaseUrl, issueId: issue.id, barrierPath: barrier });
         return worker;
       });
@@ -4565,7 +4575,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const barrier = join(barrierDir, "go");
       const databaseUrl = pgDatabaseUrl(TEST_DB);
       const workers: Array<{ worker: Worker; ready: Promise<void>; done: Promise<void> }> = ["force", "auto"].map((role) => {
-        const worker = new Worker(workerUrl, { type: "module" });
+        const worker = new Worker(workerUrl, { type: "module", env: workerEnv() });
         // Arm both phases before the init message, so a fast reply is never lost.
         const ready = armWorkerPhase(worker, "ready");
         const done = armWorkerPhase(worker, "done");

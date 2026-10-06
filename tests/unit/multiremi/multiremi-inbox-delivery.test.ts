@@ -835,7 +835,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
     }, 30_000);
 
     for (const wake of ["now", "next_turn", "inbox_only", "self_now"] as const) {
-      test(`${backend}: Chat ${wake} during a turn never creates an Issue re-ring`, async () => {
+      test(`${backend}: Chat ${wake} during a turn rerings unread now in Chat only`, async () => {
         await withStore(backend, (store, db) => {
           store.ensureLocalWorkspace();
           const runtime = store.registerRuntime({ name: "Chat runtime", provider: "codex" });
@@ -859,8 +859,13 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           store.completeTask(task.id, { output: "Task completed.", sessionId: "chat_provider" });
           expect(store.listTasks().filter(row => row.chatSessionId === chat.id && row.wakeSource === "re_ring"))
             .toHaveLength(0);
-          expect(store.listTasks().filter(row => row.chatSessionId === chat.id && row.status === "queued"))
-            .toHaveLength(0);
+          const pending = store.listTasks().filter(row => row.chatSessionId === chat.id && row.status === "queued");
+          expect(pending).toHaveLength(wake === "now" ? 1 : 0);
+          if (wake === "now") {
+            expect(pending[0]!.issueId).toBeNull();
+            expect(store.getTurnForAttempt(pending[0]!.id)?.session_id).toBe(chat.id);
+            expect(pending[0]!.prompt).toBe("Chat report");
+          }
         });
       }, 30_000);
     }

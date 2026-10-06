@@ -131,7 +131,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     const mention = /mention:\/\/(agent|squad)\/([^\s)]+)/.exec(input.body_md);
     const mentionedAgent = mention?.[1] === 'squad' ? ctx.squads().getSquad(mention[2]!)?.leaderId : mention?.[2];
     const actor = ctx.workspaces().getWorkspaceMember(input.sender.id!);
-    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.id ?? input.sender.id! };
+    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.userId ?? input.sender.id! };
     createInput = { ...createInput, dependencyForce: force };
   }
   const sourceSession=source?ctx.issueSessions().getIssueSession(source.session_id):null;

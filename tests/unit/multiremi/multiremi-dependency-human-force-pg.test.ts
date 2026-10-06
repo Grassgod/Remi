@@ -14,6 +14,11 @@ const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
 const TEST_DB = `multiremi_mul458_pg_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
 
+function workerEnv(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
+
 function pgDatabaseUrl(database: string): string {
   const url = new URL(PG_ADMIN_URL);
   url.pathname = `/${database}`;
@@ -349,7 +354,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const barrierPath = join(barrierDir, "go");
     const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
     const entries = roles.map((role) => {
-      const worker = new Worker(workerUrl, { type: "module" });
+      const worker = new Worker(workerUrl, { type: "module", env: workerEnv() });
       const ready = workerPhase(worker, "ready");
       const done = workerPhase<WorkerResult>(worker, "done");
       // A ready-stage failure also rejects done; handle it until both are awaited.

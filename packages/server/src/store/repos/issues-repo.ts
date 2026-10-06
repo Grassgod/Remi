@@ -5120,7 +5120,7 @@ export class IssuesRepo {
         prompt: assigneeCommentPrompt(comment),
         dependencyForce: {
           source: "comment",
-          actorMemberId: this.ctx.workspaces().getWorkspaceMember(comment.authorId ?? "")?.id
+          actorMemberId: this.ctx.workspaces().getWorkspaceMember(comment.authorId ?? "")?.userId
             ?? comment.authorId ?? "local",
           commentId: comment.id,
         },

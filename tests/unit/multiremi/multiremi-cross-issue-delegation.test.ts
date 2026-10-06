@@ -4,7 +4,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
@@ -29,13 +29,13 @@ function fiveChildFixture(store: MultiremiStore) {
   return { leaderRuntime, workerRuntimes, leader, workers, squad, parent, children, leaderSession, leaderTask };
 }
 
-async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
+async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>): Promise<void> {
   if (backend === "sqlite") {
     const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
-      await run(store);
+      await run(store, db);
     } finally {
       db.close();
     }
@@ -51,7 +51,7 @@ async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiS
     db = new PostgresSyncDatabase(url.toString());
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    await run(store);
+    await run(store, db);
   } finally {
     db?.close();
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
@@ -59,13 +59,19 @@ async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiS
   }
 }
 
-function fixture(store: MultiremiStore) {
-  const leaderRuntime = store.registerRuntime({ name: "Leader runtime", provider: "claude", workspaceId: "local" });
-  const workerRuntime = store.registerRuntime({ name: "Worker runtime", provider: "claude", workspaceId: "local" });
-  const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
-  const worker = store.createAgent({ name: "Worker", provider: "claude", runtimeId: workerRuntime.id });
-  const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
-  const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
+function fixture(store: MultiremiStore, db?: SqlDatabase) {
+  const registerMembers = () => {
+    const leaderRuntime = store.registerRuntime({ name: "Leader runtime", provider: "claude", workspaceId: "local" });
+    const workerRuntime = store.registerRuntime({ name: "Worker runtime", provider: "claude", workspaceId: "local" });
+    const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
+    const worker = store.createAgent({ name: "Worker", provider: "claude", runtimeId: workerRuntime.id });
+    const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
+    return { leaderRuntime, workerRuntime, leader, worker, outsider, squad };
+  };
+  // Batch independent fixture writes; Issue creation owns its transaction and callbacks.
+  const { leaderRuntime, workerRuntime, leader, worker, outsider, squad } =
+    db ? db.transaction(registerMembers)() : registerMembers();
   const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
   const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
@@ -292,8 +298,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.getTurn(store.getTask(childTask.id)!.delegationReturnTaskId!)?.session_id).toBe(f.leaderSession.id);
     }));
 
-    it("merges a failure's blocked report into its queued return", async () => withStore(backend, async (store) => {
-      const f = fixture(store);
+    it("merges a failure's blocked report into its queued return", async () => withStore(backend, async (store, db) => {
+      const f = fixture(store, db);
       const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       finishLeaderRound(store, f);
       expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);

@@ -554,7 +554,7 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
     "SELECT seq AS sequence FROM multiremi_conversation_log WHERE id = ?",
   ).get(id) as { sequence: number | string }).sequence);
   const store = new MultiremiStore(db);
-  const runtime = store.registerRuntime({ name: "Chat timing runtime", provider: "codex", workspaceId: "local" });
+  const runtime = store.registerRuntime({ name: "Chat timing runtime", provider: "codex", workspaceId: "local", daemonId: "chat-timing" });
   const agent = store.createAgent({ name: "Chat timing agent", provider: "codex", workspaceId: "local" });
   const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local" });
   const sent = store.sendChatMessage(chat.id, { content: "Complete me" });
@@ -563,6 +563,15 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
   store.startTask(sent.task.id);
   expect(store.findTurnEntry(sent.task.id)?.metadata.status).toBe("running");
   db.transaction(()=>store.createPendingAgentIssueUpdateWithinTransaction(chat.id, "W10 system update"))();
+  const bridge = store.getDaemonTurnBridge();
+  const input = bridge.offerInput(store.getTaskWithAgent(sent.task.id)!);
+  store.listMessages(chat.id, { from: 0, to: input.input_to_seq });
+  store.recordSessionAgentRangeRead(chat.id, agent.id, { seq: 1, offset: 0 },
+    { seq: input.input_to_seq + 1, offset: 0 }, sent.task.id);
+  expect(bridge.rpc("turn.input", {
+    turn_id: sent.task.turn_id, attempt_id: sent.task.id, input_to_seq: input.input_to_seq,
+    message_ids: input.input_messages.map(message => message.id),
+  }, { workspaceId: "local", runtimeId: runtime.id, daemonId: runtime.daemonId! }).ok).toBe(true);
   store.completeTask(sent.task.id, { output: "Completed answer" });
   const completedMessages = store.listChatMessages(chat.id);
   expect(completedMessages.map((message) => message.body)).toEqual(["Complete me", "W10 system update", "Completed answer"]);
@@ -604,6 +613,7 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
   store.completeTask(retry.id, { output: "Retry answer" });
   const retryTurns = store.listConversationLogEntries(retryChat.id).filter((entry) => entry.kind === "turn");
   expect(retryTurns).toHaveLength(1);
+  expect(retryTurns[0]?.id).toBe(store.getTurnForAttempt(initial.task.id)!.id);
   expect(retryTurns[0]?.task_id).toBe(retry.id);
   const retryAssistant = store.listChatMessages(retryChat.id).find((message) => message.role === "assistant")!;
   expect(retryTurns[0]?.metadata.final_entry_id).toBe(retryAssistant.id);

@@ -260,7 +260,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(delivery.body).toContain("Should I continue?");
     expect(db!.query(
       "SELECT wake_task_id, delivery_id FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
-    ).get(request.id)).toEqual({ wake_task_id: wake.id, delivery_id: null });
+    ).get(request.id)).toEqual({ wake_task_id: wake.id, delivery_id: delivery.id });
   });
 
   it("still degrades to text on a host that cannot render cards", () => {

@@ -50,6 +50,8 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## 状态与迁移
 
+人工强制启动的活动审计沿用认证用户 ID；消息头的 sender_id 使用工作区成员 ID。Chat 终态发布复用该轮已暂存的 reply_message_id，日志只保留一条回复。Chat 与 Issue 共用未读 now 补铃规则，确认输入必须通过规范消息读取及 turn.input 收据。
+
 [deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、业务轮终态的顺序推导。建轮或随后合并的消息包含 human_sender 或 agent_dispatch 时，pending 为 todo，纯平台 pending 保持原状态。执行单的负责人最后一轮 completed/failed/cancelled 分别为 in_review/blocked/todo；无负责人时，不以其它 agent 的终态替代这条规则。intake 不要求负责人，按最后结束的业务轮推导：正常结束且有生成单为 done，并保存 completed_at；没有生成单为 in_review，失败为 blocked，取消为 todo。活跃轮、未答复负责人 decision 和父子守卫优先于 intake 终态。尝试失败、lost、换机、重试不推导 Issue。领取只用已完成业务轮的输入边界淘汰已覆盖的旧叫醒；同轮 replacement 不参与这项淘汰。
 
 依赖闸门遵循 `MULTIREMI_DEPENDENCY_GATE`。成员发给 agent 的 now request 一律由服务端产生 force 标记，同事务保留 `dependency_force_started` 的真实成员、来源、消息/尝试、目标 agent、assigneeDispatched 和前置项审计。实际 rich mention 记录 source=mention，其余统一 request 记录 source=comment；旧 rerun 已迁入 message send，不再从正文推测独立 rerun 意图。HTTP 不接受 force 标记，agent 来信仍降为 next_turn；显式 next_turn/inbox_only 不提升。结构性平台交差绕过依赖门禁，立即叫醒派活人；依赖满足后的自动开工以平台身份发 request，触发消息保留来源轮，避免误判为 agent 自发自收；timer 自动化继续受门禁约束。审计失败回滚消息、轮、状态和事件。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。成员负责人在 member lane 收到 status，失败和阻塞仍显示 warning；无负责人父单保留状态消息及 skip 活动，终态告警仍送给订阅者。

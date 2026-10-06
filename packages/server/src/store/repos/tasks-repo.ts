@@ -6170,9 +6170,7 @@ ${placementAfter.sql}
       const messageBody = status === "completed" ? (body || "Task completed.") : (body || `Task ${status}`);
       const failureReason = status === "failed" ? task.failureReason : null;
       const elapsedMs = computeChatElapsedMs(task);
-      const messageId = createId("msg");
       const message = this.ctx.chat().appendChatMessageWithinTransaction({
-        id: messageId,
         chatSessionId: task.chatSessionId,
         taskId: task.id,
         role,

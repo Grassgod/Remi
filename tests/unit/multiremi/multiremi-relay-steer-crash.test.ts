@@ -8,6 +8,7 @@ import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/post
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
+import { redactDiagnostic } from "../../helpers/two-process.js";
 
 const probePath = new URL("./fixtures/relay-steer-crash-probe.ts", import.meta.url).pathname;
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -57,15 +58,16 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     async function killAt(phase: string, issueId: string): Promise<void> {
       db.close();
       const probe = Bun.spawn([process.execPath, "run", probePath, database, issueId, phase], {
-        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+        stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env },
       });
+      const diagnostic = new Response(probe.stderr).text();
       const reader = probe.stdout.getReader();
       const timeout = setTimeout(() => probe.kill("SIGKILL"), 30_000);
       let output = "";
       try {
         while (!output.split("\n").includes(phase)) {
           const { value, done } = await reader.read();
-          if (done) throw new Error(`Crash probe exited before ${phase}`);
+          if (done) throw new Error(`Crash probe exited before ${phase}: ${redactDiagnostic(await diagnostic)}`);
           output += new TextDecoder().decode(value);
         }
       } finally {
