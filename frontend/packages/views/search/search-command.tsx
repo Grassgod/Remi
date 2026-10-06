@@ -150,7 +150,9 @@ export function SearchCommand() {
   const recentItems = useRecentIssuesStore(selectRecentIssues(wsId));
   const p: WorkspacePaths = useWorkspacePaths();
   const { theme, setTheme } = useTheme();
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  // The palette sits outside the page's SSR cache boundary. Wait until it is
+  // open so it cannot race the detail page's seed during hydration.
+  const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: open });
 
   // Resolve each recent issue via its cached detail entry. Recent items are
   // typically already in the detail cache because the user has opened them;
@@ -197,7 +199,7 @@ export function SearchCommand() {
   }, [pathname]);
   const { data: currentIssue = null } = useQuery({
     ...issueDetailOptions(wsId, currentIssueId ?? ""),
-    enabled: !!currentIssueId,
+    enabled: open && !!currentIssueId,
   });
 
   const commands = useMemo<CommandItem[]>(() => {

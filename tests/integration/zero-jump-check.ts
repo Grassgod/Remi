@@ -70,6 +70,7 @@ import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 import { computeInFlightWaves, preRevealWaveFailure } from "./zero-jump-waves";
+import { startSsrProbe } from "./zero-jump-ssr-proxy";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const WEB_APP_DIR = join(REPO_ROOT, "frontend", "apps", "web");
@@ -177,6 +178,14 @@ function findFreePort(start: number): number {
 }
 
 interface Scenario {
+  csrDelayMs?: number;
+  expectSlowLoading?: boolean;
+  entrySessionId?: string;
+  clickSessionId?: string;
+  prepareSessionId?: string;
+  fastReturn?: boolean;
+  ssrTimeout?: boolean;
+  parentEntryIssueId?: string;
   /** F398 also verifies that all deferred rows remain reachable inside the slot. */
   queuedTasks?: number;
   activityPreference?: boolean;
@@ -186,7 +195,7 @@ interface Scenario {
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
-  entry: "issues-list" | "inbox";
+  entry: "issues-list" | "inbox" | "parent-issue" | "session-issue";
   /** Issue row to click, or the inbox row id for the deep link. */
   clickIssueId: string | null;
   inboxItemId: string | null;
@@ -195,6 +204,7 @@ interface Scenario {
   sidebarWidth: string | null;
   /** The issue the warm click must select; the deep link's `/inbox` click sets it. */
   expectIssueId: string | null;
+  seededParentIssueId?: string;
 }
 
 function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: ImageCase[] = []): Scenario[] {
@@ -231,10 +241,41 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
         path: `/issues/${imageCase.issueId}?comment=${imageCase.commentId}`, targetCommentId: imageCase.commentId,
       } : {}),
     }).filter(scenario => imageCase.kind !== "element" || scenario.mode === "cold")),
-    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId, {
+      seededParentIssueId: fixture.parentIssueId,
+    }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-child-warm") ? detail("detail-child-warm", fixture.waitingChildIssueId, {
+      entry: "parent-issue", parentEntryIssueId: fixture.parentIssueId, seededParentIssueId: fixture.parentIssueId,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-ssr-timeout") ? detail("detail-ssr-timeout", fixture.shortIssueId, {
+      ssrTimeout: true,
+      path: `/issues/${encodeURIComponent(fixture.shortIssueId)}?session=${encodeURIComponent(fixture.shortSessionId)}`,
+    }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-soft-slow") ? detail("detail-soft-slow", fixture.shortIssueId, {
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-switch") ? detail("detail-session-switch", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longSessionIds[1],
+      path: `/issues/${fixture.longIssueId}?session=${fixture.longSessionIds[1]}`,
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-return") ? detail("detail-session-return", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longDefaultSessionId,
+      prepareSessionId: fixture.longSessionIds[1], path: `/issues/${fixture.longIssueId}?session=${fixture.longDefaultSessionId}`,
+      csrDelayMs: 650, expectSlowLoading: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-session-return-fast") ? detail("detail-session-return-fast", fixture.longIssueId, {
+      entry: "session-issue", entrySessionId: fixture.longDefaultSessionId, clickSessionId: fixture.longDefaultSessionId,
+      prepareSessionId: fixture.longSessionIds[1], path: `/issues/${fixture.longIssueId}?session=${fixture.longDefaultSessionId}`,
+      csrDelayMs: 650, fastReturn: true,
+    }).filter(scenario => scenario.mode === "warm") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
       path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
+      targetCommentId: fixture.deepLinkCommentId,
+    }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-locate-default") ? detail("detail-locate-default", fixture.longIssueId, {
+      path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}`,
       targetCommentId: fixture.deepLinkCommentId,
     }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
@@ -288,6 +329,18 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
+  loadingSamples: Array<{ t: number; age: number; id: number; kind: string; visible: boolean }>;
+  preparedSession?: { visibleFrames: number; jumpCount: number | null; anchorVisibleMs: number | null; readyMs: number | null };
+  skeletonFlashFrames: number;
+  ssrSeedStatus: string | null;
+  documentSsrSeedStatus: string | null;
+  rscRequestCount: number;
+  legacySsrMarker: boolean;
+  ssrApiReads: Array<{ path: string; query: string; startedAt: number }>;
+  softNavigationSsrReads: Array<{ path: string; query: string; startedAt: number }>;
+  navigationResponses: Array<{ rsc: boolean; prefetch: boolean; seedStatus: string | null;
+    accept: string | null; destination: string | null;
+    initialLog: boolean; initialData: boolean; startedAt: number; finishedAt: number }>;
   streamObservation?: {
     samples: Array<{ t: number; height: number; rows: number; state: string | null }>;
     rows: number;
@@ -311,6 +364,7 @@ interface RoundResult extends RenderMeasurement {
   logSingleRowReads: number;
   logRequests: Array<{ query: string; startMs: number; responseEndMs: number }>;
   ssrSeed: boolean;
+  ssrSeedRereads: Array<{ path: string; query: string }>;
   key: string;
   mode: string;
   round: number;
@@ -339,6 +393,28 @@ interface RoundResult extends RenderMeasurement {
   /** True when the browser's first inbox page had the deep-link target injected. */
   inboxInjected: boolean;
   error: string | null;
+}
+
+/** Only reads already supplied by the Issue SSR bootstrap are redundant. */
+function findSsrSeedRereads(input: {
+  ssrSeed: boolean;
+  workspaceId: string;
+  issueId: string;
+  parentIssueId?: string;
+  sessionId: string | null;
+  requests: Array<{ path: string; query: string }>;
+}): Array<{ path: string; query: string }> {
+  if (!input.ssrSeed) return [];
+  const issuePath = `/api/issues/${encodeURIComponent(input.issueId)}`;
+  const seededPaths = new Set([
+    issuePath, `${issuePath}/sessions`, `${issuePath}/children`, `${issuePath}/task-runs`,
+    `/api/workspaces/${encodeURIComponent(input.workspaceId)}/members`,
+    ...(input.parentIssueId ? [`/api/issues/${encodeURIComponent(input.parentIssueId)}`] : []),
+  ]);
+  return input.requests.filter(request => seededPaths.has(request.path)
+    || (request.path === `/api/sessions/${input.sessionId}/log`
+      && new URLSearchParams(request.query).get("before") === "1"))
+    .map(({ path, query }) => ({ path, query }));
 }
 
 /** Which structural assertions this round violated. */
@@ -471,13 +547,16 @@ async function runRound(input: {
   webOrigin: string;
   apiOrigin: string;
   slug: string;
+  workspaceId: string;
   scenario: Scenario;
   round: number;
   ssrCookie: boolean;
   userId: string;
-  workspaceId: string;
+  ssrProbe: ReturnType<typeof startSsrProbe>;
 }): Promise<RoundResult> {
   const { browser, token, webOrigin, apiOrigin, slug, scenario, round } = input;
+  const ssrReadStart = input.ssrProbe.reads.length;
+  input.ssrProbe.setTimeoutIssue(scenario.ssrTimeout ? scenario.expectIssueId ?? undefined : undefined);
   // The scenario's own profile: a deep link's terminal element is the target
   // comment, not the newest one. Installing the generic profile and
   // post-processing with it silently reported `readyTimeout` for every deep
@@ -496,6 +575,10 @@ async function runRound(input: {
     logSingleRowReads: 0,
     logRequests: [],
     ssrSeed: false,
+    ssrSeedRereads: [],
+    ssrSeedStatus: null, documentSsrSeedStatus: null, legacySsrMarker: false, ssrApiReads: [], softNavigationSsrReads: [], navigationResponses: [], skeletonFlashFrames: 0,
+    loadingSamples: [],
+    rscRequestCount: 0,
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -524,6 +607,9 @@ async function runRound(input: {
 
   const ssrCookie = input.ssrCookie && !scenario.taskCacheEmpty;
   const context: BrowserContext = await mktContext(browser, token, [], webOrigin, ssrCookie);
+  // Fulfilled documents have no server IP for Chromium's address-space check.
+  // Permit this local origin's WS handshake while the CSR probe strips cookies.
+  if (!ssrCookie) await context.grantPermissions(["local-network-access"], { origin: webOrigin });
   if (scenario.activityPreference !== undefined) await context.addInitScript(({ key, value }) => {
     window.localStorage.setItem(key, JSON.stringify({ state: { showSystemDetails: value }, version: 0 }));
   }, { key: `multimira_issue_activity:${input.userId}:${input.workspaceId}`, value: scenario.activityPreference });
@@ -558,6 +644,26 @@ async function runRound(input: {
     } else await route.continue();
   });
   await context.addInitScript(() => {
+    const skeletonFrames: number[] = [];
+    const loadingSamples: RoundResult["loadingSamples"] = [];
+    const mounted = new WeakMap<Element, { t: number; id: number }>();
+    let loadingId = 0;
+    (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames = skeletonFrames;
+    (window as unknown as { __s7LoadingSamples: typeof loadingSamples }).__s7LoadingSamples = loadingSamples;
+    const sampleSkeletons = () => {
+      const now = performance.now();
+      for (const element of document.querySelectorAll<HTMLElement>("[data-issue-page] :is([data-issue-detail-loading], [data-issue-timeline-loading], [data-session-log-loading])")) {
+        if (!mounted.has(element)) mounted.set(element, { t: now, id: ++loadingId });
+        const first = mounted.get(element)!;
+        loadingSamples.push({ t: now, age: now - first.t, id: first.id,
+          kind: element.hasAttribute("data-session-log-loading") ? "log" : element.hasAttribute("data-issue-timeline-loading") ? "timeline" : "detail",
+          visible: element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) });
+      }
+      if ([...document.querySelectorAll<HTMLElement>('[data-issue-page] [data-slot="skeleton"]')].some(element =>
+        element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))) skeletonFrames.push(performance.now());
+      requestAnimationFrame(sampleSkeletons);
+    };
+    requestAnimationFrame(sampleSkeletons);
     performance.setResourceTimingBufferSize(10_000);
     const phases = { reveals: [] as number[], fetches: [] as Array<{path: string; t: number; state: string | null; fresh: string | null}> };
     (window as unknown as { __s7Phases: typeof phases }).__s7Phases = phases;
@@ -617,9 +723,12 @@ async function runRound(input: {
 
   const page = await context.newPage();
   const pendingApi = new Set<unknown>();
+  const pendingNavigation = new Set<unknown>();
   let lastApiChange = performance.now(), lastHubChange = performance.now();
   page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/")) { pendingApi.add(request); lastApiChange = performance.now(); } });
-  const finishRequest = (request: unknown) => { if (pendingApi.delete(request)) lastApiChange = performance.now(); };
+  const finishRequest = (request: unknown) => {
+    if (pendingApi.delete(request) || pendingNavigation.delete(request)) lastApiChange = performance.now();
+  };
   page.on("requestfinished", finishRequest); page.on("requestfailed", finishRequest);
   page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
     if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
@@ -627,10 +736,30 @@ async function runRound(input: {
     try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
   }));
   const seedReads: Promise<void>[] = [];
+  const navigationStarts = new Map<unknown, number>();
+  const rscStarts: number[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === new URL(targetUrl).pathname) {
+      pendingNavigation.add(request);
+      navigationStarts.set(request, Date.now());
+      if (request.headers().rsc === "1") rscStarts.push(Date.now());
+    }
+  });
   page.on("response", response => {
     if (new URL(response.url()).pathname === new URL(targetUrl).pathname
       && (response.request().isNavigationRequest() || new URL(response.url()).searchParams.has("_rsc"))) {
-      seedReads.push(response.text().then(body => { if (/head_ises_[A-Za-z0-9_]+/.test(body)) result.ssrSeed = true; }).catch(() => {}));
+      seedReads.push(response.text().then(async body => {
+        const requestHeaders = await response.request().allHeaders();
+        const decoded = body.replaceAll('\\"', '"');
+        result.navigationResponses.push({
+          rsc: response.request().headers().rsc === "1", prefetch: response.request().headers()["next-router-prefetch"] === "1",
+          accept: requestHeaders.accept ?? null, destination: requestHeaders["sec-fetch-dest"] ?? null,
+          seedStatus: /"data-ssr-seed"\s*:\s*"([a-z-]+)"/.exec(decoded)?.[1] ?? /data-ssr-seed="([a-z-]+)"/.exec(decoded)?.[1] ?? null,
+          initialLog: /"initialLog":(?!"\$undefined")/.test(decoded),
+          initialData: /"initialData":(?!"\$undefined")/.test(decoded),
+          startedAt: navigationStarts.get(response.request()) ?? Date.now(), finishedAt: Date.now(),
+        });
+      }).catch(() => {}));
     }
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -643,6 +772,15 @@ async function runRound(input: {
     ? null
     : await readInboxItem(apiOrigin, token, scenario.inboxItemId);
   const collectors = attachCollectors(page, round, scenario.key, [slug], { inboxTarget });
+  let delayEnabled = scenario.entry !== "session-issue";
+  if (scenario.csrDelayMs) await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (delayEnabled && route.request().method() === "GET" && (path === `/api/issues/${scenario.expectIssueId}`
+      || path === `/api/issues/${scenario.expectIssueId}/sessions` || /^\/api\/sessions\/[^/]+\/log$/.test(path))) {
+      await page.waitForTimeout(scenario.csrDelayMs!);
+    }
+    await route.fallback();
+  });
   if (scenario.taskCacheEmpty) await page.route("**/api/issues/*/task-runs", async route => {
     // Functional fault injection only: hold the real task response until the
     // first normal reveal has exposed the empty card. Then resume the same
@@ -660,9 +798,43 @@ async function runRound(input: {
     if (scenario.mode === "cold") {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
     } else {
-      const entryPath = scenario.entry === "inbox" ? "/inbox" : "/issues";
+      const entryPath = scenario.entry === "session-issue" ? `/issues/${scenario.expectIssueId}?session=${scenario.entrySessionId}`
+        : scenario.entry === "parent-issue" ? `/issues/${scenario.parentEntryIssueId}`
+        : scenario.entry === "inbox" ? "/inbox" : "/issues";
       await page.goto(`${webOrigin}/${slug}${entryPath}`, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
-      await clickEntryRow(page, scenario, slug);
+      if (scenario.entry === "parent-issue" || scenario.entry === "session-issue") {
+        await page.locator('[data-perf-scroll="issue-detail"][data-perf-state="ready"]').waitFor();
+      }
+      if (scenario.entry === "session-issue") {
+        delayEnabled = true;
+        if (scenario.prepareSessionId) {
+          await page.evaluate(name => (window as unknown as Record<string, { reset: () => void }>)[name]!.reset(), RECORDER_GLOBAL);
+          await page.locator(`[data-issue-session-select="${scenario.prepareSessionId}"]`).click();
+          const from = (await readRecorder(page))?.clicks.at(-1)?.t ?? await page.evaluate(() => performance.now());
+          await page.locator(`[data-session-log-id="${scenario.prepareSessionId}"]`).waitFor({ state: "attached" });
+          // The previous Session can stay visible while the RSC transition starts.
+          // Its ready frames are not the new Session's first visible position.
+          await page.evaluate(([name, from]) => (window as unknown as Record<string, { reset: (t: number) => void }>)[name as string]!.reset(from as number), [RECORDER_GLOBAL, from] as const);
+          await page.locator(`[data-session-log-id="${scenario.prepareSessionId}"][data-perf-state="ready"]`).waitFor();
+          await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
+          const preparedDeadline = performance.now() + ROUND_TIMEOUT_MS;
+          while (performance.now() < preparedDeadline && (pendingApi.size || pendingNavigation.size
+            || performance.now() - Math.max(lastApiChange, lastHubChange) < 500)) await page.waitForTimeout(50);
+          if (pendingApi.size || pendingNavigation.size) throw new Error("prepared Session did not settle");
+          const buffer = await readRecorder(page);
+          const frames = (buffer?.frames ?? []).filter(frame => frame.t >= from).map(frame => ({ ...frame, t: frame.t - from }));
+          const firstRealMs = computeFirstRealMs(frames, profile.name);
+          const ready = computeReadyWindow(frames, { profile, firstRealMs });
+          const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs });
+          const visibleFrames = await page.evaluate(from => (window as unknown as { __s7LoadingSamples: RoundResult["loadingSamples"] })
+            .__s7LoadingSamples.filter(sample => sample.t >= from && sample.age >= 200 && sample.visible).length, from);
+          result.preparedSession = { visibleFrames, jumpCount: jumps.jumpCount, readyMs: ready.readyMs, anchorVisibleMs: ready.anchorVisibleMs };
+          if (!visibleFrames || jumps.jumpCount !== 0 || ready.readyMs === null || ready.readyMs !== ready.anchorVisibleMs) throw new Error(`prepared Session loading gate failed: ${JSON.stringify(result.preparedSession)}`);
+          if (scenario.fastReturn) delayEnabled = false;
+        }
+        await page.locator(`[data-issue-session-select="${scenario.clickSessionId}"]`).click();
+        await page.locator(`[data-session-log-id="${scenario.clickSessionId}"]`).waitFor({ state: "attached" });
+      } else await clickEntryRow(page, scenario, slug);
       // The click has to be in the buffer before the app can navigate; resetting
       // at its timestamp keeps the reported clock on the page's own timeline.
       const clickT = await page
@@ -680,14 +852,18 @@ async function runRound(input: {
         }, [RECORDER_GLOBAL, clickT] as const);
       }
     }
+    if (scenario.entry === "session-issue") {
+      await page.locator(`[data-session-log-id="${scenario.clickSessionId}"][data-perf-state="ready"]`).waitFor();
+    }
     await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
     // Finish the entire deferred/Hub phase, rather than truncating at reveal.
     const settleDeadline = performance.now() + ROUND_TIMEOUT_MS;
     while (performance.now() < settleDeadline) {
-      if (result.hubAckSeen && pendingApi.size === 0 && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
+      if (result.hubAckSeen && pendingApi.size === 0 && pendingNavigation.size === 0
+        && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
       await page.waitForTimeout(50);
     }
-    if (!result.settled) result.error = "deferred API / Hub phase did not settle";
+    if (!result.settled) result.error = `deferred API / Hub phase did not settle (ack=${result.hubAckSeen}, pending=${pendingApi.size})`;
   } catch (error) {
     result.error = (error as Error).message.split("\n")[0] ?? String(error);
   }
@@ -699,8 +875,21 @@ async function runRound(input: {
   // other structural checks remain blocking on both paths.
   // The actual rendered log supplies the seed evidence; a cookie or unrelated
   // serialized head id does not prove this detail used SSR.
-  result.ssrSeed = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial="1"]').count().then(count => count > 0).catch(() => false);
-  result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  result.ssrSeedStatus = await page.locator('[data-issue-page]').getAttribute("data-ssr-seed").catch(() => null);
+  result.legacySsrMarker = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  result.ssrSeed = result.ssrSeedStatus === "ok";
+  result.ssrApiReads = input.ssrProbe.reads.slice(ssrReadStart);
+  const rscResponses = result.navigationResponses.filter(response => response.rsc);
+  result.rscRequestCount = rscStarts.length;
+  const documentResponse = result.navigationResponses.find(response => !response.rsc);
+  result.documentSsrSeedStatus = documentResponse?.seedStatus ?? null;
+  const expectedDocumentStatus = !ssrCookie ? "no-cookie" : scenario.ssrTimeout ? "timeout" : "ok";
+  // CSR can canonicalize the default session through router.replace after the
+  // document renders. Assert both requests, rather than losing its first result.
+  const expectedDomStatus = scenario.mode === "warm" || rscResponses.some(response => response.seedStatus === "soft-nav")
+    ? "soft-nav" : expectedDocumentStatus;
+  // Include cancelled prefetches and late SSR work, not just completed responses.
+  result.softNavigationSsrReads = rscStarts.length ? result.ssrApiReads.filter(read => read.startedAt >= Math.min(...rscStarts)) : [];
   if (!result.ssrSeed) result.waveGate = "record-only";
   const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
@@ -717,6 +906,14 @@ async function runRound(input: {
       return { query: query.toString(), startMs: entry.startTime, responseEndMs: entry.responseEnd };
     }));
   const targetSessionId = await page.locator('[data-perf-scroll="issue-detail"]').first().getAttribute("data-session-log-id").catch(() => null);
+  result.ssrSeedRereads = findSsrSeedRereads({
+    ssrSeed: result.ssrSeed,
+    workspaceId: input.workspaceId,
+    issueId: scenario.expectIssueId ?? "",
+    parentIssueId: scenario.seededParentIssueId,
+    sessionId: targetSessionId,
+    requests: result.requests,
+  });
   Object.assign(result, measureLogRender({ navStartMs, ssrSeed: result.ssrSeed, states: buffer?.stateTransitions ?? [],
     windows: result.requests.filter(request => request.path === `/api/sessions/${targetSessionId}/log`).filter(request => { const query = new URLSearchParams(request.query); return Number(query.get("before")) > 1 || Number(query.get("after")) > 1; }) }));
   result.logSingleRowReads = result.logRequests.filter(request => {
@@ -730,6 +927,10 @@ async function runRound(input: {
   result.inboxInjected = collectors.inboxInjected;
 
   result.navStartMs = navStartMs;
+  result.skeletonFlashFrames = await page.evaluate(from =>
+    (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames.filter(t => t >= from).length, navStartMs);
+  result.loadingSamples = await page.evaluate(from => (window as unknown as { __s7LoadingSamples: RoundResult["loadingSamples"] })
+    .__s7LoadingSamples.filter(sample => sample.t >= from), navStartMs);
   const frames = (buffer?.frames ?? []).filter(frame => frame.t >= navStartMs).map(frame => ({ ...frame, t: frame.t - navStartMs }));
   if (buffer && frames.length > 0) {
     const firstRealMs = computeFirstRealMs(frames, profile.name);
@@ -796,6 +997,29 @@ async function runRound(input: {
   });
   const stream = result.streamObservation;
   const failures = [
+    scenario.entry !== "inbox" && result.ssrSeedStatus !== expectedDomStatus
+      ? `unexpected SSR seed status: ${result.ssrSeedStatus}` : null,
+    scenario.ssrTimeout && ssrCookie && result.ssrSeedStatus !== "timeout"
+      ? "explicit-session timeout marker was lost" : null,
+    scenario.entry !== "inbox" && (scenario.mode === "cold" || scenario.entry === "session-issue") && (result.documentSsrSeedStatus !== expectedDocumentStatus
+      || documentResponse?.initialLog !== (expectedDocumentStatus === "ok")
+      || documentResponse?.initialData !== (expectedDocumentStatus === "ok"))
+      ? `document seed outcome/props mismatch: ${result.documentSsrSeedStatus}` : null,
+    scenario.entry !== "inbox" && result.legacySsrMarker !== result.ssrSeed ? "legacy SSR marker contradicts seed status" : null,
+    scenario.entry !== "inbox" && (scenario.mode === "cold" || rscResponses.some(response => response.seedStatus))
+      && !result.navigationResponses.some(response => response.seedStatus === result.ssrSeedStatus
+      && response.initialLog === result.ssrSeed && response.initialData === result.ssrSeed)
+      ? "Flight/document seed props contradict the result marker" : null,
+    scenario.entry !== "inbox" && ((scenario.mode === "warm" && !result.rscRequestCount) || result.softNavigationSsrReads.length)
+      ? `soft navigation SSR GETs: ${result.softNavigationSsrReads.length}, RSC requests: ${result.rscRequestCount}` : null,
+    scenario.mode === "warm" && !scenario.expectSlowLoading && result.skeletonFlashFrames ? `visible warm skeleton frames: ${result.skeletonFlashFrames}` : null,
+    scenario.expectSlowLoading && !result.loadingSamples.some(sample => sample.age >= 200 && sample.visible)
+      ? "slow CSR did not display a pending skeleton after 200ms" : null,
+    scenario.expectSlowLoading && [...new Set(result.loadingSamples.map(sample => sample.id))].some(id => {
+      const samples = result.loadingSamples.filter(sample => sample.id === id);
+      return samples.some(sample => sample.age >= 350) && !samples.some(sample => sample.age >= 200 && sample.visible);
+    }) ? "a long pending placeholder stayed invisible" : null,
+    result.ssrSeedRereads.length ? `SSR seed rereads: ${JSON.stringify(result.ssrSeedRereads)}` : null,
     scenario.queuedTasks && (!stream || !stream.samples.length || !stream.samples.some(sample => sample.rows === 0)
       || !stream.samples.some(sample => sample.rows === scenario.queuedTasks) || stream.rows !== scenario.queuedTasks
       || stream.samples.some(sample => sample.height !== stream.samples[0]!.height)
@@ -834,6 +1058,7 @@ async function clickEntryRow(page: Page, scenario: Scenario, slug: string): Prom
   const isInbox = scenario.entry === "inbox";
   const selector = isInbox
     ? inboxRowSelector("contract", scenario.inboxItemId ?? undefined)
+    : scenario.entry === "parent-issue" ? `a[href="/${slug}/issues/${scenario.clickIssueId}"]`
     : issueRowSelector("contract", scenario.clickIssueId ?? "");
   while (Date.now() < deadline) {
     const skeletons = await page.locator(`${LEGACY.listRoot} [data-slot="skeleton"]`).count().catch(() => 0);
@@ -924,6 +1149,8 @@ async function main(): Promise<void> {
   });
   await waitForHttp(`http://127.0.0.1:${apiPort}/health`, 30_000);
   log(`api ready; fixture: ${fixture.counts.longComments} long comments, ${fixture.counts.sessions} sessions, inbox ${fixture.inboxItemId}`);
+  const ssrProbe = startSsrProbe(`http://127.0.0.1:${apiPort}`, findFreePort(Math.max(apiPort, webPort) + 1));
+  running.push({ kill: () => ssrProbe.stop() });
 
   // ── web build + start ────────────────────────────────────────────────────
   if (!options.skipBuild) {
@@ -952,7 +1179,7 @@ async function main(): Promise<void> {
   const web = Bun.spawn({
     cmd: ["bun", "x", "next", "start", "--port", String(webPort)],
     cwd: WEB_APP_DIR,
-    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: `http://127.0.0.1:${apiPort}` },
+    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: ssrProbe.origin },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -970,6 +1197,25 @@ async function main(): Promise<void> {
 
   // ── browser ──────────────────────────────────────────────────────────────
   browser = await launchBrowser();
+  // Read complete Flight independently of browser-cancelled session redirects.
+  // Both requests run against the production Next server with a real cookie.
+  const directRscChecks = [];
+  for (const prefetch of [false, true]) {
+    const before = ssrProbe.reads.length;
+    const response = await fetch(`${webOrigin}/${fixture.workspaceSlug}/issues/${fixture.shortIssueId}`, {
+      headers: { RSC: "1", Accept: "*/*", Cookie: `multimira_auth=${encodeURIComponent(token)}`,
+        ...(prefetch ? { "Next-Router-Prefetch": "1" } : {}) },
+    });
+    const body = await response.text();
+    const status = /"data-ssr-seed"\s*:\s*"([a-z-]+)"/.exec(body)?.[1] ?? null;
+    const initialLog = /"initialLog":(?!"\$undefined")/.test(body);
+    const initialData = /"initialData":(?!"\$undefined")/.test(body);
+    const reads = ssrProbe.reads.slice(before);
+    directRscChecks.push({ prefetch, status, initialLog, initialData, ssrGets: reads.length, httpStatus: response.status });
+    if (reads.length || initialLog || initialData || (status !== "soft-nav" && !(prefetch && status === null))) {
+      throw new Error(`direct RSC/prefetch bootstrap gate failed: ${JSON.stringify(directRscChecks.at(-1))}`);
+    }
+  }
   const scenarios = buildScenarios(fixture, options, imageCases);
   const rounds: RoundResult[] = [];
   for (const scenario of scenarios) {
@@ -980,11 +1226,12 @@ async function main(): Promise<void> {
         webOrigin,
         apiOrigin: `http://127.0.0.1:${apiPort}`,
         slug: fixture.workspaceSlug,
+        workspaceId: fixture.workspaceId,
         scenario,
         round,
         ssrCookie: options.ssrCookie,
         userId: fixture.userId,
-        workspaceId: fixture.workspaceId,
+        ssrProbe,
       });
       rounds.push(result);
       const violations = violationsForRound(result);
@@ -1017,6 +1264,7 @@ async function main(): Promise<void> {
     fixture: fixture.counts,
     imageFixture: { width: 640, height: 240, cases: imageCases.map(({ key, kind }) => ({ key, kind })) },
     ssrCookie: options.ssrCookie,
+    directRscChecks,
     rounds,
     rows: grouped.map((row) => ({
       ...row,
@@ -1073,7 +1321,7 @@ function writeFixtureImages(uploadDir: string, fixture: ZeroJumpFixture): void {
   process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
 }
 
-export { violationsForRound, groupResults, buildScenarios, type RoundResult, type Scenario };
+export { violationsForRound, groupResults, buildScenarios, findSsrSeedRereads, type RoundResult, type Scenario };
 
 if (import.meta.main) {
   const keepOpen = process.argv.includes("--keep");

@@ -34,6 +34,12 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
+Issue 与工作区 SSR 预取只服务文档请求。Next 16 的 `headers()` 和默认 proxy 均会移除 Flight 控制头，[navigation-request.ts](../../frontend/apps/web/lib/navigation-request.ts) 正向识别 `Sec-Fetch-Dest` 为 document/frame/iframe 的请求；没有该头时只接受 HTML `Accept`。真实 RSC/Link 预取的 destination 是 empty，`Accept` 是 `*/*`，在读 cookie/API 前跳过，`initialLog` / `initialData` 留空并走原 CSR/cache 路径。Issue 页根节点 `data-ssr-seed` 只输出枚举：`ok`、`soft-nav`、`no-cookie`、`timeout`、`upstream-error`、`not-found`、`invalid`；只有 `ok` 带完整 seed（有父 Issue 时也必须成功读取父详情），缺失评论的 locate 404 仍可正常播种尾窗。结果不含凭证、URL、ID 或上游报错正文。
+
+日志根的旧 `data-ssr-initial` 是有初始日志且会话/锚点匹配时的预定位门禁，空属性值表示开启；`data-ssr-positioned=1` 是定位脚本确认的位置状态，根 layout 的同名 SSR 脚本始终存在。它们都不是播种结果诊断。检查播种先读 `data-ssr-seed`，并核对 Flight 的 `initialLog` / `initialData`，不能因脚本存在或旧位置标记就断言播种成功。
+
+软导航的 Issue 加载占位在挂载后延迟 200ms 显示：[custom.css](../../frontend/apps/web/app/custom.css) 仅匹配 `data-issue-detail-loading`、`data-issue-timeline-loading`、`data-session-log-loading` 三类 pending 占位，延迟结束后恢复可见；揭示完成即卸载，占位在后续 Session 切换时重新挂载并计时。页面没有永久隐藏骨架的 class，其他骨架不受影响。原 CSR 查询、缓存和日志揭示照常运行；快速加载避免短闪，慢加载保留反馈，不增加服务端请求或延后客户端读取。硬导航及其他 Issue 容器保留原加载展示。
+
 Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，揭示只等待 Issue、会话和日志窗口；运行卡片用缓存与预留槽位首绘，active-task reconcile、订阅者和本地目录资源在揭示后读取，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
@@ -41,6 +47,8 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
 
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
+
+搜索面板关闭时不读取成员或当前 Issue；打开后复用缓存，缺数据才读取。浮动 Chat 的当前上下文和成员查询同时等待主页面首屏就绪，避免新浏览器默认打开 Chat 时在详情页 SSR 缓存边界之外抢先发出补读；独立 Chat 页面仍立即读取。详情、父 Issue、成员、会话、子 Issue 和任务列表沿用既有缓存失效与实时更新策略，无 SSR seed 时仍由客户端获取主页面数据。
 
 ## 一次任务读取与更新
 

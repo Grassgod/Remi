@@ -280,7 +280,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     perfScroll="issue-detail" latestAnchor="latest-comment"
     anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
     onReturnToLatest={activeCommentId ? () => void returnLatest() : undefined}
-    initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
+    initialPositioned={Boolean(initialLog && initialLog.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId)}
     initialDisplayReady={displayReady}
     onScrollRoot={setScrollRoot}
     afterEntry={(entry, { highlightedId }) => <>{entry.seq === 0 && <>

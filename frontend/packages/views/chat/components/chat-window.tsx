@@ -75,6 +75,7 @@ import { useT } from "../../i18n";
 import { useNavigation } from "../../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { PageHeader } from "../../layout/page-header";
@@ -103,6 +104,10 @@ export function ChatWindow({
   useEffect(() => { setRuntimeWorkspaceId(null); }, [wsId]);
   const isOpen = useChatStore((s) => s.isOpen);
   const chatVisible = isPage || isOpen;
+  const routeReady = useAfterFirstScreen({ routeKey: navigation.pathname });
+  // A floating Chat can default to open before the detail's SSR boundary has
+  // hydrated. Its shared queries must wait for the page to supply that seed.
+  const contextEnabled = chatVisible && (isPage || routeReady);
   const storedActiveSessionId = useChatStore((s) => s.activeSessionId);
   const [pageSessionId, setPageSessionId] = useState(initialSessionId ?? storedActiveSessionId);
   useEffect(() => { if (isPage) setPageSessionId(initialSessionId ?? storedActiveSessionId); }, [isPage, initialSessionId]);
@@ -129,7 +134,7 @@ export function ChatWindow({
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: chatVisible }));
-  const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: chatVisible });
+  const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: contextEnabled });
   const { data: projects = [] } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
@@ -250,7 +255,7 @@ export function ChatWindow({
   // disable) so the input doesn't flash a fake "no agent" state in the
   // few hundred ms before the agent list query resolves. Only `"none"`
   // (server confirmed: zero usable agents) drives the disabled UI.
-  const agentAvailability = useWorkspaceAgentAvailability(chatVisible);
+  const agentAvailability = useWorkspaceAgentAvailability(contextEnabled);
   const noAgent =
     agentAvailability === "none" ||
     (!!currentSession &&
@@ -540,7 +545,7 @@ export function ChatWindow({
     pointerEvents: isVisible ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId, chatVisible);
+  const contextItems = useChatContextItems(wsId, contextEnabled);
 
   const conversation = (
     <>

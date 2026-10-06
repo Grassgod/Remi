@@ -237,6 +237,54 @@ before it replaces the API container, and leaves its named data volumes alone.
 See [`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md)
 for the connection model, the rollout runbook, and rollback.
 
+### Web server-side prefetch
+
+[`Dockerfile.web`](docker/Dockerfile.web) sets `REMOTE_API_URL` in both the build
+and runtime stages, defaulting to `http://api:6120`. In
+[`compose.application.yml`](docker/compose.application.yml), Web and the UI API
+service `api` share the `app` network; the API listens on container port 6120.
+An explicit build argument applies to both stages. A container environment
+override changes SSR reads only: Next's API rewrites retain their build-time
+destination, so changing both destinations requires rebuilding the image.
+
+A successful authenticated Issue hard navigation adds nine direct SSR GETs
+from Web to API: two workspace reads (`/api/me`, `/api/workspaces`) and seven
+Issue reads (detail, sessions, log window, seq 0, members, children, task runs).
+A parent Issue adds one GET. A comment deep link adds one locate GET for an
+explicitly selected session, or one per Issue session when none is selected.
+Application navigation and Link prefetch also send zero SSR GETs. The page and
+workspace reader require a document `Sec-Fetch-Dest` (document/frame/iframe),
+or HTML `Accept` when that header is absent, before accessing cookies or the API.
+Next's RSC requests use a fetch destination and `Accept: */*`; their Flight props contain no seed
+and the browser uses its existing CSR/cache path.
+Without the HttpOnly session cookie there are no SSR GETs. Successful prefetch
+seeds the browser's query cache and log replica, avoiding the initial client
+sessions/log read chain; these counts describe SSR traffic, not a net increase
+across SSR and browser requests.
+
+[`server-log.ts`](../frontend/apps/web/features/issues/server-log.ts) shares one
+800 ms abort deadline across the Issue reads; the workspace reader has its own
+800 ms deadline. If required reads time out, fail HTTP validation or return
+invalid data, no seed is provided and the page renders its shell for the browser
+to fill through CSR. Revert the runtime URL change and publish/deploy a new
+release to restore the previous CSR fallback, provided the deployment has no
+explicit runtime URL override.
+
+The Issue page's `data-ssr-seed` is an enum: `ok` (complete seed), `soft-nav`
+(RSC/prefetch skipped), `no-cookie`, `timeout`, `upstream-error` (HTTP/network),
+`not-found` (required API read returned 404) or `invalid` (JSON/schema/session).
+Only `ok` may have seed props. All other results use CSR; no upstream message,
+credential or URL is included. Missing-comment locate 404s still seed the normal
+tail as `ok`. A requested parent must also succeed for the seed to be complete.
+
+The remaining image build variables need no runtime copy: `REMI_APP_VERSION`
+feeds `NEXT_PUBLIC_APP_VERSION`; the `NEXT_PUBLIC_*` values are embedded by
+Next at build time, including server-rendered metadata. `STANDALONE` and
+`NEXT_BUILD_CPUS` configure the build. `NODE_ENV` is already set in runtime.
+`DOCS_URL` and `CORS_ALLOWED_ORIGINS` are Next configuration inputs, and
+`BACKEND_PORT`, `API_PORT` and `SERVER_PORT` are optional API URL fallbacks;
+none of these is set only in the image's build stage and needed by SSR.
+
 ## Session Archive v2
 
 Session Archive content is a standard ZIP (`multiremi.session-archive.v2`). Each

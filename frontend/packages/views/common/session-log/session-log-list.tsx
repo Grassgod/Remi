@@ -380,6 +380,7 @@ export function SessionLogList({
           {showPendingSkeleton && reveal.state === "pending" && (
             <div
               data-slot="skeleton"
+              data-session-log-loading=""
               data-testid={`${testIdPrefix}-skeleton`}
               className="visible absolute inset-0 z-10 flex flex-col justify-end gap-3 bg-background"
             >

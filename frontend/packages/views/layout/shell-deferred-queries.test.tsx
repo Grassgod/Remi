@@ -10,7 +10,7 @@
  * anywhere between the option factory and the mount fails here.
  */
 import type { ReactNode } from "react";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +37,9 @@ import {
 import { ChatFab } from "../chat/components/chat-fab";
 import { ChatWindow } from "../chat/components/chat-window";
 import { DashboardLayout } from "./dashboard-layout";
+import { SearchCommand } from "../search/search-command";
+import { useSearchStore } from "../search/search-store";
+import { useChatContextItems } from "../chat/components/use-chat-context-items";
 
 const listAgents = vi.hoisted(() => vi.fn(async () => []));
 const listSquads = vi.hoisted(() => vi.fn(async () => []));
@@ -59,6 +62,7 @@ const subscribeStream = vi.hoisted(() => vi.fn(() => ({ unsubscribe: vi.fn() }))
 const wsTransport = vi.hoisted(() => ({ subscribeStream, onReconnect: () => () => {} }));
 const getPendingChatTask = vi.hoisted(() => vi.fn(async () => ({ task_id: "tsk_guard_live", status: "running" })));
 const listWorkspaces = vi.hoisted(() => vi.fn(async () => [{ id: "ws-1", name: "Acme", slug: "acme" }]));
+const listMembers = vi.hoisted(() => vi.fn(async () => []));
 
 const navigation = vi.hoisted(() => ({ pathname: "/acme/issues" }));
 
@@ -134,6 +138,7 @@ beforeEach(() => {
   chat.getState().setOpen(false);
   registerChatStore(chat);
   useRecentContextStore.setState({ byWorkspace: {} });
+  useSearchStore.setState({ open: false });
   listPins.mockResolvedValue([]);
   idleQueue = [];
   resetAfterFirstScreenForTest();
@@ -143,7 +148,7 @@ beforeEach(() => {
     listAgents, listSquads, getAgentTaskSnapshot, listRuntimes, listMyInvitations,
     listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions,
     listPendingChatTasks, listWorkspaces, getTaskTrace, listTaskHumanRequests,
-    listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject,
+    listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject, listMembers,
   ]) spy.mockClear();
   getSessionLog.mockImplementation(async (sessionId: string, params: { anchor?: number }) => {
     const entries = sessionId === "cs_guard_cached" && params.anchor !== 0
@@ -173,7 +178,7 @@ beforeEach(() => {
     getSessionLog,
     getPendingChatTask,
     listWorkspaces,
-    listMembers: async () => [],
+    listMembers,
     listProjects: async () => ({ projects: [] }),
     listRuntimeWorkspaces: async () => [],
     listRecentIssues: async () => [],
@@ -185,6 +190,86 @@ beforeEach(() => {
     return idleQueue.length;
   };
   (window as unknown as { cancelIdleCallback: unknown }).cancelIdleCallback = vi.fn();
+});
+
+describe("shell consumers of Issue SSR seed (MUL-519)", () => {
+  const issueId = "iss_b2";
+  const issue = { id: issueId, identifier: "MUL-519", title: "SSR seeded issue", status: "todo" };
+
+  it("keeps the closed palette quiet, then reuses a seed that arrived after mount", async () => {
+    navigation.pathname = `/acme/issues/${issueId}`;
+    const client = newClient();
+    const view = render(<SearchCommand />, { wrapper: wrapper(client) });
+    await act(async () => {});
+    expect(getIssue).not.toHaveBeenCalled();
+    expect(listMembers).not.toHaveBeenCalled();
+    Element.prototype.scrollIntoView = vi.fn();
+    await act(async () => {
+      client.setQueryData(issueKeys.detail("ws-1", issueId), issue);
+      client.setQueryData(workspaceKeys.members("ws-1"), []);
+      useSearchStore.setState({ open: true });
+    });
+    expect(getIssue).not.toHaveBeenCalled();
+    expect(listMembers).not.toHaveBeenCalled();
+    view.unmount(); client.clear();
+  });
+
+  it("loads the current Issue and members when the palette opens without a seed", async () => {
+    navigation.pathname = `/acme/issues/${issueId}`;
+    getIssue.mockResolvedValueOnce(issue);
+    Element.prototype.scrollIntoView = vi.fn();
+    const client = newClient();
+    const view = render(<SearchCommand />, { wrapper: wrapper(client) });
+    act(() => { useSearchStore.setState({ open: true }); });
+    await waitFor(() => expect(getIssue).toHaveBeenCalledWith(issueId));
+    await waitFor(() => expect(listMembers).toHaveBeenCalledWith("ws-1"));
+    view.unmount(); client.clear();
+  });
+
+  it("keeps minimised Chat context quiet and retains seeded current context when opened", async () => {
+    navigation.pathname = `/acme/issues/${issueId}`;
+    const client = newClient();
+    const view = renderHook(({ open }) => useChatContextItems("ws-1", open), {
+      initialProps: { open: false }, wrapper: wrapper(client),
+    });
+    await act(async () => {});
+    expect(getIssue).not.toHaveBeenCalled();
+    act(() => { client.setQueryData(issueKeys.detail("ws-1", issueId), issue); });
+    view.rerender({ open: true });
+    await waitFor(() => expect(view.result.current).toEqual([expect.objectContaining({ id: issueId, group: "current" })]));
+    expect(getIssue).not.toHaveBeenCalled();
+    view.unmount(); client.clear();
+  });
+
+  it("loads current Chat context normally when opened without a seed", async () => {
+    navigation.pathname = `/acme/issues/${issueId}`;
+    getIssue.mockResolvedValueOnce(issue);
+    const client = newClient();
+    const view = renderHook(() => useChatContextItems("ws-1", true), { wrapper: wrapper(client) });
+    await waitFor(() => expect(view.result.current).toEqual([expect.objectContaining({ id: issueId, group: "current" })]));
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    view.unmount(); client.clear();
+  });
+
+  it("holds default-open floating Chat until the page's shared seed is available", async () => {
+    navigation.pathname = `/acme/issues/${issueId}`;
+    useChatStore.getState().setOpen(true);
+    const client = newClient();
+    const view = render(<ChatWindow />, { wrapper: wrapper(client) });
+    await act(async () => {});
+    expect(getIssue).not.toHaveBeenCalled();
+    expect(listMembers).not.toHaveBeenCalled();
+    await act(async () => {
+      client.setQueryData(issueKeys.detail("ws-1", issueId), issue);
+      client.setQueryData(workspaceKeys.members("ws-1"), []);
+      markRouteContentReady(navigation.pathname);
+      flushIdle();
+    });
+    await waitFor(() => expect(client.getQueryCache().find({ queryKey: issueKeys.detail("ws-1", issueId) })?.getObserversCount()).toBeGreaterThan(0));
+    expect(getIssue).not.toHaveBeenCalled();
+    expect(listMembers).not.toHaveBeenCalled();
+    view.unmount(); client.clear();
+  });
 });
 
 afterEach(() => {
