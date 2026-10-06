@@ -3,14 +3,14 @@ import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-record
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
 // guards, re-pooling on runtime changes, and the execution-engine session snapshots.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLocalStore as createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { deserializeSqliteDatabase, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -907,7 +907,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     function createCellStore(): MultiremiStore {
       matrixDb?.close();
       if (dialect === "sqlite") {
-        matrixDb = Database.deserialize(sqliteTemplate) as unknown as SqlDatabase;
+        matrixDb = deserializeSqliteDatabase(sqliteTemplate) as unknown as SqlDatabase;
         return new MultiremiStore(matrixDb);
       }
       if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);

@@ -5492,7 +5492,7 @@ ${placementAfter.sql}
     const create=()=>{ if(!workspaceLockHeld)this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       return this.createRetryAttemptWithinWorkspaceLock(parent,retryInput); };
     const retry=this.ctx.db.inTransaction?create():this.ctx.db.transaction(create)();
-    if (promoted) this.reRingUnreadIssueLane(parent, childStatusChanges, deferredEvents);
+    if (promoted) this.reRingUnreadLane(parent, childStatusChanges, deferredEvents);
     if (retry.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -6125,6 +6125,14 @@ ${placementAfter.sql}
       }
     }
 
+    if (task.chatSessionId && !task.issueId && (
+      status === "completed"
+      || (status === "cancelled" && !replacementPlanned)
+      || (status === "failed" && !retry)
+    )) {
+      this.reRingUnreadLane(task, childStatusChanges, deferredEvents, status === "cancelled" ? reRingOrigin : "turn_end");
+    }
+
     if (task.issueId) {
       const issue = this.ctx.issues().getIssue(task.issueId);
       this.ctx.appendIssueActivity(task.issueId, {
@@ -6173,10 +6181,10 @@ ${placementAfter.sql}
         // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
         if (status === "completed") {
           this.promoteSessionAgentLane(task);
-          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          this.reRingUnreadLane(task, childStatusChanges, deferredEvents);
         } else if (status === "cancelled") {
           // Redispatch creates a replacement in this transaction that covers the unread lane.
-          if (!replacementPlanned) this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents, reRingOrigin);
+          if (!replacementPlanned) this.reRingUnreadLane(task, childStatusChanges, deferredEvents, reRingOrigin);
         } else if (status === "failed" && !retry) {
           if (RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")
             || !this.promoteSessionAgentLane(task)) {
@@ -6185,7 +6193,7 @@ ${placementAfter.sql}
               taskId: task.id,
             }, deferredEvents);
           }
-          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+          this.reRingUnreadLane(task, childStatusChanges, deferredEvents);
         }
         // A pending recovery retry already suppresses this wakeup for its own
         // source: the drain below skips any delegation source that has a
@@ -6541,7 +6549,7 @@ ${placementAfter.sql}
     return result;
   }
 
-  private reRingUnreadIssueLane(task:MultiremiTask,_changes:ChildStatusChangeCollector,events:CommitEventQueue,_origin='turn_end'):void {
+  private reRingUnreadLane(task:MultiremiTask,_changes:ChildStatusChangeCollector,events:CommitEventQueue,_origin='turn_end'):void {
     const turn=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(task.id);
     if(turn)reRingAfterTurnEnd(this.ctx,turn.turn_id,events,_origin);
   }
