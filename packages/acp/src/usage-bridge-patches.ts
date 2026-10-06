@@ -1,9 +1,25 @@
 /** Patches only upstream values, never context occupancy or inferred prices. */
-export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v3";
+export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v4";
 export const CLAUDE_USAGE_PATCH_VERSION = "claude-usage-v2";
 
 export function codexUsagePatch(source: string): string | null {
   if (source.includes(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH_VERSION}";`)) return source;
+  const notificationAnchor = "  async createUpdateEvent(notification) {";
+  if (!source.includes(notificationAnchor)) return null;
+  source = source.replace(notificationAnchor, notificationAnchor + `
+    // Upstream's two explicit successful compaction notifications are reset
+    // evidence. Error/start notifications and display text are not evidence.
+    if (notification.method === "thread/compacted" || (notification.method === "item/completed" && notification.params?.item?.type === "contextCompaction")) {
+      const p = notification.params ?? {};
+      const threadId = String(p.threadId ?? this.sessionState.sessionId);
+      const key = threadId + ":" + String(p.item?.id ?? p.turnId ?? this.sessionState.currentTurnId ?? "thread-compacted");
+      const seen = this.sessionState.remiUsageCompactions ??= new Set();
+      if (!seen.has(key)) {
+        seen.add(key);
+        this.sessionState.remiUsageCompactionPending = { threadId };
+      }
+    }
+`);
   const start = source.indexOf("  createUsageUpdate(params) {");
   const end = source.indexOf("\n  handleRateLimitsUpdated(params)", start);
   if (start < 0 || end < 0) return null;
@@ -17,21 +33,33 @@ export function codexUsagePatch(source: string): string | null {
     const fields = ["inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"];
     const valid = value => value && fields.filter(key => key !== "reasoningOutputTokens").every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
       && value.inputTokens + value.cachedInputTokens + value.outputTokens === value.totalTokens;
-    const state = this.sessionState.remiUsageAccounting ??= { baseline: previous, seen: new Set(previous ? [JSON.stringify(previous)] : []), epoch: 0 };
+    const threadId = String(params.threadId ?? this.sessionState.sessionId);
+    const state = this.sessionState.remiUsageAccounting ??= { baseline: previous, seen: new Set(previous ? [JSON.stringify(previous)] : []), epoch: 0, threadId };
+    // A different upstream thread proves a new counter identity. A smaller
+    // total within one thread can be a previously unseen delayed notification.
+    if (state.threadId !== threadId) { state.threadId = threadId; state.epoch++; state.baseline = null; state.seen.clear(); }
     const fingerprint = JSON.stringify(current);
     if (!valid(current) || !valid(last)) {
       this.sessionState.totalTokenUsage = state.baseline;
       return { sessionUpdate: "usage_update", used: last.totalTokens, size: this.sessionState.modelContextWindow ?? 0,
         _meta: { remiUsagePatch: CODEX_USAGE_PATCH, remiUncertainUsage: { reportedTotalTokens: current.totalTokens, reason: "ambiguous_compaction_total" } } };
     }
-    if (state.seen.has(fingerprint)) { this.sessionState.totalTokenUsage = state.baseline; return null; }
     // On session/load the bridge has no baseline but thread totals include
     // previous prompts. Only last belongs to the newly observed request.
-    const delta = state.baseline ? Object.fromEntries(fields.map(key => [key, current[key] - state.baseline[key]])) : last;
+    const hadBaseline = !!state.baseline;
+    let delta = hadBaseline ? Object.fromEntries(fields.map(key => [key, current[key] - state.baseline[key]])) : last;
+    const decreasing = fields.filter(key => key !== "reasoningOutputTokens").some(key => delta[key] < 0);
+    const reset = decreasing && this.sessionState.remiUsageCompactionPending?.threadId === threadId;
+    if (state.seen.has(fingerprint) && !reset) { this.sessionState.totalTokenUsage = state.baseline; return null; }
     // Identical cumulative notifications are replay, not another request.
     if (fields.every(key => delta[key] === 0)) return null;
-    const reset = fields.some(key => delta[key] < 0);
-    if (reset) { state.epoch++; state.seen.clear(); }
+    if (decreasing && !reset) {
+      this.sessionState.totalTokenUsage = state.baseline;
+      return { sessionUpdate: "usage_update", used: last.totalTokens, size: this.sessionState.modelContextWindow ?? 0,
+        _meta: { remiUsagePatch: CODEX_USAGE_PATCH, remiUncertainUsage: { reportedTotalTokens: current.totalTokens, reason: "non_monotonic_cumulative_usage" } } };
+    }
+    if (reset) { state.epoch++; state.seen.clear(); delta = last; }
+    this.sessionState.remiUsageCompactionPending = null;
     state.seen.add(fingerprint);
     state.baseline = current;
     return {
@@ -41,16 +69,16 @@ export function codexUsagePatch(source: string): string | null {
       _meta: {
         remiUsagePatch: CODEX_USAGE_PATCH,
         remiTokenUsage: {
-          ...(reset ? last : delta),
+          ...delta,
           scope: "delta",
           source: "codex_thread_token_usage",
-          accuracy: reset || !previous ? "partial" : "exact",
+          accuracy: hadBaseline && !reset ? "exact" : "partial",
           // Thread totals carry no per-model breakdown. The selected model
           // is evidence of routing, not proof that child requests used it.
           model: null,
           requestedModel: this.sessionState.currentModelId ?? null,
           modelSource: this.sessionState.currentModelId ? "session_acknowledged" : "unknown",
-          id: String(params.threadId ?? this.sessionState.sessionId) + ":epoch:" + state.epoch + ":" + fingerprint,
+          id: threadId + ":epoch:" + state.epoch + ":" + fingerprint,
           threadId: params.threadId,
           turnId: params.turnId ?? this.sessionState.currentTurnId,
           cumulative: current

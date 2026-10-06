@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import type { TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const databaseName = `multiremi_usage_pg_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
@@ -60,5 +62,54 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
       expect(rows.reduce((sum, row) => sum + row.actual_total_tokens, 0)).toBe(report.summary.actual_total_tokens);
     }
     expect(Number((db!.query("SELECT count(*) AS count FROM multiremi_usage_units").get() as { count: string }).count)).toBe(3);
+  });
+
+  it("persists charge coverage and never adds reported charges to covered configured estimates", () => {
+    const runtime = store.registerRuntime({ name: "charge-pg", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "charge-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Covered charge", workspaceId: "local" });
+    const tokens: TaskUsageUnit = { unitId: "request", revision: 1, provider: "claude", model: "pg-charge-model", modelSource: "provider_reported",
+      scope: "request", source: "provider_request", accuracy: "exact", inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0,
+      cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: 1_000_000, contextTokens: null, contextWindow: null,
+      costAmount: null, costCurrency: null, occurredAt: "2026-10-01T00:00:00.000Z" };
+    const money: TaskUsageUnit = { ...tokens, unitId: "charge", model: null, modelSource: "unknown", inputTokens: null, outputTokens: null, cacheReadTokens: null,
+      cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown", costAmount: 0.25,
+      costCurrency: "USD", costSource: "provider_reported", coveredUnitIds: [tokens.unitId] };
+    store.setUsagePrice("local", { provider: "claude", model: tokens.model!, connection_id: null, requested_model_alias: false,
+      currency: "USD", input_per_million: 2, output_per_million: 0, cache_read_per_million: 0, cache_write_per_million: 0,
+      unsplit_per_million: null, source: "configured", source_url: null, effective_from: "2026-09-01T00:00:00.000Z", effective_to: null });
+    store.claimTask(runtime.id);
+    store.startTask(task.id);
+    store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "charge-run", revision: 1, complete: true, units: [money] });
+    store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "charge-run", revision: 2, complete: true, units: [tokens] });
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({
+      actual_total_tokens: 1_000_000, priced_tokens: 1_000_000, known_cost_by_currency: { USD: 0.25 }, complete: true,
+    });
+    expect(db!.query("SELECT covered_unit_id FROM multiremi_usage_cost_coverage WHERE task_id=?").all(task.id)).toEqual([{ covered_unit_id: "request" }]);
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).by_model).toEqual([
+      expect.objectContaining({ model: tokens.model, known_cost_by_currency: { USD: 0.25 } }),
+    ]);
+    expect(() => store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "charge-run", revision: 3, complete: true,
+      units: [{ ...money, coveredUnitIds: ["unproven-target"] }] })).toThrow("Conflicting usage unit");
+    const nextCharge: TaskUsageUnit = { ...money, revision: 2, costAmount: 0.5, coveredUnitIds: ["request"], coverageExpectedCount: 2,
+      coverageSha256: createHash("sha256").update(JSON.stringify(["request", "second-request"])).digest("hex") };
+    store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "charge-run", revision: 3, complete: true, units: [nextCharge, { ...tokens, unitId: "second-request" }] });
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary.complete).toBe(false);
+    expect(db!.query("SELECT cost_coverage_received_count,cost_coverage_complete FROM multiremi_usage_units WHERE task_id=? AND unit_id='charge'").get(task.id)).toEqual({ cost_coverage_received_count: 1, cost_coverage_complete: 0 });
+    store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "charge-run", revision: 2, complete: true, units: [{ ...nextCharge, coveredUnitIds: ["second-request"] }] });
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({ actual_total_tokens: 2_000_000,
+      priced_tokens: 2_000_000, known_cost_by_currency: { USD: 0.5 }, complete: true });
+    const longIds = [...Array.from({ length: 5000 }, (_, index) => `${String(index).padStart(6, "0")}:${"x".repeat(240)}`), "\uE000", "😀", "é", "é", 'quote"\\newline\n'];
+    const sha256 = createHash("sha256").update(JSON.stringify([...longIds].sort())).digest("hex");
+    const isolated = new URL(adminUrl!); isolated.pathname = `/${databaseName}`;
+    const smallBridge = new PostgresSyncDatabase(isolated.toString(), 1024 * 1024);
+    try {
+      writeUsageSnapshot(smallBridge, task.id, { version: 2, runId: "charge-run", revision: 4, complete: true,
+        units: [{ ...money, scope: "turn", revision: 3, coveredUnitIds: longIds, coverageExpectedCount: longIds.length, coverageSha256: sha256 }] });
+      expect(smallBridge.query("SELECT cost_coverage_complete,cost_coverage_sha256 FROM multiremi_usage_units WHERE task_id=? AND unit_id='charge'").get(task.id)).toEqual({ cost_coverage_complete: 1, cost_coverage_sha256: sha256 });
+      // An unbounded read of these exact rows exceeds the deliberately small
+      // bridge, proving the successful hash verification used bounded pages.
+      expect(() => smallBridge.query("SELECT covered_unit_id FROM multiremi_usage_cost_coverage WHERE task_id=?").all(task.id)).toThrow(/bridge result too large.*1048576 bytes/);
+    } finally { smallBridge.close(); }
   });
 });

@@ -40,6 +40,8 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 性能调查复用的 API、Store 和 PG bridge 脚本、采样条件及限制集中在[性能页](docs/dev/performance.md)，不把微基准结果视为用户端延迟。
 
+全路由 golden 捕获是功能契约检查，单次测试限时 60 秒；其限时不作为 API 延迟或查询性能预算。页面首屏、SQL 查询次数和读取字节边界仍由对应性能 guard 独立验证。
+
 ## CI 覆盖
 
 | 工作流 | 实际检查范围 |

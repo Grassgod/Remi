@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { createHash } from "node:crypto";
 import type { SetUsagePriceInput, TaskUsageSnapshot, TaskUsageUnit, UsageMetrics } from "@multiremi/contracts/usage-accounting.js";
 import { validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -206,6 +207,122 @@ describe("normalized task consumption", () => {
 });
 
 describe("consumption price evidence", () => {
+  it("hashes stored coverage in bounded pages with JavaScript Unicode ordering", () => {
+    const { task } = fixture();
+    const ids = [...Array.from({ length: 1100 }, (_, index) => `request-${String(index).padStart(4, "0")}`), "\uE000", "😀", "é", "é", 'quote"\\newline\n'];
+    const expected = createHash("sha256").update(JSON.stringify([...ids].sort())).digest("hex");
+    const originalQuery = db!.query.bind(db!);
+    let pages = 0;
+    const bounded = new Proxy(db!, { get(target, key) {
+      if (key === "query") return (sql: string) => {
+        if (sql.startsWith("SELECT covered_unit_id")) { expect(sql).toContain("LIMIT 512"); pages++; }
+        return originalQuery(sql);
+      };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const money = unit({ unitId: "unicode-charge", scope: "turn", source: "provider_turn", accuracy: "unknown", costSource: "provider_reported",
+      costAmount: 0.25, costCurrency: "USD", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null,
+      actualUnsplitTokens: null, reportedTotalTokens: null, coveredUnitIds: ids, coverageExpectedCount: ids.length, coverageSha256: expected });
+    writeUsageSnapshot(bounded, task.id, snapshot([money]));
+    expect(pages).toBeGreaterThanOrEqual(4);
+    expect(db!.query("SELECT cost_coverage_complete,cost_coverage_sha256 FROM multiremi_usage_units WHERE task_id=? AND unit_id=?").get(task.id, money.unitId)).toEqual({ cost_coverage_complete: 1, cost_coverage_sha256: expected });
+    // The upgrade path for earlier coverage rows must obey the same bound.
+    db!.run("UPDATE multiremi_usage_cost_coverage SET covered_unit_sort_key=NULL WHERE task_id=?", [task.id]);
+    db!.run("UPDATE multiremi_usage_units SET cost_coverage_expected_count=NULL,cost_coverage_sha256=NULL,cost_coverage_received_count=NULL WHERE task_id=?", [task.id]);
+    writeUsageSnapshot(bounded, task.id, snapshot([money]));
+    expect(db!.query("SELECT cost_coverage_complete,cost_coverage_sha256 FROM multiremi_usage_units WHERE task_id=? AND unit_id=?").get(task.id, money.unitId)).toEqual({ cost_coverage_complete: 1, cost_coverage_sha256: expected });
+  });
+
+  it("activates chunked monetary coverage only after its complete committed ID set arrives", () => {
+    const { store, task } = fixture();
+    store.setUsagePrice("local", price());
+    const ids = ["a", "b", "c"];
+    const hash = (set: string[]) => createHash("sha256").update(JSON.stringify([...set].sort())).digest("hex");
+    const money = unit({ unitId: "chunked-charge", model: null, modelSource: "unknown", scope: "turn", source: "provider_turn",
+      costSource: "provider_reported", costAmount: 0.25, costCurrency: "USD", inputTokens: null, outputTokens: null,
+      cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown",
+      coverageExpectedCount: ids.length, coverageSha256: hash(ids) });
+    store.reportTaskUsageSnapshot(task.id, snapshot(ids.map(unitId => unit({ unitId }))));
+    const send = (coveredUnitIds: string[], overrides: Partial<TaskUsageUnit> = {}, revision = 2) => store.reportTaskUsageSnapshot(task.id, snapshot([{ ...money, coveredUnitIds, ...overrides }], { revision }));
+    send(["b"]);
+    send(["b"]); // Durable replay adds neither links nor charges.
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_usage_cost_coverage WHERE task_id=?").get(task.id)).toEqual({ n: 1 });
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.complete).toBe(false);
+    send(["c"], {}, 1); // Distinct coverage may arrive with an older run frame revision.
+    send(["a"]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ known_cost_by_currency: { USD: 0.25 }, priced_tokens: 36, complete: true });
+    expect(db!.query("SELECT cost_coverage_complete FROM multiremi_usage_units WHERE task_id=? AND unit_id=?").get(task.id, money.unitId)).toEqual({ cost_coverage_complete: 1 });
+    expect(() => send(["a"], { costAmount: 5 })).toThrow("Conflicting usage unit");
+    expect(() => send(["a", "b", "d"], { revision: 2 })).toThrow("Conflicting monetary coverage commitment");
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.known_cost_by_currency).toEqual({ USD: 0.25 });
+    const newer = { revision: 2, costAmount: 0.5, coverageExpectedCount: 2, coverageSha256: hash(["a", "b"]) };
+    send(["b"], newer, 3);
+    send(["a"], {}, 4); // Older unit revision cannot contaminate the new coverage.
+    expect(db!.query("SELECT covered_unit_id FROM multiremi_usage_cost_coverage WHERE task_id=? ORDER BY covered_unit_id").all(task.id)).toEqual([{ covered_unit_id: "b" }]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.complete).toBe(false);
+    send(["a"], newer, 3);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ known_cost_by_currency: { USD: 0.50004 }, priced_tokens: 36, complete: true });
+    expect(() => validateUsageSnapshot(snapshot([{ ...money, coveredUnitIds: [], coverageSha256: undefined }]))).toThrow("Invalid monetary coverage commitment");
+    expect(validateUsageSnapshot(snapshot([{ ...money, coveredUnitIds: [], coverageExpectedCount: 10001 }])).units[0]!.coverageExpectedCount).toBe(10001);
+  });
+
+  it("uses a linked request charge instead of adding its configured token price", () => {
+    const { store, task } = fixture();
+    store.setUsagePrice("local", price());
+    const tokens = unit({ inputTokens: 1_000_000, outputTokens: 0, reportedTotalTokens: 1_000_000 });
+    const money = unit({ unitId: "request-charge", model: null, modelSource: "unknown", costSource: "provider_reported", costAmount: 0.25, costCurrency: "USD",
+      coveredUnitIds: [tokens.unitId], inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null,
+      actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown" });
+    // A charge can arrive before its token unit, without falsely claiming completeness.
+    store.reportTaskUsageSnapshot(task.id, snapshot([money]));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ known_cost_by_currency: {}, complete: false });
+    store.reportTaskUsageSnapshot(task.id, snapshot([tokens], { revision: 2 }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 1_000_000,
+      known_cost_by_currency: { USD: 0.25 }, priced_tokens: 1_000_000, unpriced_tokens: 0, price_quality: "provider_reported", complete: true });
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).by_model).toHaveLength(1);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).by_model[0]).toMatchObject({ model: "opus", known_cost_by_currency: { USD: 0.25 } });
+    expect(store.reportTaskUsageSnapshot(task.id, snapshot([money], { revision: 2 }))?.id).toBe(task.id);
+    expect(() => store.reportTaskUsageSnapshot(task.id, snapshot([{ ...money, coveredUnitIds: ["different-request"] }], { revision: 3 }))).toThrow("Conflicting usage unit");
+    // Explicit zero is also an authoritative reported charge.
+    store.reportTaskUsageSnapshot(task.id, snapshot([{ ...money, revision: 2, costAmount: 0 }], { revision: 3 }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.known_cost_by_currency).toEqual({ USD: 0 });
+  });
+
+  it("keeps a multi-model turn charge in an unallocated bucket without fabricating per-model zero costs", () => {
+    const { store, task } = fixture();
+    store.setUsagePrice("local", price());
+    store.setUsagePrice("local", price({ model: "fable" }));
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit(), unit({ unitId: "child", model: "fable" }),
+      unit({ unitId: "turn-charge", model: null, modelSource: "unknown", scope: "turn", source: "provider_turn", costSource: "provider_reported",
+        costAmount: 0.25, costCurrency: "USD", coveredUnitIds: ["request1", "child"], inputTokens: null, outputTokens: null,
+        cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown" }),
+    ]));
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary).toMatchObject({ actual_total_tokens: 24, priced_tokens: 24, known_cost_by_currency: { USD: 0.25 }, complete: true });
+    for (const model of ["opus", "fable"]) expect(report.by_model.find(row => row.model === model)).toMatchObject({
+      known_cost_by_currency: {}, cost_allocation_complete: false, complete: false, unpriced_tokens: 0,
+    });
+    expect(report.by_model.find(row => row.model_provenance === "unallocated_cost")).toMatchObject({
+      model: null, requested_model: null, actual_total_tokens: 0, known_cost_by_currency: { USD: 0.25 }, cost_allocation_complete: false,
+    });
+    for (const groups of [report.daily, report.by_agent, report.by_model, report.by_runtime]) {
+      expect(groups.reduce((sum, row) => sum + (row.known_cost_by_currency.USD ?? 0), 0)).toBe(0.25);
+    }
+  });
+
+  it("keeps unlinked or overlapping provider amounts out of known subtotals", () => {
+    const { store, task } = fixture();
+    store.setUsagePrice("local", price());
+    const money = unit({ unitId: "turn-charge", scope: "turn", source: "provider_turn", costSource: "provider_reported", costAmount: 0.25, costCurrency: "USD",
+      inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown" });
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit(), money]));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ known_cost_by_currency: { USD: 0.00004 }, complete: false });
+    store.reportTaskUsageSnapshot(task.id, snapshot([{ ...money, revision: 2, coveredUnitIds: ["request1"] },
+      { ...money, unitId: "second-charge", coveredUnitIds: ["request1"] }], { revision: 2 }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ known_cost_by_currency: {}, priced_tokens: 0, unpriced_tokens: 12, complete: false });
+    expect(() => validateUsageSnapshot(snapshot([{ ...money, coveredUnitIds: ["request1", "request1"] }]))).toThrow("Invalid monetary coverage");
+  });
+
   it("separates published reference rates and SDK estimates from confirmed pricing", () => {
     const { store, task } = fixture();
     expect(() => validateUsageSnapshot(snapshot([unit({ costAmount: 1, costCurrency: "USD", costSource: "provider_reported", scope: "task" })]))).toThrow("request or turn scope");

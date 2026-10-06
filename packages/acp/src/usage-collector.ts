@@ -50,6 +50,7 @@ export class UsageCollector {
   readonly promptId = randomUUID();
   private observed = new Map<string, TaskUsageUnit>();
   private changed = new Set<string>();
+  private monetaryTurns = new Set<string>();
 
   update(raw: unknown, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"]): void {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
@@ -102,6 +103,20 @@ export class UsageCollector {
     this.changed.add(unitId);
   }
 
+  private refreshMonetaryCoverage(units?: TaskUsageUnit[]): void {
+    if (!this.monetaryTurns.size) return;
+    const tokenIds = (units ?? [...this.observed.values()]).filter(unit => unit.source !== "context_snapshot" && unit.costAmount === null
+      && [unit.inputTokens, unit.outputTokens, unit.cacheReadTokens, unit.cacheWriteTokens, unit.actualUnsplitTokens].some(value => value !== null))
+        .map(unit => unit.unitId).sort();
+    for (const unitId of this.monetaryTurns) {
+      const unit = this.observed.get(unitId)!;
+      const coveredUnitIds = tokenIds;
+      if (JSON.stringify(unit.coveredUnitIds ?? []) === JSON.stringify(coveredUnitIds)) continue;
+      this.observed.set(unitId, { ...unit, coveredUnitIds, revision: unit.revision + 1 });
+      this.changed.add(unitId);
+    }
+  }
+
   cost(amount: unknown, currency: unknown, scope: TaskUsageUnit["scope"], source: TaskUsageUnit["costSource"], requestId?: string): void {
     const value = tokenCount(amount);
     if (value === null || typeof currency !== "string" || !currency) return;
@@ -113,8 +128,13 @@ export class UsageCollector {
       costSource: source, evidenceRef: source === "sdk_estimate" ? "claude_sdk_prompt_cost_estimate" : "acp_monetary_evidence" });
     entry.occurredAt = previous?.occurredAt ?? entry.occurredAt;
     entry.revision = (previous?.revision ?? 0) + 1;
+    if (source === "provider_reported" && scope === "request" && requestId) entry.coveredUnitIds = [`request:${requestId}`];
     this.observed.set(unitId, entry);
     this.changed.add(unitId);
+    if (source === "provider_reported" && scope === "turn") {
+      this.monetaryTurns.add(unitId);
+      this.refreshMonetaryCoverage();
+    }
   }
 
   uncertainTotal(value: unknown): void {
@@ -158,6 +178,9 @@ export class UsageCollector {
         cacheWriteTokens: null, actualUnsplitTokens: remainder, accuracy: "unknown",
         evidenceRef: "acp_prompt_unattributed_remainder" });
     }
-    return units;
+    // Link final turn coverage once at settlement; emitting a growing list on
+    // every request would turn durable reporting into quadratic traffic.
+    this.refreshMonetaryCoverage(units);
+    return units.map(unit => this.monetaryTurns.has(unit.unitId) ? { ...this.observed.get(unit.unitId)!, provider } : unit);
   }
 }

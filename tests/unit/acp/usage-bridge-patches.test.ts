@@ -3,7 +3,8 @@ import { claudeUsagePatch, codexUsagePatch } from "@acp/usage-bridge-patches.js"
 
 // These are the upstream handler boundaries; execute patched JavaScript with
 // protocol notifications, rather than assert that generated text contains fields.
-const codexBoundary = `  createUsageUpdate(params) {}
+const codexBoundary = `  async createUpdateEvent(notification) { return null; }
+  createUsageUpdate(params) {}
   handleRateLimitsUpdated(params) {}`;
 const count = (input: number, cache: number, output: number, total: number) => ({
   inputTokens: input, cachedInputTokens: cache, outputTokens: output,
@@ -39,7 +40,7 @@ describe("Codex consumption bridge", () => {
     const instance = new Handler();
     instance.sessionState = { sessionId: "s", totalTokenUsage: null };
     instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
-    const notify = (input: number, output: number, total = input + output) => instance.createUsageUpdate({ threadId: "s", tokenUsage: { total: count(input, 0, output, total), last: count(100, 0, 10, 110) } });
+    const notify = (input: number, output: number, total = input + output, threadId = "s") => instance.createUsageUpdate({ threadId, tokenUsage: { total: count(input, 0, output, total), last: count(100, 0, 10, 110) } });
     const first = notify(100, 10), second = notify(200, 20);
     expect(notify(100, 10)).toBeNull();
     const third = notify(300, 30);
@@ -48,10 +49,43 @@ describe("Codex consumption bridge", () => {
     expect(context._meta.remiTokenUsage).toBeUndefined();
     expect(context._meta.remiUncertainUsage.reportedTotalTokens).toBe(78048);
     expect(notify(400, 40)._meta.remiTokenUsage.totalTokens).toBe(110);
-    const reset = notify(10, 1);
-    const reused = notify(100, 10);
+    expect(notify(10, 1)._meta.remiUncertainUsage.reason).toBe("non_monotonic_cumulative_usage");
+    const reset = notify(10, 1, 11, "new-thread");
+    const reused = notify(100, 10, 110, "new-thread");
     expect(reset._meta.remiTokenUsage.accuracy).toBe("partial");
     expect(reused._meta.remiTokenUsage.id).not.toBe(first._meta.remiTokenUsage.id);
+  });
+
+  it("does not treat an unseen out-of-order cumulative observation as a reset", () => {
+    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
+    const instance = new Handler();
+    instance.sessionState = { sessionId: "s", totalTokenUsage: null };
+    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
+    const events = [1, 3, 2, 4].map(n => instance.createUsageUpdate({ threadId: "s",
+      tokenUsage: { total: count(n * 100, 0, n * 10, n * 110), last: count(100, 0, 10, 110) } }));
+    expect(events[2]._meta.remiTokenUsage).toBeUndefined();
+    expect(events[2]._meta.remiUncertainUsage.reason).toBe("non_monotonic_cumulative_usage");
+    expect(events.reduce((sum, event) => sum + (event?._meta.remiTokenUsage?.totalTokens ?? 0), 0)).toBe(440);
+    expect(instance.sessionState.totalTokenUsage.totalTokens).toBe(440);
+  });
+
+  it.each(["thread/compacted", "item/completed"])("counts valid consumption after an explicit %s compaction without billing its context estimate", async method => {
+    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
+    const instance = new Handler();
+    instance.sessionState = { sessionId: "s", totalTokenUsage: null };
+    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
+    const notify = (n: number, total = n * 110) => instance.createUsageUpdate({ threadId: "s",
+      tokenUsage: { total: count(n * 100, 0, n * 10, total), last: count(100, 0, 10, 110) } });
+    const before = notify(3);
+    await instance.createUpdateEvent({ method, params: { threadId: "s", turnId: "turn", item: { id: "compact", type: "contextCompaction" } } });
+    expect(notify(0, 78048)._meta.remiTokenUsage).toBeUndefined();
+    const after = notify(1), next = notify(2);
+    expect(after._meta.remiTokenUsage).toMatchObject({ totalTokens: 110, accuracy: "partial" });
+    expect(next._meta.remiTokenUsage.totalTokens).toBe(110);
+    expect([before, after, next].reduce((sum, event) => sum + event._meta.remiTokenUsage.totalTokens, 0)).toBe(330);
+    expect(after._meta.remiTokenUsage.id).toContain(":epoch:1:");
+    await instance.createUpdateEvent({ method, params: { threadId: "s", turnId: "turn", item: { id: "compact", type: "contextCompaction" } } });
+    expect(notify(1)).toBeNull(); // duplicate successful marker cannot reset again
   });
 });
 

@@ -94,15 +94,27 @@ describe("automatic scalar usage cutover", () => {
     expect(db!.query("SELECT count(*) AS n FROM multiremi_usage_units").get()).toEqual({ n: 0 });
   });
 
-  it("retires an original revision-zero preparation aggregate when modern facts already exist", async () => {
+  it("preserves a preparation aggregate when modern facts cannot prove replacement coverage", async () => {
     const { store, tasks } = fixture();
     writeUsageSnapshot(db!, tasks[0]!.id, legacyUsageSnapshot(tasks[0]!.id, firstUsage, "2026-10-01T00:00:00Z"), { historical: true });
     db!.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?)", [tasks[0]!.id, firstUsage, "2026-10-01T00:00:00Z"]);
     writeUsageSnapshot(db!, tasks[0]!.id, live("modern-existing"));
     await prepareUsageAccountingStartup(db!);
-    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(5);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 107, complete: false });
     expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_audit").get()).toEqual({ original_usage: firstUsage });
-    expect(db!.query("SELECT run_id FROM multiremi_usage_runs").all()).toEqual([{ run_id: "modern-existing" }]);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs ORDER BY run_id").all()).toEqual([{ run_id: "legacy" }, { run_id: "modern-existing" }]);
+  });
+
+  it("never erases known legacy consumption when a modern start has no telemetry", async () => {
+    for (const prepared of [false, true]) {
+      const { store, tasks } = fixture();
+      if (prepared) migrateLegacyUsage(db!);
+      writeUsageSnapshot(db!, tasks[0]!.id, { version: 2, runId: "start-ack", revision: 0, complete: false, units: [] });
+      await prepareUsageAccountingStartup(db!);
+      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 102, unknown_task_count: 1, complete: false });
+      expect(db!.query("SELECT input_tokens,output_tokens FROM multiremi_usage_units WHERE run_id='legacy'").get()).toEqual({ input_tokens: 100, output_tokens: 2 });
+      resetMultiremiTestEnv();
+    }
   });
 
   it("rechecks changed rows behind the cursor and preserves modern snapshots arriving between batches", async () => {
@@ -115,8 +127,8 @@ describe("automatic scalar usage cutover", () => {
       writeUsageSnapshot(db!, tasks[1]!.id, live("modern"));
     } });
     expect(db!.query("SELECT source_version FROM multiremi_usage_legacy_sources WHERE task_id=?").get(tasks[0]!.id)).toEqual({ source_version: 2 });
-    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(tasks[1]!.id)).toEqual([{ run_id: "modern" }]);
-    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(5);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(tasks[1]!.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern" }]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(107);
   });
 
   it("never replaces evidence-verified recovered facts with changed legacy JSON", async () => {
@@ -149,7 +161,7 @@ describe("automatic scalar usage cutover", () => {
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(250);
   });
 
-  it("retires its provisional aggregate when a modern snapshot arrives after a task checkpoint", async () => {
+  it("preserves its provisional aggregate when a modern snapshot arrives after a task checkpoint", async () => {
     const { store, tasks } = fixture(2);
     let arrived = false;
     await prepareUsageAccountingStartup(db!, { batchSize: 1, onBatch: () => {
@@ -157,8 +169,8 @@ describe("automatic scalar usage cutover", () => {
       arrived = true;
       writeUsageSnapshot(db!, tasks[0]!.id, live("modern-after-checkpoint"));
     } });
-    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(tasks[0]!.id)).toEqual([{ run_id: "modern-after-checkpoint" }]);
-    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(107);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(tasks[0]!.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern-after-checkpoint" }]);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(209);
     expect(db!.query("SELECT count(*) AS n FROM multiremi_usage_legacy_versions WHERE task_id=?").get(tasks[0]!.id)).toEqual({ n: 2 });
   });
 

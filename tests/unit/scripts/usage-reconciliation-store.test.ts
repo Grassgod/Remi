@@ -146,9 +146,98 @@ describe("historical reconciliation checkpoints", () => {
     expect(db!.query("SELECT name FROM sqlite_master WHERE name='multiremi_usage_reconciliation_audit'").get()).toBeNull();
   });
 
+  it("rejects a newly generated empty or narrower plan without erasing previously recovered request facts", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "Unknown historical consumer", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "recover", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+      [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
+    migrateLegacyUsage(db!);
+    store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
+      id: "established-request", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
+    } } } }]);
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    const first = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    expect(first.tasks[0]).toMatchObject({ actualTokens: 25, countedActualTokens: 25, supersedeLegacyRun: true });
+    applyUsageReconciliation(db!, first);
+    expect(verifyUsageReconciliation(db!, first).ledgerActualTokens).toBe(25);
+
+    db!.run("DELETE FROM multiremi_task_messages WHERE task_id=?", [task.id]);
+    const empty = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    expect(empty.tasks[0]!.actualTokens).toBe(0);
+    expect(() => applyUsageReconciliation(db!, empty)).toThrow("Recovery plan would downgrade established evidence");
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(25);
+    expect(verifyUsageReconciliation(db!, first).ledgerActualTokens).toBe(25);
+
+    store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
+      id: "established-request", model: "haiku", inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
+    } } } }]);
+    const narrower = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    expect(narrower.tasks[0]!.actualTokens).toBe(12);
+    expect(() => applyUsageReconciliation(db!, narrower)).toThrow("Recovery plan would downgrade established evidence");
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(25);
+    expect(verifyUsageReconciliation(db!, first).ledgerActualTokens).toBe(25);
+  });
+
   it("bounds migration batch sizes", () => {
     expect(migrationBatchSize(undefined)).toBe(500);
     expect(migrationBatchSize("100")).toBe(100);
     for (const value of [0, -1, 5001, NaN, "all", 1.5]) expect(() => migrationBatchSize(value)).toThrow();
+  });
+
+  it("allows a newly generated evidence superset and resumes it without recounting established requests", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "Expandable recovery", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "history", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+      [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
+    migrateLegacyUsage(db!);
+    const append = (id: string, inputTokens: number, outputTokens: number) => store.appendTaskMessages(task.id, [{ type: "usage",
+      meta: { _meta: { remiTokenUsage: { id, model: "haiku", inputTokens, outputTokens, cachedInputTokens: 0, totalTokens: inputTokens + outputTokens } } } }]);
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    append("retained", 20, 5);
+    const first = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    applyUsageReconciliation(db!, first);
+    append("new", 8, 2);
+    const superset = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    expect(superset.tasks[0]!.countedActualTokens).toBe(35);
+    expect(applyUsageReconciliation(db!, superset)).toMatchObject({ applied: 1, resumed: 0 });
+    expect(verifyUsageReconciliation(db!, superset)).toMatchObject({ units: 2, ledgerActualTokens: 35 });
+    expect(applyUsageReconciliation(db!, superset)).toMatchObject({ applied: 0, resumed: 1 });
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(35);
+  });
+
+  it("preserves established monetary coverage through recovery and verifies the stored links", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "Historical charge", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "history", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+      [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
+    migrateLegacyUsage(db!);
+    store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
+      id: "charged", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
+    } } } }]);
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    const plan = await buildReconcileUsagePlan(sql, { taskId: task.id });
+    const request = plan.tasks[0]!.snapshot.units[0]!;
+    const money = { ...actualUnit({ unitId: "historical-charge", provider: "claude", scope: "request", source: "provider_request",
+      costAmount: 0.25, costCurrency: "USD", costSource: "provider_reported" }), occurredAt: request.occurredAt, coveredUnitIds: [request.unitId] };
+    plan.tasks[0]!.snapshot.units.push(money);
+    applyUsageReconciliation(db!, plan);
+    expect(verifyUsageReconciliation(db!, plan)).toMatchObject({ units: 2, ledgerActualTokens: 25 });
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.known_cost_by_currency).toEqual({ USD: 0.25 });
+
+    const narrower = structuredClone(plan);
+    narrower.tasks[0]!.snapshot.units[1]!.coveredUnitIds = [];
+    expect(() => applyUsageReconciliation(db!, narrower)).toThrow("Recovery plan would downgrade established evidence");
+    expect(verifyUsageReconciliation(db!, plan).ledgerActualTokens).toBe(25);
+    const degraded = structuredClone(plan);
+    degraded.tasks[0]!.snapshot.units[0]!.accuracy = "unknown";
+    expect(() => applyUsageReconciliation(db!, degraded)).toThrow("Recovery plan would downgrade established evidence");
+    degraded.tasks[0]!.snapshot.units[0]!.accuracy = request.accuracy;
+    degraded.tasks[0]!.snapshot.units[0]!.modelSource = "unknown";
+    expect(() => applyUsageReconciliation(db!, degraded)).toThrow("Recovery plan would downgrade established evidence");
+    db!.run("DELETE FROM multiremi_usage_cost_coverage WHERE task_id=?", [task.id]);
+    expect(() => verifyUsageReconciliation(db!, plan)).toThrow("Reconciliation evidence mismatch");
   });
 });

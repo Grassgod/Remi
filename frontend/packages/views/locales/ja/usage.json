@@ -78,6 +78,8 @@
     "provider": "呼び出しエンジン",
     "connection": "接続",
     "unknown_model": "実際のモデル不明",
+    "unallocated_cost": "モデル間の未配分料金",
+    "allocation_unknown": "トークンの料金対象は既知ですが、モデル別の金額は配分できません",
     "currency": "通貨",
     "effective_from": "適用開始（ISO日時）",
     "version": "バージョン",

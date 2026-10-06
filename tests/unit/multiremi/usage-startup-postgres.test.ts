@@ -29,7 +29,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     // The shared SQL adapter does not enforce foreign-key cascades. Reset both
     // migration checkpoints and normalized facts before deleting their tasks.
     for (const table of [
-      "multiremi_usage_units", "multiremi_usage_run_scopes", "multiremi_usage_runs", "multiremi_usage_task_scopes",
+      "multiremi_usage_cost_coverage", "multiremi_usage_units", "multiremi_usage_run_scopes", "multiremi_usage_runs", "multiremi_usage_task_scopes",
       "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources", "multiremi_usage_legacy_audit",
     ]) db!.run(`DELETE FROM ${table}`);
     db!.run("DELETE FROM multiremi_tasks");
@@ -124,8 +124,20 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
           contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-10-01T01:00:00Z",
         }] });
       } });
-      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(cohort[0]!.id)).toEqual([{ run_id: "modern-arrival" }]);
-      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(18);
+      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(cohort[0]!.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern-arrival" }]);
+      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(31);
+    } finally { writer.close(); }
+  });
+
+  it("keeps known legacy consumption when another connection accepts an empty modern run", async () => {
+    const task = tasks(1)[0]!;
+    migrateLegacyUsage(db!);
+    const writer = new PostgresSyncDatabase(isolatedUrl);
+    try {
+      writeUsageSnapshot(writer, task.id, { version: 2, runId: "empty-accepted-start", revision: 0, complete: false, units: [] });
+      await prepareUsageAccountingStartup(db!);
+      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 13, unknown_task_count: 1, complete: false });
+      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(task.id)).toEqual([{ run_id: "empty-accepted-start" }, { run_id: "legacy" }]);
     } finally { writer.close(); }
   });
 });

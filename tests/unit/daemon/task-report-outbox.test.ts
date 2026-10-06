@@ -12,7 +12,7 @@ import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client
 import { outboxRecordBytes } from "@multiremi/worker/report-frames.js";
 import { DAEMON_FRAME_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { actualUnit } from "@acp/usage-collector.js";
-import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
+import { createLocalStore, db as usageDb, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import {
   MultiremiTaskReportOutbox,
   type MultiremiOutboxKind,
@@ -46,6 +46,68 @@ function httpError(status: number, path = "/api/daemon/tasks/x"): MultiremiDaemo
 }
 
 describe("MultiremiTaskReportOutbox", () => {
+  it("replays a turn charge whose 5000 request links exceed one frame, preserving exactly one billed amount", async () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ name: "long-charge", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "long-charge", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Long billed turn", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    store.setUsagePrice("local", { provider: "claude", model: "opus", connection_id: null, requested_model_alias: false,
+      currency: "USD", input_per_million: 2, output_per_million: 0, cache_read_per_million: 0, cache_write_per_million: 0,
+      unsplit_per_million: null, source: "configured", source_url: null, effective_from: "2026-01-01T00:00:00Z", effective_to: null });
+    const units = Array.from({ length: 5000 }, (_, i) => ({ ...actualUnit({ unitId: String(i).padStart(6, "0") + "x".repeat(240),
+      provider: "claude", model: "opus", scope: "request", source: "provider_request", inputTokens: 1_000_000,
+      outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 1_000_000 }), occurredAt: "2026-10-01T01:00:00.000Z" }));
+    const money = { ...actualUnit({ unitId: "provider-turn-charge", provider: "claude", scope: "turn", source: "provider_turn",
+      costAmount: 0.25, costCurrency: "USD", costSource: "provider_reported" }), occurredAt: "2026-10-01T01:00:00.000Z",
+      coveredUnitIds: units.map(unit => unit.unitId) };
+    const path = tempPath();
+    const offline = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    offline.enqueue(task.id, "usage", { usageSnapshot: { version: 2, runId: "long-charge", revision: 1, complete: true, units: [...units, money] } });
+    offline.enqueue(task.id, "complete", { output: "done" });
+    expect(offline.stats().blocked).toBe(0);
+    await offline.close();
+    let chargeFrames = 0;
+    let observedIncomplete = false;
+    let loseChargeAcknowledgement = true;
+    let maxFrameBytes = 0;
+    const partialAmounts: Array<{ amount: number; complete: boolean }> = [];
+    const kinds: string[] = [];
+    const restarted = track(new MultiremiTaskReportOutbox({ path, backoffScheduleMs: [1], deliver: async record => {
+      maxFrameBytes = Math.max(maxFrameBytes, outboxRecordBytes(record));
+      kinds.push(record.kind);
+      if (record.kind === "usage") {
+        const snapshot = record.payload.usageSnapshot as any;
+        chargeFrames += snapshot.units.filter((unit: any) => unit.unitId === money.unitId).length;
+        store.reportTaskUsageSnapshot(task.id, snapshot);
+        if (!observedIncomplete && snapshot.units.some((unit: any) => unit.unitId === money.unitId)
+          && (usageDb!.query("SELECT cost_coverage_complete FROM multiremi_usage_units WHERE task_id=? AND unit_id=?")
+            .get(task.id, money.unitId) as { cost_coverage_complete: number }).cost_coverage_complete === 0) {
+          observedIncomplete = true;
+          const partial = store.getUsageReport({ workspaceId: "local", days: null }).summary;
+          partialAmounts.push({ amount: partial.known_cost_by_currency.USD ?? 0, complete: partial.complete });
+          if (loseChargeAcknowledgement) {
+            loseChargeAcknowledgement = false;
+            throw new Error("charge fragment acknowledgement lost after persistence");
+          }
+        }
+      } else if (record.kind === "complete") store.completeTask(task.id, { output: "done" });
+    } }));
+    expect(await restarted.waitForTaskDrain(task.id)).toBe("delivered");
+    expect(chargeFrames).toBeGreaterThan(1);
+    expect(observedIncomplete).toBe(true);
+    expect(maxFrameBytes).toBeLessThanOrEqual(DAEMON_FRAME_MAX_BYTES);
+    // No part of the unverified reported charge may enter known amounts.
+    // Unrelated configured estimates remain whole USD 2 multiples.
+    expect(partialAmounts).toHaveLength(1);
+    expect(partialAmounts[0]!.complete).toBe(false);
+    expect(partialAmounts[0]!.amount % 2).toBe(0);
+    expect(kinds.at(-1)).toBe("complete");
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary).toMatchObject({ actual_total_tokens: 5_000_000_000, priced_tokens: 5_000_000_000,
+      known_cost_by_currency: { USD: 0.25 }, complete: true });
+    expect(store.getTask(task.id)?.status).toBe("completed");
+  }, 30_000);
   it("replays over 3000 request facts after an outage with bounded final chunks and delivers terminal last", async () => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({ name: "long-usage", provider: "claude", workspaceId: "local" });

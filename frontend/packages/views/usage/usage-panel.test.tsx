@@ -16,6 +16,20 @@ vi.mock("../runtimes/components/custom-pricing-dialog", () => ({ UsagePricingDia
 afterEach(() => { cleanup(); state.error = false; state.report = null; vi.clearAllMocks(); });
 
 describe("Unified usage panel", () => {
+  it("shows unallocated multi-model charges without displaying a model's missing amount as zero", () => {
+    state.report = usageReport({ by_model: [
+      { ...usageMetrics({ known_cost_by_currency: {}, cost_allocation_complete: false, complete: false }), provider: "claude", model: "opus", requested_model: null, model_source: "reported", model_provenance: "provider_reported", connection_id: null },
+      { ...usageMetrics({ actual_input_tokens: 0, actual_output_tokens: 0, actual_total_tokens: 0, priced_tokens: 0, known_cost_by_currency: { USD: 0.25 }, cost_allocation_complete: false, complete: false }), provider: "claude", model: null, requested_model: null, model_source: "unknown", model_provenance: "unallocated_cost", connection_id: null },
+    ] });
+    render(<UsagePanel wsId="ws" />);
+    fireEvent.click(screen.getByRole("button", { name: locale.views.models }));
+    const modelRow = screen.getByText("claude · opus").closest("tr")!;
+    expect(within(modelRow).getAllByText("—").length).toBeGreaterThan(0);
+    expect(within(modelRow).queryByText("USD 0.00")).toBeNull();
+    expect(screen.getAllByText(locale.price.allocation_unknown).length).toBe(2);
+    expect(screen.getByText(`claude · ${locale.price.unallocated_cost}`)).toBeVisible();
+    expect(within(screen.getByRole("table")).getByText("USD 0.25")).toBeVisible();
+  });
   it("keeps published references and SDK estimates separate from known subtotals", () => {
     state.report = usageReport({ summary: usageMetrics({ known_cost_by_currency: {}, reference_cost_by_currency: { USD: 1 }, sdk_estimate_cost_by_currency: { USD: 2 }, priced_tokens: 0, unpriced_tokens: 150, complete: false }) });
     render(<UsagePanel wsId="ws" />);

@@ -22,6 +22,11 @@ export interface TaskUsageUnit {
   costAmount: number | null;
   costCurrency: string | null;
   costSource?: "provider_reported" | "sdk_estimate" | "unknown";
+  /** Same-run token unit identities explicitly covered by this reported charge. */
+  coveredUnitIds?: string[];
+  /** Chunked coverage uses the full sorted ID set's count and SHA-256 JSON hash. */
+  coverageExpectedCount?: number;
+  coverageSha256?: string;
   occurredAt: string;
   evidenceRef?: string | null;
 }
@@ -63,6 +68,8 @@ export interface UsageMetrics {
   price_quality: "provider_reported" | "configured" | "published" | "mixed" | "unknown";
   complete: boolean;
   status_counts: UsageStatusCounts;
+  /** False when a known charge covers multiple model groups without an allocation. */
+  cost_allocation_complete?: boolean;
 }
 
 export interface UsageReport {

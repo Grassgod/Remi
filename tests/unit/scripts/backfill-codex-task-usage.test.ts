@@ -46,10 +46,11 @@ describe("historical consumption evidence", () => {
       actualUnsplitTokens: 0, model: null, requestedModel: "gateway-request", modelSource: "session_acknowledged" });
   });
 
-  it("does not import whole resumed history, and uses valid last counts as partial after a reset", () => {
+  it("does not import whole resumed history or infer a reset from a decrease", () => {
     const result = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "resumed" } },
       token(counts(100000, 2000, 90000), counts(30, 4, 10)), token(counts(100, 5, 80), counts(10, 5, 0))), "archive:resume");
-    expect(result.units.map(unit => [unitActualTotal(unit), unit.accuracy])).toEqual([[34, "partial"], [15, "partial"]]);
+    expect(result.units.map(unit => [unitActualTotal(unit), unit.accuracy])).toEqual([[34, "partial"]]);
+    expect(result.rejected).toBe(1);
   });
 
   it("does not let reordered replay corrupt later deltas or reuse prior-epoch identities", () => {
@@ -57,9 +58,32 @@ describe("historical consumption evidence", () => {
     const parsed = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } }, ...rows.map(total => token(total, counts(100, 10)))), "reordered");
     expect(parsed.replayed).toBe(1);
     expect(parsed.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(330);
-    const reset = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } }, token(counts(100, 10)), token(counts(10, 1)), token(counts(100, 10))), "reset");
+    const reset = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } }, token(counts(100, 10)),
+      { type: "session_meta", payload: { id: "different-thread" } }, token(counts(10, 1)), token(counts(100, 10))), "reset");
     expect(reset.units).toHaveLength(3);
     expect(new Set(reset.units.map(unit => unit.unitId)).size).toBe(3);
+  });
+
+  it("keeps the native cumulative high-water mark across unseen out-of-order notifications", () => {
+    const parsed = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } },
+      ...[1, 3, 2, 4].map(n => token(counts(n * 100, n * 10), counts(100, 10)))), "unseen-reordered");
+    expect(parsed.rejected).toBe(1);
+    expect(parsed.units.map(unit => unitActualTotal(unit))).toEqual([110, 220, 110]);
+    expect(parsed.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(440);
+  });
+
+  it.each(["compacted", "context_compacted"])("counts new valid requests after the explicit native %s marker, excluding its pseudo total", type => {
+    const marker = type === "compacted" ? { type, timestamp: at, payload: { message: "context replacement" } }
+      : { type: "event_msg", timestamp: at, payload: { type } };
+    const parsed = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "s" } },
+      token(counts(300, 30), counts(100, 10)), marker,
+      token({ input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, total_tokens: 78048 }),
+      token(counts(100, 10)), token(counts(200, 20), counts(100, 10)), marker,
+      token(counts(100, 10))), "explicit-compaction");
+    expect(parsed.rejected).toBe(1);
+    expect(parsed.units.map(unit => [unitActualTotal(unit), unit.accuracy])).toEqual([[110, "partial"], [110, "partial"], [110, "exact"]]);
+    expect(parsed.units[1]!.unitId).toContain(":epoch:1:");
+    expect(parsed.replayed).toBe(1);
   });
 
   it("assigns shared session history only within one unambiguous task interval", () => {

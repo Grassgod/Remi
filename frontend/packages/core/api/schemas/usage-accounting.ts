@@ -10,6 +10,7 @@ export const UsageMetricsSchema = z.object({
   reference_cost_by_currency: z.record(z.string().regex(/^[A-Z]{3}$/), amount).optional(),
   sdk_estimate_cost_by_currency: z.record(z.string().regex(/^[A-Z]{3}$/), amount).optional(),
   price_quality: z.string(), complete: z.boolean(),
+  cost_allocation_complete: z.boolean().optional(),
   status_counts: z.object({ completed: count, failed: count, cancelled: count, active: count, queued: count }).loose(),
 }).loose();
 

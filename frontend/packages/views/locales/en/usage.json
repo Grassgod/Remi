@@ -78,6 +78,8 @@
     "provider": "Call engine",
     "connection": "Connection",
     "unknown_model": "Unknown actual model",
+    "unallocated_cost": "Unallocated charge across models",
+    "allocation_unknown": "Token coverage is known; the charge cannot be allocated to each model",
     "currency": "Currency",
     "effective_from": "Effective from (ISO timestamp)",
     "version": "Version",

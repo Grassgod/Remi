@@ -123,18 +123,60 @@ export class UsageAccountingRepo {
       const seconds = this.ctx.db.dialect === "postgres"
         ? "GREATEST(0,EXTRACT(EPOCH FROM (CAST(t.ended_at AS TIMESTAMPTZ)-CAST(COALESCE(t.started_at,t.dispatched_at,t.created_at) AS TIMESTAMPTZ))))"
         : "MAX(0,(julianday(t.ended_at)-julianday(COALESCE(t.started_at,t.dispatched_at,t.created_at)))*86400)";
-      const cte = `WITH tasks AS (${tasksSql}), facts AS (
+      const tokenEvidence = (alias: string) => `(${alias}.input_tokens IS NOT NULL OR ${alias}.output_tokens IS NOT NULL OR ${alias}.cache_read_tokens IS NOT NULL OR ${alias}.cache_write_tokens IS NOT NULL OR ${alias}.actual_unsplit_tokens IS NOT NULL)`;
+      const cte = `WITH tasks AS (${tasksSql}), cost_links AS (
+        SELECT l.task_id,l.run_id,l.monetary_unit_id,l.covered_unit_id FROM multiremi_usage_cost_coverage l JOIN tasks scoped ON scoped.id=l.task_id
+        UNION SELECT own.task_id,own.run_id,own.unit_id,own.unit_id FROM multiremi_usage_units own JOIN tasks scoped ON scoped.id=own.task_id
+          WHERE cost_source='provider_reported' AND cost_amount IS NOT NULL AND ${tokenEvidence("own")}
+      ), cost_claims AS (
+        SELECT task_id,run_id,covered_unit_id,COUNT(*) AS claim_count FROM cost_links GROUP BY task_id,run_id,covered_unit_id
+      ), valid_charges AS (
+        SELECT m.task_id,m.run_id,m.unit_id FROM multiremi_usage_units m JOIN tasks scoped ON scoped.id=m.task_id
+        WHERE m.cost_source='provider_reported' AND m.cost_amount IS NOT NULL AND m.scope IN ('request','turn') AND m.cost_coverage_complete=1
+          AND EXISTS(SELECT 1 FROM cost_links l WHERE l.task_id=m.task_id AND l.run_id=m.run_id AND l.monetary_unit_id=m.unit_id)
+          AND NOT EXISTS(SELECT 1 FROM cost_links l
+            LEFT JOIN multiremi_usage_units target ON target.task_id=l.task_id AND target.run_id=l.run_id AND target.unit_id=l.covered_unit_id
+            LEFT JOIN cost_claims c ON c.task_id=l.task_id AND c.run_id=l.run_id AND c.covered_unit_id=l.covered_unit_id
+            WHERE l.task_id=m.task_id AND l.run_id=m.run_id AND l.monetary_unit_id=m.unit_id
+              AND (target.unit_id IS NULL OR target.source='context_snapshot' OR NOT ${tokenEvidence("target")}
+                OR target.provider<>m.provider OR COALESCE(target.connection_id,'')<>COALESCE(m.connection_id,'') OR c.claim_count<>1))
+      ), charge_groups AS (
+        SELECT v.task_id,v.run_id,v.unit_id,target.provider,target.model,target.requested_model,target.model_source,target.purpose,target.connection_id
+        FROM valid_charges v JOIN cost_links l ON l.task_id=v.task_id AND l.run_id=v.run_id AND l.monetary_unit_id=v.unit_id
+        JOIN multiremi_usage_units target ON target.task_id=l.task_id AND target.run_id=l.run_id AND target.unit_id=l.covered_unit_id
+        GROUP BY v.task_id,v.run_id,v.unit_id,target.provider,target.model,target.requested_model,target.model_source,target.purpose,target.connection_id
+      ), charge_dimensions AS (
+        SELECT task_id,run_id,unit_id,COUNT(*) AS model_groups,MIN(provider) AS provider,MIN(model) AS model,
+          MIN(requested_model) AS requested_model,MIN(model_source) AS model_source,MIN(purpose) AS purpose,MIN(connection_id) AS connection_id
+        FROM charge_groups GROUP BY task_id,run_id,unit_id
+      ), covered_cost AS (
+        SELECT l.task_id,l.run_id,l.covered_unit_id,MIN(d.model_groups) AS model_groups FROM cost_links l JOIN valid_charges v
+          ON v.task_id=l.task_id AND v.run_id=l.run_id AND v.unit_id=l.monetary_unit_id
+        JOIN charge_dimensions d ON d.task_id=v.task_id AND d.run_id=v.run_id AND d.unit_id=v.unit_id
+        GROUP BY l.task_id,l.run_id,l.covered_unit_id
+      ), facts AS (
         SELECT t.id AS task_id,COALESCE(u.agent_id,t.agent_id) AS agent_id,CASE WHEN u.task_id IS NULL THEN t.runtime_id ELSE u.runtime_id END AS runtime_id,t.status,${dateExpr} AS date,
           CASE WHEN ${lifePredicate} THEN 1 ELSE 0 END AS lifecycle_in_window,
-          COALESCE(${seconds},0) AS seconds,COALESCE(u.provider,'unknown') AS provider,u.model,u.requested_model,COALESCE(u.model_source,'unknown') AS model_provenance,COALESCE(u.purpose,'agent') AS purpose,u.connection_id,u.context_tokens,
+          COALESCE(${seconds},0) AS seconds,COALESCE(u.provider,'unknown') AS provider,
+          CASE WHEN v.unit_id IS NULL THEN u.model WHEN d.model_groups=1 THEN d.model ELSE NULL END AS model,
+          CASE WHEN v.unit_id IS NULL THEN u.requested_model WHEN d.model_groups=1 THEN d.requested_model ELSE NULL END AS requested_model,
+          CASE WHEN v.unit_id IS NULL THEN COALESCE(u.model_source,'unknown') WHEN d.model_groups=1 THEN d.model_source ELSE 'unallocated_cost' END AS model_provenance,
+          CASE WHEN v.unit_id IS NULL THEN COALESCE(u.purpose,'agent') WHEN d.model_groups=1 THEN d.purpose ELSE 'mixed' END AS purpose,
+          u.connection_id,u.context_tokens,
           COALESCE(u.runtime_provenance,'unknown') AS runtime_provenance,
           COALESCE(u.input_tokens,0) AS actual_input_tokens,COALESCE(u.output_tokens,0) AS actual_output_tokens,
           COALESCE(u.cache_read_tokens,0) AS actual_cache_read_tokens,COALESCE(u.cache_write_tokens,0) AS actual_cache_write_tokens,
           COALESCE(u.actual_unsplit_tokens,0) AS actual_unsplit_tokens,(${TOTAL}) AS actual_total_tokens,
-          CASE WHEN u.cost_amount IS NOT NULL AND u.cost_source='provider_reported' THEN (${TOTAL}) WHEN p.source='configured' THEN (${PRICE_TOKENS}) ELSE 0 END AS priced_tokens,
-          CASE WHEN u.cost_amount IS NOT NULL THEN CASE WHEN u.cost_source<>'unknown' THEN u.cost_amount ELSE NULL END WHEN ${PRICING_AVAILABLE} THEN (${PRICE_AMOUNT})/1000000.0 ELSE NULL END AS amount,
-          CASE WHEN u.cost_amount IS NOT NULL THEN CASE WHEN u.cost_source<>'unknown' THEN u.cost_currency ELSE NULL END WHEN ${PRICING_AVAILABLE} THEN p.currency ELSE NULL END AS currency,
-          CASE WHEN u.cost_amount IS NOT NULL THEN 'provider_reported' ELSE COALESCE(p.source,'unknown') END AS quality,
+          CASE WHEN cc.covered_unit_id IS NOT NULL THEN (${TOTAL}) WHEN claim.covered_unit_id IS NULL AND p.source='configured' THEN (${PRICE_TOKENS}) ELSE 0 END AS priced_tokens,
+          CASE WHEN v.unit_id IS NOT NULL OR u.cost_source='sdk_estimate' THEN u.cost_amount
+            WHEN u.cost_amount IS NOT NULL OR cc.covered_unit_id IS NOT NULL OR claim.covered_unit_id IS NOT NULL THEN NULL
+            WHEN ${PRICING_AVAILABLE} THEN (${PRICE_AMOUNT})/1000000.0 ELSE NULL END AS amount,
+          CASE WHEN v.unit_id IS NOT NULL OR u.cost_source='sdk_estimate' THEN u.cost_currency
+            WHEN u.cost_amount IS NOT NULL OR cc.covered_unit_id IS NOT NULL OR claim.covered_unit_id IS NOT NULL THEN NULL
+            WHEN ${PRICING_AVAILABLE} THEN p.currency ELSE NULL END AS currency,
+          CASE WHEN v.unit_id IS NOT NULL THEN 'provider_reported' ELSE COALESCE(p.source,'unknown') END AS quality,
+          CASE WHEN u.cost_amount IS NOT NULL AND u.cost_source='provider_reported' AND v.unit_id IS NULL THEN 0 ELSE 1 END AS price_complete,
+          CASE WHEN cc.model_groups>1 OR d.model_groups>1 THEN 0 ELSE 1 END AS cost_allocation_complete,
           CASE WHEN u.cost_amount IS NOT NULL THEN CASE WHEN u.cost_source='provider_reported' THEN 0 ELSE 2 END WHEN p.source='published' THEN 1 ELSE 0 END AS reference_amount,
           CASE WHEN u.task_id IS NULL OR NOT EXISTS(SELECT 1 FROM multiremi_usage_units observed WHERE observed.task_id=t.id AND observed.run_id=u.run_id
               AND observed.source<>'context_snapshot' AND (observed.input_tokens IS NOT NULL OR observed.output_tokens IS NOT NULL
@@ -148,6 +190,10 @@ export class UsageAccountingRepo {
               SELECT 1 FROM multiremi_usage_units covered WHERE covered.task_id=rr.task_id AND covered.run_id=rr.run_id AND covered.source<>'context_snapshot'
               AND (covered.input_tokens IS NOT NULL OR covered.output_tokens IS NOT NULL OR covered.cache_read_tokens IS NOT NULL OR covered.cache_write_tokens IS NOT NULL OR covered.actual_unsplit_tokens IS NOT NULL)))) THEN 0 ELSE 1 END AS run_complete
         FROM tasks t LEFT JOIN multiremi_usage_units u ON u.task_id=t.id AND ${unitPredicate}
+        LEFT JOIN valid_charges v ON v.task_id=u.task_id AND v.run_id=u.run_id AND v.unit_id=u.unit_id
+        LEFT JOIN charge_dimensions d ON d.task_id=u.task_id AND d.run_id=u.run_id AND d.unit_id=u.unit_id
+        LEFT JOIN covered_cost cc ON cc.task_id=u.task_id AND cc.run_id=u.run_id AND cc.covered_unit_id=u.unit_id
+        LEFT JOIN cost_claims claim ON claim.task_id=u.task_id AND claim.run_id=u.run_id AND claim.covered_unit_id=u.unit_id
         LEFT JOIN multiremi_usage_prices p ON p.id=(SELECT pp.id FROM multiremi_usage_prices pp
           WHERE pp.workspace_id=? AND pp.provider=u.provider
             AND ((pp.requested_model_alias=0 AND pp.model=u.model) OR (pp.requested_model_alias=1 AND u.model IS NULL AND pp.model=u.requested_model))
@@ -163,7 +209,7 @@ export class UsageAccountingRepo {
         const totals = this.ctx.db.query(`${cte} SELECT ${keySelect}
           ${["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"].map((f) => `COALESCE(SUM(${f}),0) AS ${f}`).join(",")},
           COUNT(DISTINCT task_id) AS task_count,COUNT(DISTINCT CASE WHEN unknown=1 THEN task_id END) AS unknown_task_count,
-          MAX(context_tokens) AS context_peak_tokens,MIN(run_complete) AS run_complete,
+          MAX(context_tokens) AS context_peak_tokens,MIN(run_complete) AS run_complete,MIN(price_complete) AS price_complete,MIN(cost_allocation_complete) AS cost_allocation_complete,
           CASE WHEN MIN(runtime_provenance)=MAX(runtime_provenance) THEN MIN(runtime_provenance) ELSE 'mixed' END AS runtime_provenance,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status='completed' THEN task_id END) AS completed,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status='failed' THEN task_id END) AS failed,
@@ -172,7 +218,7 @@ export class UsageAccountingRepo {
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status IN ('queued','pending') THEN task_id END) AS queued
           FROM facts ${group}`).all(...queryParams) as Row[];
         const monetary = this.ctx.db.query(`${cte} SELECT ${keySelect}currency,reference_amount,SUM(amount) AS amount,MIN(quality) AS first_quality,MAX(quality) AS last_quality
-          FROM facts WHERE currency IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`).all(...queryParams) as Row[];
+          FROM facts WHERE currency IS NOT NULL AND amount IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`).all(...queryParams) as Row[];
         const durations = this.ctx.db.query(`${cte} SELECT ${keySelect}SUM(seconds) AS total_seconds FROM (
           SELECT DISTINCT ${keySelect}task_id,CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END AS seconds FROM facts) task_durations ${group}`).all(...queryParams) as Row[];
         const key = (r: Row) => JSON.stringify(keys.map((k) => r[k] ?? null));
@@ -190,11 +236,14 @@ export class UsageAccountingRepo {
           const numericFields = new Set(["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens", "task_count", "unknown_task_count", "context_peak_tokens"]);
           const metrics = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, numericFields.has(k) && v !== null ? Number(v) : v])) as Row;
           const status_counts = Object.fromEntries(["completed", "failed", "cancelled", "active", "queued"].map((s) => [s, Number(r[s] ?? 0)]));
-          for (const s of ["completed", "failed", "cancelled", "active", "queued", "run_complete"]) delete metrics[s];
+          const allocationComplete = !keys.includes("model") || Number(r.cost_allocation_complete) === 1;
+          if (allocationComplete) delete metrics.cost_allocation_complete;
+          else metrics.cost_allocation_complete = false;
+          for (const s of ["completed", "failed", "cancelled", "active", "queued", "run_complete", "price_complete"]) delete metrics[s];
           const unpriced_tokens = Number(r.actual_total_tokens) - Number(r.priced_tokens);
           return { ...metrics, total_seconds: durationMap.get(key(r)) ?? 0, known_cost_by_currency: c?.values ?? {}, reference_cost_by_currency: c?.reference ?? {}, sdk_estimate_cost_by_currency: c?.sdk ?? {}, unpriced_tokens,
             status_counts, price_quality: !c || c.qualities.size === 0 ? "unknown" : c.qualities.size > 1 ? "mixed" : [...c.qualities][0],
-            complete: Number(r.task_count) === 0 || (Number(r.unknown_task_count) === 0 && unpriced_tokens === 0 && Number(r.run_complete) === 1) } as unknown as UsageMetrics & Row;
+            complete: Number(r.task_count) === 0 || (Number(r.unknown_task_count) === 0 && unpriced_tokens === 0 && Number(r.run_complete) === 1 && Number(r.price_complete) === 1 && allocationComplete) } as unknown as UsageMetrics & Row;
         });
       };
       const summary = aggregate([])[0]!;

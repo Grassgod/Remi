@@ -1,4 +1,5 @@
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
+import { createHash } from "node:crypto";
 import { advisoryLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 type Row = Record<string, unknown>;
@@ -7,7 +8,37 @@ export class UsageAccountingNotReadyError extends Error {}
 export const USAGE_CUTOVER_MARKER = "20261006_usage_accounting_v2";
 export interface UsageScopeEvidence { id: string | null; provenance: string; }
 export interface UsageWriteOptions { historical?: boolean; runtimeScope?: UsageScopeEvidence; projectScope?: UsageScopeEvidence; }
-const UNIT_FIELDS = ["provider", "model", "model_source", "purpose", "requested_model", "connection_id", "scope", "source", "accuracy", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "context_tokens", "context_window", "cost_amount", "cost_currency", "cost_source", "occurred_at", "evidence_ref"];
+const UNIT_FIELDS = ["provider", "model", "model_source", "purpose", "requested_model", "connection_id", "scope", "source", "accuracy", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "context_tokens", "context_window", "cost_amount", "cost_currency", "cost_source", "cost_coverage_expected_count", "cost_coverage_sha256", "occurred_at", "evidence_ref"];
+const coverageHash = (ids: string[]) => createHash("sha256").update(JSON.stringify([...ids].sort())).digest("hex");
+// Fixed-width UTF-16 code units preserve JavaScript sort order, including
+// supplementary Unicode characters, independently of database collation.
+const coverageSortKey = (id: string) => Array.from({ length: id.length }, (_, index) => id.charCodeAt(index).toString(16).padStart(4, "0")).join("");
+const COVERAGE_PAGE_SIZE = 512;
+
+function storedCoverageDigest(db: SqlDatabase, taskId: string, runId: string, monetaryUnitId: string): { count: number; sha256: string } {
+  const collation = db.dialect === "postgres" ? 'COLLATE "C"' : "COLLATE BINARY";
+  // Older link rows receive their deterministic key lazily in bounded pages.
+  for (;;) {
+    const missing = db.query(`SELECT covered_unit_id FROM multiremi_usage_cost_coverage
+      WHERE task_id=? AND run_id=? AND monetary_unit_id=? AND covered_unit_sort_key IS NULL LIMIT ${COVERAGE_PAGE_SIZE}`).all(taskId, runId, monetaryUnitId) as Row[];
+    if (!missing.length) break;
+    for (const row of missing) db.run("UPDATE multiremi_usage_cost_coverage SET covered_unit_sort_key=? WHERE task_id=? AND run_id=? AND monetary_unit_id=? AND covered_unit_id=?",
+      [coverageSortKey(String(row.covered_unit_id)), taskId, runId, monetaryUnitId, row.covered_unit_id]);
+  }
+  const hash = createHash("sha256");
+  hash.update("[");
+  let cursor: string | undefined, count = 0;
+  for (;;) {
+    const rows = db.query(`SELECT covered_unit_id,covered_unit_sort_key FROM multiremi_usage_cost_coverage
+      WHERE task_id=? AND run_id=? AND monetary_unit_id=?${cursor === undefined ? "" : ` AND covered_unit_sort_key ${collation}>?`}
+      ORDER BY covered_unit_sort_key ${collation} LIMIT ${COVERAGE_PAGE_SIZE}`).all(taskId, runId, monetaryUnitId, ...(cursor === undefined ? [] : [cursor])) as Row[];
+    if (!rows.length) break;
+    for (const row of rows) { if (count++) hash.update(","); hash.update(JSON.stringify(String(row.covered_unit_id))); }
+    cursor = String(rows[rows.length - 1]!.covered_unit_sort_key);
+  }
+  hash.update("]");
+  return { count, sha256: hash.digest("hex") };
+}
 
 export function ensureUsageAccountingSchema(db: SqlDatabase): void {
   db.exec(`
@@ -34,13 +65,21 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
       scope TEXT NOT NULL, source TEXT NOT NULL, accuracy TEXT NOT NULL,
       input_tokens BIGINT, output_tokens BIGINT, cache_read_tokens BIGINT, cache_write_tokens BIGINT,
       actual_unsplit_tokens BIGINT, reported_total_tokens BIGINT, context_tokens BIGINT, context_window BIGINT,
-      cost_amount DOUBLE PRECISION, cost_currency TEXT, cost_source TEXT NOT NULL DEFAULT 'unknown', occurred_at TEXT NOT NULL, evidence_ref TEXT,
+      cost_amount DOUBLE PRECISION, cost_currency TEXT, cost_source TEXT NOT NULL DEFAULT 'unknown',
+      cost_coverage_expected_count INTEGER, cost_coverage_sha256 TEXT, cost_coverage_complete INTEGER NOT NULL DEFAULT 1,cost_coverage_received_count INTEGER,
+      occurred_at TEXT NOT NULL, evidence_ref TEXT,
       PRIMARY KEY(task_id, run_id, unit_id), FOREIGN KEY(task_id, run_id) REFERENCES multiremi_usage_runs(task_id, run_id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_usage_units_workspace_time ON multiremi_usage_units(workspace_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_usage_units_runtime_time ON multiremi_usage_units(workspace_id, runtime_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_usage_units_project_time ON multiremi_usage_units(workspace_id, project_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_usage_units_model ON multiremi_usage_units(workspace_id, provider, model, connection_id);
+    CREATE TABLE IF NOT EXISTS multiremi_usage_cost_coverage (
+      task_id TEXT NOT NULL,run_id TEXT NOT NULL,monetary_unit_id TEXT NOT NULL,covered_unit_id TEXT NOT NULL,covered_unit_sort_key TEXT,
+      PRIMARY KEY(task_id,run_id,monetary_unit_id,covered_unit_id),
+      FOREIGN KEY(task_id,run_id,monetary_unit_id) REFERENCES multiremi_usage_units(task_id,run_id,unit_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_cost_covered ON multiremi_usage_cost_coverage(task_id,run_id,covered_unit_id);
     CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_audit (
       task_id TEXT PRIMARY KEY, original_usage TEXT, migrated_at TEXT NOT NULL,
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
@@ -60,8 +99,15 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
     for (const column of ["runtime_provenance", "project_provenance"]) if (!columns.some(field => field.name === column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT 'unknown'`);
   }
   const unitColumns = db.query("PRAGMA table_info(multiremi_usage_units)").all() as Array<{ name: string }>;
+  const coverageColumns = db.query("PRAGMA table_info(multiremi_usage_cost_coverage)").all() as Array<{ name: string }>;
+  if (!coverageColumns.some(field => field.name === "covered_unit_sort_key")) db.run("ALTER TABLE multiremi_usage_cost_coverage ADD COLUMN covered_unit_sort_key TEXT");
+  db.run(`CREATE INDEX IF NOT EXISTS idx_usage_cost_order ON multiremi_usage_cost_coverage(task_id,run_id,monetary_unit_id,covered_unit_sort_key ${db.dialect === "postgres" ? 'COLLATE "C"' : "COLLATE BINARY"})`);
   if (!unitColumns.some(field => field.name === "cost_source")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_source TEXT NOT NULL DEFAULT 'unknown'");
   if (!unitColumns.some(field => field.name === "purpose")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN purpose TEXT NOT NULL DEFAULT 'agent'");
+  if (!unitColumns.some(field => field.name === "cost_coverage_expected_count")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_expected_count INTEGER");
+  if (!unitColumns.some(field => field.name === "cost_coverage_sha256")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_sha256 TEXT");
+  if (!unitColumns.some(field => field.name === "cost_coverage_complete")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_complete INTEGER NOT NULL DEFAULT 1");
+  if (!unitColumns.some(field => field.name === "cost_coverage_received_count")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_received_count INTEGER");
   const taskScopeColumns = db.query("PRAGMA table_info(multiremi_usage_task_scopes)").all() as Array<{ name: string }>;
   if (!taskScopeColumns.some(field => field.name === "active_run_id")) db.run("ALTER TABLE multiremi_usage_task_scopes ADD COLUMN active_run_id TEXT");
   // A fresh database has no legacy facts to backfill. Existing installations
@@ -91,6 +137,14 @@ export function validateUsageSnapshot(input: unknown): TaskUsageSnapshot {
     if (u.modelSource !== undefined && !["provider_reported", "session_acknowledged", "configured", "unknown"].includes(u.modelSource)) throw new UsageValidationError("Invalid modelSource");
     if (u.purpose !== undefined && (typeof u.purpose !== "string" || !u.purpose.trim() || u.purpose.length > 64)) throw new UsageValidationError("Invalid purpose");
     if (u.costSource !== undefined && !["provider_reported", "sdk_estimate", "unknown"].includes(u.costSource)) throw new UsageValidationError("Invalid costSource");
+    if (u.coveredUnitIds !== undefined && (!Array.isArray(u.coveredUnitIds) || u.coveredUnitIds.length > 10_000
+      || new Set(u.coveredUnitIds).size !== u.coveredUnitIds.length
+      || u.coveredUnitIds.some(id => typeof id !== "string" || !id.trim() || id.length > 256)
+      || u.costSource !== "provider_reported" || u.costAmount === null || u.scope === "task")) throw new UsageValidationError("Invalid monetary coverage");
+    if ((u.coverageExpectedCount === undefined) !== (u.coverageSha256 === undefined)
+      || (u.coverageExpectedCount !== undefined && (!Number.isSafeInteger(u.coverageExpectedCount) || u.coverageExpectedCount < 0 || u.coverageExpectedCount > 1_000_000
+        || typeof u.coverageSha256 !== "string" || !/^[0-9a-f]{64}$/.test(u.coverageSha256)
+        || u.coveredUnitIds === undefined || u.coveredUnitIds.length > u.coverageExpectedCount))) throw new UsageValidationError("Invalid monetary coverage commitment");
     for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "actualUnsplitTokens", "reportedTotalTokens", "contextTokens", "contextWindow"] as const) {
       if (u[key] !== null && (!Number.isSafeInteger(u[key]) || u[key]! < 0)) throw new UsageValidationError(`Invalid ${key}`);
     }
@@ -154,25 +208,53 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
     let changed = Number(run.revision) < s.revision || (Number(run.revision) === s.revision && Number(run.complete) === 0 && s.complete);
     if (changed) db.run(`UPDATE multiremi_usage_runs SET revision=?, complete=? WHERE task_id=? AND run_id=?`, [s.revision, s.complete ? 1 : 0, taskId, s.runId]);
     for (const u of s.units) {
+      const coverageExpectedCount = u.coverageExpectedCount ?? (u.coveredUnitIds === undefined ? null : u.coveredUnitIds.length);
+      const coverageSha256 = u.coverageSha256 ?? (u.coveredUnitIds === undefined ? null : coverageHash(u.coveredUnitIds));
       const values = [u.provider, u.model, u.modelSource ?? "unknown", u.purpose ?? "agent", u.requestedModel ?? null, u.connectionId ?? null, u.scope, u.source, u.accuracy,
         u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.actualUnsplitTokens, u.reportedTotalTokens,
-        u.contextTokens, u.contextWindow, u.costAmount, u.costCurrency, u.costSource ?? (u.costAmount !== null ? "provider_reported" : "unknown"), new Date(u.occurredAt).toISOString(), u.evidenceRef ?? null];
-      const columns = ["task_id", "run_id", "unit_id", "revision", "workspace_id", "agent_id", "runtime_id", "project_id", "runtime_provenance", "project_provenance", ...UNIT_FIELDS];
-      const previous = db.query(`SELECT revision,${UNIT_FIELDS.join(",")} FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?`).get(taskId, s.runId, u.unitId) as Row | null;
+        u.contextTokens, u.contextWindow, u.costAmount, u.costCurrency, u.costSource ?? (u.costAmount !== null ? "provider_reported" : "unknown"), coverageExpectedCount, coverageSha256, new Date(u.occurredAt).toISOString(), u.evidenceRef ?? null];
+      const columns = ["task_id", "run_id", "unit_id", "revision", "workspace_id", "agent_id", "runtime_id", "project_id", "runtime_provenance", "project_provenance", ...UNIT_FIELDS, "cost_coverage_complete", "cost_coverage_received_count"];
+      const previous = db.query(`SELECT revision,cost_coverage_received_count,cost_coverage_complete,${UNIT_FIELDS.join(",")} FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?`).get(taskId, s.runId, u.unitId) as Row | null;
+      let receivedCount = 0;
       if (previous && Number(previous.revision) === u.revision) {
+        // Upgrade a previously stored full link set lazily under this run lock.
+        if (previous.cost_coverage_expected_count === null && coverageExpectedCount !== null) {
+          const prior = storedCoverageDigest(db, taskId, s.runId, u.unitId);
+          previous.cost_coverage_expected_count = prior.count;
+          previous.cost_coverage_sha256 = prior.sha256;
+          previous.cost_coverage_received_count = prior.count;
+        }
         const equal = UNIT_FIELDS.every((field, index) => {
           const a = previous[field], b = values[index];
           return typeof b === "number" ? Number(a) === b && a !== null : a === b;
         });
         if (!equal) throw new UsageValidationError("Conflicting usage unit at the same revision");
-        continue;
+        if (coverageExpectedCount !== null) receivedCount = previous.cost_coverage_received_count === null
+          ? Number((db.query("SELECT COUNT(*) AS n FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id=? AND monetary_unit_id=?").get(taskId, s.runId, u.unitId) as Row).n)
+          : Number(previous.cost_coverage_received_count);
+      } else {
+        if (previous && Number(previous.revision) > u.revision) continue;
+        changed = true;
+        db.run(`INSERT INTO multiremi_usage_units(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")})
+          ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision, ${UNIT_FIELDS.map((f) => `${f}=excluded.${f}`).join(",")},cost_coverage_complete=excluded.cost_coverage_complete,cost_coverage_received_count=0
+          WHERE multiremi_usage_units.revision<excluded.revision`,
+        [taskId, s.runId, u.unitId, u.revision, String(scope.workspace_id), String(scope.agent_id), scope.runtime_id ?? null, scope.project_id ?? null, scope.runtime_provenance, scope.project_provenance, ...values, coverageExpectedCount === null ? 1 : 0, 0]);
+        if (u.coveredUnitIds !== undefined || previous?.cost_source === "provider_reported") db.run("DELETE FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id=? AND monetary_unit_id=?", [taskId, s.runId, u.unitId]);
       }
-      if (previous && Number(previous.revision) > u.revision) continue;
-      changed = true;
-      db.run(`INSERT INTO multiremi_usage_units(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")})
-        ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision, ${UNIT_FIELDS.map((f) => `${f}=excluded.${f}`).join(",")}
-        WHERE multiremi_usage_units.revision<excluded.revision`,
-      [taskId, s.runId, u.unitId, u.revision, String(scope.workspace_id), String(scope.agent_id), scope.runtime_id ?? null, scope.project_id ?? null, scope.runtime_provenance, scope.project_provenance, ...values]);
+      if (coverageExpectedCount !== null) {
+        for (const coveredId of u.coveredUnitIds ?? []) {
+          const inserted = db.run("INSERT INTO multiremi_usage_cost_coverage(task_id,run_id,monetary_unit_id,covered_unit_id,covered_unit_sort_key) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING", [taskId, s.runId, u.unitId, coveredId, coverageSortKey(coveredId)]).changes;
+          receivedCount += inserted;
+          changed = inserted > 0 || changed;
+        }
+        if (receivedCount > coverageExpectedCount) throw new UsageValidationError("Conflicting monetary coverage commitment");
+        if (receivedCount === coverageExpectedCount && (!previous || Number(previous.revision) !== u.revision || Number(previous.cost_coverage_complete) !== 1)) {
+          const received = storedCoverageDigest(db, taskId, s.runId, u.unitId);
+          if (received.count !== coverageExpectedCount || received.sha256 !== coverageSha256) throw new UsageValidationError("Conflicting monetary coverage commitment");
+        }
+        db.run("UPDATE multiremi_usage_units SET cost_coverage_expected_count=?,cost_coverage_sha256=?,cost_coverage_complete=?,cost_coverage_received_count=? WHERE task_id=? AND run_id=? AND unit_id=?",
+          [coverageExpectedCount, coverageSha256, receivedCount === coverageExpectedCount ? 1 : 0, receivedCount, taskId, s.runId, u.unitId]);
+      }
     }
     return changed;
   })();
@@ -216,11 +298,7 @@ export function ensureLegacyUsageMigrationSchema(db: SqlDatabase): void {
 }
 
 const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t.started_at,t.dispatched_at,t.updated_at,t.created_at)";
-const LEGACY_SUPERSEDED = `(EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id='legacy' AND r.revision=s.source_version)
-  AND EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id NOT IN ('legacy','historical-evidence-v2'))
-  AND NOT EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id='historical-evidence-v2')
-  AND NOT EXISTS(SELECT 1 FROM multiremi_usage_units u WHERE u.task_id=t.id AND u.run_id='legacy' AND u.source<>'legacy_task'))`;
-const LEGACY_PENDING = `(s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at OR ${LEGACY_SUPERSEDED})`;
+const LEGACY_PENDING = `(s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
 
 export function hasPendingLegacyUsage(db: SqlDatabase): boolean {
   return Boolean(db.query(`SELECT t.id FROM multiremi_tasks t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING} LIMIT 1`).get());
@@ -248,25 +326,18 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       const state = db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(row.id) as Row | null;
       const runs = db.query("SELECT run_id,revision FROM multiremi_usage_runs WHERE task_id=?").all(row.id) as Row[];
       const protectedUnit = db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source<>'legacy_task' LIMIT 1").get(row.id);
-      const legacy = runs.find(run => run.run_id === "legacy");
-      const superseded = legacy && Number(legacy.revision) === Number(state?.source_version ?? 0) && !protectedUnit
-        && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")
-        && !runs.some(run => run.run_id === "historical-evidence-v2");
-      if (superseded) {
-        // A modern snapshot can arrive after this task's earlier checkpoint.
-        // Retire only our provisional aggregate, retaining all source audits.
-        db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'", [row.id]);
-        db.run("DELETE FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id='legacy'", [row.id]);
-        db.run("DELETE FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'", [row.id]);
-      }
-      if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return superseded ? 1 : 0;
+      // Merely accepting a new execution (or observing some of its requests)
+      // proves neither overlap nor complete coverage of the old aggregate.
+      // Only reviewed identity-based reconciliation may retire that evidence.
+      if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return 0;
       const timestamp = new Date().toISOString();
       db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);
       const original = db.query("SELECT original_usage,migrated_at FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row;
       db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,0,?,?,?) ON CONFLICT(task_id,source_version) DO NOTHING",
         [row.id, original.original_usage, null, original.migrated_at]);
       const version = state ? Number(state.source_version) + 1 : 1;
-      const protectedRun = runs.some(run => run.run_id !== "legacy" || Number(run.revision) !== Number(state?.source_version ?? 0));
+      const protectedRun = runs.some(run => run.run_id === "historical-evidence-v2"
+        || (run.run_id === "legacy" && Number(run.revision) !== Number(state?.source_version ?? 0)));
       if (!protectedRun && !protectedUnit) {
         // Replace only the provisional legacy aggregate, including removed entries.
         db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'", [row.id]);

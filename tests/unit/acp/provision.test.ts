@@ -48,7 +48,8 @@ function writeBridgePackage(home: string, pkg: string, version: string): string 
   return pkgDir;
 }
 
-function writeCodexDist(pkgDir: string, source = `  createUsageUpdate(params) {
+function writeCodexDist(pkgDir: string, source = `  async createUpdateEvent(notification) { return null; }
+  createUsageUpdate(params) {
     return {
       sessionUpdate: "usage_update",
       used,

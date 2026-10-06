@@ -67,6 +67,8 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
   let sessionId: string | null = null, requestedModel: string | null = null;
   let previous: CodexCounts | null = null;
   let epoch = 0;
+  let compactionAt: number | null = null;
+  const seenCompactions = new Set<string>();
   const seenCumulative = new Set<string>();
   // A final unterminated JSONL append may have been torn by process death.
   const lines = body.split("\n");
@@ -99,7 +101,17 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
       units.set(unitId, next);
       continue;
     }
-    if (row.type === "session_meta" && typeof row.payload?.id === "string") sessionId = row.payload.id;
+    if (row.type === "session_meta" && typeof row.payload?.id === "string") {
+      if (sessionId && sessionId !== row.payload.id) { epoch++; previous = null; seenCumulative.clear(); requestedModel = null; compactionAt = null; }
+      sessionId = row.payload.id;
+    }
+    if ((row.type === "compacted" || (row.type === "event_msg" && row.payload?.type === "context_compacted")) && occurredAt) {
+      const identity = `${sessionId}:${occurredAt}`;
+      if (!seenCompactions.has(identity)) {
+        seenCompactions.add(identity);
+        compactionAt = Date.parse(occurredAt);
+      }
+    }
     if (row.type === "turn_context" && typeof row.payload?.model === "string") requestedModel = row.payload.model;
     if (row.type !== "event_msg" || row.payload?.type !== "token_count" || !row.payload.info) continue;
     const info = row.payload.info;
@@ -108,17 +120,22 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
     const fingerprint = JSON.stringify(cumulative);
     // A replay must not move the delta baseline backwards. Counter epochs
     // distinguish genuine resets from identities observed in prior epochs.
-    if (seenCumulative.has(fingerprint)) { replayed++; continue; }
     let delta: CodexCounts | null = previous ? {
       input: cumulative.input - previous.input, output: cumulative.output - previous.output,
       cached: cumulative.cached - previous.cached, total: cumulative.total - previous.total,
     } : null;
-    const exact = delta && Object.values(delta).every(n => n >= 0) && delta.cached <= delta.input && delta.input + delta.output === delta.total;
-    const reset = delta && Object.values(delta).some(n => n < 0);
+    const decreasing = delta && Object.values(delta).some(n => n < 0);
+    const reset = decreasing && compactionAt !== null && Date.parse(occurredAt) >= compactionAt;
+    if (seenCumulative.has(fingerprint) && !reset) { replayed++; continue; }
+    const exact = delta && !reset && Object.values(delta).every(n => n >= 0) && delta.cached <= delta.input && delta.input + delta.output === delta.total;
+    // A decrease does not prove reset: an unseen notification can arrive late.
+    // A new session identity or explicit successful compaction proves an epoch.
+    if (decreasing && !reset) { rejected++; continue; }
     if (!exact) delta = last;
     const firstWholeRequest = !previous && last && JSON.stringify(last) === JSON.stringify(cumulative);
     if (!delta) { rejected++; continue; }
     if (reset) { epoch++; seenCumulative.clear(); }
+    compactionAt = null;
     seenCumulative.add(fingerprint);
     previous = cumulative;
     const unitId = `codex:${sessionId}:epoch:${epoch}:${digest(cumulative)}`;

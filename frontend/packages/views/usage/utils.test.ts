@@ -10,6 +10,7 @@ describe("Usage presentation", () => {
     const csv = usageCsv([{ label: 'retired,"model', metrics: report.summary }]);
     expect(csv).toContain('"retired,""model"');
     expect(csv).toContain('"known_cost_USD"');
+    expect(csv).toContain('"cost_allocation_complete"');
     expect(csv).toContain('"0.4"');
   });
   it("keeps actual unsplit additive and context separate from actual totals", () => {

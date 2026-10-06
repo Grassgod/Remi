@@ -78,6 +78,8 @@
     "provider": "调用引擎",
     "connection": "连接",
     "unknown_model": "实际模型未知",
+    "unallocated_cost": "跨模型未分配金额",
+    "allocation_unknown": "Token 计价覆盖已知，金额无法分配到各模型",
     "currency": "币种",
     "effective_from": "生效时间（ISO 时间戳）",
     "version": "版本",

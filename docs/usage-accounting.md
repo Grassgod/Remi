@@ -22,6 +22,8 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 的真实执行消费相加。
 
+用量报告按字节与单位数分块，避免长任务超过 daemon 的 1 MiB frame 上限。单个 turn 金额关联的请求列表也可分块：`coverageExpectedCount` 和 `coverageSha256` 固定完整排序列表的数量与 SHA-256（UTF-8 `JSON.stringify(sortedIds)`），各块保留同 unit/revision、金额和不可变事实，仅发送列表子集。同 revision 的列表块幂等追加，更新 revision 清空旧关联；较旧 revision 不回退。数量及哈希验证完成前金额只保留诊断，不能提前计入已知费用或与配置估价相加。所有块持久化后才发送 run 完整标记。采集器在金额观测与 turn settle 时关联覆盖，避免每个请求写入不断增长的完整列表。
+
 单位 `purpose` 默认 `agent`，辅助进度摘要使用 `progress_summary`，与主执行共享已认证的 run 和 ledger。辅助请求保留它真实返回的 provider/model；独立连接未知时不套用主云友连接费率。模型表按 purpose 分组并展示摘要用途，CSV 保留该字段。已有消费与辅助请求尚未结束时不能提前将 run 标为完整。
 
 `provider` 表示调用来源/执行引擎或协议族（如 codex、claude、openai），不代表底层模型厂商；同模型经不同协议和连接调用可有不同计价键。辅助摘要独立连接使用 `runtime:<runtimeId>:progress-summary:<claude|openai>`，只有明确共用 workspace relay 时才复用它原有 engine 的连接标识。
@@ -48,6 +50,14 @@ Runtime 列表/详情和 task/status/Issue 用量兼容响应同样只从规范�
 
 五类 per-million rate 独立允许 null 和明确零。缺价分量保留未计价 token；已有配置分量的金额作为已知小计。单位明确对应 request/turn 范围的 `costAmount` 与 `costCurrency` 另存 `costSource`：`provider_reported` 为提供商报告金额，仍不是实际支付/代理扣款凭证；`sdk_estimate` 只进入独立 SDK 估算栏，不提高计价覆盖率；`unknown` 不进入金额统计。不能把范围不明的会话总金额重复分配给多个 task。
 
+独立的提供商金额单位通过 `coveredUnitIds` 明确关联同一 run 内被收费的 token 单位；金额与 token 在同一单位时隐式覆盖自身。覆盖关系保存在标量关联表，随金额单位 revision 原子替换。可确认且不重叠的提供商金额优先于其覆盖 token 的配置价，这些 token 仍计入计价覆盖率，配置价金额不再相加。缺少目标、调用来源/连接不一致或多笔金额覆盖同一 token 时，金额不进入已知小计，且报表保持不完整；不根据接收顺序、同模型或同一 turn 名称猜测关联。SDK 估算继续单列，不参与提供商金额优先级。
+
+长 turn 的覆盖关联可分块发送：每块保持同一金额单位与 revision，仅携带部分 `coveredUnitIds`，并同时声明完整集合的 `coverageExpectedCount` 与 `coverageSha256`。哈希为排序后全部 ID 数组的 JSON UTF-8 的 SHA-256。服务端持久化幂等追加同 revision 的关联，数量及哈希全部吻合后才启用该金额；缺块期间金额只保留诊断，报表不完整。较新单位 revision 重置覆盖集合，旧 revision 不参与新集合；不可变金额字段或承诺冲突拒绝写入。普通完整数组由服务端生成同一承诺，重放不能偷偷改变目标集合，金额始终只计一次。
+
+最终哈希也按稳定游标每页最多 512 关联读取并增量计算，不一次拉回完整 ID 集合。持久化固定宽度 UTF-16 排序键并使用数据库二进制排序，确保 SQLite、PostgreSQL 与 JavaScript `sort()` 对合法 Unicode ID 的顺序一致；旧关联的排序键同样按有界页补齐。
+
+费用覆盖目标只有一个模型分组时，金额归入该目标模型；turn 金额覆盖多个模型且未提供可验证分配时，保留独立 `model_provenance=unallocated_cost` 金额桶，不按 token 比例猜分配。被覆盖的各模型金额保持缺失，页面显示 `—`，并返回 `cost_allocation_complete=false`；token 覆盖 100% 不代表模型金额归属完整。未分配金额桶仍参与同币种对账，各模型行与该桶的金额之和等于报告已知小计。金额 SQL 只聚合非 null 数值，明确零金额可以显示为零。
+
 `configured` 表示管理员确认的连接费率；`published` 表示有 source URL 的公开参考价，只有实际 provider-reported SKU 可以匹配。两者都通过服务器统一计算，但 published 结果仅进入参考金额，不提高覆盖率或宣告计价完整。公开 catalog 不自动等同代理价。服务层级、长上下文门槛、缓存时长、时段和代理倍率会改变适用价格；当前五类 flat rate 没有这些条件维度，不自动导入有条件 catalog 或把当前费率倒填未知历史。未确认适用的部分保持 unpriced。
 
 ## CLI 与受控历史迁移
@@ -67,7 +77,7 @@ remi dashboard usage reconcile --workspace <id> --days all --tz Asia/Shanghai --
 
 启动先创建 schema，释放全局 migration 锁后自动执行必需的标量迁移；UI/runtime 两个 API 进程都在迁移完成后才开启后台任务、HTTP listener 和 `/readyz`。每批默认 500 task、最多 5000，每个 task 独立提交，持久化游标和源版本检查点支持中断恢复；失败或默认五分钟启动预算耗尽会使启动失败，不会把未完成迁移当作就绪。空库同样自动完成切换，已就绪启动只查询启动标记。启动不扫描 archive、trace 或原始 telemetry，常规报表仍只读规范化账本。配置与部署边界见[部署切换说明](../deploy/README.md#usage-accounting-startup-cutover)。
 
-`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；首次新代码启动会重新检查旧服务器在准备后写入的 usage 和时间变化。迁移只替换自身创建的 provisional legacy aggregate，不覆盖 modern live run 或 evidence-verified 恢复事实。准备后的切换必须停止旧 API 写入；已完成切换后不能继续运行仅写 JSON 的旧镜像。
+`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；首次新代码启动会重新检查旧服务器在准备后写入的 usage 和时间变化。迁移只替换自身创建的 provisional legacy aggregate，不覆盖 modern live run 或 evidence-verified 恢复事实。新 run 的 start ACK 或部分请求证据不证明其覆盖旧聚合，不能据此删除旧消费；旧聚合与新尝试的证据各自保留，未知覆盖仍明确为不完整。只有经审核的身份与覆盖证据才能退休旧聚合。准备后的切换必须停止旧 API 写入；已完成切换后不能继续运行仅写 JSON 的旧镜像。
 
 下面是数据库维护脚本，不是普通 API 的隐式写操作。先备份并在恢复克隆演练；`MULTIREMI_DATABASE_URL` 由维护环境显式设置，不通过 API 传数据库凭据。
 
@@ -79,7 +89,7 @@ bun run scripts/reconcile-task-usage.ts --apply-plan=<review-plan.json> --execut
 bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 ```
 
-不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。已有 modern live run 和非终态任务不进入历史证据应用队列；legacy schema 迁移仍处理所有任务。部分原生请求不能证明覆盖旧聚合，因此旧 split 消费保持计量地位，完整请求证据单独存 reconciliation evidence，不能与聚合相加；只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial。相邻相等计数不证明重复，去重使用可验证请求身份；Codex replay 不改变累计差分基线，reset epoch 区分计数器重置后的请求。恢复按 task 原子检查点保存原事实和旧 usage 校验哈希，复检任务终态及无 modern live run，变化的源拒绝应用，重复应用同一计划恢复进度而不双计。不可恢复项有明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
+不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。已有 modern live run 和非终态任务不进入历史证据应用队列；legacy schema 迁移仍处理所有任务。部分原生请求不能证明覆盖旧聚合，因此旧 split 消费保持计量地位，完整请求证据单独存 reconciliation evidence，不能与聚合相加；只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial。相邻相等计数不证明重复，去重使用可验证请求身份；Codex replay 和无重置证据的下降不改变累计差分基线，仅 thread/session 身份变化或明确成功压缩后的有效下降建立新 epoch。原生 `compacted`、`context_compacted` 记录提供压缩证据，total-only 估计不成为消费。恢复按 task 原子检查点保存原事实和旧 usage 校验哈希，复检任务终态及无 modern live run，变化的源拒绝应用，重复应用同一计划恢复进度而不双计。后续计划必须保留已建立的请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实；追加证据的完整超集可以重新应用，并审计原事实。不可恢复项有明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
 
 ## 验证和性能边界
 

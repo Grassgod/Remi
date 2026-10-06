@@ -78,6 +78,8 @@
     "provider": "호출 엔진",
     "connection": "연결",
     "unknown_model": "실제 모델 미확인",
+    "unallocated_cost": "모델 간 미배분 금액",
+    "allocation_unknown": "토큰 과금 범위는 알려져 있지만 모델별 금액은 배분할 수 없습니다",
     "currency": "통화",
     "effective_from": "적용 시작 (ISO 타임스탬프)",
     "version": "버전",
