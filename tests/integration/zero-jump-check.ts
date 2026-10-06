@@ -69,6 +69,7 @@ import {
 } from "../../frontend/scripts/perf/lib/zero-jump-verdict";
 import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
+import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const WEB_APP_DIR = join(REPO_ROOT, "frontend", "apps", "web");
@@ -178,6 +179,7 @@ function findFreePort(start: number): number {
 interface Scenario {
   key: string;
   taskCacheEmpty?: boolean;
+  imageCase?: ImageCase;
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
@@ -192,7 +194,7 @@ interface Scenario {
   expectIssueId: string | null;
 }
 
-function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] {
+function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: ImageCase[] = []): Scenario[] {
   const detail = (key: string, issueId: string, extra: Partial<Scenario> = {}): Scenario[] => [
     {
       key,
@@ -220,6 +222,12 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     },
   ];
   const scenarios: Scenario[] = [
+    ...imageCases.flatMap(imageCase => detail(imageCase.key, imageCase.issueId, {
+      imageCase,
+      ...(imageCase.kind === "element" ? {
+        path: `/issues/${imageCase.issueId}?comment=${imageCase.commentId}`, targetCommentId: imageCase.commentId,
+      } : {}),
+    }).filter(scenario => imageCase.kind !== "element" || scenario.mode === "cold")),
     ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
@@ -273,6 +281,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
+  imageObservation?: ImageObservation;
   requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number; transferBytes: number; encodedBytes: number; initiator: string; status: number | null; delivery: string | null }>;
   preRevealOptional: string[];
   cardSamples?: Array<{ t: number; height: number; contentHeight: number; textLength: number; state: string | null; scrollTop: number; anchorTop: number | null }>;
@@ -607,6 +616,7 @@ async function runRound(input: {
     }).__s7CardSamples?.some(sample => sample.textLength === 0));
     await route.continue();
   });
+  const observeImage = scenario.imageCase ? await installImageBarrier(page, scenario.imageCase) : null;
   result.foreignRequests = await blockForeignRequests(page, [webOrigin]);
 
   let navStartMs = 0;
@@ -736,7 +746,9 @@ async function runRound(input: {
   if (scenario.taskCacheEmpty) result.cardSamples = await page.evaluate(() => (window as unknown as { __s7CardSamples: NonNullable<RoundResult["cardSamples"]> }).__s7CardSamples);
   const emptyCard = result.cardSamples?.find(sample => sample.textLength === 0);
   const filledCard = result.cardSamples?.find(sample => sample.textLength > 0);
+  if (observeImage) result.imageObservation = await observeImage().catch(() => undefined);
   const failures = [
+    scenario.imageCase ? result.imageObservation ? imageObservationFailure(result.imageObservation) : "image observation missing" : null,
     scenario.taskCacheEmpty && (!emptyCard || !filledCard || filledCard.contentHeight <= 0 || emptyCard.height !== filledCard.height
       || (emptyCard.anchorTop !== null && filledCard.anchorTop !== null && Math.abs(emptyCard.anchorTop - filledCard.anchorTop) > .5))
       ? "cache-miss agent card changed its reserved slot / anchor or was not observed" : null,
@@ -848,6 +860,7 @@ async function main(): Promise<void> {
   // The images in the long issue's markdown resolve to real attachment files;
   // they live in a temp dir this process owns and removes nothing else.
   writeFixtureImages(uploadDir, fixture);
+  const imageCases = await seedImageCases(store, fixture, uploadDir);
 
   apiServer = startMultiremiServer({
     store,
@@ -904,7 +917,7 @@ async function main(): Promise<void> {
 
   // ── browser ──────────────────────────────────────────────────────────────
   browser = await launchBrowser();
-  const scenarios = buildScenarios(fixture, options);
+  const scenarios = buildScenarios(fixture, options, imageCases);
   const rounds: RoundResult[] = [];
   for (const scenario of scenarios) {
     for (let round = 1; round <= options.rounds; round += 1) {
@@ -947,6 +960,7 @@ async function main(): Promise<void> {
     finishedAt: new Date().toISOString(),
     commit: currentCommit(),
     fixture: fixture.counts,
+    imageFixture: { width: 640, height: 240, cases: imageCases.map(({ key, kind }) => ({ key, kind })) },
     ssrCookie: options.ssrCookie,
     rounds,
     rows: grouped.map((row) => ({

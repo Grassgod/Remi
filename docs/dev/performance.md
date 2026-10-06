@@ -416,8 +416,10 @@ schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两�
 
 两条容易踩的实现事实：
 
+MUL-395 的图片回归由 [zero-jump-image-cases.ts](../../tests/integration/zero-jump-image-cases.ts) 扩展 fixture：真实 640×240 PNG 的晚到、404、canonical 元素锚点，以及有尺寸/快速加载对照。晚到请求以第一次正常揭示为条件屏障释放，图片和行高前后必须一致；位置仍由原收集器和零跳动判定检查。五类用例默认进入 CI，`--only detail-image-late` 等可以定向运行，关闭 SSR cookie 可复核 CSR。不改原 fixture 延迟或 allowlist。
+
 - **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
-- **深链冷启动的 URL 是 `/{slug}/inbox?issue=…&session=…`**，不是 `/issues/:id`。`highlightCommentId` 只在 inbox 面板里被传给 `IssueDetail`（`inbox-page.tsx`），因此 `target-comment` 这个 anchor 只在深链 URL 上存在；改成 issue 详情路由会让该 anchor 永远找不到。
+- **收件箱通知深链使用 `/{slug}/inbox?issue=…&session=…`。** 这条入口由 inbox 面板把通知 comment 传给 `IssueDetail`，不能用普通详情 URL 替代。独立详情深链现支持 `/issues/:id?comment=…`，由 SSR/CSR 的 locate 窗口提供目标锚点；`detail-locate` 和 `detail-image-element` 单独验证该路径。
 
 ### 已知失败清单与判定规则
 
