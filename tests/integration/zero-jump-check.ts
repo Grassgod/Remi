@@ -177,6 +177,7 @@ function findFreePort(start: number): number {
 
 interface Scenario {
   key: string;
+  taskCacheEmpty?: boolean;
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
@@ -229,6 +230,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     ...detail("detail-long", fixture.longIssueId),
     ...detail("detail-xlong", fixture.xlongIssueId),
     ...detail("detail-running", fixture.runningIssueId),
+    ...(options.only.includes("detail-running-empty-cache") ? detail("detail-running-empty-cache", fixture.runningIssueId, { taskCacheEmpty: true }).filter(row => row.mode === "cold") : []),
     // The deep link is the shape a notification produces, and its cold round
     // *is* the deep link: the URL has to be the inbox one, because that is where
     // the comment highlight and the target anchor come from. Navigating to
@@ -273,6 +275,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 interface RoundResult extends RenderMeasurement {
   requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number }>;
   preRevealOptional: string[];
+  cardSamples?: Array<{ t: number; height: number; contentHeight: number; textLength: number; state: string | null; scrollTop: number; anchorTop: number | null }>;
   preRevealWaves: number | null;
   preRevealWaveRows: ReturnType<typeof computeWaves>["rows"];
   preRevealWaveChain: number[];
@@ -459,7 +462,7 @@ async function runRound(input: {
     mode: "contract",
     shape: "issue-detail",
     targetCommentId: scenario.targetCommentId,
-    requireAgentStream: scenario.key === "detail-running",
+    requireAgentStream: scenario.key.startsWith("detail-running"),
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
@@ -494,8 +497,9 @@ async function runRound(input: {
     error: null,
   };
 
-  const context: BrowserContext = await mktContext(browser, token, [], webOrigin, input.ssrCookie);
-  if (!input.ssrCookie) await context.route("**/*", async route => {
+  const ssrCookie = input.ssrCookie && !scenario.taskCacheEmpty;
+  const context: BrowserContext = await mktContext(browser, token, [], webOrigin, ssrCookie);
+  if (!ssrCookie) await context.route("**/*", async route => {
     const request = route.request();
     if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
       const headers = { ...request.headers() };
@@ -538,6 +542,22 @@ async function runRound(input: {
       return originalFetch.call(this, input, init);
     } as typeof window.fetch;
   });
+  if (scenario.taskCacheEmpty) await context.addInitScript(() => {
+    const samples: NonNullable<RoundResult["cardSamples"]> = [];
+    (window as unknown as { __s7CardSamples: typeof samples }).__s7CardSamples = samples;
+    const observe = () => new MutationObserver(() => {
+      const slot = document.querySelector<HTMLElement>("[data-agent-card-slot]");
+      const root = document.querySelector<HTMLElement>('[data-perf-scroll="issue-detail"]');
+      if (!slot || !root || root.getAttribute("data-perf-state") !== "ready") return;
+      const anchor = root.querySelector<HTMLElement>('[data-perf-anchor="latest-comment"]');
+      const sample = { t: performance.now(), height: slot.getBoundingClientRect().height,
+        contentHeight: slot.firstElementChild?.getBoundingClientRect().height ?? 0,
+        textLength: slot.textContent?.trim().length ?? 0, state: root.getAttribute("data-perf-state"),
+        scrollTop: root.scrollTop, anchorTop: anchor?.getBoundingClientRect().top ?? null };
+      if (sample.height > 0 && (!samples.length || samples.at(-1)!.textLength !== sample.textLength)) samples.push(sample);
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+    if (document.documentElement) observe(); else document.addEventListener("DOMContentLoaded", observe, { once: true });
+  });
   await context.setDefaultTimeout(ROUND_TIMEOUT_MS);
   await installRecorderOnContext(context, { profiles: [profile] });
   if (scenario.sidebarWidth !== null) {
@@ -578,6 +598,15 @@ async function runRound(input: {
     ? null
     : await readInboxItem(apiOrigin, token, scenario.inboxItemId);
   const collectors = attachCollectors(page, round, scenario.key, [slug], { inboxTarget });
+  if (scenario.taskCacheEmpty) await page.route("**/api/issues/*/task-runs", async route => {
+    // Functional fault injection only: hold the real task response until the
+    // first normal reveal has exposed the empty card. Then resume the same
+    // request so the genuine running task also reaches the stream row.
+    await page.waitForFunction(() => (window as unknown as {
+      __s7CardSamples: NonNullable<RoundResult["cardSamples"]>;
+    }).__s7CardSamples?.some(sample => sample.textLength === 0));
+    await route.continue();
+  });
   result.foreignRequests = await blockForeignRequests(page, [webOrigin]);
 
   let navStartMs = 0;
@@ -701,7 +730,13 @@ async function runRound(input: {
   result.requests = result.requests.map(request => ({ ...request, path: attachmentPath(request.path) }));
   result.preRevealWaveRows = result.preRevealWaveRows.map(request => ({ ...request, path: attachmentPath(request.path) }));
   result.fetchPhases = result.fetchPhases.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  if (scenario.taskCacheEmpty) result.cardSamples = await page.evaluate(() => (window as unknown as { __s7CardSamples: NonNullable<RoundResult["cardSamples"]> }).__s7CardSamples);
+  const emptyCard = result.cardSamples?.find(sample => sample.textLength === 0);
+  const filledCard = result.cardSamples?.find(sample => sample.textLength > 0);
   const failures = [
+    scenario.taskCacheEmpty && (!emptyCard || !filledCard || filledCard.contentHeight <= 0 || emptyCard.height !== filledCard.height
+      || (emptyCard.anchorTop !== null && filledCard.anchorTop !== null && Math.abs(emptyCard.anchorTop - filledCard.anchorTop) > .5))
+      ? "cache-miss agent card changed its reserved slot / anchor or was not observed" : null,
     result.anchorVisibleMs !== result.readyMs ? `anchorVisibleMs ${result.anchorVisibleMs} != readyMs ${result.readyMs}` : null,
     result.preRevealOptional.length ? `optional before reveal: ${result.preRevealOptional.join(", ")}` : null,
     result.waveGate === "blocking" && (result.preRevealWaves ?? 99) > 2 ? `pre-reveal waves: ${result.preRevealWaves}` : null,
