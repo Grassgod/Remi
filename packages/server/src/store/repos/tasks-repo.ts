@@ -1677,6 +1677,9 @@ export class TasksRepo {
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
     if(!sessionId)throw new Error('A request must name an Issue, Chat or automation conversation');
+    const issueSession=this.ctx.issueSessions().getIssueSession(sessionId);
+    if((input.runtimeWorkspaceId??input.runtime_workspace_id)&&issueSession&&!issueSession.holdsWorkspace)
+      throw new Error('Cannot attach a runtime workspace to a Session without workspace ownership');
     let type=existing?.sender_type??(input.assignmentAuthorType==='system'?'platform':sourceTask?'agent':input.assignmentAuthorType==='agent'?'agent':'member');
     let senderId=existing?.sender_id??(type==='agent'?sourceTask?.agentId??input.assignmentAuthorId??null:type==='member'?input.assignmentAuthorId??null:null);
     if(type==='member')senderId=this.ctx.workspaces().getWorkspaceMemberByRef(senderId??'local',input.workspaceId??'local')?.id??senderId;
