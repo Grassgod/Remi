@@ -6,6 +6,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { inboxPageOptions, messageDetailKeys } from "@multiremi/core/inbox/queries";
 import { useMarkAllInboxRead, useMarkInboxRead } from "@multiremi/core/inbox/mutations";
+import { useAnchoredReveal } from "../../common/use-anchored-reveal";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
@@ -39,6 +40,13 @@ export function InboxPage() {
   const message = useQuery({ queryKey: messageDetailKeys.detail(wsId, selectedId), enabled: !!selectedId,
     queryFn: () => api.getMessage(selectedId!), initialData: selectedItem, staleTime: 15_000 });
   const active = selectedItem && (!message.data || selectedItem.revision >= message.data.revision) ? selectedItem : message.data ?? null;
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  useAnchoredReveal({
+    scrollEl, contentEl, resetKey: `${wsId}:${active?.id ?? ""}`,
+    dataReady: !!active, fresh: message.isSuccess,
+    anchor: { kind: "element", id: `inbox-message-${active?.id ?? ""}`, align: "start" },
+  });
   const perfMarker = useListPerfMarker(query);
   const error = read.error ?? allRead.error;
   const header = <PageHeader className="justify-between">
@@ -62,9 +70,10 @@ export function InboxPage() {
       {query.hasNextPage && <Button className="m-3" variant="ghost" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}><ChevronDown />{t($ => $.list.load_more)}</Button>}
     </div>
   </div>;
-  const detail = active ? <div data-inbox-detail data-perf-scroll="inbox-detail" className="min-h-0 flex-1 overflow-y-auto p-4">
+  const detail = active ? <div ref={setScrollEl} data-inbox-detail data-perf-scroll="inbox-detail" className="min-h-0 flex-1 overflow-y-auto p-4">
+    <div ref={setContentEl}>
     {error && isMobile && <p role="alert" className="mb-3 text-xs text-destructive">{error.message}</p>}
-    <div data-inbox-message={active.id} data-perf-item="message" data-perf-key={active.id}>
+    <div id={`inbox-message-${active.id}`} data-inbox-message={active.id} data-perf-item="message" data-perf-key={active.id}>
     {active.message_kind === "decision" ? <MessageDecisionCard message={active} canAnswer getActorName={getActorName} /> : <>
       <MessageHeader message={active} getActorName={getActorName} />
       <Markdown attachments={active.attachments}>{active.body_md}</Markdown>
@@ -77,6 +86,7 @@ export function InboxPage() {
         <CheckCheck className="size-4" />{tm($ => $.read_to_here, { seq: active.seq })}
       </Button>
       {read.data?.session_id === active.session_id && <span className="text-xs text-muted-foreground">{tm($ => $.read_cursor, { seq: read.data.cursor_seq })}</span>}
+    </div>
     </div>
   </div> : <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
     {message.isError ? <><p role="alert">{tm($ => $.load_failed)}</p><Button variant="outline" onClick={() => void message.refetch()}>{tm($ => $.retry_load)}</Button></>

@@ -216,18 +216,18 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     ...detail("detail-short", fixture.shortIssueId),
     ...detail("detail-long", fixture.longIssueId),
     ...detail("detail-running", fixture.runningIssueId),
-    // The deep link is the shape a notification produces, and its cold round
+    // The deep link selects a canonical inbox message, and its cold round
     // *is* the deep link: the URL has to be the inbox one, because that is where
-    // the comment highlight and the target anchor come from. Navigating to
-    // `/issues/:id` instead would measure the ordinary detail page and the
-    // `target-comment` anchor would never exist.
+    // the selected message and its target anchor come from. Navigating to
+    // `/issues/:id` instead would measure the ordinary detail page and
+    // the message anchor would never exist.
     ...detail("detail-deeplink", fixture.longIssueId, {
-      path: `/inbox?issue=${encodeURIComponent(fixture.longIssueId)}&session=${encodeURIComponent(fixture.longDefaultSessionId)}`,
+      path: `/inbox?item=${encodeURIComponent(fixture.inboxItemId)}`,
       entry: "inbox",
       clickIssueId: null,
       inboxItemId: fixture.inboxItemId,
       targetCommentId: fixture.deepLinkCommentId,
-      expectIssueId: fixture.longIssueId,
+      expectIssueId: null,
     }),
     // Its own key on purpose: a sidebar restored from localStorage after the
     // first frame is a different mechanism from the detail page's own reveal, so
@@ -426,7 +426,7 @@ async function runRound(input: {
   // actually shows.
   const profile: PerfProfileConfig = profileFor({
     mode: "contract",
-    shape: "issue-detail",
+    shape: scenario.entry === "inbox" ? "inbox" : "issue-detail",
     targetCommentId: scenario.targetCommentId,
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
@@ -579,12 +579,11 @@ async function clickEntryRow(page: Page, scenario: Scenario, slug: string): Prom
         // warm round measures the detail page rather than a chunk fetch.
         await page.waitForTimeout(150);
         await row.click({ timeout: 5_000 });
-        // The click only counts once the app has selected the intended issue:
-        // the inbox commits its selection inside `startTransition`, so the URL
-        // updates a tick after the click. Without this the round could measure
-        // whatever page it happened to be on.
+        // Start measurement only after the URL selects the intended message or issue.
         const expected = scenario.expectIssueId;
-        if (expected) {
+        if (isInbox) {
+          await page.waitForURL(url => url.searchParams.get("item") === scenario.inboxItemId, { timeout: ENTRY_TIMEOUT_MS });
+        } else if (expected) {
           await page.waitForURL((url) => url.href.includes(expected), { timeout: ENTRY_TIMEOUT_MS });
         } else if (scenario.entry === "issues-list") {
           await page.waitForURL(

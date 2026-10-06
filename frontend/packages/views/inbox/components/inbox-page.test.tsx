@@ -28,6 +28,7 @@ describe("cursor inbox", () => {
       mount(qc);
       if (!alreadyRead) {
         fireEvent.click(await screen.findByRole("button", { name: /Follow up/ }));
+        await screen.findByRole("button", { name: "Read through #5" });
         mock.listInboxPage.mockResolvedValue({ ...page, items: [] });
         fireEvent.click(screen.getByRole("button", { name: "Read through #5" }));
         await waitFor(() => expect(mock.markInboxRead).toHaveBeenCalled());
@@ -45,6 +46,7 @@ describe("cursor inbox", () => {
     mount(); const item = await screen.findByRole("button", { name: /Follow up/ });
     expect(screen.getByText("200")).toBeInTheDocument();
     fireEvent.click(item);
+    await screen.findByRole("button", { name: "Read through #5" });
     expect(mock.markInboxRead).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Read through #5" }));
     await waitFor(() => expect(mock.markInboxRead).toHaveBeenCalledWith({ session_id: "sess_1", to_seq: 5 }));
@@ -64,6 +66,7 @@ describe("cursor inbox", () => {
   });
   it("retains visible unread data when the cursor write fails", async () => {
     mock.markInboxRead.mockRejectedValue(new Error("offline")); mount(); fireEvent.click(await screen.findByRole("button", { name: /Follow up/ }));
+    await screen.findByRole("button", { name: "Read through #5" });
     fireEvent.click(screen.getByRole("button", { name: "Read through #5" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.getByRole("button", { name: /Follow up/ })).toBeInTheDocument();
@@ -81,6 +84,7 @@ describe("cursor inbox", () => {
     const element = () => <QueryClientProvider client={qc}><InboxPage /></QueryClientProvider>;
     const view = renderWithI18n(element());
     fireEvent.click(await screen.findByRole("button", { name: /Follow up/ }));
+    await screen.findByRole("button", { name: "Read through #5" });
     expect(screen.getByRole("button", { name: "Read through #5" })).toBeInTheDocument();
     mock.searchParams = new URLSearchParams("item=msg_2");
     mock.getMessage.mockResolvedValue(messageFixture({ id: "msg_2", seq: 9, body_md: "Second message" }));
@@ -96,6 +100,7 @@ describe("cursor inbox", () => {
   it("keeps read failures visible on a mobile detail", async () => {
     mock.mobile = true; mock.markInboxRead.mockRejectedValue(new Error("offline")); mount();
     fireEvent.click(await screen.findByRole("button", { name: /Follow up/ }));
+    await screen.findByRole("button", { name: "Read through #5" });
     fireEvent.click(screen.getByRole("button", { name: "Read through #5" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
   });
