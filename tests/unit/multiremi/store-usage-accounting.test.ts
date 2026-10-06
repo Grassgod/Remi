@@ -33,6 +33,40 @@ const price = (overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput 
 });
 
 describe("normalized task consumption", () => {
+  it("preserves reported floating-point amounts when transporting aggregate rows", () => {
+    const { store, task } = fixture();
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit({ costAmount: Math.PI, costCurrency: "USD", costSource: "provider_reported" })]));
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary.known_cost_by_currency.USD).toBe(Math.PI);
+    expect(report.by_model[0]!.known_cost_by_currency.USD).toBe(Math.PI);
+  });
+  it("computes many diagnostic units once for all views without repeated run-evidence lookups", () => {
+    const { store, task, runtime } = fixture();
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit()]));
+    const context = unit({ unitId: "context", scope: "turn", source: "context_snapshot", accuracy: "unknown",
+      inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null, contextTokens: 70_000 });
+    store.reportTaskUsageSnapshot(task.id, snapshot([context], { runId: "diagnostic-only" }));
+    db!.run(`WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<12000)
+      INSERT INTO multiremi_usage_units(task_id,run_id,unit_id,revision,workspace_id,agent_id,runtime_id,provider,scope,source,accuracy,occurred_at)
+      SELECT task_id,run_id,'diagnostic:'||n,revision,workspace_id,agent_id,runtime_id,provider,scope,source,accuracy,occurred_at
+      FROM multiremi_usage_units CROSS JOIN numbers WHERE task_id=? AND run_id='diagnostic-only' AND unit_id='context'`, [task.id]);
+    const originalQuery = db!.query.bind(db!);
+    const factQueries: string[] = [];
+    const query = spyOn(db!, "query").mockImplementation(sql => {
+      if (sql.startsWith("WITH tasks")) factQueries.push(sql);
+      return originalQuery(sql);
+    });
+    const started = performance.now();
+    const report = store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null });
+    const elapsed = performance.now() - started;
+    query.mockRestore();
+    expect(report.summary).toMatchObject({ actual_total_tokens: 12, unknown_task_count: 1, context_peak_tokens: 70_000, complete: false });
+    expect(factQueries).toHaveLength(1);
+    expect(factQueries[0]).toContain("facts AS MATERIALIZED");
+    expect(factQueries[0]).not.toContain("NOT EXISTS(SELECT 1 FROM multiremi_usage_units observed");
+    expect(elapsed).toBeLessThan(5000);
+    for (const rows of [report.daily, report.by_model, report.by_agent, report.by_runtime]) expect(rows.reduce((sum, row) => sum + row.actual_total_tokens, 0)).toBe(12);
+  }, 20_000);
   it("retains parked revision floors and established owner facts across replay and store restart", () => {
     const { store, task, agent, runtime } = fixture();
     const other = store.createTask({ agentId: agent.id, prompt: "Parked duplicate", workspaceId: "local" });

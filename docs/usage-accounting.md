@@ -107,8 +107,10 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 任务进度摘要的 Anthropic、OpenAI-compatible 和 Claude CLI 调用同样进入主任务的用量，`purpose=progress_summary` 单列辅助消费；实际返回的 model 与配置请求模型分开。每个传输 attempt（包括自动 fallback）有独立稳定身份，缺失响应的调用保留未知消费证据。CLI 读取 JSON result 的 usage/modelUsage，SDK 总费只进入估算桶。辅助调用与主执行共享已认证的 run，只有 start ACK 明确允许执行后才进入模型；摘要仍异步进行，主执行结束后迟到的摘要 usage 仍可交付，所有辅助调用关闭之前 run 的 complete 保持 false。
 
-常规报表只读规范化标量表，通过 SQL 聚合和 distinct 计数，不逐任务解析旧 JSON 或读取 trace。单位有 workspace/time、Runtime/time、project/time 和 model 索引；价格有精确键/有效期索引。一次 report 的分组、金额和生命周期查询仍有多个聚合扫描，全历史查询没有预计算或分页，不能据此声称已达到大数据量性能目标。
+常规报表只读规范化标量表，通过 SQL 聚合和 distinct 计数，不逐任务解析旧 JSON 或读取 trace。单位有 workspace/time、Runtime/time、project/time 和 model 索引；价格有精确键/有效期索引。run 的实际消费观测与完整性先聚合一次，不逐个诊断单位反复扫描同一 run。相同 task、日期、模型与金额出处的事实先合并，SUM 保留加性指标，MAX 保留上下文峰值与未知标志；所有视图复用一次 materialized SQL 事实。PostgreSQL 用 GROUPING SETS 同时聚合五种维度，SQLite 在同一 SQL 中复用事实的聚合分支；只把分组结果送过 DB bridge。价格以受控不重叠有效区间直接关联，保留实际 SKU、请求模型 alias 和连接条件。
 
-PostgreSQL 报表在只读 Repeatable Read 事务中取一致快照；SQL bigint/count/sum 明确转换为契约 number。SQLite 在同一事务读取，非 UTC 分日依据有效日期边界生成 CASE，长历史范围的边界构造成本需要实测。底层同步 Store/PgBridge 的线程阻塞和事务约束见[架构](ARCHITECTURE.md#存储与事务)；尚未记录统一报告的生产吞吐或 p95 基线。
+2026-10-06 在隔离恢复库实测：11,320 task、135,419 canonical unit（local workspace 134,770 unit）。该工作区全历史报告包含 11,267 distinct task，原查询独立样本 52.45 秒；现实现重复样本约 3.85–3.88 秒，30 天 Asia/Shanghai 约 3.26–3.29 秒。全历史已知消费 47,460,970,503 tokens 与原完整 summary 逐字段一致；30 天消费 39,379,041,539 tokens 与原相同时区窗口一致。诊断-heavy 的 135,211 个事实行先合并为 21,338 行，五维度 totals/durations 合计返回 254 个聚合行。该恢复库没有价格记录，费用/价格版本/货币等语义另由 SQLite 与真实 PG 专项验证；该测量不是生产吞吐或 p95，也不是更大规模的延迟保证。
+
+PostgreSQL 报表在只读 Repeatable Read 事务中取一致快照；SQL bigint/count/sum 明确转换为契约 number。该交互查询仅在自身事务内 SET LOCAL jit=off：实测编译耗时数秒，关闭后执行耗时更低；事务结束恢复原设置，不改变服务全局配置或一致性。SQLite 在同一事务读取，金额和时长使用保留浮点精度的聚合传输；非 UTC 分日依据有效日期边界生成 CASE，长历史范围的边界构造成本需要实测。底层同步 Store/PgBridge 的线程阻塞和事务约束见[架构](ARCHITECTURE.md#存储与事务)；尚未记录统一报告的生产吞吐或 p95 基线。
 
 验证入口为 [标量写入/价格/跨日/跨 Runtime 项目测试](../tests/unit/multiremi/store-usage-accounting.test.ts)、[真实 PostgreSQL 测试](../tests/unit/multiremi/usage-accounting-postgres.test.ts)、[历史恢复检查点测试](../tests/unit/scripts/usage-reconciliation-store.test.ts)、[CLI 测试](../tests/unit/remi/cli-operations.test.ts)、[严格前端边界](../frontend/packages/core/api/endpoints/usage-accounting.test.ts)、[页面测试](../frontend/packages/views/usage/usage-panel.test.tsx)和[价格编辑测试](../frontend/packages/views/runtimes/components/custom-pricing-dialog.test.tsx)。PG 测试需显式 `MULTIREMI_TEST_POSTGRES_URL`，会创建并删除独立测试库；不要指向生产数据库。构建、浏览器和生产性能验收另按 [TESTING.md](../TESTING.md)，文档检查不替代这些验证。

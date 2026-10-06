@@ -115,7 +115,12 @@ export class UsageAccountingRepo {
       LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.task_id=t.id ORDER BY ar.created_at DESC LIMIT 1)
       WHERE ${where.join(" AND ")}`;
     return this.ctx.db.transaction(() => {
-      if (this.ctx.db.dialect === "postgres") this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      if (this.ctx.db.dialect === "postgres") {
+        this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        // This bounded interactive aggregate costs more to JIT-compile than
+        // to execute. Scope the setting to this snapshot transaction only.
+        this.ctx.db.exec("SET LOCAL jit=off");
+      }
       const extent = this.ctx.db.query(`SELECT MIN(occurred_at) AS first,MAX(occurred_at) AS last FROM (SELECT ${factTime} AS occurred_at FROM (${tasksSql}) t
         LEFT JOIN multiremi_usage_units u ON u.task_id=t.id AND ${unitPredicate}
         WHERE u.task_id IS NOT NULL OR (${lifePredicate}) UNION ALL SELECT t.occurred_at FROM (${tasksSql}) t WHERE ${lifePredicate}) report_dates`).get(...params, ...unitParams, ...lifeParams, ...params, ...lifeParams) as Row;
@@ -124,10 +129,21 @@ export class UsageAccountingRepo {
         ? "GREATEST(0,EXTRACT(EPOCH FROM (CAST(t.ended_at AS TIMESTAMPTZ)-CAST(COALESCE(t.started_at,t.dispatched_at,t.created_at) AS TIMESTAMPTZ))))"
         : "MAX(0,(julianday(t.ended_at)-julianday(COALESCE(t.started_at,t.dispatched_at,t.created_at)))*86400)";
       const tokenEvidence = (alias: string) => `(${alias}.input_tokens IS NOT NULL OR ${alias}.output_tokens IS NOT NULL OR ${alias}.cache_read_tokens IS NOT NULL OR ${alias}.cache_write_tokens IS NOT NULL OR ${alias}.actual_unsplit_tokens IS NOT NULL)`;
-      const identityConflict = `EXISTS(SELECT 1 FROM identity_conflict_tasks identity WHERE identity.task_id=t.id ${relevantRun("identity")})`;
+      const identityConflict = "identity.task_id IS NOT NULL";
       const cte = `WITH tasks AS (${tasksSql}), identity_conflict_tasks AS (
         SELECT c.task_id,c.run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.task_id
         UNION SELECT c.owner_task_id,c.owner_run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.owner_task_id
+      ), identity_conflict_scope AS (
+        SELECT DISTINCT identity.task_id FROM identity_conflict_tasks identity WHERE 1=1 ${relevantRun("identity")}
+      ), run_observations AS (
+        SELECT observed.task_id,observed.run_id,MAX(CASE WHEN observed.source<>'context_snapshot' AND ${tokenEvidence("observed")} THEN 1 ELSE 0 END) AS has_actual
+        FROM multiremi_usage_units observed JOIN tasks scoped ON scoped.id=observed.task_id GROUP BY observed.task_id,observed.run_id
+      ), run_state AS (
+        SELECT rr.task_id,MAX(CASE WHEN COALESCE(observed.has_actual,0)=0 THEN 1 ELSE 0 END) AS missing_actual,
+          MIN(CASE WHEN rr.complete=1 AND observed.has_actual=1 THEN 1 ELSE 0 END) AS complete
+        FROM multiremi_usage_runs rr JOIN tasks scoped ON scoped.id=rr.task_id
+        LEFT JOIN run_observations observed ON observed.task_id=rr.task_id AND observed.run_id=rr.run_id
+        WHERE 1=1 ${relevantRun("rr")} GROUP BY rr.task_id
       ), cost_links AS (
         SELECT l.task_id,l.run_id,l.monetary_unit_id,l.covered_unit_id FROM multiremi_usage_cost_coverage l JOIN tasks scoped ON scoped.id=l.task_id
         UNION SELECT own.task_id,own.run_id,own.unit_id,own.unit_id FROM multiremi_usage_units own JOIN tasks scoped ON scoped.id=own.task_id
@@ -161,7 +177,7 @@ export class UsageAccountingRepo {
           ON v.task_id=l.task_id AND v.run_id=l.run_id AND v.unit_id=l.monetary_unit_id
         JOIN charge_dimensions d ON d.task_id=v.task_id AND d.run_id=v.run_id AND d.unit_id=v.unit_id
         GROUP BY l.task_id,l.run_id,l.covered_unit_id
-      ), facts AS (
+      ), unit_facts AS (
         SELECT t.id AS task_id,COALESCE(u.agent_id,t.agent_id) AS agent_id,CASE WHEN u.task_id IS NULL THEN t.runtime_id ELSE u.runtime_id END AS runtime_id,t.status,${dateExpr} AS date,
           CASE WHEN ${lifePredicate} THEN 1 ELSE 0 END AS lifecycle_in_window,
           COALESCE(${seconds},0) AS seconds,COALESCE(u.provider,'unknown') AS provider,
@@ -187,35 +203,47 @@ export class UsageAccountingRepo {
           CASE WHEN u.cost_amount IS NOT NULL AND u.cost_source='provider_reported' AND v.unit_id IS NULL THEN 0 ELSE 1 END AS price_complete,
           CASE WHEN cc.model_groups>1 OR d.model_groups>1 THEN 0 ELSE 1 END AS cost_allocation_complete,
           CASE WHEN u.cost_amount IS NOT NULL THEN CASE WHEN u.cost_source='provider_reported' THEN 0 ELSE 2 END WHEN p.source='published' THEN 1 ELSE 0 END AS reference_amount,
-          CASE WHEN ${identityConflict} OR u.task_id IS NULL OR NOT EXISTS(SELECT 1 FROM multiremi_usage_units observed WHERE observed.task_id=t.id AND observed.run_id=u.run_id
-              AND observed.source<>'context_snapshot' AND (observed.input_tokens IS NOT NULL OR observed.output_tokens IS NOT NULL
-                OR observed.cache_read_tokens IS NOT NULL OR observed.cache_write_tokens IS NOT NULL OR observed.actual_unsplit_tokens IS NOT NULL))
-            OR EXISTS(SELECT 1 FROM multiremi_usage_runs missing_run WHERE missing_run.task_id=t.id ${relevantRun("missing_run")} AND NOT EXISTS(
-              SELECT 1 FROM multiremi_usage_units evidence WHERE evidence.task_id=missing_run.task_id AND evidence.run_id=missing_run.run_id
-              AND evidence.source<>'context_snapshot' AND (evidence.input_tokens IS NOT NULL OR evidence.output_tokens IS NOT NULL OR evidence.cache_read_tokens IS NOT NULL OR evidence.cache_write_tokens IS NOT NULL OR evidence.actual_unsplit_tokens IS NOT NULL)))
+          CASE WHEN ${identityConflict} OR u.task_id IS NULL OR COALESCE(observed.has_actual,0)=0 OR state.missing_actual=1
             OR (u.source<>'context_snapshot' AND u.accuracy<>'exact' AND (u.cost_amount IS NULL OR u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL OR u.cache_read_tokens IS NOT NULL OR u.cache_write_tokens IS NOT NULL OR u.actual_unsplit_tokens IS NOT NULL OR u.reported_total_tokens IS NOT NULL)) THEN 1 ELSE 0 END AS unknown,
-          CASE WHEN NOT EXISTS(SELECT 1 FROM multiremi_usage_runs rr WHERE rr.task_id=t.id ${relevantRun("rr")})
-            OR EXISTS(SELECT 1 FROM multiremi_usage_runs rr WHERE rr.task_id=t.id ${relevantRun("rr")} AND (rr.complete=0 OR NOT EXISTS(
-              SELECT 1 FROM multiremi_usage_units covered WHERE covered.task_id=rr.task_id AND covered.run_id=rr.run_id AND covered.source<>'context_snapshot'
-              AND (covered.input_tokens IS NOT NULL OR covered.output_tokens IS NOT NULL OR covered.cache_read_tokens IS NOT NULL OR covered.cache_write_tokens IS NOT NULL OR covered.actual_unsplit_tokens IS NOT NULL)))) THEN 0 ELSE 1 END AS run_complete
+          COALESCE(state.complete,0) AS run_complete
         FROM tasks t LEFT JOIN multiremi_usage_units u ON u.task_id=t.id AND ${unitPredicate}
+        LEFT JOIN identity_conflict_scope identity ON identity.task_id=t.id
+        LEFT JOIN run_observations observed ON observed.task_id=u.task_id AND observed.run_id=u.run_id
+        LEFT JOIN run_state state ON state.task_id=t.id
         LEFT JOIN valid_charges v ON v.task_id=u.task_id AND v.run_id=u.run_id AND v.unit_id=u.unit_id
         LEFT JOIN charge_dimensions d ON d.task_id=u.task_id AND d.run_id=u.run_id AND d.unit_id=u.unit_id
         LEFT JOIN covered_cost cc ON cc.task_id=u.task_id AND cc.run_id=u.run_id AND cc.covered_unit_id=u.unit_id
         LEFT JOIN cost_claims claim ON claim.task_id=u.task_id AND claim.run_id=u.run_id AND claim.covered_unit_id=u.unit_id
-        LEFT JOIN multiremi_usage_prices p ON p.id=(SELECT pp.id FROM multiremi_usage_prices pp
-          WHERE pp.workspace_id=? AND pp.provider=u.provider
-            AND ((pp.requested_model_alias=0 AND pp.model=u.model) OR (pp.requested_model_alias=1 AND u.model IS NULL AND pp.model=u.requested_model))
-            AND (pp.source<>'published' OR u.model_source='provider_reported')
-            AND COALESCE(pp.connection_id,'')=COALESCE(u.connection_id,'')
-            AND pp.effective_from<=u.occurred_at AND (pp.effective_to IS NULL OR pp.effective_to>u.occurred_at)
-          ORDER BY pp.effective_from DESC LIMIT 1) WHERE u.task_id IS NOT NULL OR (${lifePredicate})
+        LEFT JOIN multiremi_usage_prices p ON p.workspace_id=? AND p.provider=u.provider
+          AND ((p.requested_model_alias=0 AND p.model=u.model) OR (p.requested_model_alias=1 AND u.model IS NULL AND p.model=u.requested_model))
+          AND (p.source<>'published' OR u.model_source='provider_reported')
+          AND COALESCE(p.connection_id,'')=COALESCE(u.connection_id,'')
+          AND p.effective_from<=u.occurred_at AND (p.effective_to IS NULL OR p.effective_to>u.occurred_at)
+        WHERE u.task_id IS NOT NULL OR (${lifePredicate})
+      ), facts AS MATERIALIZED (
+        SELECT task_id,agent_id,runtime_id,status,date,lifecycle_in_window,seconds,provider,model,requested_model,model_provenance,purpose,connection_id,runtime_provenance,time_provenance,currency,quality,reference_amount,
+          ${["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"].map(field => `SUM(${field}) AS ${field}`).join(",")},
+          MAX(context_tokens) AS context_tokens,MAX(identity_conflict) AS identity_conflict,MAX(unknown) AS unknown,
+          MIN(run_complete) AS run_complete,MIN(price_complete) AS price_complete,MIN(cost_allocation_complete) AS cost_allocation_complete,SUM(amount) AS amount
+        FROM unit_facts GROUP BY task_id,agent_id,runtime_id,status,date,lifecycle_in_window,seconds,provider,model,requested_model,model_provenance,purpose,connection_id,runtime_provenance,time_provenance,currency,quality,reference_amount
       )`;
-      const queryParams = [...params, ...lifeParams, ...runParams, ...runParams, ...runParams, ...runParams, ...runParams, ...unitParams, input.workspaceId, ...lifeParams];
-      const aggregate = (keys: string[]): Array<UsageMetrics & Row> => {
+      const queryParams = [...params, ...runParams, ...runParams, ...lifeParams, ...unitParams, input.workspaceId, ...lifeParams];
+      const dimensions = [[], ["date"], ["agent_id"], ["provider", "model", "requested_model", "model_provenance", "purpose", "connection_id"], ["runtime_id"]];
+      const tokenFields = ["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"];
+      const totalFields = [...tokenFields, "task_count", "unknown_task_count", "identity_conflict_task_count", "task_attributed_task_count", "task_attributed_tokens", "time_provenance", "context_peak_tokens", "run_complete", "price_complete", "cost_allocation_complete", "runtime_provenance", "completed", "failed", "cancelled", "active", "queued"];
+      const branches: string[] = [];
+      let summaryTotalsSql = "", summaryMonetarySql = "";
+      const jsonRow = (fields: string[]) => this.ctx.db.dialect === "postgres" ? "row_to_json(result)::text" : `json_object(${fields.flatMap(field => [
+        `'${field}'`, ["amount", "total_seconds"].includes(field)
+          // SQLite JSON's default float rendering drops significant digits.
+          // Encode these two floats as round-trip strings, then normalize below.
+          ? `CASE WHEN ${field} IS NULL THEN NULL ELSE printf('%!.17g',${field}) END` : field,
+      ]).join(",")})`;
+      const branch = (dimension: number, kind: string, fields: string[], sql: string) => branches.push(`SELECT ${dimension} AS dimension,'${kind}' AS kind,${jsonRow(fields)} AS payload FROM (${sql}) result`);
+      for (const [dimension, keys] of dimensions.entries()) {
         const keySelect = keys.length ? `${keys.join(",")},` : "";
         const group = keys.length ? `GROUP BY ${keys.join(",")}` : "";
-        const totals = this.ctx.db.query(`${cte} SELECT ${keySelect}
+        const totalsSql = `SELECT ${keySelect}
           ${["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"].map((f) => `COALESCE(SUM(${f}),0) AS ${f}`).join(",")},
           COUNT(DISTINCT task_id) AS task_count,COUNT(DISTINCT CASE WHEN unknown=1 THEN task_id END) AS unknown_task_count,
           COUNT(DISTINCT CASE WHEN identity_conflict=1 THEN task_id END) AS identity_conflict_task_count,
@@ -229,11 +257,52 @@ export class UsageAccountingRepo {
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status='cancelled' THEN task_id END) AS cancelled,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status IN ('dispatched','running','waiting_local_directory','awaiting_human') THEN task_id END) AS active,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status IN ('queued','pending') THEN task_id END) AS queued
-          FROM facts ${group}`).all(...queryParams) as Row[];
-        const monetary = this.ctx.db.query(`${cte} SELECT ${keySelect}currency,reference_amount,SUM(amount) AS amount,MIN(quality) AS first_quality,MAX(quality) AS last_quality
-          FROM facts WHERE currency IS NOT NULL AND amount IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`).all(...queryParams) as Row[];
-        const durations = this.ctx.db.query(`${cte} SELECT ${keySelect}SUM(seconds) AS total_seconds FROM (
-          SELECT DISTINCT ${keySelect}task_id,CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END AS seconds FROM facts) task_durations ${group}`).all(...queryParams) as Row[];
+          FROM facts ${group}`;
+        branch(dimension, "totals", [...keys, ...totalFields], totalsSql);
+        const monetarySql = `SELECT ${keySelect}currency,reference_amount,SUM(amount) AS amount,MIN(quality) AS first_quality,MAX(quality) AS last_quality
+          FROM facts WHERE currency IS NOT NULL AND amount IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`;
+        branch(dimension, "monetary", [...keys, "currency", "reference_amount", "amount", "first_quality", "last_quality"], monetarySql);
+        if (dimension === 0) { summaryTotalsSql = totalsSql; summaryMonetarySql = monetarySql; }
+        branch(dimension, "durations", [...keys, "total_seconds"], `SELECT ${keySelect}SUM(seconds) AS total_seconds FROM (
+          SELECT DISTINCT ${keySelect}task_id,CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END AS seconds FROM facts) task_durations ${group}`);
+      }
+      const dimensionFields = [...new Set(dimensions.flat())];
+      if (this.ctx.db.dialect === "postgres") {
+        // GROUPING distinguishes a real NULL dimension from a rolled-up one.
+        // PostgreSQL can calculate the five views in one aggregate pass.
+        const groupMask = `GROUPING(${dimensionFields.join(",")})`;
+        const dimension = `CASE ${groupMask} ${dimensions.map((keys, index) => {
+          const mask = dimensionFields.reduce((value, field, bit) => value + (keys.includes(field) ? 0 : 2 ** (dimensionFields.length - bit - 1)), 0);
+          return `WHEN ${mask} THEN ${index}`;
+        }).join(" ")} END`;
+        const sets = (suffix: string[]) => `GROUP BY GROUPING SETS (${dimensions.map(keys => `(${[...keys, ...suffix].join(",")})`).join(",")})`;
+        const prefix = `SELECT ${dimension} AS dimension,${dimensionFields.join(",")},`;
+        const totalsSql = summaryTotalsSql.replace(/^SELECT /, prefix) + sets([]);
+        const monetarySql = summaryMonetarySql.replace(/^SELECT /, prefix).replace("GROUP BY currency,reference_amount", sets(["currency", "reference_amount"]));
+        const durationsSql = `SELECT dimension,${dimensionFields.join(",")},SUM(seconds) AS total_seconds FROM (
+          ${prefix}task_id,MAX(CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END) AS seconds
+          FROM facts ${sets(["task_id"])}) task_durations GROUP BY dimension,${dimensionFields.join(",")}`;
+        branches.length = 0;
+        for (const [kind, sql] of [["totals", totalsSql], ["monetary", monetarySql], ["durations", durationsSql]]) branches.push(
+          `SELECT result.dimension,'${kind}' AS kind,(to_jsonb(result)-'dimension')::text AS payload FROM (${sql}) result`);
+      }
+      // One materialized SQL fact set serves all views; only aggregate rows
+      // cross the DB bridge, and correlated run-evidence scans never repeat
+      // per diagnostic unit or per view.
+      const grouped = new Map<string, Row[]>();
+      for (const raw of this.ctx.db.query(`${cte} ${branches.join(" UNION ALL ")}`).all(...queryParams) as Row[]) {
+        const id = `${raw.dimension}:${raw.kind}`;
+        const rows = grouped.get(id) ?? [];
+        const row = JSON.parse(String(raw.payload)) as Row;
+        for (const field of dimensionFields) if (!dimensions[Number(raw.dimension)]!.includes(field)) delete row[field];
+        rows.push(row);
+        grouped.set(id, rows);
+      }
+      const aggregate = (keys: string[]): Array<UsageMetrics & Row> => {
+        const dimension = dimensions.findIndex(fields => fields.join(",") === keys.join(","));
+        const totals = grouped.get(`${dimension}:totals`) ?? [];
+        const monetary = grouped.get(`${dimension}:monetary`) ?? [];
+        const durations = grouped.get(`${dimension}:durations`) ?? [];
         const key = (r: Row) => JSON.stringify(keys.map((k) => r[k] ?? null));
         const costs = new Map<string, { values: Record<string, number>; reference: Record<string, number>; sdk: Record<string, number>; qualities: Set<string> }>();
         for (const r of monetary) {

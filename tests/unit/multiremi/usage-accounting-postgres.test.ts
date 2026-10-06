@@ -31,6 +31,7 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     }
   });
   it("persists parked revision floors and preserves established owners across PostgreSQL reconnection", () => {
+    const jitBefore = db!.query("SHOW jit").get();
     const runtime = store.registerRuntime({ name: "boundary-pg", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "boundary-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
     const tasks = [0, 1].map(index => store.createTask({ agentId: agent.id, prompt: `Boundary ${index}`, workspaceId: "local" }));
@@ -45,6 +46,7 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
         return new MultiremiStore(reopened);
       });
     } finally { for (const connection of connections) connection.close(); }
+    expect(db!.query("SHOW jit").get()).toEqual(jitBefore);
   }, 20_000);
   for (const order of ["money-first", "tokens-first", "identity-later"] as const) it(`rejects contradictory monetary request identity on PostgreSQL with ${order}`, () => {
     const runtime = store.registerRuntime({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local" });
