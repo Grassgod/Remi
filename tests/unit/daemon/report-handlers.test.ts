@@ -4,15 +4,16 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_ERROR_CODES, DAEMON_RETRYABLE_ERROR_CODES, DAEMON_TERMINAL_ERROR_CODES } from "@multiremi/contracts/daemon-protocol.js";
 import { reportFrame } from "../../fixtures/report-session.js";
-import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import type { DaemonTaskCompletionFields, DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 
 const databases: Database[] = [];
+const inputs = new WeakMap<MultiremiStore, DaemonTurnInput>();
 const cardFields: DaemonTaskCompletionFields = {
   trace: { head: 9, event_count: 2, closed: true, tool_call_count: 1,
     type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
-  final_reply_md: null, model: null,
+  final_reply_md: "done", model: null,
 };
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
@@ -22,9 +23,27 @@ function fixture() {
   const agent = store.createAgent({ name: "Reports", provider: "claude", maxConcurrentTasks: 10 });
   const task = store.createTask({ agentId: agent.id, prompt: "report" });
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  inputs.set(store, store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(task.id)!));
   return { db, store, runtime, agent, task,
-    report: (type: string, p: Record<string, unknown> = {}) => reportFrame(store, type, { task_id: task.id, ...p }, { runtimeId: runtime.id }),
+    report: (type: string, p: Record<string, unknown> = {}) => sendReport(store, type, { task_id: task.id, ...p }, { runtimeId: runtime.id }),
   };
+}
+
+function sendReport(store: MultiremiStore, type: string, fields: Record<string, unknown>, options: Parameters<typeof reportFrame>[3]) {
+  if (type !== "turn.complete") return reportFrame(store, type, fields, options);
+  const input = inputs.get(store)!;
+  const { task_id, output, error: _error, ...metadata } = fields;
+  return reportFrame(store, type, { ...metadata, turn_id: input.turn_id, attempt_id: task_id,
+    input_to_seq: Math.max(input.input_to_seq, store.getTurn(input.turn_id)?.input_to_seq ?? 0),
+    reply: { body_md: typeof metadata.final_reply_md === "string" ? metadata.final_reply_md : output ?? "done", message_kind: "final" },
+  }, options);
+}
+
+function success(store: MultiremiStore, type: string) {
+  if (type !== "turn.complete") return { ok: true };
+  const turn = store.getTurn(inputs.get(store)!.turn_id)!;
+  expect(turn.reply_message_id).toBeString();
+  return { ok: true, turn_id: turn.id, reply_message_id: turn.reply_message_id };
 }
 
 describe("v2 reports", () => {
@@ -53,7 +72,7 @@ describe("v2 reports", () => {
     } finally { progress.mockRestore(); usage.mockRestore(); }
   });
 
-  for (const type of ["task.complete", "task.fail"]) {
+  for (const type of ["turn.complete", "task.fail"]) {
     it(`delivers all daemon-derived completion fields to the round-card hook for ${type}`, async () => {
       const { store, task, runtime } = fixture();
       store.startTask(task.id);
@@ -67,9 +86,9 @@ describe("v2 reports", () => {
           { type: "text", content: "final **answer**", meta: { phase: "final" } },
         ]);
         const fields = trace.completion(task.id);
-        expect(await reportFrame(store, type, { task_id: task.id, output: "answer", error: "failure", ...fields }, {
+        expect(await sendReport(store, type, { task_id: task.id, output: "answer", error: "failure", ...fields }, {
           runtimeId: runtime.id, onRoundCard: (taskId, fields) => received.push({ taskId, fields }),
-        })).toEqual({ ok: true });
+        })).toEqual(success(store, type));
         expect(received).toEqual([{ taskId: task.id, fields: {
           trace: { head: 3, event_count: 3, closed: true, tool_call_count: 1,
             type_histogram: [{ type: "execution", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }, { type: "text", tool: null, count: 1 }] },
@@ -79,7 +98,7 @@ describe("v2 reports", () => {
     });
   }
 
-  for (const type of ["task.complete", "task.fail"]) {
+  for (const type of ["turn.complete", "task.fail"]) {
     for (const missing of ["trace", "final_reply_md", "model"]) {
       it(`keeps ${type} effective with missing ${missing}, a blank card and a task-scoped warning`, async () => {
         const { store, task, runtime } = fixture();
@@ -90,11 +109,11 @@ describe("v2 reports", () => {
         const closed: unknown[] = [];
         const warning = spyOn(console, "warn").mockImplementation(() => {});
         try {
-          expect(await reportFrame(store, type, { task_id: task.id, ...fields }, {
+          expect(await sendReport(store, type, { task_id: task.id, ...fields }, {
             runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
             onTraceClosed: (...args) => closed.push(args),
-          })).toEqual({ ok: true });
-          expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+          })).toEqual(success(store, type));
+          expect(store.getTask(task.id)?.status).toBe(type === "turn.complete" ? "completed" : "failed");
           expect(received).toEqual([{ id: task.id, value: null }]);
           expect(closed).toEqual([]);
           expect(warning.mock.calls).toEqual([[expect.stringContaining("missing round-card fields"), { taskId: task.id }]]);
@@ -119,11 +138,11 @@ describe("v2 reports", () => {
           const received: unknown[] = [];
           const closed: unknown[] = [];
           error.mockClear();
-          expect(await reportFrame(store, type, { task_id: task.id, ...cardFields, ...patch }, {
+          expect(await sendReport(store, type, { task_id: task.id, ...cardFields, ...patch }, {
             runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
             onTraceClosed: (...args) => closed.push(args),
-          })).toEqual({ ok: true });
-          expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+          })).toEqual(success(store, type));
+          expect(store.getTask(task.id)?.status).toBe(type === "turn.complete" ? "completed" : "failed");
           expect(received).toEqual([{ id: task.id, value: null }]);
           expect(closed).toEqual([]);
           expect(error.mock.calls).toEqual([[expect.stringContaining("malformed round-card field"), { taskId: task.id, field }]]);
@@ -141,8 +160,9 @@ describe("v2 reports", () => {
       const closed: unknown[] = [];
       try {
         for (const [taskId, runtimeId, code] of [["", runtime.id, "invalid_report"],
-          ["missing", runtime.id, "task_not_found"], [task.id, "other", "authority_revoked"]]) {
-          expect(await reportFrame(store, type, { task_id: taskId, ...cardFields }, {
+          ["missing", runtime.id, type === "turn.complete" ? "stale_attempt" : "task_not_found"],
+          [task.id, "other", type === "turn.complete" ? "stale_attempt" : "authority_revoked"]]) {
+          expect(await sendReport(store, type, { task_id: taskId, ...cardFields }, {
             runtimeId, onRoundCard: (...args) => received.push(args), onTraceClosed: (...args) => closed.push(args),
           })).toEqual({ ok: false, code, retryable: false });
         }
@@ -160,16 +180,16 @@ describe("v2 reports", () => {
     store.startTask(task.id);
     const received: unknown[] = [];
     const closed: unknown[] = [];
-    expect(await reportFrame(store, "task.complete", { task_id: task.id, ...cardFields }, {
+    expect(await sendReport(store, "turn.complete", { task_id: task.id, ...cardFields }, {
       runtimeId: runtime.id, onRoundCard: (_taskId, value) => received.push(value),
       onTraceClosed: (...args) => closed.push(args),
-    })).toEqual({ ok: true });
+    })).toEqual(success(store, "turn.complete"));
     expect(received).toEqual([cardFields]);
     expect(closed).toEqual([[task.id, 9, runtime.id]]);
   });
 
   for (const [type, initialStatus] of [
-    ["task.complete", "running"], ["task.fail", "dispatched"],
+    ["turn.complete", "running"], ["task.fail", "dispatched"],
     ["task.fail", "running"], ["task.fail", "waiting_local_directory"],
   ] as const) {
     it(`calls the round-card hook once for ${type} from ${initialStatus}, despite two replays`, async () => {
@@ -180,11 +200,11 @@ describe("v2 reports", () => {
       expect(store.getTask(task.id)?.status).toBe(initialStatus);
       const received: unknown[] = [];
       for (let attempt = 0; attempt < 3; attempt++) {
-        expect(await reportFrame(store, type, { task_id: task.id, output: "done", error: "failed", ...cardFields }, {
+        expect(await sendReport(store, type, { task_id: task.id, output: "done", error: "failed", ...cardFields }, {
           runtimeId: runtime.id, onRoundCard: (id, fields) => received.push({ id, fields }),
-        })).toEqual({ ok: true });
+        })).toEqual(success(store, type));
       }
-      expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+      expect(store.getTask(task.id)?.status).toBe(type === "turn.complete" ? "completed" : "failed");
       expect(received).toEqual([{ id: task.id, fields: cardFields }]);
     });
   }
@@ -201,8 +221,8 @@ describe("v2 reports", () => {
     }
     expect(await report("task.session_pin", { session_id: "session", work_dir: "/tmp/task" })).toEqual({ ok: true });
     expect(await report("task.progress", { summary: "done", step: 3, total: 3 })).toEqual({ ok: true });
-    expect(await report("task.complete", { output: "done", session_id: "session", work_dir: "/tmp/task" })).toEqual({ ok: true });
-    expect(await report("task.complete", { output: "duplicate" })).toEqual({ ok: true });
+    expect(await report("turn.complete", { output: "done", session_id: "session", work_dir: "/tmp/task" })).toEqual(success(store, "turn.complete"));
+    expect(await report("turn.complete", { output: "duplicate" })).toEqual(success(store, "turn.complete"));
     expect(await report("task.fail", { error: "late" })).toEqual({ ok: true });
     expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "done", sessionId: "session", workDir: "/tmp/task" });
     expect(store.getTask(task.id)?.usage).toHaveLength(1);
@@ -210,17 +230,22 @@ describe("v2 reports", () => {
     expect(store.getTaskPrompt(task.id)?.prompt).toBe(prompt);
   });
 
-  it("names steer_pending without categorizing it as retryable or terminal", async () => {
-    expect(DAEMON_PROTOCOL_ERROR_CODES).toContain("steer_pending");
-    expect(DAEMON_RETRYABLE_ERROR_CODES).not.toContain("steer_pending" as never);
-    expect(DAEMON_TERMINAL_ERROR_CODES).not.toContain("steer_pending" as never);
-    const { store, task, report } = fixture();
+  it("names turn_input_pending without categorizing it as retryable or terminal", async () => {
+    expect(DAEMON_PROTOCOL_ERROR_CODES).toContain("turn_input_pending");
+    expect(DAEMON_RETRYABLE_ERROR_CODES).not.toContain("turn_input_pending" as never);
+    expect(DAEMON_TERMINAL_ERROR_CODES).not.toContain("turn_input_pending" as never);
+    const { store, task, report, runtime } = fixture();
     store.startTask(task.id);
     const steer = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "follow up" });
-    expect(await report("task.complete", { output: "old" })).toEqual({ ok: false, code: "steer_pending", retryable: false });
+    store.getDaemonTurnBridge().snapshot({ runtimeId: runtime.id, daemonId: "reports-daemon", workspaceId: "local" }, new Set([task.id]));
+    expect(await report("turn.complete", { output: "old" })).toEqual({ ok: false, code: "turn_input_pending", retryable: false });
     expect(store.getTask(task.id)?.status).toBe("running");
-    store.consumeTaskSteerMessages(task.id, [steer.id]);
-    expect(await report("task.complete", { output: "new" })).toEqual({ ok: true });
+    const input = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(task.id)!);
+    expect(await reportFrame(store, "turn.input", { turn_id: input.turn_id, attempt_id: task.id,
+      input_to_seq: input.input_to_seq, message_ids: input.input_messages.map(message => message.id) }, { runtimeId: runtime.id }))
+      .toEqual({ ok: true, input_to_seq: input.input_to_seq });
+    expect(store.getTaskSteerMessage(steer.id)?.consumedAt).toBeTruthy();
+    expect(await report("turn.complete", { output: "new" })).toEqual(success(store, "turn.complete"));
     expect(store.getTask(task.id)?.status).toBe("completed");
   });
 
@@ -228,8 +253,18 @@ describe("v2 reports", () => {
     const { store, task, report } = fixture();
     expect(await report("task.progress", { task_id: "missing" })).toEqual({ ok: false, code: "task_not_found", retryable: false });
     expect(await report("task.prompt", { mode: "other" })).toEqual({ ok: false, code: "invalid_report", retryable: false });
-    expect(await reportFrame(store, "task.complete", { task_id: "missing" }, { runtimeId: "missing-runtime" })).toMatchObject({ code: "task_not_found" });
+    expect(await sendReport(store, "turn.complete", { task_id: "missing" }, { runtimeId: "missing-runtime" }))
+      .toEqual({ ok: false, code: "authority_revoked", retryable: false });
     store.registerRuntime({ id: "other", provider: "claude", name: "other", daemonId: "other-daemon" });
-    expect(await reportFrame(store, "task.complete", { task_id: task.id }, { runtimeId: "other" })).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(await sendReport(store, "turn.complete", { task_id: task.id }, { runtimeId: "other" }))
+      .toEqual({ ok: false, code: "stale_attempt", retryable: false });
+  });
+
+  it("quarantines retired completion frames without completing the turn", async () => {
+    const { store, task, runtime } = fixture();
+    store.startTask(task.id);
+    expect(await reportFrame(store, "task.complete", { task_id: task.id, output: "old format" }, { runtimeId: runtime.id }))
+      .toEqual({ ok: false, code: "report_shape_retired", retryable: false });
+    expect(store.getTask(task.id)?.status).toBe("running");
   });
 });
