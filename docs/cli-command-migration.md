@@ -2,6 +2,10 @@
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.
+JSON output preserves explicit accounting token counters as nonnegative safe
+integers or null, and `coverage.token_ratio` as a finite ratio or null.
+Credential fields remain filtered; strings or objects disguised as token
+statistics do not bypass that filter.
 `remi dashboard usage prices list|set|close` reads or appends exact
 provider/model/connection price versions (`set --file <json>`,
 `close <price-id> --effective-to <ISO>`). Price writes are human/admin only.

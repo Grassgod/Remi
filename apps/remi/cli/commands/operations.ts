@@ -4,6 +4,7 @@ import {
   CliRenderer,
   ResourceResolver,
   sanitizeCliDetails,
+  isPublicUsageStatistic,
   type CliApiClient,
   type CliHttpMethod,
   type CliIdentity,
@@ -1364,7 +1365,7 @@ function omitSecretFields(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(omitSecretFields);
   if (!isRecord(value)) return value;
   return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !/(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i.test(key))
+    .filter(([key, entry]) => isPublicUsageStatistic(key, entry) || !/(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i.test(key))
     .map(([key, entry]) => [key, omitSecretFields(entry)]));
 }
 
