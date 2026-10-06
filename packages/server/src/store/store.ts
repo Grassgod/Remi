@@ -4703,6 +4703,10 @@ runMigrations(this.db);
     return this.sessions.listIssueSessionResults(issueId);
   }
 
+  listActiveTasksForIssue(...args: Parameters<TasksRepo["listActiveTasksForIssue"]>): MultiremiTask[] {
+    return this.tasks.listActiveTasksForIssue(...args);
+  }
+
   listTasksForIssue(issueId: string): MultiremiTask[] {
     return this.tasks.listTasksForIssue(issueId);
   }

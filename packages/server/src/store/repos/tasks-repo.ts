@@ -1487,6 +1487,28 @@ export class TasksRepo {
     return rows.map(toTask);
   }
 
+  /** Public compatibility fields only, after active/Chat visibility selection. */
+  listActiveTasksForIssue(issueId: string, access: TaskSnapshotAccess): MultiremiTask[] {
+    const params: Array<string | null> = [issueId, ...ACTIVE_TASK_STATUSES];
+    let identity = "";
+    if (access.taskToken) {
+      identity = " AND task.id = ? AND task.agent_id = ? AND task.workspace_id = ?";
+      params.push(access.taskToken.taskId, access.taskToken.agentId, access.taskToken.workspaceId);
+    } else if (access.userId !== null) {
+      identity = " AND COALESCE(chat.creator_id, 'local') = ?";
+      params.push(access.userId);
+    }
+    const rows = this.ctx.db.query(`SELECT ${SNAPSHOT_PUBLIC_COLUMNS.map(column => `task.${column}`).join(", ")}
+      FROM multiremi_tasks task
+      WHERE task.issue_id = ? AND task.status IN (${ACTIVE_TASK_STATUSES.map(() => "?").join(", ")})
+        AND (task.chat_session_id IS NULL OR task.chat_session_id = '' OR EXISTS (
+          SELECT 1 FROM multiremi_chat_sessions chat WHERE chat.id = task.chat_session_id${identity}
+        ))
+      ORDER BY task.created_at DESC`).all(...params) as Row[];
+    // listTasksForIssue does not attach autopilot-run summaries; preserve that shape.
+    return rows.map(toTask);
+  }
+
   getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
     // A dispatched task can still be waiting behind an active sibling when the
     // daemon has claimed it but has not called /start yet. Returning the

@@ -545,3 +545,7 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 ```
 
 与基线比较时先证明结果、权限和事件语义一致，再报告相同环境下的差值；没有数据时只能提出待验证假设。
+
+### S9-6：活跃 Issue 任务读
+
+`GET /api/issues/:id/active-task` 先按活跃状态及 Chat creator/task capability 在 SQL 中筛选，再只读取完整公开任务字段；公开 prompt/result/usage/plugin 与 queue blocker、顺序保持原形状。Issue workspace 已授权且一致的行无需逐行重复权限读取，历史 workspace 不一致的行保留旧权限守卫。终态任务和私有执行 profile 不跨桥。正式测试 `first-screen-hotspots-s96-active.test.ts` 对双方言、状态、空/不存在/无权 Issue、Chat/非 Chat、任务凭证逐字段对拍。
