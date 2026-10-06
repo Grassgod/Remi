@@ -5,7 +5,7 @@ import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 /** Full-page placeholder shown while the issue detail query is pending. */
 export function IssueDetailSkeleton() {
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div data-issue-detail-loading="" className="flex flex-1 min-h-0 flex-col">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
         <Skeleton className="h-4 w-16" />
         <Skeleton className="h-4 w-4" />

@@ -70,6 +70,7 @@ import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 import { computeInFlightWaves, preRevealWaveFailure } from "./zero-jump-waves";
+import { startSsrProbe } from "./zero-jump-ssr-proxy";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const WEB_APP_DIR = join(REPO_ROOT, "frontend", "apps", "web");
@@ -177,6 +178,8 @@ function findFreePort(start: number): number {
 }
 
 interface Scenario {
+  ssrTimeout?: boolean;
+  parentEntryIssueId?: string;
   /** F398 also verifies that all deferred rows remain reachable inside the slot. */
   queuedTasks?: number;
   activityPreference?: boolean;
@@ -186,7 +189,7 @@ interface Scenario {
   mode: "cold" | "warm";
   path: string;
   /** Entry page for a warm round; the round clicks a real row there. */
-  entry: "issues-list" | "inbox";
+  entry: "issues-list" | "inbox" | "parent-issue";
   /** Issue row to click, or the inbox row id for the deep link. */
   clickIssueId: string | null;
   inboxItemId: string | null;
@@ -234,6 +237,12 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
     }).filter(scenario => imageCase.kind !== "element" || scenario.mode === "cold")),
     ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId, {
       seededParentIssueId: fixture.parentIssueId,
+    }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-child-warm") ? detail("detail-child-warm", fixture.waitingChildIssueId, {
+      entry: "parent-issue", parentEntryIssueId: fixture.parentIssueId, seededParentIssueId: fixture.parentIssueId,
+    }).filter(scenario => scenario.mode === "warm") : []),
+    ...(options.only.includes("detail-ssr-timeout") ? detail("detail-ssr-timeout", fixture.shortIssueId, {
+      ssrTimeout: true,
     }).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
@@ -295,6 +304,14 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
+  skeletonFlashFrames: number;
+  ssrSeedStatus: string | null;
+  legacySsrMarker: boolean;
+  ssrApiReads: Array<{ path: string; query: string; startedAt: number }>;
+  softNavigationSsrReads: Array<{ path: string; query: string; startedAt: number }>;
+  navigationResponses: Array<{ rsc: boolean; prefetch: boolean; seedStatus: string | null;
+    accept: string | null; destination: string | null;
+    initialLog: boolean; initialData: boolean; startedAt: number; finishedAt: number }>;
   streamObservation?: {
     samples: Array<{ t: number; height: number; rows: number; state: string | null }>;
     rows: number;
@@ -506,8 +523,11 @@ async function runRound(input: {
   round: number;
   ssrCookie: boolean;
   userId: string;
+  ssrProbe: ReturnType<typeof startSsrProbe>;
 }): Promise<RoundResult> {
   const { browser, token, webOrigin, apiOrigin, slug, scenario, round } = input;
+  const ssrReadStart = input.ssrProbe.reads.length;
+  input.ssrProbe.setTimeoutIssue(scenario.ssrTimeout ? scenario.expectIssueId ?? undefined : undefined);
   // The scenario's own profile: a deep link's terminal element is the target
   // comment, not the newest one. Installing the generic profile and
   // post-processing with it silently reported `readyTimeout` for every deep
@@ -527,6 +547,7 @@ async function runRound(input: {
     logRequests: [],
     ssrSeed: false,
     ssrSeedRereads: [],
+    ssrSeedStatus: null, legacySsrMarker: false, ssrApiReads: [], softNavigationSsrReads: [], navigationResponses: [], skeletonFlashFrames: 0,
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -592,6 +613,14 @@ async function runRound(input: {
     } else await route.continue();
   });
   await context.addInitScript(() => {
+    const skeletonFrames: number[] = [];
+    (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames = skeletonFrames;
+    const sampleSkeletons = () => {
+      if ([...document.querySelectorAll<HTMLElement>('[data-issue-page] [data-slot="skeleton"]')].some(element =>
+        element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))) skeletonFrames.push(performance.now());
+      requestAnimationFrame(sampleSkeletons);
+    };
+    requestAnimationFrame(sampleSkeletons);
     performance.setResourceTimingBufferSize(10_000);
     const phases = { reveals: [] as number[], fetches: [] as Array<{path: string; t: number; state: string | null; fresh: string | null}> };
     (window as unknown as { __s7Phases: typeof phases }).__s7Phases = phases;
@@ -651,9 +680,12 @@ async function runRound(input: {
 
   const page = await context.newPage();
   const pendingApi = new Set<unknown>();
+  const pendingNavigation = new Set<unknown>();
   let lastApiChange = performance.now(), lastHubChange = performance.now();
   page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/")) { pendingApi.add(request); lastApiChange = performance.now(); } });
-  const finishRequest = (request: unknown) => { if (pendingApi.delete(request)) lastApiChange = performance.now(); };
+  const finishRequest = (request: unknown) => {
+    if (pendingApi.delete(request) || pendingNavigation.delete(request)) lastApiChange = performance.now();
+  };
   page.on("requestfinished", finishRequest); page.on("requestfailed", finishRequest);
   page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
     if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
@@ -661,10 +693,30 @@ async function runRound(input: {
     try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
   }));
   const seedReads: Promise<void>[] = [];
+  const navigationStarts = new Map<unknown, number>();
+  const rscStarts: number[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === new URL(targetUrl).pathname) {
+      pendingNavigation.add(request);
+      navigationStarts.set(request, Date.now());
+      if (request.headers().rsc === "1") rscStarts.push(Date.now());
+    }
+  });
   page.on("response", response => {
     if (new URL(response.url()).pathname === new URL(targetUrl).pathname
       && (response.request().isNavigationRequest() || new URL(response.url()).searchParams.has("_rsc"))) {
-      seedReads.push(response.text().then(body => { if (/head_ises_[A-Za-z0-9_]+/.test(body)) result.ssrSeed = true; }).catch(() => {}));
+      seedReads.push(response.text().then(async body => {
+        const requestHeaders = await response.request().allHeaders();
+        const decoded = body.replaceAll('\\"', '"');
+        result.navigationResponses.push({
+          rsc: response.request().headers().rsc === "1", prefetch: response.request().headers()["next-router-prefetch"] === "1",
+          accept: requestHeaders.accept ?? null, destination: requestHeaders["sec-fetch-dest"] ?? null,
+          seedStatus: /"data-ssr-seed"\s*:\s*"([a-z-]+)"/.exec(decoded)?.[1] ?? /data-ssr-seed="([a-z-]+)"/.exec(decoded)?.[1] ?? null,
+          initialLog: /"initialLog":(?!"\$undefined")/.test(decoded),
+          initialData: /"initialData":(?!"\$undefined")/.test(decoded),
+          startedAt: navigationStarts.get(response.request()) ?? Date.now(), finishedAt: Date.now(),
+        });
+      }).catch(() => {}));
     }
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -694,8 +746,10 @@ async function runRound(input: {
     if (scenario.mode === "cold") {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
     } else {
-      const entryPath = scenario.entry === "inbox" ? "/inbox" : "/issues";
+      const entryPath = scenario.entry === "parent-issue" ? `/issues/${scenario.parentEntryIssueId}`
+        : scenario.entry === "inbox" ? "/inbox" : "/issues";
       await page.goto(`${webOrigin}/${slug}${entryPath}`, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+      if (scenario.entry === "parent-issue") await page.locator('[data-perf-scroll="issue-detail"][data-perf-state="ready"]').waitFor();
       await clickEntryRow(page, scenario, slug);
       // The click has to be in the buffer before the app can navigate; resetting
       // at its timestamp keeps the reported clock on the page's own timeline.
@@ -718,7 +772,8 @@ async function runRound(input: {
     // Finish the entire deferred/Hub phase, rather than truncating at reveal.
     const settleDeadline = performance.now() + ROUND_TIMEOUT_MS;
     while (performance.now() < settleDeadline) {
-      if (result.hubAckSeen && pendingApi.size === 0 && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
+      if (result.hubAckSeen && pendingApi.size === 0 && pendingNavigation.size === 0
+        && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
       await page.waitForTimeout(50);
     }
     if (!result.settled) result.error = `deferred API / Hub phase did not settle (ack=${result.hubAckSeen}, pending=${pendingApi.size})`;
@@ -733,8 +788,13 @@ async function runRound(input: {
   // other structural checks remain blocking on both paths.
   // The actual rendered log supplies the seed evidence; a cookie or unrelated
   // serialized head id does not prove this detail used SSR.
-  result.ssrSeed = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial="1"]').count().then(count => count > 0).catch(() => false);
-  result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  result.ssrSeedStatus = await page.locator('[data-issue-page]').getAttribute("data-ssr-seed").catch(() => null);
+  result.legacySsrMarker = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  result.ssrSeed = result.ssrSeedStatus === "ok";
+  result.ssrApiReads = input.ssrProbe.reads.slice(ssrReadStart);
+  const rscResponses = result.navigationResponses.filter(response => response.rsc);
+  // Include cancelled prefetches and late SSR work, not just completed responses.
+  result.softNavigationSsrReads = rscStarts.length ? result.ssrApiReads.filter(read => read.startedAt >= Math.min(...rscStarts)) : [];
   if (!result.ssrSeed) result.waveGate = "record-only";
   const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
@@ -772,6 +832,8 @@ async function runRound(input: {
   result.inboxInjected = collectors.inboxInjected;
 
   result.navStartMs = navStartMs;
+  result.skeletonFlashFrames = await page.evaluate(from =>
+    (window as unknown as { __s7SkeletonFrames: number[] }).__s7SkeletonFrames.filter(t => t >= from).length, navStartMs);
   const frames = (buffer?.frames ?? []).filter(frame => frame.t >= navStartMs).map(frame => ({ ...frame, t: frame.t - navStartMs }));
   if (buffer && frames.length > 0) {
     const firstRealMs = computeFirstRealMs(frames, profile.name);
@@ -838,8 +900,17 @@ async function runRound(input: {
   });
   const stream = result.streamObservation;
   const failures = [
-    scenario.entry === "issues-list" && scenario.mode === "cold" && result.ssrSeed !== ssrCookie
-      ? `expected ${ssrCookie ? "SSR seed" : "CSR fallback"}` : null,
+    scenario.entry !== "inbox" && result.ssrSeedStatus !== (scenario.mode === "warm" ? "soft-nav"
+      : !ssrCookie ? "no-cookie" : scenario.ssrTimeout ? "timeout" : "ok")
+      ? `unexpected SSR seed status: ${result.ssrSeedStatus}` : null,
+    scenario.entry !== "inbox" && result.legacySsrMarker !== result.ssrSeed ? "legacy SSR marker contradicts seed status" : null,
+    scenario.entry !== "inbox" && (scenario.mode === "cold" || result.navigationResponses.some(response => response.seedStatus))
+      && !result.navigationResponses.some(response => response.seedStatus === result.ssrSeedStatus
+      && response.initialLog === result.ssrSeed && response.initialData === result.ssrSeed)
+      ? "Flight/document seed props contradict the result marker" : null,
+    scenario.entry !== "inbox" && scenario.mode === "warm" && (!rscResponses.length || result.softNavigationSsrReads.length)
+      ? `soft navigation SSR GETs: ${result.softNavigationSsrReads.length}, RSC responses: ${rscResponses.length}` : null,
+    scenario.mode === "warm" && result.skeletonFlashFrames ? `visible warm skeleton frames: ${result.skeletonFlashFrames}` : null,
     result.ssrSeedRereads.length ? `SSR seed rereads: ${JSON.stringify(result.ssrSeedRereads)}` : null,
     scenario.queuedTasks && (!stream || !stream.samples.length || !stream.samples.some(sample => sample.rows === 0)
       || !stream.samples.some(sample => sample.rows === scenario.queuedTasks) || stream.rows !== scenario.queuedTasks
@@ -879,6 +950,7 @@ async function clickEntryRow(page: Page, scenario: Scenario, slug: string): Prom
   const isInbox = scenario.entry === "inbox";
   const selector = isInbox
     ? inboxRowSelector("contract", scenario.inboxItemId ?? undefined)
+    : scenario.entry === "parent-issue" ? `a[href="/${slug}/issues/${scenario.clickIssueId}"]`
     : issueRowSelector("contract", scenario.clickIssueId ?? "");
   while (Date.now() < deadline) {
     const skeletons = await page.locator(`${LEGACY.listRoot} [data-slot="skeleton"]`).count().catch(() => 0);
@@ -969,6 +1041,8 @@ async function main(): Promise<void> {
   });
   await waitForHttp(`http://127.0.0.1:${apiPort}/health`, 30_000);
   log(`api ready; fixture: ${fixture.counts.longComments} long comments, ${fixture.counts.sessions} sessions, inbox ${fixture.inboxItemId}`);
+  const ssrProbe = startSsrProbe(`http://127.0.0.1:${apiPort}`, findFreePort(Math.max(apiPort, webPort) + 1));
+  running.push({ kill: () => ssrProbe.stop() });
 
   // ── web build + start ────────────────────────────────────────────────────
   if (!options.skipBuild) {
@@ -997,7 +1071,7 @@ async function main(): Promise<void> {
   const web = Bun.spawn({
     cmd: ["bun", "x", "next", "start", "--port", String(webPort)],
     cwd: WEB_APP_DIR,
-    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: `http://127.0.0.1:${apiPort}` },
+    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: ssrProbe.origin },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -1015,6 +1089,25 @@ async function main(): Promise<void> {
 
   // ── browser ──────────────────────────────────────────────────────────────
   browser = await launchBrowser();
+  // Read complete Flight independently of browser-cancelled session redirects.
+  // Both requests run against the production Next server with a real cookie.
+  const directRscChecks = [];
+  for (const prefetch of [false, true]) {
+    const before = ssrProbe.reads.length;
+    const response = await fetch(`${webOrigin}/${fixture.workspaceSlug}/issues/${fixture.shortIssueId}`, {
+      headers: { RSC: "1", Accept: "*/*", Cookie: `multimira_auth=${encodeURIComponent(token)}`,
+        ...(prefetch ? { "Next-Router-Prefetch": "1" } : {}) },
+    });
+    const body = await response.text();
+    const status = /"data-ssr-seed"\s*:\s*"([a-z-]+)"/.exec(body)?.[1] ?? null;
+    const initialLog = /"initialLog":(?!"\$undefined")/.test(body);
+    const initialData = /"initialData":(?!"\$undefined")/.test(body);
+    const reads = ssrProbe.reads.slice(before);
+    directRscChecks.push({ prefetch, status, initialLog, initialData, ssrGets: reads.length, httpStatus: response.status });
+    if (reads.length || initialLog || initialData || (status !== "soft-nav" && !(prefetch && status === null))) {
+      throw new Error(`direct RSC/prefetch bootstrap gate failed: ${JSON.stringify(directRscChecks.at(-1))}`);
+    }
+  }
   const scenarios = buildScenarios(fixture, options, imageCases);
   const rounds: RoundResult[] = [];
   for (const scenario of scenarios) {
@@ -1030,6 +1123,7 @@ async function main(): Promise<void> {
         round,
         ssrCookie: options.ssrCookie,
         userId: fixture.userId,
+        ssrProbe,
       });
       rounds.push(result);
       const violations = violationsForRound(result);
@@ -1062,6 +1156,7 @@ async function main(): Promise<void> {
     fixture: fixture.counts,
     imageFixture: { width: 640, height: 240, cases: imageCases.map(({ key, kind }) => ({ key, kind })) },
     ssrCookie: options.ssrCookie,
+    directRscChecks,
     rounds,
     rows: grouped.map((row) => ({
       ...row,

@@ -4,13 +4,42 @@ import { IssueDetailSchema } from "@multiremi/core/api/schemas/issues";
 import { IssueSessionSchema } from "@multiremi/core/api/schemas/comments";
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 
-const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => cookie.value ? { value: cookie.value } : undefined }) }));
-import { readIssueLogBootstrap, readWithSessionCookie, SSR_LOG_TIMEOUT_MS } from "./server-log";
+const cookie = vi.hoisted(() => ({ value: undefined as string | undefined, navigation: "document" }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => cookie.value ? { value: cookie.value } : undefined }),
+  headers: async () => new Headers({ accept: cookie.navigation === "soft-nav" ? "text/x-component" : "text/html" }) }));
+import { readIssueLogBootstrap, readIssueLogBootstrapResult, readIssuePageBootstrap, readSSRWorkspace, readWithSessionCookie, SSR_LOG_TIMEOUT_MS } from "./server-log";
 
-afterEach(() => { cookie.value = undefined; vi.unstubAllGlobals(); });
+afterEach(() => { cookie.value = undefined; cookie.navigation = "document"; vi.unstubAllGlobals(); });
 
 describe("Issue SSR cookie reader", () => {
+  it("skips all page and workspace reads on soft navigation before consulting cookies", async () => {
+    cookie.value = "synthetic";
+    cookie.navigation = "soft-nav";
+    const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+    expect(await readIssuePageBootstrap("test", "issue")).toEqual({ status: "soft-nav", initial: null });
+    expect(await readSSRWorkspace("test")).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("reports the absence of a cookie without making requests", async () => {
+    const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+    expect(await readIssuePageBootstrap("test", "issue")).toEqual({ status: "no-cookie", initial: null });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([
+    [404, "not-found"], [401, "upstream-error"], [503, "upstream-error"],
+    [200, "invalid"],
+  ])("reports only the enum for HTTP %s", async (status, expected) => {
+    cookie.value = "synthetic";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("private malformed body", { status })));
+    expect(await readIssueLogBootstrapResult("test", "issue")).toEqual({ status: expected, initial: null });
+  });
+  it("reports a shared Issue deadline as timeout without retaining partial data", async () => {
+    cookie.value = "synthetic";
+    vi.stubGlobal("fetch", vi.fn((_url: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("private upstream")), { once: true });
+    })));
+    expect(await readIssueLogBootstrapResult("test", "issue")).toEqual({ status: "timeout", initial: null });
+  });
   it("does not request without a cookie", async () => {
     const fetcher = vi.fn() as unknown as typeof fetch;
     expect(await readWithSessionCookie({ cookie: undefined, slug: "test", path: "/api/sessions/s/log", schema: z.array(z.string()), fetcher })).toBeNull();
@@ -107,6 +136,21 @@ describe("Issue SSR missing-comment fallback", () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/sessions/main/log?anchor=1&before=15&after=15&with_activity=1"))).toBe(true);
     expect(fetcher.mock.calls.filter(([url]) => new URL(String(url)).searchParams.get("anchor") === "0")
       .every(([url]) => !new URL(String(url)).searchParams.has("with_activity"))).toBe(true);
+  });
+
+  it("only reports ok with a complete bootstrap, including a requested parent", async () => {
+    const fetcher = mockReads(() => new Response("missing", { status: 404 }));
+    expect(await readIssueLogBootstrapResult("test", "issue")).toMatchObject({ status: "ok", initial: { issue } });
+    fetcher.mockImplementation(async (input: unknown) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/sessions")) return Response.json(sessions);
+      if (path === "/api/issues/issue") return Response.json({ ...issue, parent_issue_id: "parent" });
+      if (path === "/api/issues/parent") return new Response("private parent", { status: 503 });
+      if (path.endsWith("/log")) return Response.json(window());
+      if (path.endsWith("/children")) return Response.json({ issues: [] });
+      return Response.json([]);
+    });
+    expect(await readIssueLogBootstrapResult("test", "issue")).toEqual({ status: "upstream-error", initial: null });
   });
 
   it("does not seed a fallback when another session could not be checked", async () => {

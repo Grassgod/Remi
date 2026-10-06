@@ -567,6 +567,8 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 
 S7 默认带 SSR cookie，并在普通独立详情的 cold 轮次断言实际 SSR seed 存在；`--no-ssr-cookie` 断言实际走 CSR。已播种页的 Issue detail、父 Issue detail、members、sessions、children、task-runs 与当前 Session 的所有 `before=1` 回读必须为 0，逐轮报告 `ssrSeedRereads`，无 seed 的客户端读取不计为重复。`--only detail-locate` 覆盖显式 Session 的评论深链，`--only detail-locate-default` 覆盖未指定 Session 的评论深链，两者与 `detail-child`、`detail-short` 均可定向运行。
 
+Issue 页以 `data-ssr-seed` 输出播种结果枚举；S7 同时核对最终标记、文档/Flight 的 `initialLog` / `initialData` 和旧日志预定位标记。普通 warm 和 `--only detail-child-warm`（从父详情原生链接进入）必须是 `soft-nav`、空 seed；真实 RSC 与 Link 预取通过仅供 SSR 的本地代理记账，记录 `Accept` / `Sec-Fetch-Dest`，所有软导航 SSR GET 必须为 0（包括取消的 prefetch 和晚到工作），浏览器 rewrites 仍直连内存 API。`--only detail-ssr-timeout` 仅将 SSR Issue 读取延迟 1200ms，必须得到 `timeout` 并由 Bearer CSR 正常读取。warm、超时及 no-cookie 的客户端首次读取不计为 seed 补读；所有场景仍要求零跳动、anchorVisible=ready、无骨架和真实 Hub ack。
+
 无 cookie 的 S7 文档/RSC 拦截仍保留浏览器 Bearer 鉴权，并仅向本地 Web origin 授予 `local-network-access` 权限，避免 Chromium 对被拦截文档的地址空间检查阻断本机 WebSocket。所有路径仍必须观测真实 Hub `stream.ack`，无 ack 或请求未安静均失败；没有关闭浏览器安全策略或放宽等待断言。
 
 S1 的 `--ssr-cookie` 默认开启，仅在目标 origin 的浏览器内存 context 设置 HttpOnly `multimira_auth`；`--no-ssr-cookie` 用于 CSR 对照。开关不代表播种成功，逐轮以实际日志 DOM 的 seed 标记报告 SSR/CSR。`renderMs` 只量目标 Session 的窗口 `responseEnd` 到首次正常 fresh 揭示，warm 沿用 click 原点；SSR seed 没有浏览器窗口 responseEnd，缺观测或 forced 揭示记 null 并说明原因。各来源单列分位数；compare 不对不同 Cookie/实际来源或混合来源做差。
