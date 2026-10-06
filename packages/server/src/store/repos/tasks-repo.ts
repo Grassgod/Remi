@@ -1672,7 +1672,7 @@ export class TasksRepo {
     const existing=existingId?this.ctx.inbox().getMessage(existingId):null;
     const issueId=input.issueId??(existing?this.ctx.getLogIssueComment(existing.id)?.issueId:null);
     const requestId=input.id??createId("tsk");
-    input={...input,id:requestId,workspaceId:input.workspaceId??this.ctx.agents().getAgent(input.agentId)?.workspaceId};
+    input={...input,id:requestId,workspaceId:this.ctx.agents().getAgent(input.agentId)?.workspaceId};
     const sessionId=input.conversationSessionId??input.issueSessionId??input.issue_session_id??input.chatSessionId
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
