@@ -704,6 +704,26 @@ describe("IssueDetail (shared)", () => {
     expect(mockApiObj.getActiveTasksForIssue).not.toHaveBeenCalled();
   });
 
+  it("reads the log and task-runs while children still hold the detail render gate", async () => {
+    let release!: (value: { issues: Issue[] }) => void;
+    mockApiObj.listChildIssues.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    renderIssueDetail();
+    await waitFor(() => expect(mockApiObj.getSessionLog).toHaveBeenCalled());
+    expect(mockApiObj.listTasksByIssue).toHaveBeenCalledExactlyOnceWith("issue-1");
+    expect(document.querySelector('[data-perf-scroll="issue-detail"]')).toBeNull();
+    await act(async () => { release({ issues: [] }); });
+    await waitForReveal();
+    expect(mockApiObj.getSessionLog.mock.calls.filter(([, params]) => params?.before === 30)).toHaveLength(1);
+  });
+
+  it("reuses detail reactions instead of issuing the same Issue read again", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, reactions: [] });
+    renderIssueDetail();
+    await waitForReveal();
+    await waitFor(() => expect(mockApiObj.listIssueSubscribers).toHaveBeenCalled());
+    expect(mockApiObj.getIssue.mock.calls.filter(([id]) => id === "issue-1")).toHaveLength(1);
+  });
+
   describe("first-screen dependencies (MUL-499)", () => {
     it("does not request dependencies for a top-level issue", async () => {
       renderIssueDetail();

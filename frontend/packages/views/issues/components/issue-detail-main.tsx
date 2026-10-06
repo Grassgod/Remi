@@ -1,5 +1,7 @@
 "use client";
 
+import type { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
+
 import { useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Clock3, Play } from "lucide-react";
@@ -30,6 +32,7 @@ export interface RevealGates {
 interface IssueDetailMainProps {
   issue: Issue;
   issueId: string;
+  log?: ReturnType<typeof useIssueLog>;
   parentIssue: Issue | null;
   breadcrumbProject: Project | null;
   actions: UseIssueActionsResult;
@@ -69,6 +72,7 @@ interface IssueDetailMainProps {
 export function IssueDetailMain({
   issue,
   issueId,
+  log,
   parentIssue,
   breadcrumbProject,
   actions,
@@ -241,6 +245,7 @@ export function IssueDetailMain({
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IssueActivitySection
+              log={log}
               onContentReady={onContentReady}
               issueId={issueId}
               issueTitle={issue.title}

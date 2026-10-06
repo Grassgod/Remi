@@ -39,6 +39,7 @@ import { buildLogRowModel, TrailSignatureCache } from "../utils/log-row-model";
 export const STICK_PIN_THRESHOLD_PX = 24;
 
 interface IssueActivitySectionProps {
+  log?: ReturnType<typeof useIssueLog>;
   issueId: string;
   issueTitle: string;
   projectId: string | null;
@@ -72,14 +73,16 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
 }
 
 export function IssueActivitySection({ issueId, issueTitle, projectId, members, agents, onShowKeyResults, currentUserId, canModerateComments, activeIssueSessionId: sessionId,
-  activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
+  log, activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
   const { ready: preferencesReady, showSystemDetails: savedSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
   const [requestedCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
   const withActivity = activeIssueSession?.is_default === true;
-  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, requestedCommentId ?? undefined, false, true, withActivity);
+  const fallbackLog = useIssueLog(log ? "" : sessionId, log ? undefined : initialLog,
+    requestedCommentId ?? undefined, false, !log, withActivity);
+  const { replica, snapshot, error } = log ?? fallbackLog;
   const rowModel = useMemo(() => buildLogRowModel(snapshot.entries), [snapshot.entries]);
   const commentsById = useMemo(() => new Map(rowModel.rows.filter(row => row.kind === "message" && !isSystemDetail(row))
     .map(row => [row.id, logRowToComment(row)])), [rowModel]);

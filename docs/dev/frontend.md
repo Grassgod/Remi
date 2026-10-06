@@ -134,3 +134,5 @@ Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯�
 文案使用 [views/i18n/](../../frontend/packages/views/i18n/) 的 `useT`；语言资源在 [locales/](../../frontend/packages/views/locales/)，键一致性检查在 [parity.test.ts](../../frontend/packages/views/locales/parity.test.ts)，术语维护见 [glossary.md](../../frontend/packages/views/locales/glossary.md)。
 
 Issue 的结果列表、代码工作区、用量、标签、归档和代码变更查询延后到当前详情揭示。结果发布行仍使用已有固定单行与 metadata 标题，缓存数据继续可读；查询晚到只更新该行文字。收件箱在同一路径切换选中 Issue 时，详情访问门单独重置，不能复用入口页已经开启的首屏门。DOM 布局、揭示预算及滚动锚定路径不变。
+
+CSR 详情在 sessions 解出 activeId 后即启动 useIssueLog 的 tail/head 读取，不等待成员或 children 的既有渲染门；活动区复用同一个副本，不重新读取窗口。task-runs 与窗口独立并行，并与侧栏共用原查询键和策略。描述 reactions 用详情缓存里的完整 reactions 播种原 reactions 查询，保留 WS/重连失效与 mutation 行为，避免首屏再次读取同一 Issue。

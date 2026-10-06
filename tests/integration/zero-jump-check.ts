@@ -620,10 +620,13 @@ async function runRound(input: {
   const summary = await readRecorderSummary(page).catch(() => null);
   const buffer: PerfRecorderBuffer | null = await readRecorder(page).catch(() => null);
   await Promise.all(seedReads);
+  // CSR warm wave depth is a target after moving the window earlier; all
+  // other structural checks remain blocking on both paths.
   // The actual rendered log supplies the seed evidence; a cookie or unrelated
   // serialized head id does not prove this detail used SSR.
   result.ssrSeed = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial="1"]').count().then(count => count > 0).catch(() => false);
   result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  if (!result.ssrSeed) result.waveGate = "record-only";
   const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
     .map(entry => ({ path: new URL(entry.name).pathname, query: new URL(entry.name).search, startMs: entry.startTime, responseEndMs: entry.responseEnd })));
