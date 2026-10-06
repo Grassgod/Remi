@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http";
 import { ApiContractError } from "../schema";
 import { MessagesEndpoints } from "./messages";
-import { messageFixture, turnFixture } from "./unified.fixture";
+import { messageFixture, turnFixture } from "../unified.fixture";
 import { MessageSchema } from "../schemas/messages";
 import { SessionLogEntrySchema } from "../schemas/session-log";
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

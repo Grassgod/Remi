@@ -2,6 +2,7 @@
 
 import { MessageHeader } from "../../common/message-header";
 import { useActorName } from "@multiremi/core/workspace/hooks";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { TurnControls } from "../../common/turn-controls";
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -71,7 +72,8 @@ export function ChatMessageList({
   initialPositioned = false,
 }: ChatMessageListProps) {
   const { t } = useT("chat");
-  const { getActorName } = useActorName();
+  const namesReady = useAfterFirstScreen();
+  const { getActorName } = useActorName({ enabled: visible && namesReady });
   const { t: tm } = useT("messages");
   const statuses = tm($ => $.statuses, { returnObjects: true }) as Record<string, string>;
   const { t: traceT } = useT("agents");
@@ -285,8 +287,8 @@ function AssistantMessage({
 /** Task detail and trace are requested only after the reader opens execution. */
 function ChatTraceButton({ taskId, turnId, visible }: { taskId: string; turnId?: string; visible: boolean }) {
   const { t } = useT("agents");
-  const { getActorName } = useActorName();
   const [open, setOpen] = useState(false);
+  const { getActorName } = useActorName({ enabled: visible && open });
   const { data: task, isFetching, isError, refetch } = useQuery({
     queryKey: ["task-detail", taskId],
     enabled: visible && open,

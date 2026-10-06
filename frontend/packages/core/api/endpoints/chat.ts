@@ -68,7 +68,7 @@ export class ChatEndpoints {
     const session = await this.getChatSession(sessionId);
     const result = await new MessagesEndpoints(this.http).sendMessage(sessionId, {
       body_md: content, message_kind: "request", to: { type: "agent", ref: session.agent_id },
-      attachment_ids: attachmentIds, dedupe_key: clientId,
+      attachment_ids: attachmentIds?.length ? attachmentIds : undefined, dedupe_key: clientId,
     });
     // The message is committed. A supplemental read must not turn it into a failed send.
     // Pending-turn polling reconciles the optimistic identity if this read is unavailable.

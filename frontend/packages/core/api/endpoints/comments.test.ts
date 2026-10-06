@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommentsEndpoints } from "./comments";
 import { HttpClient } from "../http";
-import { messageFixture } from "./unified.fixture";
+import { messageFixture } from "../unified.fixture";
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const api = () => new CommentsEndpoints(new HttpClient("https://api.example.test"));
 afterEach(() => vi.unstubAllGlobals());

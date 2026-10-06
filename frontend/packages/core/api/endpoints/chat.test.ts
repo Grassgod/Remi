@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http";
 import { ApiContractError } from "../schema";
 import { ChatEndpoints } from "./chat";
-import { messageFixture, turnFixture } from "./unified.fixture";
+import { messageFixture, turnFixture } from "../unified.fixture";
 
 const session = {
   id: "chat-1", workspace_id: "ws-1", agent_id: "agent-1", creator_id: "user-1",

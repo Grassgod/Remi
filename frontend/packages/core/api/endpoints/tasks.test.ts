@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../client";
-import { turnFixture } from "./unified.fixture";
+import { turnFixture } from "../unified.fixture";
 import { TasksEndpoints } from "./tasks";
 import { HttpClient } from "../http";
 import { ApiContractError } from "../schema";

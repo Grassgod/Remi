@@ -10,6 +10,7 @@ import enEditor from "../../locales/en/editor.json";
 import enUI from "../../locales/en/ui.json";
 
 const download = vi.hoisted(() => vi.fn());
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "w" }));
 vi.mock("../../editor/use-download-attachment", () => ({ useDownloadAttachment: () => download }));
 vi.mock("../../common/task-transcript/use-task-trace", () => ({
   useTaskTraceState: () => ({ events: [], closed: false, error: false }),
@@ -17,7 +18,8 @@ vi.mock("../../common/task-transcript/use-task-trace", () => ({
 vi.mock("@multiremi/core/config", () => ({ useConfigStore: (selector: (s: { cdnDomain: string }) => unknown) => selector({ cdnDomain: "" }) }));
 vi.mock("@multiremi/core/paths", async importOriginal => {
   const actual = await importOriginal<typeof import("@multiremi/core/paths")>();
-  return { ...actual, useWorkspaceSlug: () => "test", useWorkspacePaths: () => actual.paths.workspace("test") };
+  return { ...actual, useCurrentWorkspace: () => ({ id: "w", name: "Test", slug: "test" }),
+    useWorkspaceSlug: () => "test", useWorkspacePaths: () => actual.paths.workspace("test") };
 });
 // Keep message parsing, Markdown and AttachmentList real; virtual layout is unrelated to deduplication.
 vi.mock("../../common/session-log/session-log-list", () => ({
@@ -38,7 +40,9 @@ beforeEach(() => vi.clearAllMocks());
 function renderMessage(content: string, attachments: Attachment[], role: "user" | "assistant" = "user") {
   const replica = new MemorySessionReplica({ cs: { entries: [{
     session_id: "cs", id: "msg", seq: 1, revision: 1,
-    kind: role === "user" ? "message" : "turn", author_type: role === "user" ? "member" : "system",
+    kind: "message", author_type: role === "user" ? "member" : "agent",
+    sender_type: role === "user" ? "member" : "agent", sender_id: role === "user" ? "u" : "agent-1",
+    message_kind: role === "user" ? "request" : "final",
     body_md: content, body_html: null, render_version: null, metadata: { attachments },
     created_at: "2026-10-04T00:00:00Z",
   } as SessionLogEntry] } });
