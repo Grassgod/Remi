@@ -499,12 +499,13 @@ export class ChatRepo {
     const id=staged??input.id??createId('msg');
     const task=input.taskId?this.ctx.tasks().getTask(input.taskId):null;
     const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
-    const member=this.ctx.workspaces().getWorkspaceMemberByRef(session.creatorId??'local',session.workspaceId)
-      ??this.ctx.workspaces().listWorkspaceMembers(session.workspaceId).find(m=>m.role==='owner');
+    const creatorMember=this.ctx.workspaces().getWorkspaceMemberByRef(session.creatorId??'local',session.workspaceId);
+    const member=creatorMember??this.ctx.workspaces().listWorkspaceMembers(session.workspaceId).find(m=>m.role==='owner');
     const result=sendMessageWithinTransaction(this.ctx,{id,session_id:session.id,
       sender:{type:input.role==='assistant'?'agent':input.role==='user'?'member':'platform',id:input.role==='assistant'?task?.agentId??null:input.role==='user'?member?.id??null:null},
       source_turn_id:input.role==='assistant'?source?.turn_id:null,
-      to:input.role==='user'||input.pendingAgentDelivery?{type:'agent',ref:session.agentId}:{type:'none'},
+      to:input.role==='user'||input.pendingAgentDelivery?{type:'agent',ref:session.agentId}
+        :input.role==='assistant'&&creatorMember?{type:'member',ref:creatorMember.id}:{type:'none'},
       message_kind:input.role==='assistant'?'reply':'request',wake_requested:input.role==='user'||input.pendingAgentDelivery?'now':'inbox_only',
       body_md:input.body,metadata:{...input.metadata,...(input.clientId?{client_id:input.clientId}:{}),failure_reason:input.failureReason??null,elapsed_ms:input.elapsedMs??null,
         pending_agent_delivery:input.pendingAgentDelivery??false,agent_delivery_task_id:input.agentDeliveryTaskId??null}},createCommitEventQueue());
