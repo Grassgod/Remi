@@ -28,6 +28,73 @@ function fixture() {
 }
 
 describe("v2 reports", () => {
+  it("restores a queued sent offer and binds a modern run before authorizing execution", async () => {
+    const { db, store, task, runtime, report } = fixture();
+    store.recordTaskOffered(task.id, runtime.id);
+    expect(store.requeueTaskOffer(task.id, runtime.id)).toBe(true);
+    expect(await report("task.start", { usage_run_id: "recovered-run" })).toEqual({ ok: true, execution_authorized: true });
+    expect(store.getTask(task.id)?.status).toBe("running");
+    expect(db.query("SELECT runtime_id,workspace_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(task.id, "recovered-run"))
+      .toEqual({ runtime_id: runtime.id, workspace_id: "local" });
+  });
+
+  it("rejects a bound runtime moved to a different workspace before late usage", async () => {
+    const { db, store, task, runtime, report } = fixture();
+    expect(await report("task.start", { usage_run_id: "bound-run" })).toMatchObject({ execution_authorized: true });
+    store.createWorkspace({ id: "moved-workspace", name: "Moved", slug: "moved-workspace" });
+    db.run("UPDATE multiremi_runtimes SET workspace_id=? WHERE id=?", ["moved-workspace", runtime.id]);
+    expect(await report("task.usage", { usageSnapshot: { version: 2, runId: "bound-run", revision: 1, complete: false, units: [] } }))
+      .toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(db.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id=?").get(task.id, "bound-run")).toEqual({ revision: 0 });
+  });
+
+  it("rechecks bound late-usage daemon identity under the workspace lock", async () => {
+    const { db, store, task, runtime, report } = fixture();
+    expect(await report("task.start", { usage_run_id: "bound-run" })).toMatchObject({ execution_authorized: true });
+    const ctx = (store as unknown as { ctx: { lockWorkspaceRuntimeLifecycle: (workspaceId: string) => void } }).ctx;
+    const lock = ctx.lockWorkspaceRuntimeLifecycle.bind(ctx);
+    const changed = spyOn(ctx, "lockWorkspaceRuntimeLifecycle").mockImplementationOnce(workspaceId => {
+      lock(workspaceId);
+      db.run("UPDATE multiremi_runtimes SET daemon_id=? WHERE id=?", ["replacement-daemon", runtime.id]);
+    });
+    try {
+      expect(await report("task.usage", { usageSnapshot: { version: 2, runId: "bound-run", revision: 1, complete: false, units: [] } }))
+        .toEqual({ ok: false, code: "authority_revoked", retryable: false });
+      expect(db.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id=?").get(task.id, "bound-run")).toEqual({ revision: 0 });
+    } finally { changed.mockRestore(); }
+  });
+
+  it("freezes an authenticated run at start and accepts only its original runtime's late usage", async () => {
+    const { db, store, task, runtime, report } = fixture();
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, execution_authorized: true });
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, code: "start_replayed", execution_authorized: true });
+    const other = store.registerRuntime({ id: "other", name: "retry", provider: "claude", daemonId: "other-daemon" });
+    db.run("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", [other.id, task.id]);
+    expect(await report("task.start", { usage_run_id: "accepted-run" })).toEqual({ ok: true, code: "start_replayed", execution_authorized: false });
+    const usageSnapshot = { version: 2, runId: "accepted-run", revision: 1, complete: true, units: [{
+      unitId: "request", revision: 1, provider: "claude", model: "opus", scope: "request", source: "provider_request", accuracy: "exact",
+      inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: 12,
+      contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-10-01T00:00:00Z",
+    }] };
+    expect(await report("task.usage", { usageSnapshot })).toEqual({ ok: true });
+    expect(db.query("SELECT runtime_id FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ runtime_id: runtime.id });
+    expect(await reportFrame(store, "task.usage", { task_id: task.id, usageSnapshot }, { runtimeId: other.id })).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(store.getRuntime(runtime.id)?.inputTokens).toBe(10);
+    expect(store.getRuntime(other.id)?.inputTokens).toBe(0);
+    expect(store.getTask(task.id)?.usage[0]?.totalTokens).toBe(12);
+    expect(store.getTaskStatusSnapshot(task.id)?.usage[0]?.totalTokens).toBe(12);
+  });
+
+  it("makes infrastructure failures retryable while rejecting malformed snapshots", async () => {
+    const { store, report } = fixture();
+    const usageSnapshot = { version: 2, runId: "run", revision: 1, complete: false, units: [] };
+    const write = spyOn(store, "reportTaskUsageSnapshot").mockImplementation(() => { throw new Error("temporary database outage"); });
+    try {
+      expect(await report("task.usage", { usageSnapshot })).toMatchObject({ ok: false, code: "server_error", retryable: true });
+      expect(await report("task.usage", { usageSnapshot: { ...usageSnapshot, revision: -1 } })).toEqual({ ok: false, code: "invalid_report", retryable: false });
+    } finally { write.mockRestore(); }
+  });
+
   it("absorbs identical progress and normalized usage subset replays before Store writes", async () => {
     const { store, task, report } = fixture();
     store.startTask(task.id);

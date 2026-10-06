@@ -4,6 +4,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
+import { actualUnit, tokenCount } from "./usage-collector.js";
 import type { AgentResponse, Provider, ProviderEvent, SendOptions } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import type { AcpModelCapability, AcpProviderOptions } from "./provider.js";
@@ -246,6 +249,7 @@ export class AntigravityProvider implements Provider {
     let timeout = false;
     let stdout = "";
     let stderr = "";
+    let usageUnits: TaskUsageUnit[] = [];
     let sessionId = options.sessionId ?? null;
     let result: Record<string, any> | null = null;
     let bytes = 0;
@@ -277,11 +281,33 @@ export class AntigravityProvider implements Provider {
           if (typeof id === "string" && UUID.test(id)) {
             if (options.sessionId && id !== options.sessionId) throw new Error("Stale provider session: no conversation found for the requested Antigravity ID");
             sessionId = id;
-            this.lastResponse = createAgentResponse({ text: stdout, sessionId, model: model ?? null, durationMs: Date.now() - started });
+            this.lastResponse = createAgentResponse({ text: stdout, sessionId, model: model ?? null, durationMs: Date.now() - started, metadata: { usageUnits } });
           }
           if (event.event === "result") {
             if (result) throw new Error("Antigravity emitted more than one result for a turn");
             result = event.result;
+            const usage = result?.usage ?? {};
+            const unit = actualUnit({
+              unitId: `antigravity:${randomUUID()}`, provider: "antigravity",
+              model: typeof result?.model === "string" ? result.model : null, requestedModel: model,
+              scope: "turn", source: "provider_turn", accuracy: "partial",
+              inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
+              cacheReadTokens: usage.cache_read_tokens, totalTokens: usage.total_tokens,
+              evidenceRef: "antigravity_result_usage",
+            });
+            const split = (unit.inputTokens ?? 0) + (unit.outputTokens ?? 0) + (unit.cacheReadTokens ?? 0);
+            if (unit.reportedTotalTokens != null && split > unit.reportedTotalTokens) {
+              // Native agy does not declare whether input includes cache. An
+              // inconsistent split cannot become invented disjoint categories.
+              unit.inputTokens = unit.outputTokens = unit.cacheReadTokens = null;
+              unit.actualUnsplitTokens = unit.reportedTotalTokens;
+              unit.accuracy = "unknown";
+              unit.evidenceRef = "antigravity_result_ambiguous_cache_semantics";
+            }
+            usageUnits = [unit];
+            this.lastResponse = createAgentResponse({ text: stdout, sessionId, model: model ?? null,
+              durationMs: Date.now() - started, metadata: { usageUnits } });
+            yield { sessionUpdate: "usage_update", used: 0, size: 0, _meta: { remiUsageUnits: usageUnits, antigravityUsage: usage } };
           }
           const step = event.event === "step_update" ? event.step_update : null;
           if (step?.step_type === "agent_response" && typeof step.text_delta === "string") {
@@ -314,7 +340,7 @@ export class AntigravityProvider implements Provider {
         throw new Error("Stale provider session: no conversation found for the requested Antigravity ID");
       }
       sessionId = sessionId ?? log.sessionId;
-      this.lastResponse = createAgentResponse({ text: stdout, sessionId, model: model ?? null, durationMs: Date.now() - started });
+      this.lastResponse = createAgentResponse({ text: stdout, sessionId, model: model ?? null, durationMs: Date.now() - started, metadata: { usageUnits } });
       options.signal?.throwIfAborted();
       if (timeout) throw new Error("Antigravity task timed out");
       if (exit.error) throw new Error(`Could not start agy: ${exit.error.message}`);
@@ -331,12 +357,12 @@ export class AntigravityProvider implements Provider {
       if (!stdout) yield textEvent(finalText);
       else if (finalText.startsWith(stdout) && finalText.length > stdout.length) yield textEvent(finalText.slice(stdout.length));
       const usage = result?.usage ?? {};
-      const count = (key: string) => typeof usage[key] === "number" && Number.isFinite(usage[key]) ? usage[key] : null;
+      const count = (key: string) => tokenCount(usage[key]);
       this.lastResponse = createAgentResponse({
         text: finalText, sessionId, model: model ?? null, durationMs: Date.now() - started,
         inputTokens: count("input_tokens"), outputTokens: count("output_tokens"),
         cacheReadInputTokens: count("cache_read_tokens"), totalTokens: count("total_tokens"),
-        metadata: { outputFormat: caps.stream ? "stream-json" : "text" },
+        metadata: { outputFormat: caps.stream ? "stream-json" : "text", usageUnits },
       });
     } finally {
       if (timer) clearTimeout(timer);

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandRegistry, CliError, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
+import { CommandRegistry, CliError, sanitizeCliDetails, isPublicUsageStatistic, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
 
 const realFetch = globalThis.fetch;
@@ -27,6 +27,55 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("renders usage report accounting counters through the Registry while removing credentials and disguised statistics", async () => {
+    useCliEnv();
+    const spec = specById("dashboard.usage.report");
+    const counters = { actual_input_tokens: 18_500_000, actual_output_tokens: 6_500_000, actual_cache_read_tokens: 2_500_000, actual_cache_write_tokens: 1_000_000,
+      actual_unsplit_tokens: 0, actual_total_tokens: 28_500_000, priced_tokens: 28_500_000, unpriced_tokens: 0, context_peak_tokens: 70_000, task_attributed_tokens: 0 };
+    const secrets = { api_token: 123, access_token: "sensitive", taskToken: "sensitive", authorization: "Bearer sensitive", cookie: "sensitive", credential: { password: "sensitive" },
+      arbitrary_token_count: 7, totalTokensSecret: 8 };
+    const report = { summary: { ...counters, ...secrets }, daily: [{ ...counters, context_peak_tokens: null }],
+      coverage: { priced_tokens: 28_500_000, unpriced_tokens: 0, token_ratio: 1, ...secrets },
+      legacy: { inputTokens: 12, outputTokens: 0, cacheReadTokens: 1, cacheWriteTokens: 0, totalTokens: 13, ...secrets },
+      disguised: { actual_total_tokens: "sensitive", priced_tokens: { access_token: "sensitive" }, context_peak_tokens: ["sensitive"], inputTokens: true, outputTokens: -1, cacheReadTokens: 0.5, cacheWriteTokens: Infinity, totalTokens: NaN, token_ratio: "sensitive" },
+      invalidRatio: { token_ratio: 2 }, nested: [{ token_ratio: null, actual_total_tokens: null, ...secrets }] };
+    globalThis.fetch = capabilityFetch(spec.id, request => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET"); expect(url.pathname).toBe("/api/usage/report");
+      expect(url.searchParams.get("runtime_id")).toBe("rt_fixture");
+      return Response.json(report);
+    });
+    const output = await capture(() => registryFor([spec]).execute(["dashboard", "usage", "report", "--runtime", "rt_fixture", "--days", "all", "--json"]));
+    const value = JSON.parse(output.stdout);
+    expect(value.summary).toEqual(counters);
+    expect(value.daily).toEqual([{ ...counters, context_peak_tokens: null }]);
+    expect(value.coverage).toEqual({ priced_tokens: 28_500_000, unpriced_tokens: 0, token_ratio: 1 });
+    expect(value.legacy).toEqual({ inputTokens: 12, outputTokens: 0, cacheReadTokens: 1, cacheWriteTokens: 0, totalTokens: 13 });
+    // JSON encodes non-finite values as null; validate the original values at the sanitizer boundary too.
+    expect(value.disguised).toEqual({ cacheWriteTokens: null, totalTokens: null });
+    expect(value.invalidRatio).toEqual({});
+    expect(value.nested).toEqual([{ token_ratio: null, actual_total_tokens: null }]);
+    expect(output.stdout).not.toContain("sensitive");
+    expect(sanitizeCliDetails({ totalTokens: Infinity, priced_tokens: NaN, token_ratio: Infinity })).toEqual({ totalTokens: "***", priced_tokens: "***", token_ratio: "***" });
+    for (const invalid of ["12", {}, [], true, -1, 0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) expect(isPublicUsageStatistic("actual_total_tokens", invalid)).toBe(false);
+    for (const invalid of ["1", {}, [], true, -1, 1.1, Infinity, NaN]) expect(isPublicUsageStatistic("token_ratio", invalid)).toBe(false);
+  });
+  it("reconciles additive usage and currencies from one report without adding distinct model task counts", async () => {
+    useCliEnv();
+    const spec = specById("dashboard.usage.reconcile");
+    const metrics = { actual_input_tokens: 10, actual_output_tokens: 2, actual_cache_read_tokens: 0, actual_cache_write_tokens: 0, actual_unsplit_tokens: 0, actual_total_tokens: 12, priced_tokens: 10, unpriced_tokens: 2, task_count: 1, known_cost_by_currency: { USD: 0.2, CNY: 0 } };
+    const report = { summary: metrics, daily: [metrics], by_agent: [metrics], by_runtime: [metrics],
+      by_model: [{ ...metrics, actual_input_tokens: 5, actual_output_tokens: 1, actual_total_tokens: 6, priced_tokens: 5, unpriced_tokens: 1, known_cost_by_currency: { USD: 0.1 } }, { ...metrics, actual_input_tokens: 5, actual_output_tokens: 1, actual_total_tokens: 6, priced_tokens: 5, unpriced_tokens: 1, known_cost_by_currency: { USD: 0.1, CNY: 0 } }],
+      as_of: "2026-10-01T00:00:00Z", pricing_revision: "1", window: { tz: "UTC" } };
+    globalThis.fetch = capabilityFetch(spec.id, request => {
+      const url = new URL(request.url); expect(url.pathname).toBe("/api/usage/report"); expect(url.searchParams.get("days")).toBe("all"); expect(url.searchParams.get("runtime_id")).toBe("runtime-old");
+      return Response.json(report);
+    });
+    const output = await capture(() => registryFor([spec]).execute(["dashboard", "usage", "reconcile", "--days", "all", "--runtime", "runtime-old", "--json"]));
+    expect(JSON.parse(output.stdout)).toMatchObject({ reconciled: true, distinct_task_count: 1, discrepancies: [] });
+    report.by_model[0]!.actual_total_tokens = 7;
+    await expect(capture(() => registryFor([spec]).execute(["dashboard", "usage", "reconcile", "--days", "all", "--runtime", "runtime-old", "--json"]))).rejects.toThrow("do not reconcile");
+  });
   it("returns an agent's capability states and model default without losing metadata", async () => {
     useCliEnv();
     const spec = specById("runtime.model.catalog");

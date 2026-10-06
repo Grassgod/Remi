@@ -1,7 +1,130 @@
 import { expect, spyOn, test } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.js";
+import { actualUnit } from "@acp/usage-collector.js";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
+import { migrateLegacyUsage } from "@multiremi/store/usage-accounting.js";
+import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+
+for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`late deprecated aggregates beside ${nativeRunId} park as invalid without blocking independent bound usage over the real socket`, async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon(); await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "late legacy", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "synthetic overlap", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    const original = nativeRunId === "current" ? [] : [{ provider: "claude", model: "configured", totalTokens: 70 }];
+    h.db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify(original), task.id]);
+    migrateLegacyUsage(h.db);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 920000,
+      p: { task_id: task.id, usage_run_id: "current" } })).resolves.toMatchObject({ execution_authorized: true });
+    h.store.reportTaskUsageSnapshot(task.id, { version: 2, runId: nativeRunId, revision: 1, complete: false,
+      units: [actualUnit({ unitId: "native", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 })] });
+    const before = h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920001, p: { task_id: task.id,
+      usage: original.length ? [{ provider: "claude", model: "configured", total_tokens: 70 }] : [] } })).resolves.toMatchObject({ ok: true });
+    expect(h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(before);
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "late-legacy.db"), canSend: () => h.client.connectionState() === "connected",
+      deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 920010 + record.seq }) });
+    const bad = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] });
+    const good = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "current", revision: 1, complete: true,
+        units: [actualUnit({ unitId: "independent", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 })] } });
+    await expect(bad).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(good).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect((h.db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(task.id) as { usage: string }).usage).toBe(JSON.stringify(original));
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    // A raw JSON drift cannot acquire a false replay ACK through the fast path.
+    const changed = [{ provider: "claude", model: "configured", inputTokens: 20, outputTokens: 0 }];
+    h.db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify(changed), task.id]);
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920009, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] } })).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15000);
+
+test("invalid usage and execution payloads cannot strand independently authorized consumption over the real socket", async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "validation accounting owner", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "manual protocol validation", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 910_000, p: { task_id: task.id, usage_run_id: "accepted" } })).resolves.toMatchObject({ execution_authorized: true });
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "invalid-accounting.db"), canSend: () => h.client.connectionState() === "connected",
+      deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 910_000 + record.seq }) });
+    // This reaches the actual snapshot validator rather than a mocked failure.
+    const invalid = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: false,
+        units: [{ ...actualUnit({ unitId: "bad", provider: "claude", scope: "request", source: "provider_request", inputTokens: 99 }), inputTokens: -99 }] } });
+    const accepted = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 2, complete: true,
+        units: [actualUnit({ unitId: "valid", provider: "claude", scope: "request", source: "provider_request", inputTokens: 12 })] } });
+    await expect(invalid).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(accepted).resolves.toMatchObject({ ok: true });
+    const invalidExecution = outbox.enqueueAndWait(task.id, "prompt", { runtime_id: runtimeId, prompt: 42 });
+    const next = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted", revision: 3, complete: true,
+        units: [actualUnit({ unitId: "second-valid", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 })] } });
+    await expect(invalidExecution).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(next).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 2 });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15_000);
+
+test("rejected obsolete progress cannot strand independently authorized late usage over the real socket", async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "late accounting owner", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "manual protocol run", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 900_000,
+      p: { task_id: task.id, usage_run_id: "accepted-original" } })).resolves.toMatchObject({ execution_authorized: true });
+    const replacement = h.store.registerRuntime({ name: "replacement accounting owner", provider: "claude", workspaceId: "local", daemonId: "other-device" });
+    h.db.run("UPDATE multiremi_tasks SET runtime_id=?,status='dispatched' WHERE id=?", [replacement.id, task.id]);
+    const attempts: string[] = [];
+    const unit = actualUnit({ unitId: "request-original", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 });
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "obsolete-report-accounting.db"),
+      canSend: () => h.client.connectionState() === "connected",
+      deliver: async record => {
+        attempts.push(record.kind + ":" + ((record.payload.usageSnapshot as any)?.runId ?? "execution"));
+        return h.client.event({ ...outboxRecordFrame(record), seq: 900_000 + record.seq });
+      } });
+    outbox.enqueue(task.id, "progress", { runtime_id: runtimeId, step: "obsolete" });
+    outbox.enqueue(task.id, "usage", { runtime_id: runtimeId, usageSnapshot: { version: 2, runId: "not-accepted", revision: 1, complete: false, units: [unit] } });
+    outbox.enqueue(task.id, "usage", { runtime_id: runtimeId, usageSnapshot: { version: 2, runId: "accepted-original", revision: 1, complete: true, units: [unit] } });
+    outbox.enqueue(task.id, "complete", { runtime_id: runtimeId, output: "obsolete completion" });
+    expect(await outbox.waitForTaskDrain(task.id)).toBe("blocked"); // Only the invalid run remains durable.
+    expect(attempts).toEqual(["progress:execution", "usage:not-accepted", "usage:accepted-original"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(12);
+    expect(h.store.getTask(task.id)).toMatchObject({ runtimeId: replacement.id, status: "dispatched" });
+    expect(outbox.enqueue(task.id, "progress", { runtime_id: runtimeId, step: "still obsolete" })).toBeNull();
+    const extra = actualUnit({ unitId: "late-helper", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 });
+    await expect(outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted-original", revision: 2, complete: true, units: [extra] } })).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    // Immutable run ownership does not override current daemon/runtime authority.
+    h.db.run("UPDATE multiremi_runtimes SET daemon_id='revoked-device' WHERE id=?", [runtimeId]);
+    await expect(outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted-original", revision: 3, complete: true,
+        units: [actualUnit({ unitId: "revoked-request", provider: "claude", scope: "request", source: "provider_request", inputTokens: 99 })] } })).rejects.toMatchObject({ code: "authority_revoked" });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 2 });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15_000);
 
 for (const confirmed of [false, true]) {
   test(`recovers start after ${confirmed ? "confirmed" : "unconfirmed"} acceptance disconnect without running twice`, async () => {
@@ -21,7 +144,11 @@ for (const confirmed of [false, true]) {
           await finishing;
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "synthetic answer" }] } as any;
         },
-        getLastResponse: () => ({ text: "synthetic answer", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
+        getLastResponse: () => ({ text: "synthetic answer", sessionId: "fixture-session", usage: [], toolCalls: [], metadata: {
+          usageUnits: [actualUnit({ unitId: "recovered-request", provider: "claude", model: "fixture-opus",
+            scope: "request", source: "provider_request", accuracy: "exact", inputTokens: 10, outputTokens: 2,
+            cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12 })],
+        } } as any),
         close: async () => {},
       }),
       beforeSend(frame, socket, harness) {
@@ -57,6 +184,7 @@ for (const confirmed of [false, true]) {
       const issue = h.store.createIssue({ title: "Recovered report", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
       const task = h.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "inert recovery", maxAttempts: 1 });
       await waitFor(() => droppedStart && h.client.connectionState() === "disconnected", "first start disconnected", 5_000);
+      expect(runs).toBe(0);
       if (confirmed) {
         expect(h.store.getTask(task.id)?.acceptedAt).not.toBeNull();
         expect(h.store.getTask(task.id)?.status).toBe("dispatched");
@@ -71,6 +199,8 @@ for (const confirmed of [false, true]) {
       await waitFor(() => h.daemon.outboxStats()?.pending === 0, "start acknowledgement", 5_000);
       expect(h.store.getTask(task.id)?.status).toBe("running");
       expect(h.store.getTask(task.id)?.startedAt).not.toBeNull();
+      const usageRunId = h.ledger.find(entry => entry.type === "task.start" && entry.partition === task.id)!.frame.p.usage_run_id as string;
+      expect(h.store.getTaskUsageRunRuntime(task.id, usageRunId)).toBe(runtimeId);
       await waitFor(() => runs === 1, "inert provider starts once", 5_000);
       await waitFor(() => (h.daemon as unknown as { serverDrainActive: boolean }).serverDrainActive, "daemon applies drain", 5_000);
       h.clock.advance(15_000);
@@ -95,6 +225,7 @@ for (const confirmed of [false, true]) {
       expect(comments.filter(comment => comment.body === "synthetic answer")).toHaveLength(1);
       expect(h.store.listSessionEvents(session)).toEqual(events);
       expect(h.store.getTask(task.id)!.attempt).toBe(attempts);
+      expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(12);
       expect(h.store.listWorkspaceAgentRunCounts()).toEqual(counters);
       expect(cards.filter(id => id === task.id)).toHaveLength(1);
       expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
@@ -161,7 +292,7 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     const initial = send("First immutable input", "initial-input");
     const oldTaskId = initial.task!.id;
     await waitFor(() => droppedStart && h.client.connectionState() === "disconnected"
-      && h.store.getTask(oldTaskId)?.status === "queued" && prompts.length === 1,
+      && h.store.getTask(oldTaskId)?.status === "queued" && prompts.length === 0,
     "real Issue offer disconnect and requeue", 5_000);
     const oldTask = h.store.getTask(oldTaskId)!;
     const oldBound = h.store.getBoundIssueLogToSeq(oldTaskId);
@@ -172,10 +303,11 @@ test("a new Issue envelope during offer recovery runs once in a separate turn", 
     expect(h.store.getTask(oldTaskId)).toMatchObject({ prompt: oldTask.prompt,
       triggerCommentId: oldTask.triggerCommentId });
     expect(h.store.getBoundIssueLogToSeq(oldTaskId)).toBe(oldBound);
-    expect(prompts[0]).toContain("First immutable input");
-    expect(prompts[0]).not.toContain(next.entry.body_md);
     await h.reconnect();
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "running", "old Issue turn recovered", 5_000);
+    await waitFor(() => prompts.length === 1, "accepted old turn enters its provider", 5_000);
+    expect(prompts[0]).toContain("First immutable input");
+    expect(prompts[0]).not.toContain(next.entry.body_md);
     finish();
     await waitFor(() => h.store.getTask(oldTaskId)?.status === "completed"
       && h.store.listTasksForIssue(issue.id).some(task => task.id !== oldTaskId)
@@ -326,7 +458,7 @@ for (const replacement of ["cancelled", "assigned elsewhere"] as const) {
 
 for (const terminalReport of ["complete", "fail"] as const) {
 for (const accepted of [true, false]) {
-test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} when its start write was lost`, async () => {
+test(`a real ${accepted ? "accepted" : "requeued"} offer accepts legacy ${terminalReport} while a modern daemon waits for its lost start`, async () => {
   let finish!: () => void;
   const finishing = new Promise<void>(resolve => { finish = resolve; });
   let droppedStart = false;
@@ -362,10 +494,10 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const agent = h.store.createAgent({ name: "Completion without start", provider: "claude", runtimeId });
     const task = h.store.createTask({ agentId: agent.id, prompt: "Inert accepted completion", maxAttempts: 1 });
-    await waitFor(() => droppedStart && runs === 1
+    await waitFor(() => droppedStart && runs === 0
       && (accepted ? h.store.getTask(task.id)?.acceptedAt != null
         : h.client.connectionState() === "disconnected" && h.store.getTask(task.id)?.status === "queued"),
-      "real offer received, local provider running, start absent", 5_000);
+      "real offer received, provider gated, start absent", 5_000);
     expect(h.store.getTask(task.id)).toMatchObject({ status: accepted ? "dispatched" : "queued", startedAt: null });
     if (!accepted) {
       h.store.beginPlatformDrain({ operationId: `terminal-${terminalReport}`, ttlMs: 120_000 });
@@ -387,7 +519,7 @@ test(`a real ${accepted ? "accepted" : "requeued"} offer can ${terminalReport} w
     await waitFor(() => h.daemon.outboxStats()?.pending === 0
       && h.ledger.some(entry => entry.partition === task.id && entry.type === "task.start"),
     "lost start retries against the now-terminal task and drains", 5_000);
-    expect(runs).toBe(1);
+    expect(runs).toBe(0);
     // The ledger observes state writes for complete; fail is asserted directly
     // against its persisted terminal row, and neither report reruns the provider.
     if (terminalReport === "complete") expect(h.effectiveLedger.filter(entry => entry.partition === task.id && entry.type === "task.complete")).toHaveLength(1);

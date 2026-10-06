@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ArrowUpCircle,
   Globe,
@@ -14,7 +14,6 @@ import type { AgentRuntime, MemberWithUser } from "@multiremi/core/types";
 import { deriveWorkload } from "@multiremi/core/agents";
 import {
   deriveRuntimeHealth,
-  runtimeUsageOptions,
 } from "@multiremi/core/runtimes";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -36,21 +35,21 @@ import { HealthIcon, useHealthLabel } from "./shared";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import {
-  computeCostInWindow,
   formatLastSeen,
   isSelfHealingRuntime,
   isVersionNewer,
-  pctChange,
 } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
 import { RuntimeNameEditor } from "./name-editor";
 import { RuntimeProtocolLine } from "./runtime-protocol-line";
 import { useT } from "../../i18n";
+import { useWorkspaceId } from "@multiremi/core/hooks";
+import { usageReportOptions } from "@multiremi/core/usage/queries";
+import { formatKnownCost, tokenCoverage } from "../../usage/utils";
 
 // Per-row data assembled at the page level. The columns reach into
-// `row.original` and never pull their own data — except for the per-runtime
-// usage query in CostCell, which fetches its own narrow 14-day window
-// (just enough for the cell's 7d cost + 7d prior-window delta).
+// `row.original`; CostCell shares one workspace report for its known 7-day
+// cost subtotal and coverage, rather than calculating rates in the browser.
 export interface RuntimeRow {
   runtime: AgentRuntime;
   ownerMember: MemberWithUser | null;
@@ -342,64 +341,19 @@ function WorkloadCell({
   );
 }
 
-// Per-row cost — only renders a 7d total + delta vs the prior 7d, so we
-// only need 14 days of usage. Previously this fetched a 180-day window to
-// share the cache key with the runtime-detail page, but that turned the
-// list page into N × 180d in-line aggregations against `task_usage` (one
-// per runtime row) and dominated DB load for this view. Detail still
-// fetches its own 180d window on navigation; the cold-load difference for
-// detail is one extra request, while the steady-state savings on the list
-// page are large.
-const COST_CELL_DAYS = 14;
-
+// All rows share one workspace report and select the matching Runtime.
+// This avoids a separate statistics scan for every row in the fleet table.
 function CostCell({ runtimeId }: { runtimeId: string }) {
-  const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
   const tz = useViewingTimezone();
-  const { data: usage = [] } = useQuery(
-    runtimeUsageOptions(runtimeId, COST_CELL_DAYS, tz),
-  );
-  const cost7d = useMemo(
-    () => computeCostInWindow(usage, 7, tz),
-    [usage, tz],
-  );
-  const costPrev7d = useMemo(
-    () => computeCostInWindow(usage, 7, tz, 7),
-    [usage, tz],
-  );
-  const delta = pctChange(cost7d, costPrev7d);
-
-  if (usage.length === 0) {
-    return (
-      <div className="text-right">
-        <span className="text-xs text-muted-foreground/50">—</span>
-      </div>
-    );
-  }
-  const fmt = cost7d >= 100 ? `$${cost7d.toFixed(0)}` : `$${cost7d.toFixed(2)}`;
-  const deltaTone =
-    delta == null
-      ? "text-muted-foreground"
-      : delta > 0
-        ? "text-warning"
-        : delta < 0
-          ? "text-success"
-          : "text-muted-foreground";
-  const deltaLabel =
-    delta == null
-      ? null
-      : delta === 0
-        ? t(($) => $.list.cost_delta_flat)
-        : `${delta > 0 ? "↑" : "↓"}${Math.abs(delta)}%`;
-  return (
-    <div className="flex flex-col items-end leading-tight">
-      <span className="text-sm font-medium tabular-nums">{fmt}</span>
-      {deltaLabel && (
-        <span className={`text-[11px] tabular-nums ${deltaTone}`}>
-          {deltaLabel}
-        </span>
-      )}
-    </div>
-  );
+  const { t } = useT("usage");
+  const query = useQuery(usageReportOptions(wsId, { days: 7, tz }));
+  const metrics = query.data?.by_runtime.find(row => row.runtime_id === runtimeId);
+  const coverage = metrics ? tokenCoverage(metrics) : null;
+  return <div className="text-right" title={`${t($ => $.summary.known_cost)} · ${t($ => $.summary.coverage)} ${coverage === null ? "—" : `${(coverage * 100).toFixed(1)}%`}`}>
+    <span className="text-xs font-medium tabular-nums">{query.isError || !metrics ? "—" : formatKnownCost(metrics)}</span>
+    {metrics && !metrics.complete && <div className="mt-1 text-[10px] text-muted-foreground">{t($ => $.summary.partial)}</div>}
+  </div>;
 }
 
 function AgentCell({ runtime }: { runtime: AgentRuntime }) {

@@ -6,6 +6,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { ACTIVE_TASK_STATUSES } from "@multiremi/store/helpers.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database";
 import { seedFirstScreenHotspotsFixture } from "../../fixtures/multiremi/first-screen-hotspots-fixture";
+import { firstScreenTaskUsage, seedFirstScreenTaskUsage } from "../../fixtures/multiremi/first-screen-task-usage-fixture";
 
 const resources: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 afterEach(async () => { for (const resource of resources.splice(0)) await resource.dispose(); });
@@ -20,8 +21,10 @@ describe("S9-6 active-task SQL selection / public projection", () => {
     for (const [index, status] of statuses.entries()) {
       const task = store.createTask({ id: `tsk_active_${index}`, agentId: fixture.agentIds[1]!, issueId: issue, prompt: `full prompt ${index}` });
       resource.db.run("UPDATE multiremi_tasks SET status = ?, result = ?, codex_profile = ?, plugin_snapshot = ?, usage = ?, created_at = ? WHERE id = ?", [status, JSON.stringify({ full: index }), '{"private":"fixture"}', '[]', '[]', `2026-10-01T00:00:0${index}.000Z`, task.id]);
+      seedFirstScreenTaskUsage(store, task.id);
     }
     for (const taskId of fixture.taskIds) resource.db.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [issue, taskId]);
+    seedFirstScreenTaskUsage(store, fixture.taskIds[0]!);
     const foreign = store.createWorkspace({ id: "ws_active_foreign", name: "Foreign" });
     const foreignIssue = store.createIssue({ id: "iss_active_foreign", title: "Foreign", workspaceId: foreign.id });
     resource.db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [foreign.id, fixture.taskIds.at(-1)!]);
@@ -29,6 +32,7 @@ describe("S9-6 active-task SQL selection / public projection", () => {
     const reader = await store.createAccessToken({ name: "active reader", type: "pat", userId: fixture.readerUserId, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "active-fixture-root" });
     const optimized = store.listActiveTasksForIssue.bind(store);
+    expect(optimized(issue, { userId: fixture.ownerUserId }).find(task => task.id === "tsk_active_0")?.usage).toEqual(firstScreenTaskUsage);
     app.get("/api/s96-legacy-active/:id", c => {
       const issue = issueFromParam(store, c, "id", "compat");
       if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -53,7 +57,7 @@ describe("S9-6 active-task SQL selection / public projection", () => {
         expect(await actual.json()).toEqual(await legacy.json());
       }
     }
-    // Large private payloads and terminal rows must not cross the task read.
+    // Large private payloads, obsolete usage JSON and terminal rows must not cross the task read.
     let taskBytes = 0;
     const originalQuery = resource.db.query.bind(resource.db);
     resource.db.query = ((sql: string) => {
@@ -67,8 +71,11 @@ describe("S9-6 active-task SQL selection / public projection", () => {
     }) as typeof resource.db.query;
     optimized(issue, { userId: fixture.ownerUserId }); const small = taskBytes;
     resource.db.run("UPDATE multiremi_tasks SET codex_profile = ?", [JSON.stringify({ padding: "x".repeat(65536) })]);
+    resource.db.run("UPDATE multiremi_tasks SET usage = ?", [JSON.stringify([{ provider: "claude", model: "legacy-decoy",
+      inputTokens: 999_999, outputTokens: 0, padding: "x".repeat(65_536) }])]);
     taskBytes = 0; optimized(issue, { userId: fixture.ownerUserId });
     expect(taskBytes).toBe(small);
+    expect(optimized(issue, { userId: fixture.ownerUserId }).find(task => task.id === "tsk_active_0")?.usage).toEqual(firstScreenTaskUsage);
     resource.db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE issue_id = ?", [issue]);
     expect(optimized(issue, { userId: fixture.ownerUserId })).toEqual([]);
   }, 30_000);

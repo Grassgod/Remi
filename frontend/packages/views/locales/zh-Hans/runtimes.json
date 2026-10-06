@@ -441,7 +441,7 @@
     "col_owner": "所有者",
     "col_agents": "智能体",
     "col_workload": "工作负载",
-    "col_cost": "费用 · 7 天",
+    "col_cost": "已知小计 · 7 天",
     "col_cli": "CLI",
     "col_agent": "Agent",
     "col_acp": "ACP",

@@ -4,6 +4,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { taskPublicResponse } from "../../../packages/server/src/api/wire/tasks.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { seedFirstScreenHotspotsFixture } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
+import { firstScreenTaskUsage, seedFirstScreenTaskUsage } from "../../fixtures/multiremi/first-screen-task-usage-fixture.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 const databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
@@ -14,6 +15,7 @@ async function fixture() {
   databases.push(database);
   let bytes = 0;
   const queries: string[] = [];
+  const usageReads: unknown[][] = [];
   const db = new Proxy(database.db, {
     get(target, key) {
       if (key === "query" || key === "prepare") return (sql: string) => {
@@ -24,6 +26,7 @@ async function fixture() {
             const result = value.apply(st, args);
             bytes += Buffer.byteLength(JSON.stringify(result));
             queries.push(sql);
+            if (sql.includes("FROM multiremi_usage_units")) usageReads.push(args);
             return result;
           };
           return typeof value === "function" ? value.bind(st) : value;
@@ -36,12 +39,14 @@ async function fixture() {
   const store = new MultiremiStore(db);
   const seed = seedFirstScreenHotspotsFixture(store, { sessions: 100, agents: 3, inboxRows: 0, issues: 0,
     taskPromptBytes: 2048, skillBodyBytes: 4096, run: (sql, params) => db.run(sql, params) });
-  return { db, store, seed, queries, reset() { bytes = 0; queries.length = 0; }, bytes: () => bytes };
+  return { db, store, seed, queries, usageReads,
+    reset() { bytes = 0; queries.length = 0; usageReads.length = 0; }, bytes: () => bytes };
 }
 
 test("snapshot filters Chat before hydration and preserves complete public rows for both identities", async () => {
   const f = await fixture();
   const nonChat = f.store.createTask({ agentId: f.seed.primaryAgentId, prompt: "workspace task" });
+  for (const id of [nonChat.id, f.seed.taskIds[0]!]) seedFirstScreenTaskUsage(f.store, id);
   const all = f.store.listWorkspaceAgentTaskSnapshot("local");
   for (const userId of [f.seed.readerUserId, f.seed.ownerUserId, null]) {
     const expected = all.filter((task) => !task.chatSessionId ||
@@ -51,6 +56,8 @@ test("snapshot filters Chat before hydration and preserves complete public rows 
     const actual = f.store.listWorkspaceAgentTaskSnapshot("local", { userId }).map(taskPublicResponse);
     expect(actual).toEqual(expected);
     expect(actual.some((task) => task.id === nonChat.id)).toBe(true);
+    expect(actual.find((task) => task.id === nonChat.id)?.usage).toEqual(firstScreenTaskUsage);
+    expect(f.usageReads).toEqual([expected.map((task) => task.id)]);
     expect(f.queries.some((sql) => /SELECT task\.\*/.test(sql))).toBe(false);
     expect(f.queries.some((sql) => /codex_profile|claude_profile|delegation_id/.test(sql))).toBe(false);
     if (userId === f.seed.ownerUserId) expect(f.bytes()).toBeLessThan(10_000);
@@ -68,12 +75,14 @@ test("snapshot filters Chat before hydration and preserves complete public rows 
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: null }).some((row) => row.id === task.id)).toBe(false);
   f.db.run("UPDATE multiremi_tasks SET chat_session_id = '' WHERE id = ?", [task.id]);
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).some((row) => row.id === task.id)).toBe(true);
-  // Invisible prompt/result and private profiles cannot increase bridge bytes.
+  // Invisible payloads, private profiles and obsolete usage JSON cannot increase bridge bytes.
   f.reset();
   const baseline = f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).map(taskPublicResponse);
   const baselineBytes = f.bytes();
   f.db.run("UPDATE multiremi_tasks SET prompt = ?, result = ?, codex_profile = ? WHERE chat_session_id IN (SELECT id FROM multiremi_chat_sessions WHERE creator_id = ?)",
     ["p".repeat(16_384), "r".repeat(16_384), JSON.stringify({ large: "x".repeat(16_384) }), f.seed.readerUserId]);
+  f.db.run("UPDATE multiremi_tasks SET usage = ?", [JSON.stringify([{ provider: "claude", model: "legacy-decoy",
+    inputTokens: 999_999, outputTokens: 0, padding: "x".repeat(65_536) }])]);
   f.reset();
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).map(taskPublicResponse)).toEqual(baseline);
   expect(f.bytes()).toBe(baselineBytes);
@@ -103,6 +112,8 @@ test("invisible latest outcome does not promote older visible outcome; missing c
 
 test("both snapshot routes return the same creator-scoped public contract", async () => {
   const f = await fixture();
+  seedFirstScreenTaskUsage(f.store, f.seed.taskIds[0]!);
+  expect(f.store.getTask(f.seed.taskIds[0]!)?.usage).toEqual(firstScreenTaskUsage);
   const app = createMultiremiApp({ store: f.store, authToken: "snapshot-fixture-master" });
   for (const userId of [f.seed.readerUserId, f.seed.ownerUserId]) {
     const credential = await f.store.createAccessToken({ name: "snapshot fixture", type: "pat", userId, workspaceId: "local" });

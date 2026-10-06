@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
+import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
 import type { DaemonArchiveSessionsResultPayload } from "@multiremi/contracts/daemon-protocol.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
@@ -1036,8 +1037,8 @@ export class MultiremiDaemonClient {
     await this.report("runtime.local_skill_import_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
-  async startTask(taskId: string): Promise<void> {
-    await this.report("task.start", taskId, {});
+  async startTask(taskId: string, usageRunId?: string): Promise<void> {
+    await this.report("task.start", taskId, usageRunId ? { usage_run_id: usageRunId } : {});
   }
 
   async markTaskWaitingLocalDirectory(taskId: string, reason: string): Promise<void> {
@@ -1199,6 +1200,10 @@ export class MultiremiDaemonClient {
         total_tokens: entry.totalTokens ?? 0,
       })),
     });
+  }
+
+  async reportTaskUsageSnapshot(taskId: string, usageSnapshot: TaskUsageSnapshot): Promise<void> {
+    await this.report("task.usage", taskId, { usageSnapshot });
   }
 
   /**
