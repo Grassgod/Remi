@@ -53,11 +53,11 @@ export const DAEMON_PROTOCOL_MIN = 2;
 /**
  * Lowest CLI version the server accepts on the v2 socket.
  *
- * RELEASE PLACEHOLDER: the release owner must replace this during integration
- * with the first formal release containing MUL-507. 0.2.86 is reserved for
- * the MUL-496 patch. Never publish or deploy with this placeholder.
+ * Provisional MUL-493 integration version for PPE. Before merging main, the
+ * release owner must align this with the approved first unified-model release,
+ * package.json and the prepared dependency snapshot. This does not publish it.
  */
-export const DAEMON_MIN_CLI_VERSION = "999.0.0-unreleased-mul507";
+export const DAEMON_MIN_CLI_VERSION = "0.2.87";
 
 // ── Frames ──────────────────────────────────────────────────────────────────
 

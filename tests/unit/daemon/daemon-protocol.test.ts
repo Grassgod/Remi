@@ -315,6 +315,8 @@ describe("meetsDaemonMinCliVersion", () => {
   it("rejects the fleet's current release, which is the point of the gate", () => {
     // Every online daemon reported v0.2.82 when MUL-401 was designed.
     expect(meetsDaemonMinCliVersion("0.2.82")).toBe(false);
+    expect(meetsDaemonMinCliVersion("0.2.85")).toBe(false);
+    expect(meetsDaemonMinCliVersion("0.2.86")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.1.0")).toBe(false);
   });
 });

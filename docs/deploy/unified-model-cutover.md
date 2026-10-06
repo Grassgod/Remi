@@ -4,9 +4,9 @@
 
 ## 切换顺序
 
-1. 发布负责人集成时，将 `packages/contracts/src/daemon-protocol.ts` 的 `DAEMON_MIN_CLI_VERSION` 从 `999.0.0-unreleased-mul507` 替换为第一个包含 MUL-507 的正式版本，并同步协议说明；`0.2.86` 留给 MUL-496 补丁。确认占位值已移除、版本门与正式 tag 一致、目标版本全部集成，按集成时有效的发布门禁验证正式 main 提交。当前 release-build-check 已停用，不等待该检查；保留 Developer context 与相关定向测试证据，正式发布门禁由发布负责人核对。
+1. 当前集成候选暂定为 `0.2.87`：`package.json`、`DAEMON_MIN_CLI_VERSION` 和依赖快照已同步，`0.2.85`、`0.2.86` 的旧 daemon 被拒绝。PPE 的新 daemon 使用候选产物自身版本即可接入，不需要伪造 version label。本轮不打 tag、不发版、不等待 CI。合 main 前，发布负责人按实际批准的正式版号再次核对常量、package、依赖快照和正式 tag；版本门不表示 fleet 已升级。
 
-   目前保留占位值，不猜测正式版号。版号确定后，在仓库根目录将以下命令的 `<正式版本，不带 v>` 换成已批准的版本再执行。命令只填写协议常量及协议说明，不改 package 版本、不打 tag、不发布；正常发版仍由发布负责人执行。
+   若正式版号另定，在仓库根目录将以下命令的 `<正式版本，不带 v>` 替换为已批准的版本。脚本只同步协议常量和说明；随后执行依赖准备，将 package 与快照一并刷新。所有改动仍需提交、通过有效发布门禁后才可打 tag。
 
    ```bash
    MUL493_RELEASE_VERSION='<正式版本，不带 v>' python3 - <<'PY'
@@ -14,14 +14,14 @@
    from pathlib import Path
    version = os.environ['MUL493_RELEASE_VERSION']
    assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), '需要稳定 SemVer，不带 v'
-   assert version not in ('0.2.86', '999.0.0'), '不得使用保留版号或占位版号'
+   assert tuple(map(int, version.split('.'))) >= (0, 2, 87), '不得重新接纳旧 daemon'
    edits = {
        'packages/contracts/src/daemon-protocol.ts': (
-           'export const DAEMON_MIN_CLI_VERSION = "999.0.0-unreleased-mul507";',
+           'export const DAEMON_MIN_CLI_VERSION = "0.2.87";',
            f'export const DAEMON_MIN_CLI_VERSION = "{version}";'),
        'docs/daemon-protocol-v2.md': (
-           '当前 `DAEMON_MIN_CLI_VERSION` 为明显的未发布占位值 `999.0.0-unreleased-mul507`。',
-           f'当前 `DAEMON_MIN_CLI_VERSION` 为首个包含 MUL-507 的正式版本 `{version}`。'),
+           '当前 `DAEMON_MIN_CLI_VERSION` 为集成候选暂定号 `0.2.87`。',
+           f'当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `{version}`。'),
    }
    prepared = []
    for name, (old, new) in edits.items():
@@ -32,9 +32,10 @@
    for path, text in prepared:
        path.write_text(text)
    PY
+   bun run release:prepare --version '<正式版本，不带 v>'
    ```
 
-   同一提交还需将常量上方的 `RELEASE PLACEHOLDER` 注释改为正式版门槛说明，并将 [协议说明 §7.4b](../daemon-protocol-v2.md#74b-daemon_min_cli_version-与载荷发布版本) 的后续占位提醒改为实际 tag 和目标 main SHA 的核对要求。此步骤的替换示例可保留作操作说明；检查占位是否残留应针对常量赋值和协议当前值，不能把手册示例误判成仍在使用占位。
+   正式号确定后，将常量注释与[协议说明 §7.4b](../daemon-protocol-v2.md#74b-daemon_min_cli_version-与载荷发布版本)的暂定提醒同步为实际 tag 和目标 main SHA 的核对要求。CI 的“Require refreshed dependencies for a new release version”要求依赖快照 `preparedFor` 与 package 版本一致；不得仅替换 package 版号。
 
    测试无需批量换字符串：接入成功的夹具从 `DAEMON_MIN_CLI_VERSION` 导入，旧版拒绝用例保留原版号。复核并定向运行以下文件：
 

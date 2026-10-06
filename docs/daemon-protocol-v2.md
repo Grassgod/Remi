@@ -941,10 +941,11 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 
 ### 7.4b `DAEMON_MIN_CLI_VERSION` 与载荷发布版本
 
-当前 `DAEMON_MIN_CLI_VERSION` 为明显的未发布占位值 `999.0.0-unreleased-mul507`。
-发布负责人集成时必须将其替换为第一个包含本单的正式版本，并校验常量与正式 tag 一致；
-`0.2.86` 留给 MUL-496 补丁，不得用作本单门槛。切换前执行[统一模型切换清单](deploy/unified-model-cutover.md)
-中的替换步骤，不得携带占位值发版或部署；门槛不表示 fleet 已升级。
+当前 `DAEMON_MIN_CLI_VERSION` 为集成候选暂定号 `0.2.87`。
+package 版本与依赖快照同步为该候选号，PPE 新 daemon 不需要伪造 label 即可接入；
+`0.2.85`、`0.2.86` 的旧 daemon 被拒绝。这次修改不打 tag、不发布。
+合 main 前，发布负责人按实际发版核对并同步正式版号、依赖快照、tag 和目标 main SHA；
+操作见[统一模型切换清单](deploy/unified-model-cutover.md)。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
 

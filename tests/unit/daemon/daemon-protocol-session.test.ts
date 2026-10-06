@@ -211,13 +211,13 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.session.isHandshakeComplete).toBe(false);
   });
 
-  it("rejects a CLI below the minimum with reject and close 4426", async () => {
+  it.each(["0.2.82", "0.2.85", "0.2.86"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
     const h = harness();
     await h.session.handleMessage(JSON.stringify({
       v: 2,
       t: "hello",
       ts: 1,
-      p: helloPayload({ cli_version: "0.2.82" }),
+      p: helloPayload({ cli_version: version }),
     }));
 
     expect(h.socket.lastOfType("reject")!.p).toMatchObject({
@@ -226,6 +226,16 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     });
     expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required);
     expect(h.registry.size).toBe(0);
+  });
+
+  it("admits the candidate package version without a forged CLI label", async () => {
+    const { default: candidate } = await import("../../../package.json");
+    const h = harness();
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1,
+      p: helloPayload({ cli_version: candidate.version }) }));
+    expect(h.socket.lastOfType("reject")).toBeNull();
+    expect(h.socket.lastOfType("welcome")).not.toBeNull();
+    expect(h.session.isHandshakeComplete).toBe(true);
   });
 
   it("treats an unparseable CLI version as too old, so it must upgrade", async () => {
