@@ -359,6 +359,7 @@ export function SessionLogList({
         ref={useCallback((el: HTMLDivElement | null) => { setScrollEl(el); onScrollRoot?.(el); }, [onScrollRoot])}
         data-tab-scroll-root=""
         data-session-log-scroll=""
+        data-session-log-id={sessionId}
         data-ssr-initial={initialPositioned ? "" : undefined}
         data-ssr-display-ready={initialPositioned ? (initialDisplayReady ? "1" : "0") : undefined}
         data-ssr-expected={initialPositioned ? entries.length : undefined}

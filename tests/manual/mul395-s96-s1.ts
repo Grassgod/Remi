@@ -63,6 +63,7 @@ try {
     "--rounds", "2", "--name", "MUL-395-s96-contract", "--out", out,
     "--issue-short", fixture.shortIssueId, "--issue-long", fixture.longIssueId,
     "--issue-xlong", "", "--issue-running", fixture.runningIssueId, "--inbox-item", fixture.inboxItemId];
+  if (process.env.MUL395_S1_SSR_COOKIE === "0") args.push("--no-ssr-cookie");
   if (process.env.MUL395_S1_ONLY) args.push("--only", process.env.MUL395_S1_ONLY);
   const probe = Bun.spawn(args, { cwd: root, env: { ...childEnv, MULTIREMI_QA_WEB_TOKEN: minted.token },
     stdout: Bun.file(join(out, "probe.log")), stderr: Bun.file(join(out, "probe-errors.log")) });

@@ -39,6 +39,7 @@ import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
 import {
   computeAppReadyMs,
+  computeWaves,
   computeFirstRealMs,
   computeJumps,
   computeReadyWindow,
@@ -66,6 +67,7 @@ import {
   type ZeroJumpRowResult,
   type ZeroJumpViolation,
 } from "../../frontend/scripts/perf/lib/zero-jump-verdict";
+import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
 import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
@@ -217,6 +219,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     },
   ];
   const scenarios: Scenario[] = [
+    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
       path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
@@ -224,6 +227,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
     ...detail("detail-long", fixture.longIssueId),
+    ...detail("detail-xlong", fixture.xlongIssueId),
     ...detail("detail-running", fixture.runningIssueId),
     // The deep link is the shape a notification produces, and its cold round
     // *is* the deep link: the URL has to be the inbox one, because that is where
@@ -266,7 +270,18 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 }
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
-interface RoundResult {
+interface RoundResult extends RenderMeasurement {
+  requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number }>;
+  preRevealOptional: string[];
+  preRevealWaves: number | null;
+  preRevealWaveRows: ReturnType<typeof computeWaves>["rows"];
+  preRevealWaveChain: number[];
+  waveGate: "blocking" | "record-only";
+  attachmentReads: Record<string, number>;
+  settled: boolean;
+  hubAckSeen: boolean;
+  revealDispatchMs: number | null;
+  fetchPhases: Array<{ path: string; t: number; state: string | null; fresh: string | null }>;
   logSingleRowReads: number;
   logRequests: Array<{ query: string; startMs: number; responseEndMs: number }>;
   ssrSeed: boolean;
@@ -275,6 +290,8 @@ interface RoundResult {
   round: number;
   url: string;
   readyMs: number | null;
+  anchorVisibleMs: number | null;
+  navStartMs: number;
   readyTimeout: boolean;
   firstRealMs: number | null;
   anchorName: string | null;
@@ -442,9 +459,12 @@ async function runRound(input: {
     mode: "contract",
     shape: "issue-detail",
     targetCommentId: scenario.targetCommentId,
+    requireAgentStream: scenario.key === "detail-running",
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
+    requests: [], preRevealOptional: [], preRevealWaves: null, preRevealWaveRows: [], preRevealWaveChain: [], waveGate: scenario.mode === "warm" && !(["detail-running", "detail-deeplink"].includes(scenario.key)) ? "blocking" : "record-only", attachmentReads: {}, settled: false, hubAckSeen: false, revealDispatchMs: null, fetchPhases: [],
+    renderMs: null, renderSource: "unobserved", renderReason: "not measured", windowResponseEndMs: null,
     logSingleRowReads: 0,
     logRequests: [],
     ssrSeed: false,
@@ -453,6 +473,7 @@ async function runRound(input: {
     round,
     url: targetUrl,
     readyMs: null,
+    anchorVisibleMs: null, navStartMs: 0,
     readyTimeout: true,
     firstRealMs: null,
     anchorName: null,
@@ -487,7 +508,36 @@ async function runRound(input: {
       await route.fulfill({ status: response.status, headers: Object.fromEntries(responseHeaders), body: Buffer.from(await response.arrayBuffer()) });
     } else await route.continue();
   });
-  await context.addInitScript(() => performance.setResourceTimingBufferSize(10_000));
+  await context.addInitScript(() => {
+    performance.setResourceTimingBufferSize(10_000);
+    const phases = { reveals: [] as number[], fetches: [] as Array<{path: string; t: number; state: string | null; fresh: string | null}> };
+    (window as unknown as { __s7Phases: typeof phases }).__s7Phases = phases;
+    const originalAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+      originalAttribute.call(this, name, value);
+      if ((name === "data-perf-state" || name === "data-perf-fresh") && this.getAttribute("data-perf-scroll") === "issue-detail"
+        && this.getAttribute("data-perf-state") === "ready" && this.getAttribute("data-perf-fresh") === "1") phases.reveals.push(performance.now());
+    };
+    const observeSeed = () => {
+      const confirm = () => {
+        for (const root of document.querySelectorAll('[data-perf-scroll="issue-detail"][data-ssr-positioned="1"][data-perf-state="ready"]')) {
+          if (root.getAttribute("data-perf-fresh") === "1" && !phases.reveals.length) phases.reveals.push(performance.now());
+        }
+      };
+      new MutationObserver(confirm).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-ssr-positioned", "data-perf-state"] });
+      confirm();
+    };
+    if (document.documentElement) observeSeed(); else document.addEventListener("DOMContentLoaded", observeSeed, { once: true });
+    const originalFetch = window.fetch;
+    window.fetch = function(this: Window, input: RequestInfo | URL, init?: RequestInit) {
+      const path = new URL(input instanceof Request ? input.url : String(input), location.href).pathname;
+      if (path.startsWith("/api/")) {
+        const root = [...document.querySelectorAll('[data-perf-scroll="issue-detail"]')].at(-1);
+        phases.fetches.push({ path, t: performance.now(), state: root?.getAttribute("data-perf-state") ?? null, fresh: root?.getAttribute("data-perf-fresh") ?? null });
+      }
+      return originalFetch.call(this, input, init);
+    } as typeof window.fetch;
+  });
   await context.setDefaultTimeout(ROUND_TIMEOUT_MS);
   await installRecorderOnContext(context, { profiles: [profile] });
   if (scenario.sidebarWidth !== null) {
@@ -501,6 +551,16 @@ async function runRound(input: {
   }
 
   const page = await context.newPage();
+  const pendingApi = new Set<unknown>();
+  let lastApiChange = performance.now(), lastHubChange = performance.now();
+  page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/")) { pendingApi.add(request); lastApiChange = performance.now(); } });
+  const finishRequest = (request: unknown) => { if (pendingApi.delete(request)) lastApiChange = performance.now(); };
+  page.on("requestfinished", finishRequest); page.on("requestfailed", finishRequest);
+  page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
+    if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
+    lastHubChange = performance.now();
+    try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
+  }));
   const seedReads: Promise<void>[] = [];
   page.on("response", response => {
     if (new URL(response.url()).pathname === new URL(targetUrl).pathname
@@ -520,6 +580,7 @@ async function runRound(input: {
   const collectors = attachCollectors(page, round, scenario.key, [slug], { inboxTarget });
   result.foreignRequests = await blockForeignRequests(page, [webOrigin]);
 
+  let navStartMs = 0;
   try {
     if (scenario.mode === "cold") {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
@@ -537,6 +598,7 @@ async function runRound(input: {
         }, RECORDER_GLOBAL)
         .catch(() => null);
       if (clickT !== null) {
+        navStartMs = clickT;
         await page.evaluate(([name, from]) => {
           const recorder = (window as unknown as Record<string, { reset?: (t?: number) => void }>)[name as string];
           recorder?.reset?.(from as number);
@@ -544,6 +606,13 @@ async function runRound(input: {
       }
     }
     await waitForRecorderReady(page, profile.name, ROUND_TIMEOUT_MS);
+    // Finish the entire deferred/Hub phase, rather than truncating at reveal.
+    const settleDeadline = performance.now() + ROUND_TIMEOUT_MS;
+    while (performance.now() < settleDeadline) {
+      if (result.hubAckSeen && pendingApi.size === 0 && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
+      await page.waitForTimeout(50);
+    }
+    if (!result.settled) result.error = "deferred API / Hub phase did not settle";
   } catch (error) {
     result.error = (error as Error).message.split("\n")[0] ?? String(error);
   }
@@ -551,7 +620,14 @@ async function runRound(input: {
   const summary = await readRecorderSummary(page).catch(() => null);
   const buffer: PerfRecorderBuffer | null = await readRecorder(page).catch(() => null);
   await Promise.all(seedReads);
+  // The actual rendered log supplies the seed evidence; a cookie or unrelated
+  // serialized head id does not prove this detail used SSR.
+  result.ssrSeed = await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial="1"]').count().then(count => count > 0).catch(() => false);
   result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  const allRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter(entry => new URL(entry.name).pathname.startsWith("/api/"))
+    .map(entry => ({ path: new URL(entry.name).pathname, query: new URL(entry.name).search, startMs: entry.startTime, responseEndMs: entry.responseEnd })));
+  result.requests = allRequests.filter(request => request.startMs >= navStartMs);
   result.logRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
     .filter(entry => /\/sessions\/[^/]+\/log\?/.test(entry.name))
     .map(entry => {
@@ -559,6 +635,9 @@ async function runRound(input: {
       for (const key of ["anchor", "before", "after"]) { const value = url.searchParams.get(key); if (value !== null && /^\d+$/.test(value)) query.set(key, value); }
       return { query: query.toString(), startMs: entry.startTime, responseEndMs: entry.responseEnd };
     }));
+  const targetSessionId = await page.locator('[data-perf-scroll="issue-detail"]').first().getAttribute("data-session-log-id").catch(() => null);
+  Object.assign(result, measureLogRender({ navStartMs, ssrSeed: result.ssrSeed, states: buffer?.stateTransitions ?? [],
+    windows: result.requests.filter(request => request.path === `/api/sessions/${targetSessionId}/log`).filter(request => { const query = new URLSearchParams(request.query); return Number(query.get("before")) > 1 || Number(query.get("after")) > 1; }) }));
   result.logSingleRowReads = result.logRequests.filter(request => {
     const query = new URLSearchParams(request.query);
     return query.get("before") === "1" && query.get("after") === "0";
@@ -569,20 +648,22 @@ async function runRound(input: {
   result.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
   result.inboxInjected = collectors.inboxInjected;
 
-  const frames = buffer?.frames ?? [];
+  result.navStartMs = navStartMs;
+  const frames = (buffer?.frames ?? []).filter(frame => frame.t >= navStartMs).map(frame => ({ ...frame, t: frame.t - navStartMs }));
   if (buffer && frames.length > 0) {
     const firstRealMs = computeFirstRealMs(frames, profile.name);
     const ready = computeReadyWindow(frames, { profile, firstRealMs });
-    const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
+    const jumps = computeJumps(frames, { profile: profile.name, fromMs: firstRealMs, toMs: frames.at(-1)?.t });
     result.firstRealMs = firstRealMs;
     result.readyMs = ready.readyMs;
+    result.anchorVisibleMs = ready.anchorVisibleMs;
     result.readyTimeout = ready.readyTimeout;
     result.anchorName = ready.anchorName;
     result.anchorRectAtReady = ready.anchorRectAtReady;
     result.jumps = jumps.jumps;
     result.jumpCount = jumps.jumpCount;
     result.jumpPx = jumps.jumpPx;
-    const appReady = computeAppReadyMs(buffer.stateTransitions);
+    const appReady = computeAppReadyMs(buffer.stateTransitions.filter(state => state.t >= navStartMs).map(state => ({ ...state, t: state.t - navStartMs })));
     result.appReadyMs = appReady.appReadyMs;
     result.appReadyForced = appReady.forced;
     result.appReadyForcedSeen = appReady.readyForced;
@@ -594,6 +675,36 @@ async function runRound(input: {
     result.error = "recorder produced no frames";
   }
 
+  const phases = await page.evaluate(() => (window as unknown as { __s7Phases: { reveals: number[]; fetches: RoundResult["fetchPhases"] } }).__s7Phases);
+  result.revealDispatchMs = phases.reveals.find(t => t >= navStartMs) ?? null;
+  result.fetchPhases = phases.fetches.filter(fetch => fetch.t >= navStartMs);
+  const revealAt = result.revealDispatchMs;
+  const preReveal = revealAt === null ? [] : result.requests.filter(request => request.startMs < revealAt);
+  result.preRevealOptional = result.fetchPhases.filter(request => /\/(active-task|subscribers|resources)$/.test(request.path) && (request.state !== "ready" || request.fresh !== "1")).map(request => request.path);
+  const waves = computeWaves(preReveal.map((request, index) => ({ ...request, index })));
+  result.preRevealWaves = revealAt === null ? null : waves.serialDepth;
+  result.preRevealWaveRows = waves.rows;
+  result.preRevealWaveChain = waves.chain;
+  const aliases = new Map<string, string>();
+  for (const request of result.requests) {
+    const id = /\/attachments\/([^/]+)\/content$/.exec(request.path)?.[1];
+    if (id) {
+      if (!aliases.has(id)) aliases.set(id, `attachment-${aliases.size + 1}`);
+      const alias = aliases.get(id)!; result.attachmentReads[alias] = (result.attachmentReads[alias] ?? 0) + 1;
+    }
+  }
+  const attachmentPath = (path: string) => path.replace(/(\/attachments\/)([^/]+)(\/content$)/,
+    (_match, prefix, id, suffix) => `${prefix}${aliases.get(id) ?? id}${suffix}`);
+  result.requests = result.requests.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  result.preRevealWaveRows = result.preRevealWaveRows.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  result.fetchPhases = result.fetchPhases.map(request => ({ ...request, path: attachmentPath(request.path) }));
+  const failures = [
+    result.anchorVisibleMs !== result.readyMs ? `anchorVisibleMs ${result.anchorVisibleMs} != readyMs ${result.readyMs}` : null,
+    result.preRevealOptional.length ? `optional before reveal: ${result.preRevealOptional.join(", ")}` : null,
+    result.waveGate === "blocking" && (result.preRevealWaves ?? 99) > 2 ? `pre-reveal waves: ${result.preRevealWaves}` : null,
+    Object.values(result.attachmentReads).some(count => count > 1) ? `duplicate attachment content: ${JSON.stringify(result.attachmentReads)}` : null,
+  ].filter(Boolean);
+  if (failures.length) result.error = [result.error, ...failures].filter(Boolean).join("; ");
   if (violationsForRound(result).length > 0) {
     const shotDir = process.env[SHOT_DIR_ENV] ?? join(tmpdir(), "mul394-zero-jump");
     ensureDir(shotDir);
@@ -847,6 +958,8 @@ function writeFixtureImages(uploadDir: string, fixture: ZeroJumpFixture): void {
   for (let index = 0; index < fixture.counts.longImages; index += 1) {
     writeFileSync(join(uploadDir, fixture.workspaceId, `att_zerojump_img_${index}.png`), png);
   }
+  writeFileSync(join(uploadDir, fixture.workspaceId, `${fixture.htmlAttachmentId}.html`),
+    "<!doctype html><html><body><h1>Fixture HTML preview</h1><p>" + "safe preview text ".repeat(3000) + "</p></body></html>");
   process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
 }
 

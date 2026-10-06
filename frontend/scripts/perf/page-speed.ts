@@ -28,6 +28,7 @@
  */
 
 import type { Browser, BrowserContext, Page } from "@playwright/test";
+import { measureLogRender, renderStatsBySource } from "./lib/render-measurement";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, cpus, hostname, platform, release as osRelease, totalmem } from "node:os";
 import { join, resolve } from "node:path";
@@ -578,6 +579,8 @@ function blankRound(round: number, url: string): RoundMeasurement {
     selectorMode: "legacy",
     anchorRule: "",
     readyMs: null,
+    renderMs: null, renderSource: "unobserved", renderReason: "not measured", windowResponseEndMs: null,
+    ssrSeed: false, ssrSeedSource: "none",
     readyTimeout: false,
     firstRealMs: null,
     anchorVisibleMs: null,
@@ -727,7 +730,18 @@ async function measureRound(options: {
   // legacy one provides the equivalence evidence and the fallback for a DOM
   // that predates MUL-384. Sampling is installed before any document exists, so
   // a warm in-app navigation is covered without re-injecting.
-  const context = await mktContext(browser, options.token, [], baseUrl);
+  const context = await mktContext(browser, options.token, [], baseUrl, opts.ssrCookie);
+  if (!opts.ssrCookie) await context.route("**/*", async route => {
+    const request = route.request();
+    if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
+      const headers = { ...request.headers() };
+      headers.cookie = (headers.cookie ?? "").split(";").filter(part => !part.trim().startsWith("multimira_auth=")).join(";");
+      const response = await fetch(request.url(), { headers, redirect: "manual" });
+      const responseHeaders = new Headers(response.headers);
+      for (const name of ["content-length", "content-encoding", "transfer-encoding"]) responseHeaders.delete(name);
+      await route.fulfill({ status: response.status, headers: Object.fromEntries(responseHeaders), body: Buffer.from(await response.arrayBuffer()) });
+    } else await route.continue();
+  });
   await installRecorderOnContext(context, {
     profiles: profilesFor({ modes: ["contract", "legacy"], shape: scenario.shape, targetCommentId: scenario.targetCommentId, requireAgentStream: scenario.key === "detail-running" }),
   });
@@ -841,6 +855,17 @@ async function measureRound(options: {
   const buffer = await readRecorderBuffer(page);
   const vitals = await readWebVitals(page);
   const resources = await readResourceEntries(page, baseUrl, knownIds);
+  if (scenario.shape === "issue-detail") {
+    const root = page.locator('[data-perf-scroll="issue-detail"]').last();
+    const sessionId = await root.getAttribute("data-session-log-id").catch(() => null);
+    measurement.ssrSeed = await root.getAttribute("data-ssr-initial").then(value => value !== null).catch(() => false);
+    measurement.ssrSeedSource = measurement.ssrSeed ? (cold ? "document-dom-marker" : "rsc-dom-marker") : "none";
+    Object.assign(measurement, measureLogRender({ navStartMs: measurement.navStartMs, states: buffer?.stateTransitions ?? [], ssrSeed: measurement.ssrSeed,
+      windows: resources.filter(resource => {
+        const url = new URL(resource.name);
+        return sessionId !== null && url.pathname === `/api/sessions/${sessionId}/log` && (Number(url.searchParams.get("before")) > 1 || Number(url.searchParams.get("after")) > 1);
+      }) }));
+  } else measurement.renderReason = "page has no Issue log window";
   await page.close();
 
   return {
@@ -1678,6 +1703,7 @@ async function main(): Promise<void> {
         hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
         rounds: rounds.map(roundSummary),
         stats: {
+          bySource: renderStatsBySource(rounds),
           ...computeScenarioStats(
             rounds.map((round) => ({
               readyMs: round.readyMs,
@@ -1694,6 +1720,8 @@ async function main(): Promise<void> {
           // round-level "slowest API" cannot answer "did /api/inbox/summary get
           // faster" (plan §9).
           apiByPath: computeApiPathStats(rounds.map((round) => ({ apiFirstScreenEntries: round.apiFirstScreenEntries }))),
+          // Readiness distributions from different delivery paths must stay separate.
+          ...(renderStatsBySource(rounds).length > 1 ? { readyP50: null, readyP75: null, readyP95: null, readyMax: null } : {}),
         },
       });
     }
@@ -1718,6 +1746,9 @@ async function main(): Promise<void> {
       viewport: `${VIEWPORT.width}x${VIEWPORT.height}`,
       readingRule: READING_RULE,
       selectorMode: opts.selectors,
+      ssrCookie: opts.ssrCookie,
+      ssrSeedEvidence: "actual Issue log DOM data-ssr-initial; document/RSC source follows navigation mode",
+      renderRule: "target session window responseEnd to first normal fresh Issue reveal; SSR seed has no browser responseEnd and remains unobserved; bySource separates SSR/CSR",
       hoverLeadMs: opts.hoverLeadMs,
       quietMs: opts.quietMs,
       // The entry-page quiet rule (MUL-383 pending item A1, answered 2026-09-27)

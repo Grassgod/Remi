@@ -158,6 +158,7 @@ export interface PerfClick {
 export interface PerfStateTransition {
   t: number;
   value: string;
+  scrollRoot?: string | null;
   /**
    * `data-perf-fresh` sampled in the same mutation callback, or null while that
    * attribute is absent. Kept with the state so the Node side can tell a real
@@ -257,7 +258,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
   type Frame = { t: number; profiles: Record<string, Profile>; satisfied: Record<string, boolean> };
   type Shift = { t: number; value: number; hadRecentInput: boolean; sources: string[] };
   type Click = { t: number; href: string | null; label: string };
-  type Transition = { t: number; value: string; fresh?: string | null };
+  type Transition = { t: number; value: string; fresh?: string | null; scrollRoot?: string | null };
 
   const MAX_ROWS = typeof config.maxRows === "number" && config.maxRows > 0 ? config.maxRows : 60;
   const THRESHOLD_PX = 1;
@@ -587,7 +588,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
         const fresh = target.getAttribute("data-perf-fresh");
         const last = state.stateTransitions[state.stateTransitions.length - 1];
         if (last && last.value === value && (last.fresh ?? null) === fresh) continue;
-        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value, fresh });
+        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value, fresh, scrollRoot: target.getAttribute("data-perf-scroll") });
       }
     });
     // `addInitScript` runs at document-start, where `documentElement` can still
@@ -615,6 +616,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
           t: Math.round(performance.now() * 10) / 10,
           value,
           fresh: el.getAttribute("data-perf-fresh"),
+          scrollRoot: el.getAttribute("data-perf-scroll"),
         });
       }
     }

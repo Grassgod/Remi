@@ -43,6 +43,7 @@ import { anchorPlan, type PageShape } from "./selectors";
 // in `harness.ts`; `ResourceEntry` is the shape `readResourceEntries` returns.
 import { parseServerTiming, type ResourceEntry } from "./harness";
 import type { ReportRoundSummary } from "./report";
+import type { RenderMeasurement } from "./render-measurement";
 
 /** Everything one round contributes to the report, derived from the raw buffer. */
 export interface RoundComputation {
@@ -335,7 +336,7 @@ export interface RoundDriverState {
 }
 
 /** One measured round: the derived numbers plus the driver's own state. */
-export type RoundMeasurement = RoundComputation & RoundDriverState;
+export type RoundMeasurement = RoundComputation & RoundDriverState & Partial<RenderMeasurement> & { ssrSeed?: boolean; ssrSeedSource?: string };
 
 /**
  * The persistence projection of one round.
@@ -351,6 +352,12 @@ export function roundSummary(round: RoundMeasurement): ReportRoundSummary {
     navStartMs: round.navStartMs,
     clickT: round.clickT,
     readyMs: round.readyMs,
+    renderMs: round.renderMs,
+    renderSource: round.renderSource,
+    renderReason: round.renderReason,
+    windowResponseEndMs: round.windowResponseEndMs,
+    ssrSeed: round.ssrSeed,
+    ssrSeedSource: round.ssrSeedSource,
     readyTimeout: round.readyTimeout,
     firstRealMs: round.firstRealMs,
     firstRealKeys: round.firstRealKeys,
