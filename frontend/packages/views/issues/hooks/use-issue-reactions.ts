@@ -18,7 +18,9 @@ export function useIssueReactions(issueId: string, userId?: string) {
   const { data: serverReactions = [], isLoading: loading } = useQuery(
     { ...issueReactionsOptions(issueId), staleTime: Infinity, initialData: () => {
       const issue = qc.getQueryData<Issue>(issueKeys.detail(wsId, issueId));
-      return issue?.reactions;
+      // The detail API omits the optional field when there are no reactions.
+      // A loaded detail with that shape still supplies an authoritative empty set.
+      return issue ? issue.reactions ?? [] : undefined;
     } },
   );
 

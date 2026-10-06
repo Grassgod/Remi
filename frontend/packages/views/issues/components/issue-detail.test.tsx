@@ -716,8 +716,10 @@ describe("IssueDetail (shared)", () => {
     expect(mockApiObj.getSessionLog.mock.calls.filter(([, params]) => params?.before === 30)).toHaveLength(1);
   });
 
-  it("reuses detail reactions instead of issuing the same Issue read again", async () => {
-    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, reactions: [] });
+  it.each([false, true])("reuses detail reactions instead of reading Issue again (empty field omitted: %s)", async omitted => {
+    const value = { ...mockIssue, reactions: [] };
+    if (omitted) delete (value as Partial<typeof value>).reactions;
+    mockApiObj.getIssue.mockResolvedValue(value);
     renderIssueDetail();
     await waitForReveal();
     await waitFor(() => expect(mockApiObj.listIssueSubscribers).toHaveBeenCalled());
