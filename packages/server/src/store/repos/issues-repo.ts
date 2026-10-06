@@ -6017,8 +6017,10 @@ export class IssuesRepo {
       ? "CASE WHEN pg_input_is_valid(created_at, 'timestamp with time zone') THEN EXTRACT(EPOCH FROM created_at::timestamptz) END"
       : "unixepoch(created_at, 'subsec')";
     const boundaries = inboxDateGroupBoundaries(new Date(), timezoneOffsetMinutes);
+    // Materialize the narrow projection once: both aggregate branches consume
+    // it, and inlining would repeatedly parse the large details JSON per run.
     const runs = this.ctx.db.query(
-      `WITH runs AS (
+      `WITH runs AS MATERIALIZED (
          SELECT read, ${autopilotId} AS autopilot_id, ${timestamp} AS created_epoch
          FROM multiremi_inbox_items
          WHERE member_id = ?${workspaceFilter} AND archived = 0 AND type = 'autopilot_run_completed'

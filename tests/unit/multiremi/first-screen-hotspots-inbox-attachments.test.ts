@@ -245,6 +245,52 @@ async function getInboxSummary(
 }
 
 describe("MUL-473 inbox summary", () => {
+  it("MUL-395: preserves millisecond date/week boundaries, JSON edge shapes and identity isolation", async () => {
+    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
+    const RealDate = Date;
+    const now = Date.UTC(2026, 9, 5, 0, 0, 0, 500); // Monday immediately after midnight.
+    class FixedDate extends RealDate {
+      constructor(...args: unknown[]) { if (args.length) super(...(args as [string])); else super(now); }
+      static now() { return now; }
+    }
+    globalThis.Date = FixedDate as DateConstructor;
+    try {
+      const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
+        (id, workspace_id, member_id, recipient_type, recipient_id, type, title, body, details, read, archived, created_at)
+        VALUES (?, ?, ?, 'member', ?, 'autopilot_run_completed', 'run', '', ?, ?, ?, ?)`);
+      for (const offset of [0, -480, 300, -840, 840]) {
+        harness.db.run("DELETE FROM multiremi_inbox_items");
+        const shifted = new RealDate(now - offset * 60_000);
+        const today = RealDate.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) + offset * 60_000;
+        const monday = today - ((shifted.getUTCDay() + 6) % 7) * 86_400_000;
+        const times = [today - 1, today, today + 1, today - 86_400_000 - 1, today - 86_400_000,
+          monday - 1, monday, monday + 1, monday - 8 * 86_400_000];
+        const details = ['null', '[]', '42', '"scalar"', '{}', '{"autopilot_id":null}', '{"autopilot_id":false}',
+          '{"autopilot_id":""}', '{"autopilot_id":"a"}', '{"autopilot_id":"a","autopilot_id":"b"}',
+          JSON.stringify({ autopilot_id: "quote\"\\\n" })];
+        let index = 0;
+        for (const time of times) for (const detail of details) for (const read of [0, 1]) {
+          insert.run(`inb_boundary_${index++}`, harness.fixture.workspaceId, harness.fixture.readerMemberId,
+            harness.fixture.readerMemberId, detail, read, 0, new RealDate(time).toISOString());
+        }
+        const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
+        expect((await getInboxSummary(harness, offset)).body).toEqual(expected);
+        insert.run("inb_archived", harness.fixture.workspaceId, harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 1, new RealDate(today).toISOString());
+        insert.run("inb_other_member", harness.fixture.workspaceId, "other_member", "other_member", '{}', 0, 0, new RealDate(today).toISOString());
+        insert.run("inb_other_workspace", "other_workspace", harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 0, new RealDate(today).toISOString());
+        expect((await getInboxSummary(harness, offset)).body).toEqual(expected);
+        // Invalid JSON has the same no-autopilot behavior as {}. The frozen
+        // legacy witness predates JSON tolerance, so compare valid counterparts.
+        insert.run("inb_invalid", harness.fixture.workspaceId, harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 0, new RealDate(today).toISOString());
+        const withStandalone = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
+        for (const invalid of [null, "", "invalid json"]) {
+          harness.db.run("UPDATE multiremi_inbox_items SET details = ? WHERE id = 'inb_invalid'", [invalid]);
+          expect((await getInboxSummary(harness, offset)).body).toEqual(withStandalone);
+        }
+      }
+    } finally { globalThis.Date = RealDate; }
+  }, 20000);
+
   it("MUL-395: 5000 run payloads never cross the summary bridge", async () => {
     const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
     const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
