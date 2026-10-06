@@ -4132,6 +4132,10 @@ ${routing.sql}
       // which machine can resume the session, so the Skills are not read on this path.
       const agent = this.ctx.agents().getAgentLite(task.agentId);
       if (!chat || !agent || chat.status === "archived" || agent.archivedAt) continue;
+      // Internal callers can supply an initial provider session before Chat has
+      // promoted any lineage. Only later user turns inherit the completed lane.
+      if (!row.feishu_transport && task.sessionId && !chat.sessionId && !chat.workDir
+        && !chat.sessionRuntimeId && !chat.sessionExecutionFingerprint) continue;
       const plugins = this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
       const fingerprint = this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
       const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;

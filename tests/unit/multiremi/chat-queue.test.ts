@@ -282,6 +282,28 @@ describe("Chat queues", () => {
 });
 
 pendingTurnBackendTests("Chat queue unified API", fixture => {
+  it("preserves an explicit initial provider session and then follows the completed Chat lane", () => {
+    const { store } = fixture();
+    const agent = store.createAgent({ name: "Initial session", provider: "codex", visibility: "workspace" });
+    const runtime = store.registerRuntime({ name: "Initial runtime", provider: "codex" });
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: chat.id, prompt: "restore explicit input",
+      runtimeId: runtime.id, sessionId: "explicit-session", workDir: "/tmp/explicit" });
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(first.id);
+    expect(claimed.runtimeId).toBe(runtime.id);
+    expect(claimed.sessionId).toBe("explicit-session");
+    expect(claimed.workDir).toBe("/tmp/explicit");
+    store.buildTaskSessionProjection(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "restored", sessionId: "completed-session", workDir: "/tmp/completed" });
+    const next = store.sendChatMessage(chat.id, { body: "continue" });
+    const resumed = store.claimTask(runtime.id)!;
+    expect(resumed.id).toBe(next.task.id);
+    expect(resumed.sessionId).toBe("completed-session");
+    expect(resumed.workDir).toBe("/tmp/completed");
+  });
+
   it("enforces message ownership, unread conflicts and delete/resend FIFO through the public API", async () => {
     const { store } = fixture();
     const agent = store.createAgent({ name: "Queue API", provider: "codex", visibility: "workspace" });
