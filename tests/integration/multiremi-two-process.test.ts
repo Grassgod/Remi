@@ -162,8 +162,10 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     const socket = await daemon(queue.runtimeIds[0]);
     try {
       const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId, runtimeId: queue.runtimeIds[0] });
-      const offer = await socket.wait("task.offer", (frame) => frame.p?.id === id);
-      expect(offer).toMatchObject({ rt: queue.runtimeIds[0], p: { id } });
+      const offer = await socket.wait("task.offer", (frame) => frame.p?.attempt_id === id);
+      expect(offer).toMatchObject({ rt: queue.runtimeIds[0], p: { attempt_id: id } });
+      expect(offer!.p.turn_id).toBeString();
+      expect(offer!.p).not.toHaveProperty("id");
       acceptOffer(socket, offer!);
       expect(await pair[1].call<TaskState>("task", { id })).toEqual({ id, status: "dispatched", runtimeId: queue.runtimeIds[0] });
       await pair[0].call("complete", { id });
@@ -177,9 +179,9 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     try {
       for (let round = 0; round < 200; round += 1) {
         const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId });
-        expect(await pollUntil(() => daemons.some(socket => socket.frames.some(frame => frame.t === "task.offer" && frame.p?.id === id)), 5000)).toBe(true);
+        expect(await pollUntil(() => daemons.some(socket => socket.frames.some(frame => frame.t === "task.offer" && frame.p?.attempt_id === id)), 5000)).toBe(true);
         const offered = daemons.flatMap((socket, index) => socket.frames
-          .filter(frame => frame.t === "task.offer" && frame.p?.id === id)
+          .filter(frame => frame.t === "task.offer" && frame.p?.attempt_id === id)
           .map(frame => ({ socket, runtimeId: queue.runtimeIds[index], frame })));
         expect(offered).toHaveLength(1);
         const owner = offered[0]!.runtimeId;
