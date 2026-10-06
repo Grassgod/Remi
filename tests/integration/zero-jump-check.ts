@@ -177,6 +177,9 @@ function findFreePort(start: number): number {
 }
 
 interface Scenario {
+  /** F398 also verifies that all deferred rows remain reachable inside the slot. */
+  queuedTasks?: number;
+  activityPreference?: boolean;
   key: string;
   taskCacheEmpty?: boolean;
   imageCase?: ImageCase;
@@ -235,6 +238,10 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
       targetCommentId: fixture.deepLinkCommentId,
     }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
+    ...detail("detail-f398", fixture.f398IssueId, { queuedTasks: fixture.counts.f398QueuedTasks, activityPreference: false })
+      .filter(scenario => scenario.mode === "cold"),
+    ...(options.only.includes("detail-f398-system-details") ? detail("detail-f398-system-details", fixture.f398IssueId,
+      { queuedTasks: fixture.counts.f398QueuedTasks, activityPreference: true }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-long", fixture.longIssueId),
     ...detail("detail-xlong", fixture.xlongIssueId),
     ...detail("detail-running", fixture.runningIssueId),
@@ -281,6 +288,13 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult extends RenderMeasurement {
+  streamObservation?: {
+    samples: Array<{ t: number; height: number; rows: number; state: string | null }>;
+    rows: number;
+    clientHeight: number;
+    scrollHeight: number;
+    lastRowReachable: boolean;
+  };
   imageObservation?: ImageObservation;
   requests: Array<{ path: string; query: string; startMs: number; responseEndMs: number; transferBytes: number; encodedBytes: number; initiator: string; status: number | null; delivery: string | null }>;
   preRevealOptional: string[];
@@ -460,6 +474,8 @@ async function runRound(input: {
   scenario: Scenario;
   round: number;
   ssrCookie: boolean;
+  userId: string;
+  workspaceId: string;
 }): Promise<RoundResult> {
   const { browser, token, webOrigin, apiOrigin, slug, scenario, round } = input;
   // The scenario's own profile: a deep link's terminal element is the target
@@ -508,6 +524,26 @@ async function runRound(input: {
 
   const ssrCookie = input.ssrCookie && !scenario.taskCacheEmpty;
   const context: BrowserContext = await mktContext(browser, token, [], webOrigin, ssrCookie);
+  if (scenario.activityPreference !== undefined) await context.addInitScript(({ key, value }) => {
+    window.localStorage.setItem(key, JSON.stringify({ state: { showSystemDetails: value }, version: 0 }));
+  }, { key: `multimira_issue_activity:${input.userId}:${input.workspaceId}`, value: scenario.activityPreference });
+  if (scenario.queuedTasks) await context.addInitScript(() => {
+    const samples: NonNullable<RoundResult["streamObservation"]>["samples"] = [];
+    (window as unknown as { __s7StreamSamples: typeof samples }).__s7StreamSamples = samples;
+    const sample = () => {
+      const root = document.querySelector('[data-perf-scroll="issue-detail"]');
+      const slot = root?.querySelector<HTMLElement>("[data-agent-stream-slot]");
+      if (slot) {
+        const next = { t: performance.now(), height: slot.getBoundingClientRect().height,
+          rows: slot.querySelectorAll('[data-perf-anchor="agent-stream"] > button').length,
+          state: root!.getAttribute("data-perf-state") };
+        const previous = samples.at(-1);
+        if (next.height > 0 && (!previous || previous.height !== next.height || previous.rows !== next.rows || previous.state !== next.state)) samples.push(next);
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   if (!ssrCookie) await context.route("**/*", async route => {
     const request = route.request();
     if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
@@ -747,7 +783,24 @@ async function runRound(input: {
   const emptyCard = result.cardSamples?.find(sample => sample.textLength === 0);
   const filledCard = result.cardSamples?.find(sample => sample.textLength > 0);
   if (observeImage) result.imageObservation = await observeImage().catch(() => undefined);
+  if (scenario.queuedTasks) result.streamObservation = await page.evaluate(() => {
+    // Run after recording the measured frames. This explicit user-style scroll
+    // tests reachability, and does not enter the zero-jump measurement.
+    const slot = document.querySelector<HTMLElement>("[data-agent-stream-slot]");
+    const buttons = slot?.querySelectorAll<HTMLElement>('[data-perf-anchor="agent-stream"] > button');
+    if (slot) slot.scrollTop = slot.scrollHeight;
+    const slotRect = slot?.getBoundingClientRect(), lastRect = buttons?.[buttons.length - 1]?.getBoundingClientRect();
+    return { samples: (window as unknown as { __s7StreamSamples: NonNullable<RoundResult["streamObservation"]>["samples"] }).__s7StreamSamples,
+      rows: buttons?.length ?? 0, clientHeight: slot?.clientHeight ?? 0, scrollHeight: slot?.scrollHeight ?? 0,
+      lastRowReachable: Boolean(slotRect && lastRect && lastRect.top >= slotRect.top && lastRect.bottom <= slotRect.bottom) };
+  });
+  const stream = result.streamObservation;
   const failures = [
+    scenario.queuedTasks && (!stream || !stream.samples.length || !stream.samples.some(sample => sample.rows === 0)
+      || !stream.samples.some(sample => sample.rows === scenario.queuedTasks) || stream.rows !== scenario.queuedTasks
+      || stream.samples.some(sample => sample.height !== stream.samples[0]!.height)
+      || stream.scrollHeight <= stream.clientHeight || !stream.lastRowReachable)
+      ? "deferred queued stream changed slot height, dropped rows or made the last row unreachable" : null,
     scenario.imageCase ? result.imageObservation ? imageObservationFailure(result.imageObservation) : "image observation missing" : null,
     scenario.taskCacheEmpty && (!emptyCard || !filledCard || filledCard.contentHeight <= 0 || emptyCard.height !== filledCard.height
       || (emptyCard.anchorTop !== null && filledCard.anchorTop !== null && Math.abs(emptyCard.anchorTop - filledCard.anchorTop) > .5))
@@ -929,6 +982,8 @@ async function main(): Promise<void> {
         scenario,
         round,
         ssrCookie: options.ssrCookie,
+        userId: fixture.userId,
+        workspaceId: fixture.workspaceId,
       });
       rounds.push(result);
       const violations = violationsForRound(result);

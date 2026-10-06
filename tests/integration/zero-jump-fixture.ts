@@ -6,6 +6,7 @@
  * in one place and the check itself stays about measurement and verdicts:
  *
  *  - a short issue with 3 comments;
+ *  - the F398 assignment with a long description, 20 queued runs and 60 updates;
  *  - a long issue with 250 comments carrying ~20 code blocks, 5 images, replies
  *    and activity, spread over 3 sessions (one of them the default);
  *  - one running task with messages, so the agent stream row renders;
@@ -26,6 +27,9 @@ export const FIXTURE = {
   codeBlocks: 20,
   images: 5,
   sessions: 3,
+  f398Comments: 4,
+  f398QueuedTasks: 20,
+  f398Updates: 60,
 } as const;
 
 export interface ZeroJumpFixture {
@@ -34,6 +38,7 @@ export interface ZeroJumpFixture {
   memberId: string;
   userId: string;
   shortIssueId: string;
+  f398IssueId: string;
   parentIssueId: string;
   waitingChildIssueId: string;
   ungrantedParentIssueId: string;
@@ -59,6 +64,9 @@ export interface ZeroJumpFixture {
     longImages: number;
     sessions: number;
     runningMessages: number;
+    f398Comments: number;
+    f398QueuedTasks: number;
+    f398Updates: number;
   };
 }
 
@@ -118,6 +126,35 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       authorType: "member",
       authorId: user.id,
       body: `short comment ${i}`,
+    });
+  }
+
+  // MUL-501 2a / MUL-519 F398: a long assignment with a heading, twenty
+  // paragraphs and enough queued runs to exceed the deferred footer slot.
+  const f398Description = "# F398 heading\n\n" + Array.from({ length: 10 }, (_, index) =>
+    `## Stable section ${index + 1}\n\n` + "Synthetic QA dispatch content with explicit checks. ".repeat(10),
+  ).join("\n\n");
+  const f398Issue = store.createIssue({
+    id: "iss_zerojump_f398", title: "Zero-jump F398 assignment", description: f398Description,
+    status: "in_progress", priority: "medium",
+  });
+  const f398Session = store.getOrCreateDefaultIssueSession(f398Issue.id, user.id);
+  for (let index = 0; index < FIXTURE.f398Comments; index += 1) {
+    store.createIssueComment(f398Issue.id, {
+      issueSessionId: f398Session.id, authorType: "member", authorId: user.id,
+      body: `F398 comment ${index + 1}.`,
+    });
+  }
+  const f398Agent = store.createAgent({ id: "agt_zerojump_f398", name: "F398 unbound agent", provider: "codex" });
+  for (let index = 0; index < FIXTURE.f398QueuedTasks; index += 1) {
+    store.createTask({ id: `tsk_zerojump_f398_${index}`, agentId: f398Agent.id, issueId: f398Issue.id,
+      prompt: `F398 dispatch ${index + 1}\n\n${f398Description}` });
+  }
+  for (let index = 0; index < FIXTURE.f398Updates; index += 1) {
+    store.updateIssue(f398Issue.id, {
+      title: `F398 synthetic activity ${index + 1}`,
+      priority: (["low", "high", "medium", "urgent"] as const)[index % 4],
+      actorType: "member", actorId: user.id,
     });
   }
 
@@ -441,6 +478,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     memberId: member.id,
     userId: user.id,
     shortIssueId: shortIssue.id,
+    f398IssueId: f398Issue.id,
     parentIssueId: parentIssue.id,
     waitingChildIssueId: waitingChild.id,
     ungrantedParentIssueId: ungrantedParent.id,
@@ -465,6 +503,9 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       longImages: imageAttachmentIds.length,
       sessions: longSessionIds.length,
       runningMessages,
+      f398Comments: FIXTURE.f398Comments,
+      f398QueuedTasks: FIXTURE.f398QueuedTasks,
+      f398Updates: FIXTURE.f398Updates,
     },
   };
 }

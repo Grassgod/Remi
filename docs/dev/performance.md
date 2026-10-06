@@ -408,6 +408,8 @@ schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两�
 
 MUL-395 的图片回归由 [zero-jump-image-cases.ts](../../tests/integration/zero-jump-image-cases.ts) 扩展 fixture：真实 640×240 PNG 的晚到、404、canonical 元素锚点，以及有尺寸/快速加载对照。晚到请求以第一次正常揭示为条件屏障释放，图片和行高前后必须一致；位置仍由原收集器和零跳动判定检查。五类用例默认进入 CI，`--only detail-image-late` 等可以定向运行，关闭 SSR cookie 可复核 CSR。不改原 fixture 延迟或 allowlist。
 
+`detail-f398::cold` 默认进入同一 CI：带 `#` 标题的长描述、20 段正文、4 条评论、20 条 queued dispatch、60 次标题/优先级更新，覆盖延后挂载的多任务 footer。任务槽保持 64px，更多任务在槽内滚动，避免揭示后的挂载触发外层贴底补偿。回归沿用完整锚点与零跳动判定，并验证空槽和 20 行挂载后的高度相同、所有行保留且末行可滚到。活动偏好关闭是默认；`--only detail-f398-system-details` 验证打开偏好，`--no-ssr-cookie` 验证 CSR。
+
 - **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
 - **消息深链的 URL 为 `/{slug}/inbox?item=<message_id>`**，使用 `target-message` anchor。独立详情深链使用 `/issues/:id?comment=…`，由 SSR/CSR locate 窗口提供目标锚点；`detail-locate` 和 `detail-image-element` 单独验证该路径。
 
