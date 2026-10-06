@@ -950,6 +950,8 @@ function checkTurnCard(
 ): void {
   const raw=db.query('SELECT event_count,tool_call_count,type_histogram,model FROM multiremi_turn_attempts WHERE id=?').get(summary.taskId);
   if(!raw){context.turnCard(false);return;}
+  raw.event_count = raw.event_count == null ? null : Number(raw.event_count);
+  raw.tool_call_count = raw.tool_call_count == null ? null : Number(raw.tool_call_count);
   context.turnCard(true);
   const decode=(value:unknown)=>typeof value==='string'?JSON.parse(value):value;
   const card={...raw,type_histogram:decode(raw.type_histogram),model:decode(raw.model)} as ConversationLogTurnMetadata;
