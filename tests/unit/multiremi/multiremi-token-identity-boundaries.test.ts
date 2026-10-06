@@ -66,7 +66,7 @@ it("preserves explicit ownership for master-token and open-mode provisioning", a
     const store = createLocalStore();
     const app = createMultiremiApp({ store, authToken });
     const response = await app.request("/api/multiremi/tokens", {
-      method: "POST", headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+      method: "POST", headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}), "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Provisioned", user_id: "provisioned-user", type: "daemon" }),
     });
     expect(response.status).toBe(201);
@@ -108,7 +108,7 @@ it("retains native token listing and revocation for master-token and open mode",
     const store = createLocalStore();
     const token = await store.createAccessToken({ name: "Managed", type: "pat" });
     const app = createMultiremiApp({ store, authToken });
-    const headers = { Authorization: `Bearer ${authToken}` };
+    const headers: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
     expect((await app.request("/api/multiremi/tokens?workspaceId=local", { headers })).status).toBe(200);
     expect((await app.request(`/api/multiremi/tokens/${token.id}`, { method: "DELETE", headers })).status).toBe(200);
   }

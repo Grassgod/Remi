@@ -1287,11 +1287,9 @@ describe("Multiremi SSH Mesh", () => {
       workspaceId: ownerWorkspace.id,
       userId: "delete-auth-member-user",
     });
-    const taskToken = await store.createTaskAccessToken({
-      id: "tsk_delete_auth",
-      agentId: "agt_delete_auth",
-      workspaceId: ownerWorkspace.id,
-    }, "local");
+    const taskAgent = store.createAgent({ name: "Delete auth task", provider: "claude", workspaceId: ownerWorkspace.id });
+    const task = store.createTask({ agentId: taskAgent.id, prompt: "Preserve workspace", workspaceId: ownerWorkspace.id });
+    const taskToken = await store.createTaskAccessToken(task, "local");
     const daemonToken = await store.createAccessToken({
       name: "Unbound delete daemon",
       type: "daemon",

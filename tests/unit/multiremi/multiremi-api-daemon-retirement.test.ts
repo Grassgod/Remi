@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -681,9 +681,9 @@ describe("Multiremi API — daemon retirement", () => {
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     store.getOrCreateSessionAgentLane(session.id, agent.id);
     db!.run(
-      `UPDATE multiremi_session_agent_lanes
+      `UPDATE multiremi_session_lanes
        SET provider_session_id = 'provider-session', runtime_id = ?, provider = 'claude', work_dir = '/work/lane'
-       WHERE session_id = ? AND agent_id = ?`,
+       WHERE session_id = ? AND reader_id = ?`,
       [claude.id, session.id, agent.id],
     );
     const chat = store.createChatSession({ agentId: agent.id, title: "Retirement chat", workspaceId: "local" });
@@ -759,7 +759,7 @@ describe("Multiremi API — daemon retirement", () => {
     });
     expect(revokedHeartbeat.status).toBe(401);
     expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBeNull();
-    expect(db!.query("SELECT runtime_id, provider_session_id FROM multiremi_session_agent_lanes WHERE session_id = ?").get(session.id)).toMatchObject({
+    expect(db!.query("SELECT runtime_id, provider_session_id FROM multiremi_agent_lane_records WHERE session_id = ?").get(session.id)).toMatchObject({
       runtime_id: null,
       provider_session_id: null,
     });
@@ -948,7 +948,7 @@ describe("Multiremi API — daemon retirement", () => {
 
     store.getOrCreateSessionAgentLane(session.id, agent.id);
     db!.run(
-      "UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+      "UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ? AND reader_id = ?",
       [runtime.id, session.id, agent.id],
     );
     plan = store.getDaemonRetirementPlan("local", "daemon-snapshot");

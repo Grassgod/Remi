@@ -235,7 +235,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect((await updatedModels.json()).models[0].id).toBe("gpt-5.4");
 
     const claim = await taskOfferResponse(store, "rt_api");
-    expect((await claim.json()).task.id).toBe(task.id);
+    expect((await claim.json()).task.attempt_id).toBe(task.id);
     await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "codex", model: "gpt-5", input_tokens: 11, output_tokens: 5, cache_read_tokens: 2 }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
     const detail = await app.request("/api/multiremi/runtimes/rt_api");
@@ -368,7 +368,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const app = createMultiremiApp({ store });
 
     const claim = await taskOfferResponse(store, "rt_total_only");
-    expect((await claim.json()).task.id).toBe(task.id);
+    expect((await claim.json()).task.attempt_id).toBe(task.id);
 
     // Exactly what a pre-0.2.49 daemon posts: a total, no splits.
     const report = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "claude", model: "opus", total_tokens: 78048 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
@@ -418,7 +418,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const app = createMultiremiApp({ store });
 
     const claim = await taskOfferResponse(store, "rt_split");
-    expect((await claim.json()).task.id).toBe(task.id);
+    expect((await claim.json()).task.attempt_id).toBe(task.id);
     const report = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{
           provider: "claude",
           model: "opus",

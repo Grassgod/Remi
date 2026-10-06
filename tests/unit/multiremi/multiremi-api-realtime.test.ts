@@ -1,17 +1,18 @@
 // Daemon and browser websocket upgrades, workspace-scoped fanout, and the
 // privacy boundaries on chat/member/invitation events.
 import { afterEach, describe, expect, it } from "bun:test";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { watchRuntimeFrames } from "../../fixtures/runtime-downlinks.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { notifyBrowserWorkspaceEvent } from "../../../packages/server/src/api/realtime.js";
-import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt, waitWebSocketOpen } from "./helpers.js";
+import { authenticateBrowserWebSocket, createLocalStore as createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt, waitWebSocketOpen } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 function v2Hello(daemonId: string, runtimeIds: string[],
   capabilitiesByRuntime: Record<string, { agent_plugin_protocol: number }> = {}): string {
   return JSON.stringify({ v: 2, t: "hello", ts: Date.now(), p: {
-    protocol: 2, daemon_id: daemonId, cli_version: "0.2.83", launched_by: null,
+    protocol: 2, daemon_id: daemonId, cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
     runtimes: runtimeIds.map(runtime_id => ({ runtime_id, provider: "codex", max_concurrency: 1,
       active_task_ids: [], ...(capabilitiesByRuntime[runtime_id] ? { capabilities: capabilitiesByRuntime[runtime_id] } : {}) })), caps: [],
   } });
@@ -228,7 +229,7 @@ describe("Multiremi API — realtime websockets", () => {
       const nextOffer = inbox.next("task.offer");
       const queued = store.createTask({ agentId: agent.id, prompt: "push dispatch" });
       const offer = await nextOffer;
-      expect(offer).toMatchObject({ t: "task.offer", rt: runtime.id, p: { id: queued.id } });
+      expect(offer).toMatchObject({ t: "task.offer", rt: runtime.id, p: { attempt_id: queued.id } });
       ws.send(JSON.stringify({ v: 2, t: "res", re: String(offer.seq), ack: offer.seq, p: { ok: true } }));
       expect(store.getTask(queued.id)?.status).toBe("dispatched");
       store.cancelTask(queued.id);
@@ -254,8 +255,9 @@ describe("Multiremi API — realtime websockets", () => {
   it("serves browser workspace websocket fanout with workspace isolation", async () => {
     const store = createStore();
     const localRuntime = store.registerRuntime({ id: "rt_browser_local", name: "Browser local runtime", provider: "claude", workspaceId: "local" });
-    const agent = store.createAgent({ name: "Browser Claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Browser Claude", provider: "claude", visibility: "workspace" });
     const remoteWorkspace = store.createWorkspace({ id: "ws_browser_remote", name: "Browser Remote", slug: "browser-remote" });
+    const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id, visibility: "workspace" });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local", title: "Private browser chat" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "local", name: "Local", role: "owner" });
     store.createWorkspaceMember({ workspaceId: "local", userId: "other-user", name: "Other Local", role: "member" });
@@ -282,8 +284,12 @@ describe("Multiremi API — realtime websockets", () => {
       await authenticateBrowserWebSocket(remote, remoteToken.token);
       await authenticateBrowserWebSocket(otherLocal, otherLocalToken.token);
 
+      const localCreated = nextWebSocketMessages(local, 2);
+      const peerCreated = nextWebSocketMessages(otherLocal, 2);
       const localTask = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "local browser realtime" });
-      expect(await nextWebSocketMessage(local)).toMatchObject({
+      const localEvents = await localCreated;
+      expect(localEvents.map(event => event.type)).toEqual(["inbox:new", "task:queued"]);
+      expect(localEvents[1]).toMatchObject({
         type: "task:queued",
         payload: {
           task_id: localTask.id,
@@ -293,7 +299,7 @@ describe("Multiremi API — realtime websockets", () => {
         actor_id: agent.id,
         actor_type: "agent",
       });
-      expect(await nextWebSocketMessage(otherLocal)).toMatchObject({
+      expect((await peerCreated)[1]).toMatchObject({
         type: "task:queued",
         payload: { task_id: localTask.id, workspace_id: "local" },
       });
@@ -303,9 +309,11 @@ describe("Multiremi API — realtime websockets", () => {
       expect(await nextWebSocketMessage(local)).toEqual({ type: "pong" });
       // A task inherits its agent's workspace, so the remote-workspace task
       // needs an agent that actually lives in the remote workspace.
-      const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id });
+      const remoteCreated = nextWebSocketMessages(remote, 2);
       const remoteTask = store.createTask({ agentId: remoteAgent.id, prompt: "remote browser realtime" });
-      expect(await nextWebSocketMessage(remote)).toMatchObject({
+      const remoteEvents = await remoteCreated;
+      expect(remoteEvents.map(event => event.type)).toEqual(["inbox:new", "task:queued"]);
+      expect(remoteEvents[1]).toMatchObject({
         type: "task:queued",
         payload: {
           task_id: remoteTask.id,
@@ -341,8 +349,11 @@ describe("Multiremi API — realtime websockets", () => {
           status: "running",
         },
       });
+      const completed = nextWebSocketMessages(local, 2);
       store.completeTask(localTask.id, { output: "done", sessionId: "sess-browser", workDir: "/tmp/browser-local" });
-      expect(await nextWebSocketMessage(local)).toMatchObject({
+      const completionEvents = await completed;
+      expect(completionEvents[0]).toEqual({ type: "inbox:new", actor_id: null, actor_type: "system", payload: { index_only: true } });
+      expect(completionEvents[1]).toMatchObject({
         type: "task:completed",
         payload: {
           task_id: localTask.id,
@@ -386,8 +397,10 @@ describe("Multiremi API — realtime websockets", () => {
 
       const sent = store.sendChatMessage(chat.id, { body: "hello private" });
       const queued = store.sendChatMessage(chat.id, { body: "private pending" });
-      store.updateQueuedChatTask(chat.id, queued.task.id, "private revised input");
-      store.removeQueuedChatTasks(chat.id, queued.task.id);
+      store.editMessage(queued.message.id, { body_md: "private revised input" });
+      expect(store.getMessage(queued.message.id)?.body_md).toBe("private revised input");
+      store.deleteMessage(queued.message.id);
+      expect(store.getMessage(queued.message.id)?.deleted_at).toBeString();
       expect(store.claimTask(runtime.id)?.id).toBe(sent.task.id);
       store.startTask(sent.task.id);
       store.completeTask(sent.task.id, { output: "all done", sessionId: "sess-chat", workDir: "/tmp/chat" });
@@ -404,7 +417,6 @@ describe("Multiremi API — realtime websockets", () => {
         actor_type: "system",
         payload: { chat_session_id: chat.id, task_id: sent.task.id, content: "all done" },
       });
-      expect(first("chat:queue_updated")).toMatchObject({ type: "chat:queue_updated", payload: { chat_session_id: chat.id } });
       expect(first("chat:session_read")).toMatchObject({ type: "chat:session_read", payload: { chat_session_id: chat.id } });
       expect(first("chat:session_updated")).toMatchObject({
         type: "chat:session_updated",
@@ -414,7 +426,10 @@ describe("Multiremi API — realtime websockets", () => {
       // Chat-linked task lifecycle (which carries the assistant result text) stays on the private chat scope.
       expect(first("task:completed")?.payload).toMatchObject({ task_id: sent.task.id, chat_session_id: chat.id, result: "all done" });
       // The workspace peer must never receive any private chat session traffic.
-      expect(peerMessages).toEqual([]);
+      expect(peerMessages).toEqual([
+        ...Array.from({ length: 4 }, () => ({ type: "inbox:new", actor_id: null, actor_type: "system", payload: { index_only: true } })),
+        { type: "inbox:read", actor_id: null, actor_type: "system", payload: { index_only: true } },
+      ]);
     } finally {
       creator.close();
       peer.close();
