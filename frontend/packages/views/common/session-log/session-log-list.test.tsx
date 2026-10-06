@@ -154,6 +154,21 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("defers seeded log reconciliation until the SSR positioning script confirms reveal", async () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)], ready: true, fresh: true } });
+    const onRevealed = vi.fn();
+    const view = renderList(replica, { initialPositioned: true, onRevealed });
+    reveal();
+    expect(onRevealed).not.toHaveBeenCalled();
+    await act(async () => { view.root.dataset.ssrPositioned = "1"; });
+    expect(onRevealed).not.toHaveBeenCalled();
+    await act(async () => { view.root.dataset.perfState = "ready"; });
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    await act(async () => { view.root.dataset.perfState = "ready"; });
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    view.restore();
+  });
+
   it("publishes fresh=0 while the replica's window is behind the server", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1)], ready: true, fresh: false },

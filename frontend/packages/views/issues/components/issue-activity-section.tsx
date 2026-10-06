@@ -295,7 +295,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         <div className="h-6 min-w-16">{revealed && <IssueSubscribersControl issueId={issueId} currentUserId={currentUserId} members={members} agents={agents} />}</div>
       </div>
       <LocalDirectoryHint projectId={projectId} enabled={revealed} reserveSlot />
-      <div className="min-h-20" data-agent-card-slot>
+      <div className="h-32 min-h-20 overflow-y-auto" data-agent-card-slot>
         <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
           reconcileEnabled={revealed} />
       </div>

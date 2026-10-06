@@ -61,6 +61,8 @@ vi.mock("@multiremi/core/paths", async (importOriginal) => {
   };
 });
 
+import { DeferredContentContext } from "../common/deferred-content-context";
+import { HtmlPreviewBody } from "./html-preview-body";
 import { HtmlAttachmentPreview } from "./html-attachment-preview";
 
 function renderWithQuery(ui: ReactElement) {
@@ -273,5 +275,66 @@ describe("HtmlAttachmentPreview — failure mode does not unmount the toolbar", 
     expect(onPreview).toHaveBeenCalled();
     fireEvent.mouseDown(downloadBtn);
     expect(onDownload).toHaveBeenCalled();
+  });
+});
+
+
+describe("anchored log HTML attachment lifecycle", () => {
+  it("reserves a stable slot before reveal, shares one successful body across consumers and remounts", async () => {
+    let finish!: (value: { text: string; originalContentType: string }) => void;
+    getAttachmentTextContentMock.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const body = (revealed: boolean, mounted = true) => <QueryClientProvider client={qc}>
+      <DeferredContentContext.Provider value={revealed}>
+        {mounted && <><HtmlAttachmentPreview attachmentId="shared" filename="report.html" onPreview={() => {}} onDownload={() => {}} />
+          <HtmlPreviewBody source={{ kind: "attachment", attachmentId: "shared" }} title="modal" /></>}
+      </DeferredContentContext.Provider>
+    </QueryClientProvider>;
+    const view = render(body(false));
+    const slot = () => document.querySelector<HTMLElement>('[data-attachment-preview-slot="shared"]');
+    expect(slot()?.style.height).toBe("240px");
+    expect(getAttachmentTextContentMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("html-attachment-preview-error")).toBeNull();
+    view.rerender(body(true));
+    await waitFor(() => expect(getAttachmentTextContentMock).toHaveBeenCalledTimes(1));
+    finish({ text: "<p>shared</p>", originalContentType: "text/html" });
+    await waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(2));
+    expect(slot()?.style.height).toBe("240px");
+    view.rerender(body(true, false));
+    view.rerender(body(true));
+    await waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(2));
+    expect(getAttachmentTextContentMock).toHaveBeenCalledTimes(1);
+    getAttachmentTextContentMock.mockResolvedValueOnce({ text: "<p>updated</p>", originalContentType: "text/html" });
+    await qc.invalidateQueries({ queryKey: ["attachment-content", "acme", "shared"] });
+    await waitFor(() => expect(getAttachmentTextContentMock).toHaveBeenCalledTimes(2));
+    expect(slot()?.style.height).toBe("240px");
+  });
+
+  it("reuses a cached height while retaining only the shell before reveal", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(["attachment-preview-height", "acme", "cached"], 320);
+    qc.setQueryData(["attachment-content", "acme", "cached"], { text: "<p>cached</p>" });
+    render(<QueryClientProvider client={qc}><DeferredContentContext.Provider value={false}>
+      <HtmlAttachmentPreview attachmentId="cached" filename="cached.html" onPreview={() => {}} onDownload={() => {}} />
+    </DeferredContentContext.Provider></QueryClientProvider>);
+    expect(document.querySelector<HTMLElement>('[data-attachment-preview-slot="cached"]')?.style.height).toBe("320px");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(getAttachmentTextContentMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed log slot stable and permits a user remount to retry", async () => {
+    getAttachmentTextContentMock.mockRejectedValueOnce(new Error("temporary"));
+    const qc = new QueryClient();
+    const body = (mounted: boolean) => <QueryClientProvider client={qc}><DeferredContentContext.Provider value={true}>
+      {mounted && <HtmlAttachmentPreview attachmentId="retry" filename="report.html" onPreview={() => {}} onDownload={() => {}} />}
+    </DeferredContentContext.Provider></QueryClientProvider>;
+    const view = render(body(true));
+    await waitFor(() => expect(screen.getByTestId("html-attachment-preview-error")).toBeTruthy());
+    expect(document.querySelector<HTMLElement>('[data-attachment-preview-slot="retry"]')?.style.height).toBe("240px");
+    expect(getAttachmentTextContentMock).toHaveBeenCalledTimes(1);
+    getAttachmentTextContentMock.mockResolvedValueOnce({ text: "<p>recovered</p>", originalContentType: "text/html" });
+    view.rerender(body(false)); view.rerender(body(true));
+    await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+    expect(getAttachmentTextContentMock).toHaveBeenCalledTimes(2);
   });
 });

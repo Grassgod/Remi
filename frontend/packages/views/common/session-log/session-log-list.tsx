@@ -1,5 +1,7 @@
 "use client";
 
+import { DeferredContentContext } from "../deferred-content-context";
+
 /**
  * SessionLogList — the flat session log both the Issue detail timeline and Chat
  * will mount (MUL-403 plan 3/6 §3, ADR 0007 §3).
@@ -23,7 +25,7 @@
  * renders what their state says.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 import { ArrowDown } from "lucide-react";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
@@ -231,13 +233,27 @@ export function SessionLogList({
     fresh: snapshot.fresh,
     initialPositioned,
   });
-  useEffect(() => { if (reveal.revealed) onRevealed?.(); }, [reveal.revealed, onRevealed]);
+  const [confirmedSsrRoot, setConfirmedSsrRoot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!initialPositioned || !scrollEl) return;
+    const confirm = () => {
+      if (scrollEl.dataset.ssrPositioned === "1" && scrollEl.dataset.perfState === "ready") setConfirmedSsrRoot(scrollEl);
+    };
+    confirm();
+    const observer = new MutationObserver(confirm);
+    observer.observe(scrollEl, { attributes: true, attributeFilter: ["data-ssr-positioned", "data-perf-state"] });
+    return () => observer.disconnect();
+  }, [initialPositioned, scrollEl]);
+  // The hook's initial SSR state describes pre-rendered markup. Deferred work
+  // starts only after the pre-paint script has actually positioned/revealed it.
+  const contentRevealed = reveal.revealed && (!initialPositioned || Boolean(scrollEl && confirmedSsrRoot === scrollEl));
+  useEffect(() => { if (contentRevealed) onRevealed?.(); }, [contentRevealed, onRevealed]);
 
   const stick = useStickToBottom({
     scrollEl,
     contentEl,
     mode: anchor.kind === "bottom" ? { kind: "bottom" } : { kind: "element", id: anchor.id },
-    enabled: reveal.revealed,
+    enabled: contentRevealed,
     // A deep link lands on a row, not on the end of the stream: pinning there
     // would fight the reader from the first frame (ADR 0008 §4).
     initialState: anchor.kind === "element" ? "released" : "pinned",
@@ -300,7 +316,7 @@ export function SessionLogList({
     widthPx,
     getRows,
     version: windowVersion,
-    enabled: reveal.revealed,
+    enabled: contentRevealed,
   });
 
   // Content width, in the same units the cache keys on. A ResizeObserver rather
@@ -358,6 +374,7 @@ export function SessionLogList({
             frame that shows content is already at its final position. It keeps
             `visibility: hidden` rather than unmounting because the hook measures
             real heights to know where "final" is. */}
+        <DeferredContentContext.Provider value={contentRevealed}>
         <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className="relative mx-auto w-full max-w-4xl px-4 py-6">
           {showPendingSkeleton && reveal.state === "pending" && (
             <div
@@ -405,6 +422,7 @@ export function SessionLogList({
           {footer}
           {anchorId && <div aria-hidden="true" className="h-[50vh]" />}
         </div>
+        </DeferredContentContext.Provider>
       </div>
       {newMessageCount > 0 && stick.state === "released" && (
         <NewMessagesChip count={newMessageCount} onReturn={handleReturn} label={newMessagesLabel} />

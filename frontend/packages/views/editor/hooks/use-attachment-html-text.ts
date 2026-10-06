@@ -12,13 +12,17 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { useWorkspaceSlug } from "@multiremi/core/paths";
+import { useDeferredContent } from "../../common/deferred-content-context";
 import { api } from "@multiremi/core/api";
 
 export function useAttachmentHtmlText(attachmentId: string | null | undefined) {
+  const enabled = useDeferredContent() !== false;
+  const slug = useWorkspaceSlug();
   return useQuery({
-    queryKey: ["attachment-content", attachmentId ?? ""] as const,
+    queryKey: ["attachment-content", slug ?? "", attachmentId ?? ""] as const,
     queryFn: () => api.getAttachmentTextContent(attachmentId as string),
-    enabled: !!attachmentId,
+    enabled: enabled && !!attachmentId,
     // 413 / 415 won't become 200 on retry; a transport error is easier to
     // recover from by re-opening than waiting on background retries with
     // no UI affordance.
