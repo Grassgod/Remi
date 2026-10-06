@@ -54,6 +54,7 @@ function shortDate(date: string | null): string {
 interface IssueDetailSidebarProps {
   issue: Issue;
   issueId: string;
+  queriesEnabled?: boolean;
   sections: SidebarSectionsState;
   optionalProps: OptionalPropsState;
   onUpdateField: (updates: Partial<UpdateIssueRequest>) => void;
@@ -79,6 +80,7 @@ interface IssueDetailSidebarProps {
 export function IssueDetailSidebar({
   issue,
   issueId,
+  queriesEnabled = true,
   sections,
   optionalProps,
   onUpdateField,
@@ -304,7 +306,7 @@ export function IssueDetailSidebar({
 
       <IssueSubIssuesSummary issueId={issueId} sections={sections} onCreateSubIssue={onCreateSubIssue} getActorName={getActorName} />
 
-      <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
+      <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} enabled={queriesEnabled} />
 
       <IssueCreationRelationSection issue={issue} />
 
@@ -318,7 +320,7 @@ export function IssueDetailSidebar({
             {t(($) => $.detail.section_code_changes)}
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${codeChangesOpen ? "rotate-90" : ""}`} />
           </button>
-          {codeChangesOpen && <div className="pl-2"><ChangeRequestList issueId={issueId} /></div>}
+          {codeChangesOpen && <div className="pl-2"><ChangeRequestList issueId={issueId} enabled={queriesEnabled} /></div>}
         </div>
       )}
 
@@ -348,7 +350,7 @@ export function IssueDetailSidebar({
 
       {/* Key results — what the sessions published, typed by kind. Hides
           itself until the first result lands. */}
-      <IssueKeyResultsSection issueId={issueId} sessions={issueSessions} />
+      <IssueKeyResultsSection issueId={issueId} sessions={issueSessions} enabled={queriesEnabled} />
 
       {/* Execution log — active runs + collapsed past runs. Self-contained;
           owns its own collapse state and WS subscriptions. Hides itself
@@ -356,6 +358,7 @@ export function IssueDetailSidebar({
       <ExecutionLogSection issueId={issueId} />
 
       <IssueSessionArchivesSection
+        enabled={queriesEnabled}
         issueId={issue.id}
         issueStatus={issue.status}
         canManage={canManageArchives}

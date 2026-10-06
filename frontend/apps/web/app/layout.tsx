@@ -116,6 +116,7 @@ export default async function RootLayout({
     >
       <head>
         <Script id="issue-log-ssr-position" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: `(()=>{
+          const pendingWidths=new WeakSet();
           const position=e=>{
             const target=e.dataset.ssrAnchorId&&document.getElementById(e.dataset.ssrAnchorId);
             if(target&&e.contains(target)){
@@ -126,15 +127,29 @@ export default async function RootLayout({
           const place=()=>document.querySelectorAll('[data-session-log-scroll][data-ssr-initial]').forEach(e=>{
             const expected=Number(e.dataset.ssrExpected||0);
             if(e.dataset.ssrDisplayReady==='0'||e.dataset.ssrPositioned||e.dataset.ssrPositioning||expected<1||e.querySelectorAll('[data-perf-item]').length<expected||e.clientHeight<1||e.scrollHeight<1)return;
+            const sidebar=e.closest('[data-slot="sidebar-wrapper"]');
+            if(sidebar?.dataset.sidebarWidthReady==='0')return;
+            const gap=sidebar?.querySelector('[data-slot="sidebar"][data-state="expanded"] [data-slot="sidebar-gap"]');
+            const width=sidebar&&parseFloat(getComputedStyle(sidebar).getPropertyValue('--sidebar-width'));
+            if(gap&&gap.getClientRects().length>0&&Number.isFinite(width)&&gap.getBoundingClientRect().width!==width){
+              if(!pendingWidths.has(e)){pendingWidths.add(e);requestAnimationFrame(()=>{pendingWidths.delete(e);place();});}return;
+            }
             e.dataset.ssrPositioning='1';const c=e.firstElementChild;position(e);
             const r=e.getBoundingClientRect();
             const images=[...e.querySelectorAll('img')].filter(i=>!i.complete&&i.getBoundingClientRect().bottom>r.top&&i.getBoundingClientRect().top<r.bottom);
             const waits=images.map(i=>new Promise(resolve=>{i.addEventListener('load',resolve,{once:true});i.addEventListener('error',resolve,{once:true});}));
-            Promise.race([Promise.all(waits),new Promise(resolve=>setTimeout(resolve,1500))]).then(()=>requestAnimationFrame(()=>{
-              position(e);c.style.visibility='';e.dataset.ssrPositioned='1';e.dataset.perfState='ready';
-            }));
+            Promise.race([Promise.all(waits),new Promise(resolve=>setTimeout(resolve,1500))]).then(()=>{
+              let lastTop=NaN,lastHeight=NaN,lastWidth=NaN,stableFrames=0;
+              const reveal=()=>{
+                position(e);const top=e.scrollTop,height=e.scrollHeight,width=e.clientWidth;
+                stableFrames=top===lastTop&&height===lastHeight&&width===lastWidth?stableFrames+1:1;
+                lastTop=top;lastHeight=height;lastWidth=width;
+                if(stableFrames<2){requestAnimationFrame(reveal);return;}
+                c.style.visibility='';e.dataset.ssrPositioned='1';e.dataset.perfState='ready';
+              };requestAnimationFrame(reveal);
+            });
           });
-          new MutationObserver(place).observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-ssr-display-ready']});
+          new MutationObserver(place).observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['data-ssr-display-ready','data-sidebar-width-ready']});
           document.addEventListener('DOMContentLoaded',place);place();
         })();` }} />
       </head>

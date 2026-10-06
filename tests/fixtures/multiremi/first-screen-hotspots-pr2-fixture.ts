@@ -51,6 +51,15 @@ export function instrumentHotspotDatabase(raw: SqlDatabase, probe: ReturnType<ty
   });
 }
 
+export function reportPr2Usage(store: MultiremiStore, taskId: string, index: number, inputTokens = index, outputTokens = index * 2, revision = 1): void {
+  store.reportTaskUsageSnapshot(taskId, { version: 2, runId: `pr2-fixture:${index}`, revision, complete: true, units: [{
+    unitId: "request", revision, provider: "codex", model: "model-default", modelSource: "provider_reported",
+    scope: "request", source: "provider_request", accuracy: "exact", inputTokens, outputTokens,
+    cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: inputTokens + outputTokens,
+    contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-09-26T08:00:00.000Z",
+  }] });
+}
+
 export async function createPr2Harness(options: { inboxRows?: number; runtimes?: number; foreignRuntimes?: number; attachmentBytes?: number } = {}) {
   const database = await openHotspotDatabase();
   const probe = hotspotProbe();
@@ -83,10 +92,11 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
       { id: "model-default", label: "Default model", provider: "codex", default: true },
       { id: "model-extra", label: "Extra model", provider: "codex", default: false },
     ]);
-    // Existing tasks supply every status and usage format without inventing new tasks.
+    // Existing tasks supply every status; usage is ingested into the canonical ledger.
     const taskId = fixture.taskIds[index % fixture.taskIds.length]!;
     db.run("UPDATE multiremi_tasks SET runtime_id = ?, usage = ? WHERE id = ?", id,
       JSON.stringify([{ model: "model-default", input_tokens: index, output_tokens: index * 2 }]), taskId);
+    reportPr2Usage(store, taskId, index);
     runtimeIds.push(id);
   }
   for (let index = 0; index < (options.foreignRuntimes ?? 30); index++) {

@@ -441,7 +441,7 @@
     "col_owner": "所有者",
     "col_agents": "エージェント",
     "col_workload": "作業量",
-    "col_cost": "コスト · 7 日",
+    "col_cost": "既知小計 · 7 日",
     "col_cli": "CLI",
     "col_agent": "Agent",
     "col_acp": "ACP",

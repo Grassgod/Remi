@@ -126,7 +126,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const projects = store
-      .listProjects(workspaceId)
+      .listProjectSummaries(workspaceId)
       .map(projectCompatibilitySummaryResponse);
     return c.json({ projects, total: projects.length });
   });

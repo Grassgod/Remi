@@ -249,9 +249,9 @@ interface RoundResult {
   appReadyForced: boolean;
   readyMs: number | null;
   firstRealMs: number | null;
-  jumpCount: number;
-  jumpPx: number;
-  jumpScrollPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
+  jumpScrollPx: number | null;
   jumps: ReturnType<typeof computeJumps>["jumps"];
   /** Recorder timestamps of the window's two ends, for the report. */
   scrollWindowStart: number;
@@ -587,9 +587,9 @@ async function runRound(input: {
     appReadyForced: false,
     readyMs: null,
     firstRealMs: null,
-    jumpCount: 0,
-    jumpPx: 0,
-    jumpScrollPx: 0,
+    jumpCount: null,
+    jumpPx: null,
+    jumpScrollPx: null,
     jumps: [],
     scrollWindowStart: 0,
     perturbAt: 0,
@@ -819,7 +819,7 @@ async function main(): Promise<void> {
   // The control has to move: a run where the instrument cannot see a deliberate
   // 200px scroll would report `jumps = 0` for every scenario and mean nothing.
   const controlFailures = controls.filter(
-    (round) => round.error !== null || round.jumpPx < CONTROL_SCROLL_PX - 1,
+    (round) => round.error !== null || (round.jumpPx === null || round.jumpPx < CONTROL_SCROLL_PX - 1),
   );
   const report = {
     kind: "mul443-session-log-zero-jump",

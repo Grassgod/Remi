@@ -461,7 +461,7 @@
     "col_owner": "Owner",
     "col_agents": "Agents",
     "col_workload": "Workload",
-    "col_cost": "Cost · 7d",
+    "col_cost": "Known subtotal · 7d",
     "col_cli": "CLI",
     "col_agent": "Agent",
     "col_acp": "ACP",

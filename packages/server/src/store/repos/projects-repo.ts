@@ -17,6 +17,7 @@ import { type StoreContext } from "@multiremi/store/context.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { DaemonRetiredError } from "@multiremi/store/repos/daemon-retirement-repo.js";
+export type ProjectSummary = Omit<MultiremiProject, "instructions" | "deltaInstructions" | "instructionsRevision" | "instructionsUpdatedAt" | "instructionsUpdatedBy">;
 import type {
   CreatePinnedItemInput,
   CreateProjectDocInput,
@@ -172,6 +173,17 @@ export class ProjectsRepo {
       ? this.ctx.db.query(projectSelect("WHERE p.workspace_id = ? ORDER BY p.updated_at DESC")).all(workspaceId) as Row[]
       : this.ctx.db.query(projectSelect("ORDER BY p.updated_at DESC")).all() as Row[];
     return rows.map(toProject);
+  }
+
+  /** The compatibility list omits instruction bodies and revision metadata. */
+  listProjectSummaries(workspaceId: string): ProjectSummary[] {
+    const columns = ["id", "workspace_id", "title", "description", "icon", "status", "priority",
+      "lead_type", "lead_id", "default_assignee_type", "default_assignee_id", "archived_at", "created_at", "updated_at"];
+    const rows = this.ctx.db.query(projectSelect("WHERE p.workspace_id = ? ORDER BY p.updated_at DESC", columns.map(column => `p.${column}`).join(", "))).all(workspaceId) as Row[];
+    return rows.map(row => {
+      const { instructions, deltaInstructions, instructionsRevision, instructionsUpdatedAt, instructionsUpdatedBy, ...summary } = toProject(row);
+      return summary;
+    });
   }
 
   searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MultiremiProjectSearchResult[]; total: number } {
@@ -1425,9 +1437,9 @@ function isValidGitRepoUrl(value: string): boolean {
   }
 }
 
-function projectSelect(suffix: string): string {
+function projectSelect(suffix: string, columns = "p.*"): string {
   return `
-    SELECT p.*,
+    SELECT ${columns},
       COUNT(i.id) AS issue_count,
       COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count,
       (

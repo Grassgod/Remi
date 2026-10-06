@@ -240,6 +240,7 @@ const mockApiObj = vi.hoisted(() => ({
   }]),
   listSessionTasks: vi.fn().mockResolvedValue([]),
   listIssueSessionResults: vi.fn().mockResolvedValue([]),
+  getIssueWorkspace: vi.fn().mockResolvedValue({ workspace: null }),
   createIssueSession: vi.fn(),
   addSessionParticipant: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
@@ -693,6 +694,38 @@ describe("IssueDetail (shared)", () => {
     ).toBe(true);
   });
 
+  it("keeps optional log metadata behind this detail reveal while its body is pending", async () => {
+    mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
+    renderIssueDetail();
+    await act(async () => {});
+    expect(mockApiObj.listIssueSessionResults).not.toHaveBeenCalled();
+    expect(mockApiObj.getIssueWorkspace).not.toHaveBeenCalled();
+    expect(mockApiObj.listIssueSessionArchives).not.toHaveBeenCalled();
+    expect(mockApiObj.getActiveTasksForIssue).not.toHaveBeenCalled();
+  });
+
+  it("reads the log and task-runs while children still hold the detail render gate", async () => {
+    let release!: (value: { issues: Issue[] }) => void;
+    mockApiObj.listChildIssues.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    renderIssueDetail();
+    await waitFor(() => expect(mockApiObj.getSessionLog).toHaveBeenCalled());
+    expect(mockApiObj.listTasksByIssue).toHaveBeenCalledExactlyOnceWith("issue-1");
+    expect(document.querySelector('[data-perf-scroll="issue-detail"]')).toBeNull();
+    await act(async () => { release({ issues: [] }); });
+    await waitForReveal();
+    expect(mockApiObj.getSessionLog.mock.calls.filter(([, params]) => params?.before === 30)).toHaveLength(1);
+  });
+
+  it.each([false, true])("reuses detail reactions instead of reading Issue again (empty field omitted: %s)", async omitted => {
+    const value = { ...mockIssue, reactions: [] };
+    if (omitted) delete (value as Partial<typeof value>).reactions;
+    mockApiObj.getIssue.mockResolvedValue(value);
+    renderIssueDetail();
+    await waitForReveal();
+    await waitFor(() => expect(mockApiObj.listIssueSubscribers).toHaveBeenCalled());
+    expect(mockApiObj.getIssue.mock.calls.filter(([id]) => id === "issue-1")).toHaveLength(1);
+  });
+
   describe("first-screen dependencies (MUL-499)", () => {
     it("does not request dependencies for a top-level issue", async () => {
       renderIssueDetail();
@@ -720,6 +753,19 @@ describe("IssueDetail (shared)", () => {
       }
       expect(mockApiObj.listIssueDependencies).not.toHaveBeenCalled();
     });
+  });
+
+  it("reveals without active-task reconciliation and starts optional reads afterwards", async () => {
+    const phases: Array<{ endpoint: string; state: string | null }> = [];
+    const record = (endpoint: string) => phases.push({ endpoint, state: document.querySelector("[data-perf-scroll='issue-detail']")?.getAttribute("data-perf-state") ?? null });
+    mockApiObj.getActiveTasksForIssue.mockImplementation(() => { record("active-task"); return new Promise(() => {}); });
+    mockApiObj.listIssueSubscribers.mockImplementation(async () => { record("subscribers"); return []; });
+    renderIssueDetail();
+    await waitFor(() => expect(document.querySelector("[data-perf-scroll='issue-detail']")).toHaveAttribute("data-perf-state", "ready"));
+    await waitFor(() => expect(phases.map(p => p.endpoint)).toEqual(expect.arrayContaining(["active-task", "subscribers"])));
+    expect(phases.every(p => p.state === "ready")).toBe(true);
+    expect(document.querySelector("[data-agent-card-slot]")).toHaveClass("min-h-20");
+    expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("min-h-16");
   });
 
   it("keeps the detail skeleton until member and child gates resolve", async () => {

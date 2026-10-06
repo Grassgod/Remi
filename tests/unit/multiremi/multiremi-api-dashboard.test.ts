@@ -1,11 +1,7 @@
 import { reportFrame } from "../../fixtures/report-session.js";
-// The JSON data endpoints the Next.js frontend reads (D11 removed the
-// server-rendered HTML dashboard; only this contract survived).
-//
-// MUL-92: the frontend parses these responses with zod schemas whose fields
-// are snake_case and all carry `.default(0)` — so a camelCase body "parses"
-// with every number defaulted to zero and the dashboard renders all-zeros.
-// These tests lock the snake_case wire contract field-by-field.
+// Compatibility dashboard endpoints project canonical facts in snake_case.
+// The unified Web dashboard reads /api/usage/report; these checks retain the
+// older clients' wire contract and verify consumption/lifecycle time boundaries.
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -14,6 +10,11 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — dashboard JSON endpoints", () => {
+  function setFixtureTimestamps(taskId: string, iso: string): void {
+    db!.run("UPDATE multiremi_tasks SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
+      [iso, iso, iso, iso, iso, taskId]);
+    db!.run("UPDATE multiremi_usage_units SET occurred_at=? WHERE task_id=?", [iso, taskId]);
+  }
   function seedRuntimeWithUsage(store: MultiremiStore, options: {
     runtimeId: string;
     workspaceId?: string;
@@ -68,7 +69,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     expect(await response.text()).toBe("");
   });
 
-  it("serves /api/dashboard/usage/daily in the snake_case wire shape the frontend schema parses", async () => {
+  it("serves /api/dashboard/usage/daily in the snake_case compatibility wire shape", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     seedRuntimeWithUsage(store, { runtimeId: "rt_daily", inputTokens: 21, outputTokens: 8 });
@@ -78,8 +79,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     expect(response.headers.get("Content-Type")).toContain("application/json");
     const body = await response.json();
     expect(body).toHaveLength(1);
-    // Exact contract — a camelCase regression here zeroes the whole dashboard
-    // through the frontend's `.default(0)` zod schema (MUL-92).
+    // Keep the compatibility field names and actual total explicit.
     expect(body[0]).toEqual({
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       runtime_id: "rt_daily",
@@ -89,7 +89,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
       output_tokens: 8,
       cache_read_tokens: 0,
       cache_write_tokens: 0,
-      total_tokens: 0,
+      total_tokens: 29,
       task_count: 1,
     });
   });
@@ -109,7 +109,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
       output_tokens: 4,
       cache_read_tokens: 0,
       cache_write_tokens: 0,
-      total_tokens: 0,
+      total_tokens: 17,
       task_count: 1,
     }]);
   });
@@ -261,17 +261,18 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_window" });
-    // Push every timestamp outside a 7-day window but inside the 365-day cap.
+    // Lifecycle changes cannot move consumption; each timeline has its own window.
     const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-      [stale, stale, stale, stale, seeded.taskId],
+      "UPDATE multiremi_tasks SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
+      [stale, stale, stale, stale, stale, seeded.taskId],
     );
-
-    const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=7")).json();
-    expect(daily).toEqual([]);
+    expect(await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=7")).json()).toHaveLength(1);
     const runtimeDaily = await (await app.request("/api/dashboard/runtime/daily?workspace_id=local&days=7")).json();
     expect(runtimeDaily).toEqual([]);
+    db!.run("UPDATE multiremi_usage_units SET occurred_at=? WHERE task_id=?", [stale, seeded.taskId]);
+    const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=7")).json();
+    expect(daily).toEqual([]);
 
     // A 90-day window includes it again.
     const wide = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=90")).json();
@@ -284,10 +285,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_tz" });
     // 2026-08-20T20:00Z is already 2026-08-21 in UTC+8 (Asia/Shanghai).
     const evening = "2026-08-20T20:00:00.000Z";
-    db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ?, completed_at = ? WHERE id = ?",
-      [evening, evening, evening, evening, evening, seeded.taskId],
-    );
+    setFixtureTimestamps(seeded.taskId, evening);
 
     const utc = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=3650")).json();
     expect(utc[0].date).toBe("2026-08-20");
@@ -311,12 +309,8 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const midnight = new Date(`${shanghaiToday}T00:00:00+08:00`);
     const beforeMidnight = new Date(midnight.getTime() - 60 * 1000).toISOString();
     const afterMidnight = new Date(midnight.getTime() + 60 * 1000).toISOString();
-    const setTimestamps = (taskId: string, iso: string) => db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-      [iso, iso, iso, iso, taskId],
-    );
-    setTimestamps(before.taskId, beforeMidnight);
-    setTimestamps(after.taskId, afterMidnight);
+    setFixtureTimestamps(before.taskId, beforeMidnight);
+    setFixtureTimestamps(after.taskId, afterMidnight);
 
     // days=1 in the viewer tz = "the viewer's today": a task one minute before
     // local midnight is out even though it is within the past 24 hours. This
@@ -346,12 +340,8 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
       const app = createMultiremiApp({ store });
       const before = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_before", model: "sonnet" });
       const after = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_after", model: "opus" });
-      const setTimestamps = (taskId: string, iso: string) => db!.run(
-        "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-        [iso, iso, iso, iso, taskId],
-      );
-      setTimestamps(before.taskId, "2025-09-07T03:30:00.000Z"); // local 09-06 23:30 — previous day
-      setTimestamps(after.taskId, "2025-09-07T04:30:00.000Z"); // local 09-07 01:30 — the DST day
+      setFixtureTimestamps(before.taskId, "2025-09-07T03:30:00.000Z"); // local 09-06 23:30 — previous day
+      setFixtureTimestamps(after.taskId, "2025-09-07T04:30:00.000Z"); // local 09-07 01:30 — the DST day
 
       const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=1&tz=America/Santiago")).json();
       expect(daily.map((row: any) => row.model)).toEqual(["opus"]);

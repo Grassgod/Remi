@@ -63,6 +63,11 @@ import type {
   ScmSnapshotEventWriteResult,
 } from "@multiremi/scm/types.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
+import { UsageAccountingRepo, type UsageReportInput } from "@multiremi/store/repos/usage-accounting-repo.js";
+import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { afterCommit } from "@multiremi/store/db/postgres.js";
+import { ensureUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
+import type { TaskUsageSnapshot, SetUsagePriceInput, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import {
@@ -711,6 +716,11 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  /** Required cutover gate; call after schema migration and before API/jobs. */
+  ensureUsageAccountingStartup(): void {
+    ensureUsageAccountingStartup(this.db);
   }
 
   getPlatformState() {
@@ -1450,6 +1460,14 @@ runMigrations(this.db);
 
   listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[] {
     return this.agents.listAgents(options);
+  }
+
+  listAgentCompatibilityCandidates(workspaceId: string, options?: { includeArchived?: boolean }): MultiremiAgent[] {
+    return this.agents.listAgentCompatibilityCandidates(workspaceId, options);
+  }
+
+  listAgentSkillSummaries(agents: readonly MultiremiAgent[]): Map<string, MultiremiSkill[]> {
+    return this.agents.listAgentSkillSummaries(agents);
   }
 
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MultiremiWorkspaceMember {
@@ -3565,6 +3583,47 @@ runMigrations(this.db);
     return this.usage.listRuntimeUsage(runtimeId);
   }
 
+  getUsageReport(input: UsageReportInput): UsageReport {
+    return new UsageAccountingRepo(this.ctx).report(input);
+  }
+
+  listUsagePrices(workspaceId: string): UsagePrice[] {
+    return new UsageAccountingRepo(this.ctx).listPrices(workspaceId);
+  }
+
+  setUsagePrice(workspaceId: string, input: SetUsagePriceInput): UsagePrice {
+    return new UsageAccountingRepo(this.ctx).setPrice(workspaceId, input);
+  }
+
+  closeUsagePrice(workspaceId: string, id: string, effectiveTo: string): UsagePrice {
+    return new UsageAccountingRepo(this.ctx).closePrice(workspaceId, id, effectiveTo);
+  }
+
+  reportTaskUsageSnapshot(taskId: string, snapshot: TaskUsageSnapshot, authority?: Parameters<TasksRepo["writeTaskUsageSnapshotFromDaemon"]>[2]): MultiremiTask {
+    const changed = authority ? this.tasks.writeTaskUsageSnapshotFromDaemon(taskId, snapshot, authority) : writeUsageSnapshot(this.ctx.db, taskId, snapshot);
+    const task = this.getTask(taskId)!;
+    if (changed) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:usage", task));
+    return task;
+  }
+
+  getTaskUsageRunRuntime(taskId: string, runId: string): string | null {
+    const row = this.ctx.db.query("SELECT runtime_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(taskId, runId) as { runtime_id: string | null } | null;
+    return row?.runtime_id ?? null;
+  }
+
+  isTaskUsageExecutionAuthorized(taskId: string, runId: string, runtimeId: string): boolean {
+    return !!this.ctx.db.query(`SELECT t.id FROM multiremi_tasks t JOIN multiremi_usage_task_scopes s ON s.task_id=t.id
+      JOIN multiremi_usage_runs r ON r.task_id=t.id AND r.run_id=s.active_run_id
+      WHERE t.id=? AND t.runtime_id=? AND t.status='running' AND s.active_run_id=? AND r.complete=0`).get(taskId, runtimeId, runId);
+  }
+
+  /** Deprecated transport replay check; never a reporting/statistics source. */
+  getLegacyTaskUsageForIngestion(taskId: string): unknown {
+    const row = this.ctx.db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(taskId) as { usage: unknown } | null;
+    return row?.usage ?? null;
+  }
+
+
   listUsageDaily(input: {
     workspaceId?: string | null;
     projectId?: string | null;
@@ -4703,6 +4762,10 @@ runMigrations(this.db);
     return this.sessions.listIssueSessionResults(issueId);
   }
 
+  listActiveTasksForIssue(...args: Parameters<TasksRepo["listActiveTasksForIssue"]>): MultiremiTask[] {
+    return this.tasks.listActiveTasksForIssue(...args);
+  }
+
   listTasksForIssue(issueId: string): MultiremiTask[] {
     return this.tasks.listTasksForIssue(issueId);
   }
@@ -4737,6 +4800,10 @@ runMigrations(this.db);
 
   listProjects(workspaceId?: string | null): MultiremiProject[] {
     return this.projects.listProjects(workspaceId);
+  }
+
+  listProjectSummaries(workspaceId: string): import("./repos/projects-repo.js").ProjectSummary[] {
+    return this.projects.listProjectSummaries(workspaceId);
   }
 
   searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MultiremiProjectSearchResult[]; total: number } {
@@ -5651,8 +5718,8 @@ runMigrations(this.db);
     return this.tasks.listAgentTasks(agentId);
   }
 
-  listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MultiremiTask[] {
-    return this.tasks.listWorkspaceAgentTaskSnapshot(workspaceId);
+  listWorkspaceAgentTaskSnapshot(...args: Parameters<TasksRepo["listWorkspaceAgentTaskSnapshot"]>): MultiremiTask[] {
+    return this.tasks.listWorkspaceAgentTaskSnapshot(...args);
   }
 
   listWorkspaceAgentRunCounts(workspaceId = "local", days = 30): MultiremiAgentRunCount[] {
@@ -5681,12 +5748,12 @@ runMigrations(this.db);
     return this.tasks.requeueTaskOffer(taskId, runtimeId, outcome);
   }
 
-  startTask(taskId: string): MultiremiTask {
-    return this.tasks.startTask(taskId);
+  startTask(taskId: string, usageRunId?: string, expectedRuntimeId?: string): MultiremiTask {
+    return this.tasks.startTask(taskId, usageRunId, expectedRuntimeId);
   }
 
-  startTaskFromDaemon(taskId: string, authority: Parameters<TasksRepo["startTaskFromDaemon"]>[1]): "started" | "replayed" {
-    return this.tasks.startTaskFromDaemon(taskId, authority);
+  startTaskFromDaemon(taskId: string, authority: Parameters<TasksRepo["startTaskFromDaemon"]>[1], usageRunId?: string): "started" | "replayed" {
+    return this.tasks.startTaskFromDaemon(taskId, authority, usageRunId);
   }
 
   completeTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["completeTask"]>[1],

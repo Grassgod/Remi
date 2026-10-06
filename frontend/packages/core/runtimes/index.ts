@@ -9,8 +9,6 @@ export * from "./types";
 export * from "./derive-health";
 export * from "./use-runtime-health";
 export * from "./cli-version";
-export * from "./custom-pricing-store";
-export * from "./usage-diagnostics-store";
 export * from "./cloud-runtime";
 export * from "./provisions";
 // Subpath, never the root barrel: a *value* import from "@multiremi/contracts"

@@ -40,6 +40,8 @@ export function WorkbenchListItem({
 
   return (
     <button
+      data-perf-item="issue"
+      data-perf-key={issue.id}
       type="button"
       onClick={onClick}
       className={`group flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-colors ${

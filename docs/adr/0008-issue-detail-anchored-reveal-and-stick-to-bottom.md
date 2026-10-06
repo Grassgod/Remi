@@ -37,14 +37,23 @@ so the mechanism cannot be owned by the issue timeline component.
 1. **Hide, then position once.** The activity content stays
    `visibility: hidden` (layout preserved, so it can be measured) until five
    gates hold, then a single frame positions the scroll root and reveals it:
-   data ready, list layout settled (for the flat deep-link path, trivially
+   data ready (Issue, sessions and the target log window), list layout settled (for the flat deep-link path, trivially
    true), target position stable for two consecutive animation frames, images
-   inside the viewport complete or `imageWaitMs` elapsed, and the reveal budget
+   without intrinsic dimensions inside the viewport complete or `imageWaitMs` elapsed, and the reveal budget
    not exhausted. The budget is 800 ms by default; the main branch's flat
    deep-link path passes 1500 ms because a 250-comment page mounts every row
    synchronously there. Exhausting the budget still reveals, but publishes
    `data-perf-state="ready-forced"` and warns; CI and S1 treat `ready-forced`
    as a failure, so it is a diagnostic, not a fallback that counts as passing.
+
+   S9-6 (MUL-395) removes the live card's initial reconcile from the data gate.
+   Cached tasks can paint the card shell; `active-task`, subscribers and local
+   directory resources are reconciled after reveal. The card, subscriber control,
+   local hint and running row reserve layout slots before their late content
+   arrives. A running page's measurement endpoint remains the actual visible,
+   stable agent-stream row after reveal; an earlier ready attribute alone is
+   insufficient. Late growth beyond the reserved slot uses the same pin state
+   machine, including released readers and element anchors.
 
 2. **Stick to the bottom after the reveal.** A separate state machine
    (`pinned | released | returning`) compensates for content that arrives
@@ -138,3 +147,15 @@ so the mechanism cannot be owned by the issue timeline component.
 - **C9 redoes the wiring, not the rules.** The gates computed inside
   `issue-activity-section.tsx` are specific to the Virtuoso path and will be
   discarded when the list is replaced.
+
+### S9-6：SSR 首次定位等待侧栏实际宽度
+
+SSR 定位脚本在原有显示偏好门禁之外读取 SidebarProvider 的 `data-sidebar-width-ready`，等本地宽度恢复；展开的桌面侧栏仍在原 CSS 宽度动画中时，按实际 gap 宽度继续等待，再按原揭示契约的两帧稳定门禁等待正文宽度、滚动高度及滚动位置稳定，用最终布局首次定位；不改面板注册。每个日志根最多一个宽度等待帧链；已完成定位的根不重新定位。侧栏 DOM、动画、日志滚动状态机、预算和记录器阈值均未修改。带 seed 的 `detail-long-sidebar::cold` 与普通 CSR 分别验证；正式 SSR 脚本测试覆盖偏好完成但宽度未恢复，以及恢复值已写入而动画未完成两条路径。
+
+### S9-6：流式 SSR 缓冲区中的日志图片
+
+日志正文的图片若未声明 `loading`，在渲染时补 `loading="lazy"`；保留原 URL、尺寸及显式加载偏好。浏览器因此等隐藏的 SSR 缓冲区放入实际页面后才加载图片，避免流式放置前后的重复读取。该处理只作用于 `EntryHtml` 的渲染副本，不改日志数据。原生 Chromium 回归用与 S7 相同的请求路由方式验证：隐藏缓冲区到实际容器的读取由 2 次降为 1 次；容器仍为 `visibility:hidden` 时图片可以完成加载，加载后的自然尺寸一致。撤去处理后同一断言必须失败；S7 继续对整轮全部附件 content 读取执行原有单次门禁。
+
+缺少两个有效正整数 `width` / `height` 的日志图片，在 SSR 输出中增加 `data-entry-image-frame`，静态 CSS 预留宽度不超过 640px、固定高度 240px 的框。`object-fit: scale-down` 保持固有比例且不放大小图片；加载失败的 alt / 破图也留在同一个框内。揭示时无需等这类图片加载，超时、晚到和失败都不能改变行高。完整尺寸的图片保留声明比例。这会让小型无尺寸图片周围留白，换取首屏和元素锚点的稳定性；不适用于编辑器或独立附件预览。
+
+S7 的 `detail-image-late` / `error` / `element` / `sized` / `fast` 使用真实 640×240 PNG 与真实附件接口。晚到、404 和有尺寸对照用首次正常揭示作为 HTTP 条件屏障，不改变 fixture 延迟、预算、收集器、allowlist 或跳动判定。逐轮检查前后图片/行/滚动高度完全一致，scrollTop 和元素锚点位移沿用原 S7 零跳动判定，并保留前后位置观测；整轮 content 只读一次。SSR 与 CSR 分别验证。`element` 为 canonical `?comment` 冷启动，其他四项还覆盖应用内 warm 点击。

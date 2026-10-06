@@ -957,11 +957,72 @@ describe("stub-writes allow-list", () => {
 });
 
 describe("selectors", () => {
+  it("requires fresh real list rows, never a heading or skeleton", () => {
+    const profile = profileFor({ mode: "contract", shape: "list" });
+    expect(profile.rule).toEqual({ kind: "items" });
+    expect(profile.items).toBe('[data-perf-scroll="list"] [data-perf-item]');
+    const empty = { ...view(20), items: [], anchors: [] };
+    const frames = [frame(0, empty), frame(100, view(20)), frame(116, view(32)), frame(616, view(32))];
+    expect(computeFirstRealMs(frames, "contract")).toBe(100);
+    expect(computeReadyWindow(frames, { profile }).readyMs).toBe(116);
+    expect(computeJumps(frames, { profile: "contract", fromMs: 100 }).jumpPx).toBe(12);
+    expect(computeReadyWindow([frame(0, empty), frame(600, empty)], { profile }).readyTimeout).toBe(true);
+    expect(computeReadyWindow([frame(0, view(20, { skeleton: true })), frame(600, view(20, { skeleton: true }))], { profile }).readyTimeout).toBe(true);
+  });
+
+  it("running requires agent-stream even while the latest comment is settled", () => {
+    for (const mode of ["contract", "legacy"] as const) {
+      const profile = profileFor({ mode, shape: "issue-detail", requireAgentStream: true });
+      expect(profile.rule).toEqual({ kind: "anchor", anchors: ["agent-stream"] });
+      const frames = [0, 500, 1000].map(t => ({ t, profiles: { [mode]: view(20) } }));
+      expect(computeReadyWindow(frames, { profile }).readyTimeout).toBe(true);
+      const stream = { ...view(20), anchors: [{ ...view(20).anchors[0]!, name: "agent-stream" }] };
+      const observed = [frame(100, stream), frame(600, stream)];
+      if (mode === "contract") expect(computeReadyWindow(observed, { profile }).anchorName).toBe("agent-stream");
+    }
+    expect(profileFor({ mode: "contract", shape: "chat" }).rule).toEqual({ kind: "anchor", anchors: ["latest-message"] });
+  });
+
+  it("chat waits for the latest message anchor after the heading and older rows", () => {
+    const profile = profileFor({ mode: "contract", shape: "chat" });
+    const olderRows = { ...view(20), anchors: [] };
+    const latest = { ...view(20), anchors: [{ ...view(20).anchors[0]!, name: "latest-message" }] };
+    const result = computeReadyWindow([frame(0, olderRows), frame(300, latest), frame(800, latest)], { profile });
+    expect(result).toMatchObject({ readyMs: 300, anchorVisibleMs: 300, anchorName: "latest-message", readyTimeout: false });
+    expect(computeReadyWindow([frame(0, olderRows), frame(800, olderRows)], { profile }).readyTimeout).toBe(true);
+    const empty = { ...olderRows, items: [] };
+    expect(computeFirstRealMs([frame(0, empty), frame(800, empty)], "contract")).toBeNull();
+    expect(computeReadyWindow([frame(0, empty), frame(800, empty)], { profile }).readyTimeout).toBe(true);
+  });
+
+  it("propagates unobserved movement through computation, persistence, stats and both reports", () => {
+    const computed = computeRoundMeasurement({ mode: "contract", shape: "list", targetCommentId: null,
+      navStartMs: 0, frames: [frame(0, { ...view(10), items: [], anchors: [] })], shifts: [], stateTransitions: [],
+      resources: [], quietMs: 500, profileReady: false });
+    expect(computed.firstRealMs).toBeNull();
+    expect(computed.jumpCount).toBeNull();
+    expect(computed.jumpPx).toBeNull();
+    expect(computed.jumpScrollPx).toBeNull();
+    const round = roundSummary({ ...computed, round: 1, navStartMs: 0, clickT: null, blockedWrites: 0, stubbedWrites: 0 } as RoundMeasurement);
+    expect(JSON.parse(JSON.stringify(round)).jumpCount).toBeNull();
+    const stats = computeScenarioStats([computed]);
+    expect(stats).toMatchObject({ n: 1, jumpObserved: 0, jumpUnobserved: 1, jumpsMax: null, jumpPxMax: null });
+    expect(computeScenarioStats([computed, { ...computed, firstRealMs: 100, jumpCount: 2, jumpPx: 12 }]))
+      .toMatchObject({ n: 2, jumpObserved: 1, jumpUnobserved: 1, jumpsMax: 2, jumpPxMax: 12 });
+    const scenario = { key: "page-projects", mode: "cold" as const, target: { identifier: "projects" }, rule: "real rows", anchorRule: "real-list-row",
+      selectorMode: "contract" as const, skipped: false, skipReason: null, hoverLeadMs: null, rounds: [round], stats: { ...stats, apiByPath: [] } };
+    const report = { meta: { schema: 3 }, scenarios: [scenario], blockedWrites: [] };
+    expect(buildMarkdown(report)).toContain("未观测（0/1）");
+    expect(buildHtml(report)).toContain("未观测（0/1）");
+    const compare = buildCompare(report, report);
+    expect(compare.rows[0]).toMatchObject({ beforeJumpsMax: null, afterJumpsMax: null });
+    expect(compare.markdown).toContain("未观测 → 未观测");
+  });
   it("builds both tables for the same targets", () => {
     expect(issueRowSelector("legacy", "iss_1")).toBe('[data-slot="sidebar-inset"] a[href$="/issues/iss_1"]');
     expect(issueRowSelector("contract", "iss_1")).toBe('[data-perf-item="issue"][data-perf-key="iss_1"] a');
     expect(inboxRowSelector("contract", "inb_1")).toBe(
-      '[data-perf-item="inbox"][data-perf-key="inb_1"] a, [data-perf-item="inbox"][data-perf-key="inb_1"] [role="button"], [data-perf-item="inbox"][data-perf-key="inb_1"]',
+      '[data-perf-item="inbox"][data-perf-key="inb_1"]',
     );
   });
 
@@ -1025,7 +1086,7 @@ describe("selectors", () => {
     expect(profiles.map((profile) => profile.name)).toEqual(["contract", "legacy"]);
     const contract = profiles[0]!;
     const legacy = profiles[1]!;
-    expect(contract.anchors.map((anchor) => anchor.name)).toEqual(["agent-stream", "latest-comment"]);
+    expect(contract.anchors.map((anchor) => anchor.name)).toEqual(["latest-comment"]);
     expect(legacy.anchors.map((anchor) => anchor.name)).toEqual(["latest-comment"]);
   });
 });

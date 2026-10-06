@@ -177,6 +177,19 @@ describe("useAnchoredReveal", () => {
     expect(result.current.state).toBe("ready");
   });
 
+  it.each(["attributes", "aspect-ratio"])("does not wait for an unloaded image with reserved %s dimensions", kind => {
+    const image = document.createElement("img");
+    image.src = "/pending.png";
+    if (kind === "attributes") { image.width = 640; image.height = 480; }
+    else image.style.aspectRatio = "4 / 3";
+    image.getBoundingClientRect = () => fixture.root.getBoundingClientRect();
+    fixture.content.appendChild(image);
+    expect(image.complete).toBe(false);
+    const { result } = renderReveal(baseProps({ dataReady: true }));
+    runFrames(2);
+    expect(result.current.state).toBe("ready");
+  });
+
   it("does not wait for an image outside the viewport", () => {
     const image = document.createElement("img");
     image.setAttribute("src", "/off-screen.png");

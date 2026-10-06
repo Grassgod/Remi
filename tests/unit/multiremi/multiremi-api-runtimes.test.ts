@@ -255,7 +255,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       output_tokens: 5,
       cache_read_tokens: 2,
       cache_write_tokens: 0,
-      total_tokens: 0,
+      total_tokens: 18,
     });
     expect(usageBody[0].runtimeId).toBeUndefined();
     expect(usageBody[0].cacheReadTokens).toBeUndefined();
@@ -269,7 +269,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       output_tokens: 5,
       cache_read_tokens: 2,
       cache_write_tokens: 0,
-      total_tokens: 0,
+      total_tokens: 18,
       task_count: 1,
     });
     expect(byAgentBody[0].agentId).toBeUndefined();
@@ -356,11 +356,8 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(await invalidCompatibilityPatch.json()).toEqual({ error: "visibility must be 'private' or 'public'" });
   });
 
-  // MUL-123: pre-0.2.49 daemons reported only the context-occupancy total, so
-  // historical rows carry `total_tokens` with all four splits at zero. The
-  // dashboard wire has always forwarded it; the runtime wire dropped it, which
-  // made the runtime usage page render "0 tokens" over a non-empty window.
-  it("forwards total-only token history through both runtime usage compatibility mappers", async () => {
+  // A legacy total cannot establish actual consumption or context occupancy.
+  it("retains ambiguous total-only evidence as unknown across runtime and dashboard APIs", async () => {
     const store = createStore();
     store.registerRuntime({ id: "rt_total_only", name: "Legacy runtime", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Legacy agent", provider: "claude", workspaceId: "local" });
@@ -375,39 +372,23 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(report.ok).toBe(true);
 
     const daily = await (await app.request("/api/runtimes/rt_total_only/usage")).json();
-    expect(daily).toHaveLength(1);
-    expect(daily[0]).toEqual({
-      runtime_id: "rt_total_only",
-      date: expect.any(String),
-      provider: "claude",
-      model: "opus",
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      total_tokens: 78048,
-    });
-    expect(daily[0].totalTokens).toBeUndefined();
+    expect(daily).toEqual([]);
 
     const byAgent = await (await app.request("/api/runtimes/rt_total_only/usage/by-agent")).json();
-    expect(byAgent).toEqual([{
-      agent_id: agent.id,
-      model: "opus",
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      total_tokens: 78048,
-      task_count: 1,
-    }]);
-    expect(byAgent[0].totalTokens).toBeUndefined();
+    expect(byAgent).toEqual([]);
 
     // The runtime endpoints must agree with the dashboard endpoints that read
     // the very same `listUsageDaily` / `listUsageByAgent` rollups.
     const dashboardDaily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local")).json();
-    expect(dashboardDaily[0].total_tokens).toBe(daily[0].total_tokens);
+    expect(dashboardDaily).toEqual([]);
     const dashboardByAgent = await (await app.request("/api/dashboard/usage/by-agent?workspace_id=local")).json();
-    expect(dashboardByAgent[0].total_tokens).toBe(byAgent[0].total_tokens);
+    expect(dashboardByAgent).toEqual([]);
+    const canonical = await (await app.request("/api/usage/report?workspace_id=local&runtime_id=rt_total_only&days=all")).json();
+    expect(canonical.summary).toMatchObject({ actual_total_tokens: 0, unknown_task_count: 1, context_peak_tokens: null, complete: false });
+    expect(canonical.by_model).toContainEqual(expect.objectContaining({ model: null, requested_model: "opus", model_source: "requested" }));
+    expect(db!.query("SELECT reported_total_tokens,input_tokens,output_tokens,actual_unsplit_tokens,context_tokens FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({
+      reported_total_tokens: 78048, input_tokens: null, output_tokens: null, actual_unsplit_tokens: null, context_tokens: null,
+    });
   });
 
   it("forwards total_tokens alongside splits when a modern daemon reports both", async () => {

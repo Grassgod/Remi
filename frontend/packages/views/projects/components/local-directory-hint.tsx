@@ -23,15 +23,19 @@ import { useT } from "../../i18n";
  */
 export function LocalDirectoryHint({
   projectId,
+  enabled = true,
+  reserveSlot = false,
 }: {
   projectId: string | null | undefined;
+  enabled?: boolean;
+  reserveSlot?: boolean;
 }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const daemon = useLocalDaemonStatus();
   const { data: resources = [] } = useQuery({
     ...projectResourcesOptions(wsId, projectId ?? ""),
-    enabled: Boolean(projectId),
+    enabled: enabled && Boolean(projectId) && Boolean(daemon.daemonId),
   });
 
   if (!projectId) return null;
@@ -45,10 +49,10 @@ export function LocalDirectoryHint({
       )
       .filter((r) => r.resource_ref.daemon_id === daemon.daemonId);
 
-  if (matches.length === 0) return null;
+  if (matches.length === 0) return reserveSlot ? <div className="mt-3 h-12" aria-hidden="true" /> : null;
 
   return (
-    <div className="mt-3 space-y-1 rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+    <div className={`${reserveSlot ? "h-12 overflow-y-auto" : ""} mt-3 space-y-1 rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground`}>
       {matches.map((resource) => {
         const ref = resource.resource_ref;
         const label = (ref.label || resource.label || ref.local_path).trim() ||

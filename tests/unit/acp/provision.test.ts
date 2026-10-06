@@ -7,6 +7,7 @@ import {
   bridgeVersion,
   bridgeSatisfied,
   patchCodexUsageBridge,
+  patchClaudeUsageBridge,
   BRIDGE_PIN,
   CODEX_USAGE_PATCH,
   RUNTIME_PIN,
@@ -39,16 +40,23 @@ function writeBridgePackage(home: string, pkg: string, version: string): string 
   const pkgDir = join(home, "acp", "node_modules", ...pkg.split("/"));
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: pkg, version }));
+  if (pkg.endsWith("claude-agent-acp")) {
+    mkdirSync(join(pkgDir, "dist"), { recursive: true });
+    writeFileSync(join(pkgDir, "dist", "acp-agent.js"), "                if (session.emitRawSDKMessages && true) {}\n");
+    patchClaudeUsageBridge(() => {}, pkgDir);
+  }
   return pkgDir;
 }
 
-function writeCodexDist(pkgDir: string, source = `  createUsageUpdate() {
+function writeCodexDist(pkgDir: string, source = `  async createUpdateEvent(notification) { return null; }
+  createUsageUpdate(params) {
     return {
       sessionUpdate: "usage_update",
       used,
       size
     };
   }
+  handleRateLimitsUpdated(params) {}
 `): string {
   const dist = join(pkgDir, "dist", "index.js");
   mkdirSync(join(pkgDir, "dist"), { recursive: true });
@@ -138,7 +146,7 @@ test("preflight preserves the old Codex launcher until normal daemon startup act
   expect(readlinkSync(launcher)).toBe(dist);
 });
 
-test("codex usage patch is idempotent and carries the complete last-request split", () => {
+test("codex usage patch is idempotent and carries cumulative consumption separately from context", () => {
   const home = freshHome();
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
   const dist = writeCodexDist(pkgDir);
@@ -150,7 +158,7 @@ test("codex usage patch is idempotent and carries the complete last-request spli
   const once = readFileSync(dist, "utf8");
   expect(once).toContain(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH}";`);
   expect(once).toContain("remiTokenUsage");
-  expect(once).toContain("cachedInputTokens: this.sessionState.lastTokenUsage.cachedInputTokens");
+  expect(once).toContain("cumulative: current");
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
   expect(readFileSync(dist, "utf8")).toBe(once);
   expect(once.match(/remiTokenUsage/g)).toHaveLength(1);
