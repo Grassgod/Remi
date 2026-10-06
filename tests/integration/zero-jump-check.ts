@@ -192,6 +192,7 @@ interface Scenario {
   sidebarWidth: string | null;
   /** The issue the warm click must select; the deep link's `/inbox` click sets it. */
   expectIssueId: string | null;
+  seededParentIssueId?: string;
 }
 
 function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: ImageCase[] = []): Scenario[] {
@@ -228,10 +229,16 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
         path: `/issues/${imageCase.issueId}?comment=${imageCase.commentId}`, targetCommentId: imageCase.commentId,
       } : {}),
     }).filter(scenario => imageCase.kind !== "element" || scenario.mode === "cold")),
-    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-child") ? detail("detail-child", fixture.waitingChildIssueId, {
+      seededParentIssueId: fixture.parentIssueId,
+    }).filter(scenario => scenario.mode === "cold") : []),
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
       path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
+      targetCommentId: fixture.deepLinkCommentId,
+    }).filter(scenario => scenario.mode === "cold") : []),
+    ...(options.only.includes("detail-locate-default") ? detail("detail-locate-default", fixture.longIssueId, {
+      path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}`,
       targetCommentId: fixture.deepLinkCommentId,
     }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
@@ -297,6 +304,7 @@ interface RoundResult extends RenderMeasurement {
   logSingleRowReads: number;
   logRequests: Array<{ query: string; startMs: number; responseEndMs: number }>;
   ssrSeed: boolean;
+  ssrSeedRereads: Array<{ path: string; query: string }>;
   key: string;
   mode: string;
   round: number;
@@ -325,6 +333,28 @@ interface RoundResult extends RenderMeasurement {
   /** True when the browser's first inbox page had the deep-link target injected. */
   inboxInjected: boolean;
   error: string | null;
+}
+
+/** Only reads already supplied by the Issue SSR bootstrap are redundant. */
+function findSsrSeedRereads(input: {
+  ssrSeed: boolean;
+  workspaceId: string;
+  issueId: string;
+  parentIssueId?: string;
+  sessionId: string | null;
+  requests: Array<{ path: string; query: string }>;
+}): Array<{ path: string; query: string }> {
+  if (!input.ssrSeed) return [];
+  const issuePath = `/api/issues/${encodeURIComponent(input.issueId)}`;
+  const seededPaths = new Set([
+    issuePath, `${issuePath}/sessions`, `${issuePath}/children`, `${issuePath}/task-runs`,
+    `/api/workspaces/${encodeURIComponent(input.workspaceId)}/members`,
+    ...(input.parentIssueId ? [`/api/issues/${encodeURIComponent(input.parentIssueId)}`] : []),
+  ]);
+  return input.requests.filter(request => seededPaths.has(request.path)
+    || (request.path === `/api/sessions/${input.sessionId}/log`
+      && new URLSearchParams(request.query).get("before") === "1"))
+    .map(({ path, query }) => ({ path, query }));
 }
 
 /** Which structural assertions this round violated. */
@@ -457,6 +487,7 @@ async function runRound(input: {
   webOrigin: string;
   apiOrigin: string;
   slug: string;
+  workspaceId: string;
   scenario: Scenario;
   round: number;
   ssrCookie: boolean;
@@ -480,6 +511,7 @@ async function runRound(input: {
     logSingleRowReads: 0,
     logRequests: [],
     ssrSeed: false,
+    ssrSeedRereads: [],
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -508,6 +540,9 @@ async function runRound(input: {
 
   const ssrCookie = input.ssrCookie && !scenario.taskCacheEmpty;
   const context: BrowserContext = await mktContext(browser, token, [], webOrigin, ssrCookie);
+  // Fulfilled documents have no server IP for Chromium's address-space check.
+  // Permit this local origin's WS handshake while the CSR probe strips cookies.
+  if (!ssrCookie) await context.grantPermissions(["local-network-access"], { origin: webOrigin });
   if (!ssrCookie) await context.route("**/*", async route => {
     const request = route.request();
     if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
@@ -651,7 +686,7 @@ async function runRound(input: {
       if (result.hubAckSeen && pendingApi.size === 0 && performance.now() - Math.max(lastApiChange, lastHubChange) >= 500) { result.settled = true; break; }
       await page.waitForTimeout(50);
     }
-    if (!result.settled) result.error = "deferred API / Hub phase did not settle";
+    if (!result.settled) result.error = `deferred API / Hub phase did not settle (ack=${result.hubAckSeen}, pending=${pendingApi.size})`;
   } catch (error) {
     result.error = (error as Error).message.split("\n")[0] ?? String(error);
   }
@@ -681,6 +716,14 @@ async function runRound(input: {
       return { query: query.toString(), startMs: entry.startTime, responseEndMs: entry.responseEnd };
     }));
   const targetSessionId = await page.locator('[data-perf-scroll="issue-detail"]').first().getAttribute("data-session-log-id").catch(() => null);
+  result.ssrSeedRereads = findSsrSeedRereads({
+    ssrSeed: result.ssrSeed,
+    workspaceId: input.workspaceId,
+    issueId: scenario.expectIssueId ?? "",
+    parentIssueId: scenario.seededParentIssueId,
+    sessionId: targetSessionId,
+    requests: result.requests,
+  });
   Object.assign(result, measureLogRender({ navStartMs, ssrSeed: result.ssrSeed, states: buffer?.stateTransitions ?? [],
     windows: result.requests.filter(request => request.path === `/api/sessions/${targetSessionId}/log`).filter(request => { const query = new URLSearchParams(request.query); return Number(query.get("before")) > 1 || Number(query.get("after")) > 1; }) }));
   result.logSingleRowReads = result.logRequests.filter(request => {
@@ -748,6 +791,9 @@ async function runRound(input: {
   const filledCard = result.cardSamples?.find(sample => sample.textLength > 0);
   if (observeImage) result.imageObservation = await observeImage().catch(() => undefined);
   const failures = [
+    scenario.entry === "issues-list" && scenario.mode === "cold" && result.ssrSeed !== ssrCookie
+      ? `expected ${ssrCookie ? "SSR seed" : "CSR fallback"}` : null,
+    result.ssrSeedRereads.length ? `SSR seed rereads: ${JSON.stringify(result.ssrSeedRereads)}` : null,
     scenario.imageCase ? result.imageObservation ? imageObservationFailure(result.imageObservation) : "image observation missing" : null,
     scenario.taskCacheEmpty && (!emptyCard || !filledCard || filledCard.contentHeight <= 0 || emptyCard.height !== filledCard.height
       || (emptyCard.anchorTop !== null && filledCard.anchorTop !== null && Math.abs(emptyCard.anchorTop - filledCard.anchorTop) > .5))
@@ -927,6 +973,7 @@ async function main(): Promise<void> {
         webOrigin,
         apiOrigin: `http://127.0.0.1:${apiPort}`,
         slug: fixture.workspaceSlug,
+        workspaceId: fixture.workspaceId,
         scenario,
         round,
         ssrCookie: options.ssrCookie,
@@ -1018,7 +1065,7 @@ function writeFixtureImages(uploadDir: string, fixture: ZeroJumpFixture): void {
   process.env.MULTIREMI_UPLOAD_DIR = uploadDir;
 }
 
-export { violationsForRound, groupResults, buildScenarios, type RoundResult, type Scenario };
+export { violationsForRound, groupResults, buildScenarios, findSsrSeedRereads, type RoundResult, type Scenario };
 
 if (import.meta.main) {
   const keepOpen = process.argv.includes("--keep");

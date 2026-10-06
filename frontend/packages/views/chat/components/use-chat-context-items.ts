@@ -77,10 +77,9 @@ export function parseCurrentContextRoute(pathname: string, searchParams: URLSear
 export function useChatContextItems(
   wsId: string,
   /**
-   * MUL-472 b: `false` while the chat window is minimised. The current-route
-   * context stays (it is how an @-mention finds the issue you are reading),
-   * but the recent-entry hydration — up to 8 detail requests, one per recent
-   * issue/project — waits until the window is actually open.
+   * `false` while the chat window is minimised. Cached current-route context
+   * stays available, but all lookups wait until it opens so the shell cannot
+   * race the page's SSR seed during hydration.
    */
   recentsEnabled = true,
 ): MentionItem[] {
@@ -94,12 +93,12 @@ export function useChatContextItems(
 
   const { data: currentIssue } = useQuery({
     ...issueDetailOptions(wsId, currentRoute?.type === "issue" ? currentRoute.id : ""),
-    enabled: currentRoute?.type === "issue",
+    enabled: recentsEnabled && currentRoute?.type === "issue",
   });
 
   const { data: currentProject } = useQuery({
     ...projectDetailOptions(wsId, currentRoute?.type === "project" ? currentRoute.id : ""),
-    enabled: currentRoute?.type === "project",
+    enabled: recentsEnabled && currentRoute?.type === "project",
   });
 
   const recentQueries = useQueries({

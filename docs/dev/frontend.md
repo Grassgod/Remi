@@ -42,6 +42,8 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
 
+搜索面板关闭时不读取成员或当前 Issue；打开后复用缓存，缺数据才读取。浮动 Chat 的当前上下文和成员查询同时等待主页面首屏就绪，避免新浏览器默认打开 Chat 时在详情页 SSR 缓存边界之外抢先发出补读；独立 Chat 页面仍立即读取。详情、父 Issue、成员、会话、子 Issue 和任务列表沿用既有缓存失效与实时更新策略，无 SSR seed 时仍由客户端获取主页面数据。
+
 ## 一次任务读取与更新
 
 ```text
