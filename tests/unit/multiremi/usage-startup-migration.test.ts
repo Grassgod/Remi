@@ -133,12 +133,14 @@ describe("automatic scalar usage cutover", () => {
 
   it("never replaces evidence-verified recovered facts with changed legacy JSON", async () => {
     const { tasks } = fixture();
-    migrateLegacyUsage(db!);
+    await prepareUsageAccountingStartup(db!);
+    expect(marker()).not.toBeNull();
     writeUsageSnapshot(db!, tasks[0]!.id, live("historical-evidence-v2"), { historical: true });
     const before = db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all();
     db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
-    await prepareUsageAccountingStartup(db!);
+    await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after historical reconciliation");
     expect(db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all()).toEqual(before);
+    expect(marker()).toBeNull();
   });
 
   it("rechecks a source changed after the final batch and before the readiness marker", async () => {
@@ -174,19 +176,69 @@ describe("automatic scalar usage cutover", () => {
     expect(db!.query("SELECT count(*) AS n FROM multiremi_usage_legacy_versions WHERE task_id=?").get(tasks[0]!.id)).toEqual({ n: 2 });
   });
 
-  it("unchanged ready startup reads only its marker", async () => {
+  it("unchanged ready startup checks pending IDs without fetching source JSON", async () => {
     fixture();
     await prepareUsageAccountingStartup(db!);
     const originalQuery = db!.query.bind(db!);
     const proxy = new Proxy(db!, { get(target, key) {
       if (key === "query") return (sql: string) => {
-        if (!sql.includes("multiremi_schema_migrations")) throw new Error("Ready startup scanned history");
+        if (!sql.includes("multiremi_schema_migrations") && !sql.startsWith("SELECT t.id FROM multiremi_tasks")) throw new Error("Ready startup fetched source payloads");
         return originalQuery(sql);
       };
       const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
     } });
     await prepareUsageAccountingStartup(proxy);
     ensureUsageAccountingStartup(proxy);
+  });
+
+  it("ready startup refreshes old-writer changes but does not synthesize legacy runs for v2-only tasks", async () => {
+    const { store, tasks } = fixture();
+    await prepareUsageAccountingStartup(db!);
+    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 20, outputTokens: 0 }]), tasks[0]!.id]);
+    await prepareUsageAccountingStartup(db!);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(20);
+    for (const source of ["[]"]) {
+      const task = store.createTask({ agentId: tasks[0]!.agentId, prompt: "new protocol", workspaceId: "local" });
+      db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [source, task.id]);
+      writeUsageSnapshot(db!, task.id, live("new-v2-only"));
+      const before = store.getUsageReport({ workspaceId: "local", days: null }).summary;
+      await prepareUsageAccountingStartup(db!);
+      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([{ run_id: "new-v2-only" }]);
+      expect(db!.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toBeNull();
+      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toEqual(before);
+      db!.run("UPDATE multiremi_tasks SET completed_at='2026-10-03T00:00:00Z',status='completed' WHERE id=?", [task.id]);
+      ensureUsageAccountingStartup(db!);
+      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([{ run_id: "new-v2-only" }]);
+    }
+  });
+
+  it("audits a never-executed queued task without a phantom run across restart before its complete v2 usage", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "not yet executed", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "queued across restart", workspaceId: "local" });
+    await prepareUsageAccountingStartup(db!);
+    expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_audit WHERE task_id=?").get(task.id)).toEqual({ original_usage: "[]" });
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([]);
+    await prepareUsageAccountingStartup(db!);
+    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    const observed = live("first-real-run");
+    observed.units[0] = { ...observed.units[0]!, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" };
+    writeUsageSnapshot(db!, task.id, observed);
+    await prepareUsageAccountingStartup(db!);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 0, complete: true });
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([{ run_id: "first-real-run" }]);
+  });
+
+  it("preserves missing-consumption evidence for an empty queued retry with prior execution", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "retry", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "prior execution unknown", workspaceId: "local" });
+    db!.run("UPDATE multiremi_tasks SET attempt=2 WHERE id=?", [task.id]);
+    await prepareUsageAccountingStartup(db!);
+    writeUsageSnapshot(db!, task.id, live("retry-known"));
+    await prepareUsageAccountingStartup(db!);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 1, complete: false });
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(task.id)).toEqual([{ run_id: "legacy" }, { run_id: "retry-known" }]);
   });
 
   it("a failed scalar transaction cannot establish readiness and retries cleanly", async () => {

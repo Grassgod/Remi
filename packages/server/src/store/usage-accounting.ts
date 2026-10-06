@@ -6,6 +6,7 @@ type Row = Record<string, unknown>;
 export class UsageValidationError extends Error {}
 export class UsageAccountingNotReadyError extends Error {}
 export const USAGE_CUTOVER_MARKER = "20261006_usage_accounting_v2";
+export const USAGE_STARTUP_CUTOVER_MARKER = "20261006_usage_accounting_startup_v1";
 export interface UsageScopeEvidence { id: string | null; provenance: string; }
 export interface UsageWriteOptions { historical?: boolean; runtimeScope?: UsageScopeEvidence; projectScope?: UsageScopeEvidence; identityLocksHeld?: boolean; }
 const UNIT_FIELDS = ["provider", "model", "model_source", "purpose", "requested_model", "connection_id", "provider_session_id", "provider_request_id", "provider_observation_id", "identity_kind", "meter_evidence", "time_provenance", "scope", "source", "accuracy", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "context_tokens", "context_window", "cost_amount", "cost_currency", "cost_source", "cost_coverage_expected_count", "cost_coverage_sha256", "occurred_at", "evidence_ref"];
@@ -506,10 +507,23 @@ export function ensureLegacyUsageMigrationSchema(db: SqlDatabase): void {
 }
 
 const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t.started_at,t.dispatched_at,t.updated_at,t.created_at)";
-const LEGACY_PENDING = `(s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
+// New protocol executions do not write the deprecated JSON column. A missing
+// checkpoint (or a changed lifecycle timestamp) for their null source must not
+// manufacture an empty legacy run and downgrade established consumption.
+const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR NOT EXISTS (
+  SELECT 1 FROM multiremi_usage_runs modern WHERE modern.task_id=t.id AND modern.run_id NOT IN ('legacy','historical-evidence-v2')))`;
+const LEGACY_PENDING = `${LEGACY_SOURCE_EXISTS} AND (s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
 
 export function hasPendingLegacyUsage(db: SqlDatabase): boolean {
   return Boolean(db.query(`SELECT t.id FROM multiremi_tasks t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING} LIMIT 1`).get());
+}
+
+/** Deprecated aggregates cannot establish independence from reviewed native evidence. */
+export function hasProtectedHistoricalUsage(db: SqlDatabase, taskId: string): boolean {
+  return Boolean(db.query(`SELECT unit_id FROM multiremi_usage_units WHERE task_id=?
+    AND (run_id='historical-evidence-v2' OR (run_id='legacy' AND source<>'legacy_task'))
+    AND (COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(cache_write_tokens,0)+COALESCE(actual_unsplit_tokens,0)>0
+      OR (cost_amount>0 AND cost_source='provider_reported')) LIMIT 1`).get(taskId));
 }
 
 /** Bounded backfill. Immutable originals and every observed source version survive retries. */
@@ -527,9 +541,10 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
     WHERE ${keyset ? "t.id > ?" : LEGACY_PENDING} ORDER BY t.id LIMIT ?`).all(...(keyset ? [options.afterTaskId, batchSize] : [batchSize])) as Row[];
   let migrated = 0;
   for (const selected of rows) {
+    let rejectedHistoricalSource = false;
     const migrateTask = db.transaction(() => {
       // Read the current source AFTER taking the task lock, never a stale batch payload.
-      const row = db.query(`SELECT t.id,t.usage,${LEGACY_OCCURRED_AT} AS occurred_at FROM multiremi_tasks t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
+      const row = db.query(`SELECT t.id,t.usage,t.status,t.attempt,t.dispatched_at,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,${LEGACY_OCCURRED_AT} AS occurred_at FROM multiremi_tasks t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
       if (!row) return 0;
       const state = db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(row.id) as Row | null;
       const runs = db.query("SELECT run_id,revision FROM multiremi_usage_runs WHERE task_id=?").all(row.id) as Row[];
@@ -538,23 +553,52 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       // proves neither overlap nor complete coverage of the old aggregate.
       // Only reviewed identity-based reconciliation may retire that evidence.
       if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return 0;
+      if ((row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
+        && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")) return 0;
       const timestamp = new Date().toISOString();
       db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);
       const original = db.query("SELECT original_usage,migrated_at FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row;
       db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,0,?,?,?) ON CONFLICT(task_id,source_version) DO NOTHING",
         [row.id, original.original_usage, null, original.migrated_at]);
-      const version = state ? Number(state.source_version) + 1 : 1;
-      const protectedRun = runs.some(run => run.run_id === "historical-evidence-v2"
-        || (run.run_id === "legacy" && Number(run.revision) !== Number(state?.source_version ?? 0)));
-      if (!protectedRun && !protectedUnit) {
+      if (hasProtectedHistoricalUsage(db, String(row.id))) {
+        // Commit the newly observed raw source to audit, but leave its consumed
+        // checkpoint and all canonical facts untouched. Throw AFTER commit:
+        // throwing inside this transaction would erase the conflict evidence.
+        const latest = db.query(`SELECT source_version,original_usage,source_occurred_at FROM multiremi_usage_legacy_versions
+          WHERE task_id=? ORDER BY source_version DESC LIMIT 1`).get(row.id) as Row;
+        if (latest.original_usage !== (row.usage ?? null) || latest.source_occurred_at !== row.occurred_at) {
+          db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,?,?,?,?)",
+            [row.id, Number(latest.source_version) + 1, row.usage ?? null, row.occurred_at, timestamp]);
+        }
+        // An earlier ready marker must not survive detection of source drift.
+        db.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)", [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]);
+        rejectedHistoricalSource = true;
+        return 0;
+      }
+      const lastVersion = db.query("SELECT MAX(source_version) AS version FROM multiremi_usage_legacy_versions WHERE task_id=?").get(row.id) as Row;
+      const version = Math.max(Number(state?.source_version ?? 0), Number(lastVersion.version ?? 0)) + 1;
+      {
         // Replace only the provisional legacy aggregate, including removed entries.
-        db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'", [row.id]);
-        db.run("DELETE FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id='legacy'", [row.id]);
-        db.run("DELETE FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'", [row.id]);
+        db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source='legacy_task'", [row.id]);
+        if (!protectedUnit) {
+          db.run("DELETE FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id='legacy'", [row.id]);
+          db.run("DELETE FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'", [row.id]);
+        }
         const snapshot = legacyUsageSnapshot(String(row.id), row.usage, String(row.occurred_at));
-        snapshot.revision = version;
-        for (const unit of snapshot.units) unit.revision = version;
-        writeUsageSnapshot(db, String(row.id), snapshot, { historical: true });
+        const floor = Number((db.query("SELECT MAX(revision) AS revision FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id='legacy'").get(row.id) as Row).revision ?? 0);
+        snapshot.revision = Math.max(version, floor + 1);
+        for (const unit of snapshot.units) {
+          // Preserve diagnostic native units even when an old legacy ID collides.
+          if (db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND unit_id=? AND source<>'legacy_task'").get(row.id, unit.unitId)) unit.unitId = `legacy-aggregate:${unit.unitId}`;
+          unit.revision = snapshot.revision;
+        }
+        const neverExecuted = row.status === "queued" && Number(row.attempt) <= 1
+          && [row.dispatched_at, row.started_at, row.completed_at, row.failed_at, row.cancelled_at].every(value => value == null)
+          && runs.every(run => run.run_id === "legacy");
+        // A queued first attempt with no execution evidence has no missing
+        // consumption to represent. Audit its empty old source, without a
+        // phantom legacy run that would make its future v2 facts incomplete.
+        if (snapshot.units.length || !neverExecuted || protectedUnit) writeUsageSnapshot(db, String(row.id), snapshot, { historical: true });
       }
       db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,?,?,?,?)", [row.id, version, row.usage ?? null, row.occurred_at, timestamp]);
       db.run(`INSERT INTO multiremi_usage_legacy_sources(task_id,source_version,source_usage,source_occurred_at) VALUES(?,?,?,?)
@@ -562,6 +606,7 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       return 1;
     });
     migrated += (migrateTask as typeof migrateTask & { immediate?: () => number }).immediate?.() ?? migrateTask();
+    if (rejectedHistoricalSource) throw new UsageValidationError("Legacy usage changed after historical reconciliation; stop legacy writers and provide reviewed source evidence before resuming migration");
   }
   const lastTaskId = rows.length ? String(rows[rows.length - 1]!.id) : options.afterTaskId;
   // Internal keyset passes need only know whether another bounded batch exists;

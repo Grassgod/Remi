@@ -4,6 +4,7 @@ import { legacyUsageSnapshot, lockUsageIdentities, validateUsageSnapshot, writeU
 import { markRequestReadCacheLockTaken } from "../packages/server/src/store/request-read-cache.js";
 import type { ReconcileUsagePlan } from "./reconcile-task-usage.js";
 import { unitActualTotal } from "../packages/acp/src/usage-collector.js";
+import { readUsageRevisionState, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
 
 export const usagePlanChecksum = (plan: ReconcileUsagePlan) => createHash("sha256").update(JSON.stringify(plan)).digest("hex");
 const coverageCommitment = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"][number]) => ({
@@ -27,6 +28,8 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
   for (const item of plan.tasks) {
     if (seen.has(item.taskId) || item.snapshot.runId !== "historical-evidence-v2" || typeof item.supersedeLegacyRun !== "boolean"
       || !/^[a-f0-9]{64}$/.test(item.expectedLegacyUsageSha256)) throw new Error("Invalid reconciliation task");
+    if (item.expectedRevisionStateSha256 !== undefined && (!/^[a-f0-9]{64}$/.test(item.expectedRevisionStateSha256)
+      || !Number.isSafeInteger(item.legacyRevision) || item.legacyRevision! < 1 || item.legacyRevision! > 2_147_483_647)) throw new Error("Invalid reconciliation revision state");
     seen.add(item.taskId);
     const ids = new Set(item.snapshot.units.map(unit => unit.unitId));
     if (ids.size !== item.snapshot.units.length || item.snapshot.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0) !== item.actualTokens) throw new Error("Reconciliation totals or identities do not match");
@@ -75,6 +78,11 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
       if (live) throw new Error(`Historical cohort changed: modern live usage exists for ${item.taskId}`);
       const legacy = legacyUsageSnapshot(item.taskId, task.usage, task.occurred_at);
       if (legacy.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0) !== item.legacyKnownTokens) throw new Error(`Legacy evidence total changed: ${item.taskId}`);
+      const revisionState = readUsageRevisionState(db, item.taskId);
+      if (item.legacyRevision !== undefined) {
+        legacy.revision = item.legacyRevision;
+        for (const unit of legacy.units) unit.revision = item.legacyRevision;
+      }
       const originalUnits = db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? AND run_id IN ('legacy','historical-evidence-v2') ORDER BY run_id,unit_id").all(item.taskId) as Record<string, any>[];
       const originalRuns = db.query("SELECT * FROM multiremi_usage_runs WHERE task_id=? AND run_id IN ('legacy','historical-evidence-v2') ORDER BY run_id").all(item.taskId);
       const originalCoverage = db.query("SELECT * FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id IN ('legacy','historical-evidence-v2') ORDER BY run_id,monetary_unit_id,covered_unit_id").all(item.taskId) as Record<string, any>[];
@@ -103,6 +111,12 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
           || (Number(row.cost_coverage_complete) === 1 && coverage!.count !== null && (next.coveredUnitIds?.length ?? 0) !== coverage!.count)) {
           throw new Error(`Recovery plan would downgrade established evidence: ${item.taskId}`);
         }
+      }
+      if (item.expectedRevisionStateSha256 !== undefined && usageRevisionStateSha256(revisionState) !== item.expectedRevisionStateSha256) {
+        throw new Error(`Usage revision watermarks changed after plan; regenerate reviewed plan: ${item.taskId}`);
+      }
+      if (item.expectedRevisionStateSha256 === undefined && revisionState.receipts.some(row => row.run_id === "historical-evidence-v2")) {
+        throw new Error(`Recovery plan predates persisted revision watermarks; regenerate reviewed plan: ${item.taskId}`);
       }
       // Partial evidence stays separate from a known aggregate. Rebuilding a
       // verified superset preserves identities and audits the preceding facts.

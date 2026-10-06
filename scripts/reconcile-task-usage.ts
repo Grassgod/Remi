@@ -12,6 +12,7 @@ import { applyUsageReconciliation, verifyUsageReconciliation } from "./usage-rec
 import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/server/src/store/usage-accounting.js";
 import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, type HistoricalTaskBoundary } from "./usage-evidence.js";
 import { readLegacyUsageMembers } from "./legacy-usage-archive.js";
+import { nextUsageRevision, readPlanUsageRevisionStates, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
 
 interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 interface Archive { id: string; relative_path: string; subject_kind: string; subject_id: string; format: string; }
@@ -31,6 +32,7 @@ export interface ReconcileUsagePlan {
   counts: { tasks: number; rawEvents: number; archives: number; nativeMembers: number; rejected: number; replayed: number; ambiguousRawEvents: number; ambiguousTaskEvents: number; archiveReadFailures: number; bytesRead: number };
   tasks: Array<{ taskId: string; expectedLegacyUsageSha256: string; supersedeLegacyRun: boolean; snapshot: TaskUsageSnapshot; actualTokens: number; source: "native" | "raw" | "context_only";
     coverage: "partial" | "none"; legacyKnownTokens: number; countedActualTokens: number; knownDeltaTokens: number; ambiguousRawEvents: number; unrecoverableReason: string | null;
+    expectedRevisionStateSha256?: string; legacyRevision?: number;
     attributionEvidence?: Array<{ reason: "missing_request_namespace" | "competing_request_owners"; unit: TaskUsageUnit; competingTaskIds: string[] }> }>;
   limitations: string[];
   excludedTasks?: Array<{ taskId: string; reason: "modern_live_usage" | "nonterminal_task" }>;
@@ -222,6 +224,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
     if (!claims.some(value => value.taskId === taskId && value.connectionId === connectionId && value.unit.unitId === unit.unitId)) claims.push({ taskId, connectionId, unit });
     ownership.set(key, claims);
   };
+  const revisionStates = await readPlanUsageRevisionStates(sql);
   for (const [taskId, target] of byTask) {
     for (const unit of target.native.size ? target.native.values() : target.raw.values()) claim(target.task.workspace_id, taskId, unit);
   }
@@ -269,9 +272,12 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
     }
     const context = target.context;
     const units = [...actual, ...diagnostics, ...(context ? [context] : [])];
+    const revisionState = revisionStates.get(taskId) ?? { receipts: [], units: [], runs: [] };
+    for (const unit of units) unit.revision = nextUsageRevision(revisionState, "historical-evidence-v2", unit.unitId);
     const actualTokens = actual.reduce((sum, u) => sum + unitActualTotal(u), 0);
     const legacyKnownTokens = legacyUsageSnapshot(taskId, target.task.usage, plan.generatedAt).units.reduce((sum, unit) => sum + unitActualTotal(unit), 0);
     plan.tasks.push({ taskId, expectedLegacyUsageSha256: createHash("sha256").update(target.task.usage ?? "").digest("hex"),
+      expectedRevisionStateSha256: usageRevisionStateSha256(revisionState), legacyRevision: nextUsageRevision(revisionState, "legacy"),
       supersedeLegacyRun: actualTokens > 0 && legacyKnownTokens === 0, countedActualTokens: legacyKnownTokens === 0 ? actualTokens : 0,
       source: target.native.size ? "native" : evidenceUnits.length ? "raw" : "context_only",
       coverage: actual.length ? "partial" : "none", legacyKnownTokens, knownDeltaTokens: actualTokens > 0 ? actualTokens - legacyKnownTokens : 0,
@@ -279,7 +285,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       unrecoverableReason: actual.length ? (legacyKnownTokens > 0 ? "partial_evidence_legacy_preserved" : "partial_request_coverage")
         : attributionEvidence.some(e => e.reason === "competing_request_owners") ? "competing_request_owners"
         : attributionEvidence.length ? "missing_request_namespace" : context ? "context_only_no_request_evidence" : "no_request_evidence",
-      attributionEvidence, snapshot: { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false, units }, actualTokens });
+      attributionEvidence, snapshot: { version: 2, runId: "historical-evidence-v2", revision: nextUsageRevision(revisionState, "historical-evidence-v2"), complete: false, units }, actualTokens });
   }
   return plan;
 }

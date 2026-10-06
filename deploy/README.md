@@ -48,7 +48,13 @@ and each bounded batch. It does not hold the global schema lock while migrating
 data. SQLite uses immediate per-task writer transactions. The final readiness
 check and marker share one transaction; PostgreSQL briefly locks task/run tables
 against writes during that final check. Empty databases pass this gate too.
-Subsequent ready startups only check the startup marker and do not scan history.
+Subsequent ready startups check the marker and query pending task IDs inside the
+database. They detect source changes from old writers or an image rollback
+without loading old JSON payloads into the process. Null or default `[]`
+deprecated fields for new v2-only tasks do not create empty legacy runs.
+An empty first-attempt queued task with no dispatch/start/terminal evidence is
+audited without a phantom execution run, so its later complete v2 usage remains
+complete. Empty retries or prior execution evidence still retain unknown usage.
 
 An optional `scripts/migrate-usage-accounting.ts --execute` preparation retains
 the original audit and all observed source versions, but does not write the
@@ -61,9 +67,21 @@ the canonical ledger. See the [usage contract](../docs/usage-accounting.md).
 
 Keep the updater's drain-protected switch: stop the old API writers before
 allowing the new processes to finish cutover. Running an old image against the
-database after the startup marker has been established is unsupported: that
-image can still write JSON without updating the ledger. Optional evidence
-recovery remains a separate reviewed maintenance operation.
+database after the startup marker has been established can still write JSON
+without updating the ledger. A new startup detects such changes. If the task
+already has counted historical/native facts, it commits a source-conflict audit,
+revokes readiness and fails without advancing the processed source or changing
+those facts. The deprecated ingestion entry likewise rejects changed aggregates
+as nonretryable `invalid_report`; identical processed snapshots remain idempotent.
+Empty execution shells and context-only history do not block proven legacy
+consumption. Resolving an overlap requires reviewed evidence, not an automatic
+sum, maximum, or replacement.
+
+Production schema preparation may precede the switch. Evidence recovery must
+wait until old writers have stopped, old reports have drained and new code has
+completed its startup cutover. Generate and review a fresh source cohort and
+plan after that fence. A clone rehearsal or merged source does not establish
+that deployment or production recovery has happened.
 
 Validation: `tests/unit/multiremi/usage-startup-migration.test.ts` covers fresh and
 existing databases, checkpoints/restart, source changes, modern/recovered facts,
@@ -75,8 +93,10 @@ PostgreSQL and SQLite startup tests were run with Bun 1.3.14 against disposable
 databases. Updater deadline tests cover readiness beyond 60 s/300 s, finite
 failure deadlines, request time, extra runtime readiness and rollback. The clone
 benchmark completed all 11320 checkpoints in 23 batches; the separate-process
-warm migration check took 0.984 ms and executed zero batches (Store schema setup
-still took 8.309 s). The benchmark started no jobs, HTTP listener or providers.
+earlier marker-only warm migration check took 0.984 ms and executed zero batches
+(Store schema setup still took 8.309 s). That measurement predates the required
+pending-source check and is not a timing claim for the current warm gate. The
+benchmark started no jobs, HTTP listener or providers.
 
 ## Release pipeline
 

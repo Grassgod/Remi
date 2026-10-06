@@ -1,6 +1,5 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { UsageValidationError, validateUsageSnapshot } from "@multiremi/store/usage-accounting.js";
-import { normalizeTaskUsageEntries, parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
 import { TaskDaemonReportError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
@@ -184,11 +183,10 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
               break;
             }
             const usage = daemonTaskUsageEntries(p.usage);
-            const keyed = (entries: unknown) => new Map(normalizeTaskUsageEntries(entries)
-              .map(entry => [JSON.stringify([entry.provider, entry.model]), entry]));
-            const current = keyed(parseTaskUsageEntries(store.getLegacyTaskUsageForIngestion(taskId)));
-            if ([...keyed(usage)].every(([key, entry]) => isDeepStrictEqual(current.get(key), entry))) break;
-            store.reportTaskUsage(taskId, usage);
+            // The ingestion boundary performs replay checks and rejects JSON
+            // drift against its protected historical source checkpoint.
+            try { store.reportTaskUsage(taskId, usage); }
+            catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
             break;
           }
           case "task.workspace": {

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { actualUnit } from "@acp/usage-collector.js";
 import { migrateLegacyUsage, USAGE_CUTOVER_MARKER, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { prepareUsageAccountingStartup, USAGE_STARTUP_CUTOVER_MARKER } from "@multiremi/store/usage-migration.js";
 
@@ -81,6 +82,41 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(34);
     expect(Number((db!.query("SELECT source_version FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task!.id) as { source_version: number }).source_version)).toBe(2);
     expect(Number((db!.query("SELECT count(*) AS n FROM multiremi_usage_legacy_versions").get() as { n: string }).n)).toBe(3);
+  });
+
+  it("rechecks ready startup after a legacy rollback without creating empty runs for v2 tasks", async () => {
+    const task = tasks(1)[0]!;
+    await prepareUsageAccountingStartup(db!);
+    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 30, outputTokens: 4 }]), task.id]);
+    await prepareUsageAccountingStartup(db!);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(34);
+    for (const source of ["[]"]) {
+      const next = store.createTask({ agentId: task.agentId, prompt: "v2-only startup", workspaceId: "local" });
+      db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [source, next.id]);
+      writeUsageSnapshot(db!, next.id, { version: 2, runId: "v2-only", revision: 1, complete: true,
+        units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
+          cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5 })] });
+      await prepareUsageAccountingStartup(db!);
+      db!.run("UPDATE multiremi_tasks SET status='completed',completed_at='2026-10-03T00:00:00Z' WHERE id=?", [next.id]);
+      await prepareUsageAccountingStartup(db!);
+      expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(next.id)).toEqual([{ run_id: "v2-only" }]);
+      expect(db!.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(next.id)).toBeNull();
+    }
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(39);
+  });
+
+  it("does not invent legacy consumption for a queued first attempt across startup on PostgreSQL", async () => {
+    const agent = store.createAgent({ name: "queued restart pg", provider: "codex", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "queued", workspaceId: "local" });
+    await prepareUsageAccountingStartup(db!);
+    await prepareUsageAccountingStartup(db!);
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([]);
+    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "first-v2", revision: 1, complete: true,
+      units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" })] });
+    await prepareUsageAccountingStartup(db!);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 5, unknown_task_count: 0, complete: true });
   });
 
   it("serializes two real UI/runtime startup processes without duplicate source versions", async () => {

@@ -5,6 +5,8 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
+import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary } from "./usage-legacy-history-boundaries.js";
+import { assertRecoveryRevisions, assertRecreatedLegacyReceipt } from "../scripts/usage-reconciliation-revision-cases.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const databaseName = `multiremi_usage_pg_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
@@ -48,6 +50,21 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     } finally { for (const connection of connections) connection.close(); }
     expect(db!.query("SHOW jit").get()).toEqual(jitBefore);
   }, 20_000);
+  it("rejects overlapping late legacy ingestion and stops source refresh durably on PostgreSQL", () => {
+    const agent = store.createAgent({ name: "late old writer pg", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "late legacy boundary", workspaceId: "local" });
+    assertLegacyHistoryBoundary(store, db!, task.id);
+    for (const kind of ["empty_modern", "empty_history", "context_history"] as const) {
+      const other = store.createTask({ agentId: agent.id, prompt: kind, workspaceId: "local" });
+      assertNonconsumingHistoryBoundary(store, db!, other.id, kind);
+    }
+  }, 20_000);
+  it("advances stronger historical evidence and recreated legacy receipts on PostgreSQL", async () => {
+    const agent = store.createAgent({ name: "revision-pg", provider: "claude", workspaceId: "local" });
+    const tasks = [0, 1].map(index => store.createTask({ agentId: agent.id, prompt: `revision ${index}`, workspaceId: "local" }));
+    await assertRecoveryRevisions(store, db!, tasks[0]!.id);
+    await assertRecreatedLegacyReceipt(store, db!, tasks[1]!.id);
+  }, 30_000);
   for (const order of ["money-first", "tokens-first", "identity-later"] as const) it(`rejects contradictory monetary request identity on PostgreSQL with ${order}`, () => {
     const runtime = store.registerRuntime({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local", runtimeId: runtime.id });

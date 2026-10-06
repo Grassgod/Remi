@@ -87,9 +87,13 @@ remi dashboard usage reconcile --workspace <id> --days all --tz Asia/Shanghai --
 
 `reconcile` 对一次服务端报告的日、Agent、模型、Runtime 加性消费指标及每个币种金额作对账；不对 distinct task count 求和。旧统计 API/CLI 路径保留兼容投影，但事实来自规范化表，Web 不使用旧统计查询。
 
-启动先创建 schema，释放全局 migration 锁后自动执行必需的标量迁移；UI/runtime 两个 API 进程都在迁移完成后才开启后台任务、HTTP listener 和 `/readyz`。每批默认 500 task、最多 5000，每个 task 独立提交，持久化游标和源版本检查点支持中断恢复；失败或默认五分钟启动预算耗尽会使启动失败，不会把未完成迁移当作就绪。空库同样自动完成切换，已就绪启动只查询启动标记。启动不扫描 archive、trace 或原始 telemetry，常规报表仍只读规范化账本。配置与部署边界见[部署切换说明](../deploy/README.md#usage-accounting-startup-cutover)。
+启动先创建 schema，释放全局 migration 锁后自动执行必需的标量迁移；UI/runtime 两个 API 进程都在迁移完成后才开启后台任务、HTTP listener 和 `/readyz`。每批默认 500 task、最多 5000，每个 task 独立提交，持久化游标和源版本检查点支持中断恢复；失败或默认五分钟启动预算耗尽会使启动失败，不会把未完成迁移当作就绪。空库同样自动完成切换，已就绪启动仍在数据库内检查 pending task ID，复检旧 writer 或镜像回滚后的来源变化，不向进程读取全部旧 JSON。v2-only 任务的旧字段为 null 或默认 `[]` 时，不因缺少旧来源检查点或生命周期变化生成空 legacy run。启动不扫描 archive、trace 或原始 telemetry，常规报表仍只读规范化账本。配置与部署边界见[部署切换说明](../deploy/README.md#usage-accounting-startup-cutover)。
 
-`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；首次新代码启动会重新检查旧服务器在准备后写入的 usage 和时间变化。迁移只替换自身创建的 provisional legacy aggregate，不覆盖 modern live run 或 evidence-verified 恢复事实。新 run 的 start ACK 或部分请求证据不证明其覆盖旧聚合，不能据此删除旧消费；旧聚合与新尝试的证据各自保留，未知覆盖仍明确为不完整。只有经审核的身份与覆盖证据才能退休旧聚合。准备后的切换必须停止旧 API 写入；已完成切换后不能继续运行仅写 JSON 的旧镜像。
+`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；新代码每次启动都检查旧来源变化。迁移只替换自身创建的 provisional legacy aggregate。已有计量的 historical/native 消费或提供商金额时，变化的旧累计无法证明与这些事实独立：弃用上报入口返回不可重试 `invalid_report`，保留原 canonical 和 outbox payload；相同已处理旧快照重放不改事实或 revision。迁移观察到此类来源变化时，提交新源审计、撤销就绪标记并失败，既不推进 processed source，也不相加或自动覆盖消费，需受审查证据修复。空 modern/historical run 或仅 context 的历史观测没有已计消费，不阻止明确旧 split 被规范化。新 run 的 start ACK 或部分请求证据不证明其覆盖旧聚合，不能据此删除旧消费；只有经审核的身份与覆盖证据才能退休旧聚合。
+
+生产准备允许先创建本范围 schema；历史 evidence 回填必须在停止旧 writers、排空旧上报并完成新代码切换后，重新生成和审核 source cohort 与恢复计划。仅写 JSON 的旧镜像不得与回填并行；若自动回滚后修改了受保护历史来源，下次新代码启动同样失败关闭。恢复演练与源码合入不代表已经部署、发版或在线修复。
+
+首次 attempt 的新 queued task 若旧来源为空、没有 dispatch/start/terminal 时间或此前执行 run，仅审计旧来源，不创建缺失消费的 legacy run。重启后其完整 v2 消费可正常成为已知；已有重试或旧执行迹象时仍保留未知消费，不能凭空确认先前消费为零。
 
 下面是数据库维护脚本，不是普通 API 的隐式写操作。先备份并在恢复克隆演练；`MULTIREMI_DATABASE_URL` 由维护环境显式设置，不通过 API 传数据库凭据。
 
@@ -101,7 +105,7 @@ bun run scripts/reconcile-task-usage.ts --apply-plan=<review-plan.json> --execut
 bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 ```
 
-不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。已有 modern live run 和非终态任务不进入历史证据应用队列；legacy schema 迁移仍处理所有任务。部分原生请求不能证明覆盖旧聚合，因此旧 split 消费保持计量地位，完整请求证据单独存 reconciliation evidence，不能与聚合相加；只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial。相邻相等计数不证明重复，去重使用可验证请求身份；Codex replay 和无重置证据的下降不改变累计差分基线，仅 thread/session 身份变化或明确成功压缩后的有效下降建立新 epoch。原生 `compacted`、`context_compacted` 记录提供压缩证据，total-only 估计不成为消费。恢复按 task 原子检查点保存原事实和旧 usage 校验哈希，复检任务终态及无 modern live run，变化的源拒绝应用，重复应用同一计划恢复进度而不双计。后续计划必须保留已建立的请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实；追加证据的完整超集可以重新应用，并审计原事实。不可恢复项有明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
+不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。已有 modern live run 和非终态任务不进入历史证据应用队列；legacy schema 迁移仍处理所有任务。部分原生请求不能证明覆盖旧聚合，因此旧 split 消费保持计量地位，完整请求证据单独存 reconciliation evidence，不能与聚合相加；只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial。相邻相等计数不证明重复，去重使用可验证请求身份；Codex replay 和无重置证据的下降不改变累计差分基线，仅 thread/session 身份变化或明确成功压缩后的有效下降建立新 epoch。原生 `compacted`、`context_compacted` 记录提供压缩证据，total-only 估计不成为消费。恢复按 task 原子检查点保存原事实和旧 usage 校验哈希，复检任务终态及无 modern live run，变化的源拒绝应用，重复应用同一计划恢复进度而不双计。后续计划必须保留已建立的请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实；追加证据的完整超集可以重新应用，并审计原事实。计划生成读取持久 receipts、单位与 run 水位，为修订的单位和重建的 legacy 明确分配更高 revision，保留 receipts 防止旧事实复活。应用复检生成时的水位哈希，水位变化则拒绝并要求重新生成；相同计划的已完成检查点仍幂等恢复，verify 校验计划中的实际 revision。不可恢复项有明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
 
 ## 验证和性能边界
 
@@ -109,7 +113,7 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 常规报表只读规范化标量表，通过 SQL 聚合和 distinct 计数，不逐任务解析旧 JSON 或读取 trace。单位有 workspace/time、Runtime/time、project/time 和 model 索引；价格有精确键/有效期索引。run 的实际消费观测与完整性先聚合一次，不逐个诊断单位反复扫描同一 run。相同 task、日期、模型与金额出处的事实先合并，SUM 保留加性指标，MAX 保留上下文峰值与未知标志；所有视图复用一次 materialized SQL 事实。PostgreSQL 用 GROUPING SETS 同时聚合五种维度，SQLite 在同一 SQL 中复用事实的聚合分支；只把分组结果送过 DB bridge。价格以受控不重叠有效区间直接关联，保留实际 SKU、请求模型 alias 和连接条件。
 
-2026-10-06 在隔离恢复库实测：11,320 task、135,419 canonical unit（local workspace 134,770 unit）。该工作区全历史报告包含 11,267 distinct task，原查询独立样本 52.45 秒；现实现重复样本约 3.85–3.88 秒，30 天 Asia/Shanghai 约 3.26–3.29 秒。全历史已知消费 47,460,970,503 tokens 与原完整 summary 逐字段一致；30 天消费 39,379,041,539 tokens 与原相同时区窗口一致。诊断-heavy 的 135,211 个事实行先合并为 21,338 行，五维度 totals/durations 合计返回 254 个聚合行。该恢复库没有价格记录，费用/价格版本/货币等语义另由 SQLite 与真实 PG 专项验证；该测量不是生产吞吐或 p95，也不是更大规模的延迟保证。
+2026-10-06 在隔离恢复库实测：11,320 task、135,419 canonical unit（local workspace 134,770 unit）。该工作区全历史报告包含 11,267 distinct task，原查询独立样本 52.45 秒；现实现重复样本约 3.85–3.88 秒，30 天 Asia/Shanghai 约 3.26–3.29 秒。全历史完整 summary 与原查询逐字段一致，30 天消费与原相同时区窗口一致；API golden 未变，各维度字段和加性指标对账专项通过。诊断-heavy 的 135,211 个事实行先合并为 21,338 行，五维度 totals/durations 合计返回 254 个聚合行。该恢复库没有价格记录，费用/价格版本/货币等语义另由 SQLite 与真实 PG 专项验证；该测量不是生产吞吐或 p95，也不是更大规模的延迟保证。
 
 PostgreSQL 报表在只读 Repeatable Read 事务中取一致快照；SQL bigint/count/sum 明确转换为契约 number。该交互查询仅在自身事务内 SET LOCAL jit=off：实测编译耗时数秒，关闭后执行耗时更低；事务结束恢复原设置，不改变服务全局配置或一致性。SQLite 在同一事务读取，金额和时长使用保留浮点精度的聚合传输；非 UTC 分日依据有效日期边界生成 CASE，长历史范围的边界构造成本需要实测。底层同步 Store/PgBridge 的线程阻塞和事务约束见[架构](ARCHITECTURE.md#存储与事务)；尚未记录统一报告的生产吞吐或 p95 基线。
 

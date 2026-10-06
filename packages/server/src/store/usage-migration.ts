@@ -1,12 +1,12 @@
 /** Required scalar cutover, separate from schema DDL and archive/evidence recovery. */
 import { advisoryLock, type SqlDatabase } from "./db/postgres.js";
 import {
-  ensureLegacyUsageMigrationSchema, hasPendingLegacyUsage, migrateLegacyUsage, USAGE_CUTOVER_MARKER, USAGE_MIGRATION_LOCK,
+  ensureLegacyUsageMigrationSchema, hasPendingLegacyUsage, migrateLegacyUsage, USAGE_CUTOVER_MARKER, USAGE_MIGRATION_LOCK, USAGE_STARTUP_CUTOVER_MARKER,
 } from "./usage-accounting.js";
 
 // A manual preparation may have written the old marker while old servers were
 // still writing JSON. Only a startup pass can establish this cutover marker.
-export const USAGE_STARTUP_CUTOVER_MARKER = "20261006_usage_accounting_startup_v1";
+export { USAGE_STARTUP_CUTOVER_MARKER } from "./usage-accounting.js";
 export interface UsageStartupMigrationOptions {
   batchSize?: number;
   timeoutMs?: number;
@@ -26,8 +26,17 @@ function startupMigration(db: SqlDatabase, options: UsageStartupMigrationOptions
   const deadline = performance.now() + timeoutMs;
   let initialized = false;
   let cursor: string | undefined = "";
+  const currentReady = () => {
+    if (!ready(db)) return false;
+    // A previously deployed JSON-only writer may have run after this marker,
+    // including during an image rollback. Query only pending IDs in the DB;
+    // do not trust a marker while its processed sources have changed.
+    if (!hasPendingLegacyUsage(db)) return true;
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)", [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]);
+    return false;
+  };
   return () => {
-    if (ready(db)) return true;
+    if (currentReady()) return true;
     if (performance.now() >= deadline) throw new Error("Usage startup migration timed out; committed checkpoints will resume on restart");
     if (!initialized) {
       ensureLegacyUsageMigrationSchema(db);
@@ -53,7 +62,7 @@ function startupMigration(db: SqlDatabase, options: UsageStartupMigrationOptions
     // Recheck rows changed behind the keyset cursor. Both process roles use
     // this same mutex; each batch has already committed its task checkpoints.
     return advisoryLock(db, USAGE_MIGRATION_LOCK, () => {
-      if (ready(db)) return true;
+      if (currentReady()) return true;
       const final = migrateLegacyUsage(db, { batchSize, schemaReady: true });
       if (performance.now() >= deadline) throw new Error("Usage startup migration timed out; committed checkpoints will resume on restart");
       if (!final.complete) { cursor = undefined; return false; }

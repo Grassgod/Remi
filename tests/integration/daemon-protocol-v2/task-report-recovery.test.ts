@@ -4,8 +4,47 @@ import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.j
 import { actualUnit } from "@acp/usage-collector.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
+import { migrateLegacyUsage } from "@multiremi/store/usage-accounting.js";
 import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+
+test("late deprecated aggregates park as invalid without blocking independent bound usage over the real socket", async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon(); await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "late legacy", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "synthetic overlap", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    const original = [{ provider: "claude", model: "configured", totalTokens: 70 }];
+    h.db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify(original), task.id]);
+    migrateLegacyUsage(h.db);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 920000,
+      p: { task_id: task.id, usage_run_id: "current" } })).resolves.toMatchObject({ execution_authorized: true });
+    h.store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false,
+      units: [actualUnit({ unitId: "native", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 })] });
+    const before = h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920001, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", total_tokens: 70 }] } })).resolves.toMatchObject({ ok: true });
+    expect(h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(before);
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "late-legacy.db"), canSend: () => h.client.connectionState() === "connected",
+      deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 920010 + record.seq }) });
+    const bad = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] });
+    const good = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "current", revision: 1, complete: true,
+        units: [actualUnit({ unitId: "independent", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 })] } });
+    await expect(bad).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(good).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect((h.db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(task.id) as { usage: string }).usage).toBe(JSON.stringify(original));
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    // A raw JSON drift cannot acquire a false replay ACK through the fast path.
+    const changed = [{ provider: "claude", model: "configured", inputTokens: 20, outputTokens: 0 }];
+    h.db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify(changed), task.id]);
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920009, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] } })).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15000);
 
 test("invalid usage and execution payloads cannot strand independently authorized consumption over the real socket", async () => {
   const h = await DaemonProtocolHarness.create();
