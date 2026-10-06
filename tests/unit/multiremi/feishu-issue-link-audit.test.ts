@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -45,8 +46,7 @@ function scaffold() {
   // These records would have been included by the removed catch-up projection.
   store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "LEGACY_PRIVATE_COMMENT" });
   const sourceTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Legacy work", holdsWorkspace: false });
-  db!.run("UPDATE multiremi_tasks SET status = 'completed', completed_at = ?, result = ? WHERE id = ?",
-    [new Date().toISOString(), "SYNTHETIC_SECRET_RESULT /internal/legacy/work", sourceTask.id]);
+  mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status = 'completed', completed_at = ?, result = ? WHERE id = ?", [new Date().toISOString(), "SYNTHETIC_SECRET_RESULT /internal/legacy/work", sourceTask.id]);
   const audit = db!.query("SELECT * FROM multiremi_feishu_bot_issue_link_audit WHERE binding_id = ?").get(binding.id);
   return { store, agent, issue, binding, input, first, audit };
 }

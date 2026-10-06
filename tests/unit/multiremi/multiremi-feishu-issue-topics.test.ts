@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -377,10 +378,10 @@ describe("Feishu Issue topics", () => {
       configureTopics(store);
       const wake = prepareReport(store);
       const issue = store.getIssue(wake.issueId!)!;
-      db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE issue_id = ? AND chat_session_id IS NULL", [issue.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE issue_id = ? AND chat_session_id IS NULL", [issue.id]);
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
-      db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
       const terminalActivities: Array<{ index: number; inTransaction: boolean }> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
@@ -505,7 +506,7 @@ describe("Feishu Issue topics", () => {
           }))!;
         expect(wake.runtimeId).toBeNull();
         if (legacyPin) {
-          db!.run("UPDATE multiremi_tasks SET runtime_id = 'rt_bot' WHERE id = ?", [wake.id]);
+          mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = 'rt_bot' WHERE id = ?", [wake.id]);
         }
         expect(store.claimTask("rt_claude")?.id).toBe(wake.id);
         expect(store.getTask(wake.id)?.runtimeId).toBe("rt_claude");
@@ -700,7 +701,7 @@ describe("Feishu Issue topics", () => {
     store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Verify topic update delivery" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const round = store.createSessionTask(session.id, { agentId: store.getFeishuBotConfig("local")!.agentId, prompt: "Report progress" });
-    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [round.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [round.id]);
     store.completeTask(round.id, { output: "Round complete" });
     expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain(`会话 ${session.id}`);
     expect(store.listConversationLogShown(session.id).some(entry => entry.body_md === "Verify topic update delivery")).toBe(true);
@@ -727,17 +728,24 @@ describe("Feishu Issue topics", () => {
       },
     });
 
-    const topicWake = store.listTasks().find(task => task.id !== wake.id && task.id !== sourceTask.id);
+    const topicWake = store.getTask(wake.id);
     expect(topicWake).toMatchObject({ chatSessionId: store.getTask(wake.id)!.chatSessionId, holdsWorkspace: false });
-    expect(topicWake?.prompt).toContain(`Human request id: ${request.id}`);
+    expect(store.listChatMessages(topicWake!.chatSessionId!).at(-1)?.body).toContain(`Human request id: ${request.id}`);
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
-    expect(delivery.taskId).toBe(topicWake?.id);
+    expect(delivery.id).not.toBe(roundDelivery.id);
+    expect(delivery.taskId).toBeUndefined();
+    expect(delivery.humanRequestId).toBe(request.id);
+    expect(delivery.humanRequestTaskId).toBe(sourceTask.id);
     expect(delivery.body).toContain("Should I continue?");
+    expect(db!.query("SELECT status, external_message_id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+      .get(roundDelivery.id)).toMatchObject({ status: "sent", external_message_id: "om_round_push" });
 
     // Replaying the same request report is idempotent and does not enqueue a
     // second wake Task or outbound delivery.
     expect(store.prepareFeishuBotHumanRequestPush(request)?.id).toBe(topicWake?.id);
-    expect(store.listTasks().filter(task => task.prompt.includes(`Human request id: ${request.id}`))).toHaveLength(1);
+    expect(store.listChatMessages(topicWake!.chatSessionId!).filter(message => message.body.includes(`Human request id: ${request.id}`))).toHaveLength(1);
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?")
+      .get(request.id)).toMatchObject({ count: 1 });
   });
 
   it("keeps a private Feishu chat independent when its Agent creates an Issue", async () => {

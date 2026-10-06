@@ -88,12 +88,10 @@ describe("remi CLI dispatcher", () => {
       "knowledge",
       "memory",
       "wiki",
-      "comment",
       "session",
       "share",
       "label",
       "chat",
-      "task",
       "agent",
       "squad",
       "skill",
@@ -104,13 +102,15 @@ describe("remi CLI dispatcher", () => {
       "scm",
       "messaging",
       "feishu",
-      "inbox",
       "notification",
       "pin",
       "dashboard",
       "platform",
       "billing",
       "lark",
+      "message",
+      "turn",
+      "inbox",
       "start",
       "stop",
       "restart",
@@ -144,7 +144,7 @@ describe("remi CLI dispatcher", () => {
   it("removes Chat Issue commands while retaining conversation and queue commands", () => {
     const inventory = cliCommandInventory();
     expect(inventory.filter((entry) => entry.id.startsWith("chat.issue"))).toEqual([]);
-    for (const id of ["chat.create", "chat.message.create", "chat.queue.list", "chat.pin", "chat.archive", "chat.restore"]) {
+    for (const id of ["chat.create", "message.send", "turn.list", "chat.pin", "chat.archive", "chat.restore"]) {
       expect(inventory.some((entry) => entry.id === id), id).toBe(true);
     }
   });

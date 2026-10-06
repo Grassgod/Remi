@@ -1525,7 +1525,8 @@ describe("SCM connection and canonical event store", () => {
     const claimResponse = await taskOfferResponse(store, runtime.id, { headers: { Authorization: "Bearer root-secret" }, authToken: "root-secret" });
     expect(claimResponse.status).toBe(200);
     const claim = (await claimResponse.json() as any).task;
-    expect(claim.id).toBe(runs[0]!.taskId);
+    expect(claim.attempt_id).toBe(runs[0]!.taskId);
+    expect(claim.turn_id).toBe(store.getTurnForAttempt(runs[0]!.taskId!)!.id);
     expect(claim).not.toHaveProperty("scm_revision");
     const runTask = store.getTask(runs[0]!.taskId!);
     const runToken = await store.createTaskAccessToken(runTask!, "local");
@@ -1663,8 +1664,8 @@ describe("SCM connection and canonical event store", () => {
       const claim = (await response.json() as any).task;
       expect(claim).not.toBeNull();
       if (!claim) throw new Error("expected SCM automation task claim");
-      claims.set(claim.id, claim);
-      store.completeTask(claim.id, { output: "claim probe complete" });
+      claims.set(claim.attempt_id, claim);
+      store.completeTask(claim.attempt_id, { output: "claim probe complete" });
     }
 
     expect(claims.get(wikiRuns[0]!.taskId!)?.scm_revision).toBe("abc123");

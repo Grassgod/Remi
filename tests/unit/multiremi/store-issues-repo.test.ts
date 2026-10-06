@@ -15,6 +15,7 @@ function createRepo(): IssuesRepo {
   db = openSqliteDatabase(":memory:");
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   store = new MultiremiStore(db);
+  store.ensureLocalWorkspace();
   return new IssuesRepo(new StoreContext(db, () => store!));
 }
 

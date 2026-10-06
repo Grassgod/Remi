@@ -16,14 +16,17 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { configureRepositoryWikiAutomation, createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 
 afterEach(resetMultiremiTestEnv);
 
 const REPOSITORY_ID = "repo_projection";
 const rootHeaders = { Authorization: "Bearer root-secret" };
+const stores = new WeakMap<object, MultiremiStore>();
 
 function fixture() {
   const store = createLocalStore();
+  stores.set(db!, store);
   store.updateWorkspaceRepositories("local", [
     { id: REPOSITORY_ID, name: "Projection", url: "https://github.com/acme/projection.git", source: "github" },
   ]);
@@ -48,23 +51,34 @@ function insertRun(
     payload: unknown;
     createdAt: string;
     repositoryId?: string;
+    scheduleTarget?: unknown;
+    status?: "running" | "completed";
   },
   writer: RunWriter | null = null,
 ): void {
   const target = (writer ?? (db as unknown as RunWriter))!;
+  const store = stores.get(target)!;
+  const autopilot = store.getAutopilot(input.autopilotId)!;
+  const sessionId = (target as SqlDatabase).query("SELECT session_id FROM multiremi_autopilots WHERE id=?").get(autopilot.id)!.session_id;
+  const task = sentTask(store, store.sendMessage({ session_id: sessionId,
+    sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: autopilot.assigneeId! },
+    message_kind: "request", wake_requested: "now", execution_scope: input.id, body_md: "Projection fixture" }));
+  mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status=?, result=? WHERE id=?",
+    [input.status ?? "completed", JSON.stringify({ output: "result filler" }), task.id]);
   target.run(
     `INSERT INTO multiremi_autopilot_runs (
-       id, autopilot_id, source, status, repository_id, dedupe_key,
-       triggered_at, completed_at, payload, result, created_at
-     ) VALUES (?, ?, 'scm_event', 'completed', ?, ?, ?, ?, ?, ?, ?)`,
+       id, autopilot_id, source, turn_id, repository_id, dedupe_key,
+       triggered_at, completed_at, payload, schedule_target, created_at
+     ) VALUES (?, ?, 'scm_event', ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.id,
     input.autopilotId,
-    input.repositoryId ?? REPOSITORY_ID,
+    store.getTurnForAttempt(task.id)!.id,
+    input.scheduleTarget ? null : input.repositoryId ?? REPOSITORY_ID,
     input.dedupeKey,
     input.createdAt,
-    input.createdAt,
+    input.status === "running" ? null : input.createdAt,
     JSON.stringify(input.payload),
-    JSON.stringify({ taskId: "tsk_projection", output: "result filler" }),
+    input.scheduleTarget ? JSON.stringify(input.scheduleTarget) : null,
     input.createdAt,
   );
 }
@@ -90,13 +104,15 @@ function createRecordingStore(): { store: MultiremiStore; sql: string[]; raw: Ru
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   }) as SqlDatabase;
-  return { store: new MultiremiStore(db), sql, raw: raw as unknown as RunWriter };
+  const store = new MultiremiStore(db);
+  stores.set(raw, store);
+  return { store, sql, raw: raw as unknown as RunWriter };
 }
 
 /** Every statement that reads the run table, normalized to one line. */
 function runStatements(sql: string[]): string[] {
   return sql
-    .filter((statement) => /multiremi_autopilot_runs/i.test(statement))
+    .filter((statement) => /multiremi_autopilot_(?:runs|run_records)/i.test(statement))
     .map((statement) => statement.replace(/\s+/g, " ").trim());
 }
 
@@ -140,7 +156,7 @@ describe("repository-wikis run projection surface", () => {
     // Observability reads exactly the six columns it consumes; `status` is a
     // WHERE filter and must not be projected back.
     expect(repositoryWiki).toMatch(
-      /^SELECT r\.id, r\.repository_id, r\.schedule_target, r\.task_id, r\.completed_at, r\.created_at FROM multiremi_autopilot_runs r/,
+      /^SELECT r\.id, r\.repository_id, r\.schedule_target, r\.task_id, r\.completed_at, r\.created_at FROM multiremi_autopilot_run_records r/,
     );
     expect(repositoryWiki).not.toMatch(/\br\.status\b(?! IN)/);
 
@@ -457,17 +473,19 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
     // A schedule-only run that nothing references: the loop below always skipped
     // it, so the statement must not ship it any more.
     const orphan = store.runAutopilot(autopilot.id, { source: "manual" });
+    mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?", [orphan.taskId]);
     raw.run(
       `UPDATE multiremi_autopilot_runs SET schedule_target = ?, repository_id = NULL,
-         status = 'completed', completed_at = ? WHERE id = ?`,
+         completed_at = ? WHERE id = ?`,
       [JSON.stringify({ kind: "repository", id: REPOSITORY_ID }), "2026-09-18T00:00:00.000Z", orphan.id],
     );
     // A schedule-only run WITH a repository-scoped compilation record: the loop
     // does consume it, so it must stay in the result set.
     const referenced = store.runAutopilot(autopilot.id, { source: "manual" });
+    mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?", [referenced.taskId]);
     raw.run(
       `UPDATE multiremi_autopilot_runs SET schedule_target = ?, repository_id = NULL,
-         status = 'completed', completed_at = ? WHERE id = ?`,
+         completed_at = ? WHERE id = ?`,
       [JSON.stringify({ kind: "repository", id: REPOSITORY_ID }), "2026-09-19T00:00:00.000Z", referenced.id],
     );
     raw.run(
@@ -544,16 +562,8 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
     // newer ones carry `repository_id`. The SQL ranking partitions on those two
     // shapes separately, so both candidates come back and the loop has to settle
     // them — this is the case that made the ranking safe to push into SQL.
-    db!.run(
-      `INSERT INTO multiremi_autopilot_runs (
-         id, autopilot_id, source, status, repository_id, schedule_target, dedupe_key,
-         triggered_at, completed_at, payload, result, created_at
-       ) VALUES (?, ?, 'scm_event', 'completed', NULL, ?, NULL, ?, ?, NULL, NULL, ?)`,
-      [
-        "run_a2_old_scope", autopilot.id, JSON.stringify({ kind: "repository", id: REPOSITORY_ID }),
-        "2026-09-18T00:00:00.000Z", "2026-09-18T00:00:00.000Z", "2026-09-18T00:00:00.000Z",
-      ],
-    );
+    insertRun({ id: "run_a2_old_scope", autopilotId: autopilot.id, dedupeKey: null,
+      scheduleTarget: { kind: "repository", id: REPOSITORY_ID }, payload: null, createdAt: "2026-09-18T00:00:00.000Z" });
     insertRun({
       id: "run_a2_new_scope", autopilotId: autopilot.id,
       dedupeKey: `${REPOSITORY_ID}:incremental_update:new`, payload: { data: { merge_sha: "new" } },
@@ -570,16 +580,8 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
     const createdAt = "2026-09-22T00:00:00.000Z";
     insertRun({ id: "run_a2_completed", autopilotId: autopilot.id,
       dedupeKey: `${REPOSITORY_ID}:incremental_update:done`, payload: { data: { merge_sha: "done" } }, createdAt });
-    db!.run(
-      `INSERT INTO multiremi_autopilot_runs (
-         id, autopilot_id, source, status, repository_id, dedupe_key, triggered_at, completed_at, payload, result, created_at
-       ) VALUES (?, ?, 'scm_event', 'running', ?, ?, ?, NULL, ?, NULL, ?)`,
-      [
-        "run_a2_active", autopilot.id, REPOSITORY_ID,
-        `${REPOSITORY_ID}:incremental_update:active`, createdAt,
-        JSON.stringify({ data: { merge_sha: "active" } }), createdAt,
-      ],
-    );
+    insertRun({ id: "run_a2_active", autopilotId: autopilot.id, status: "running",
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:active`, payload: { data: { merge_sha: "active" } }, createdAt });
 
     const runs = store.listLatestRepositoryAutopilotRuns("local");
     // The route's existing rule: on a created_at tie a still-active run wins, so

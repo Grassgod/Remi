@@ -1601,7 +1601,8 @@ export class TasksRepo {
     const row=input.wake.seq?this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq=? AND kind='message'").get(sessionId,input.wake.seq):null;
     const message=row?this.ctx.inbox().getMessage(row.id):null;
     if(!message){if(input.wake.mode==='inbox_only'||input.wake.mode==='next_turn')return {task:null,action:'none'};
-      const task=input.create();return {task,action:'created'};}
+      const before=this.ctx.db.query("SELECT current_attempt_id,status FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status IN ('pending','running','awaiting_human')").get(sessionId,input.lane.agentId,scope);
+      const task=input.create();return {task,action:before?.current_attempt_id===task.id?(before.status==='pending'?'coalesced':'steered'):'created'};}
     const before=this.ctx.db.query("SELECT id,status FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status IN ('pending','running','awaiting_human')").get(sessionId,input.lane.agentId,scope);
     const events=createCommitEventQueue();
     const result=sendMessageWithinTransaction(this.ctx,{id:message.id,session_id:sessionId,
@@ -1695,6 +1696,10 @@ export class TasksRepo {
     gateIssueBeforeReplacement?: MultiremiIssue | null,
     executionScopeOverride?: string,
   ): MultiremiTask {
+    const topicIssueId = input.chatSessionId ? this.ctx.feishuBot().getFeishuIssueIdForChatSession(input.chatSessionId) : null;
+    if (topicIssueId && (input.issueId != null || input.assignmentAuthorType === "system")) {
+      input = { ...input, issueId: input.issueId ?? topicIssueId, holdsWorkspace: false };
+    }
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
@@ -2274,15 +2279,20 @@ export class TasksRepo {
       const workspace = resolveChatWorkspace(this.ctx, chat);
       if (!workspace) continue;
       this.clearStaleChatWorkspaceLineage(chat);
-      const tasks = this.ctx.db.query(`SELECT id, execution_fingerprint, runtime_id, work_dir FROM multiremi_turn_execution_records
+      const tasks = this.ctx.db.query(`SELECT id, execution_fingerprint, runtime_id, work_dir, session_id FROM multiremi_turn_execution_records
         WHERE chat_session_id = ? AND issue_id IS NULL
           AND (status = 'queued' OR (status = 'dispatched' AND started_at IS NULL
             AND dispatched_at IS NOT NULL AND dispatched_at < ?))`).all(chat.id, cutoff) as Row[];
       for (const task of tasks) {
         if (this.acceptedOfferLeases.has(String(task.id))) continue;
-        const source = { executionFingerprint: nullableString(task.execution_fingerprint),
+        const inheritsCurrentSession = task.session_id != null && task.session_id === chat.sessionId
+          && task.runtime_id === chat.sessionRuntimeId && task.work_dir === chat.workDir;
+        const source = { executionFingerprint: nullableString(task.execution_fingerprint)
+            ?? (inheritsCurrentSession ? chat.sessionExecutionFingerprint : null),
           workDir: nullableString(task.work_dir), runtimeId: nullableString(task.runtime_id) };
-        if (chatWorkspaceLineageCurrent(this.ctx, chat, source) && !workspace.changed) continue;
+        const unavailableColdPin = !workspace.available && task.runtime_id != null
+          && task.session_id == null && task.work_dir == null && source.executionFingerprint == null;
+        if (!unavailableColdPin && chatWorkspaceLineageCurrent(this.ctx, chat, source) && !workspace.changed) continue;
         if (this.coalesceDispatchedTurnWithinTransaction(String(task.id))) continue;
         const frozen = source.executionFingerprint;
         runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
@@ -5481,6 +5491,14 @@ ${placementAfter.sql}
     if(detached){
       this.ctx.db.run("UPDATE multiremi_turns SET issue_id=NULL WHERE id=?",[row.turn_id]);
       input={...input,resetProviderSession:true,sessionId:null,runtimeId:null,workDir:null};
+    }
+    if (parent.chatSessionId && !parent.issueId && input.resetProviderSession) {
+      const agent = this.ctx.agents().getAgent(parent.agentId);
+      const chat = this.ctx.chat().getChatSession(parent.chatSessionId);
+      if (agent && chat) {
+        input = { ...input, runtimeId: this.resolveTaskAffinity(agent, chat, null,
+          parent.holdsWorkspace, input.executionFingerprint ?? "", Boolean(parent.pluginSnapshot?.length)).runtimeId };
+      }
     }
     const created=createReplacementAttemptWithinTransaction(this.ctx.db,row.turn_id,{
       previousStatus:redispatch?(parent.status==='failed'?'failed':'cancelled'):parent.failureReason==='runtime_recovery'?'lost':'failed',

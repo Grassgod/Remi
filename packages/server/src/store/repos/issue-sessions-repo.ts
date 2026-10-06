@@ -419,8 +419,8 @@ export class IssueSessionsRepo {
         author_type:input.authorType,author_id:input.authorId??null,kind:input.kind,body:input.body??'',
         task_id:input.taskId,source_comment_id:input.sourceCommentId??null,metadata:toJson(input.metadata??{}),created_at:pointer.created_at});
     }
-    // Session producers share the canonical log allocator.
-    const seq = this.ctx.conversationLog().nextSeqWithinTransaction(sessionId);
+    // The canonical message or marker writer allocates the sequence once.
+    const seq = 0;
     const id = createId("sevt");
     const now = input.createdAt ?? nowIso();
     const row={id,session_id:sessionId,seq,author_type:input.authorType,author_id:input.authorId??null,
@@ -461,7 +461,7 @@ export class IssueSessionsRepo {
     }
     return this.ctx.conversationLog().appendWithinTransaction({
       sessionId: mapped.sessionId,
-      seq: mapped.seq,
+      seq: mapped.kind === "head" ? mapped.seq : undefined,
       id: mapped.id,
       kind: mapped.kind,
       authorType: mapped.authorType,

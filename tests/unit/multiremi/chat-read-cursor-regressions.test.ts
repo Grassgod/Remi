@@ -36,7 +36,7 @@ pendingTurnBackendTests("MUL-509 Chat member read cursors", fixture => {
       expect(detail.status).toBe(200);
       expect(await detail.json()).toMatchObject({ has_unread: false, unread_count: 0 });
     }
-    expect(db.query("SELECT unread_since FROM multiremi_chat_sessions WHERE id=?").get(chat.id)?.unread_since).toBe("2026-01-01");
+    expect(db.query("SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type='member' AND reader_id='mem_local_local'").get(chat.id)?.cursor_seq).toBe(1);
     send("New reply");
     expect(await list()).toMatchObject({ has_unread: true, unread_count: 1 });
   });

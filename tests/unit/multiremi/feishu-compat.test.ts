@@ -12,10 +12,11 @@ import { MessageProviderError } from "@multiremi/contracts/messaging.js";
 import { MessageProviderRegistry } from "@multiremi/messaging/index.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { FeishuIngestRepo } from "@multiremi/store/repos/feishu-ingest-repo.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
-import type { MultiremiStore } from "@multiremi/store/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { MultiremiStore } from "@multiremi/store/store.js";
+import { createHistoricalDatabase, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -139,14 +140,15 @@ function legacyMessage(
 /**
  * Seeds a store the way it looked before the refactor, then upgrades it.
  *
- * The migration marker is cleared rather than the store rebuilt, because that
- * is the real sequence: a server that has been running holds legacy rows and
- * has not applied the Core migration yet.
+ * Populate the historical schema before constructing a current runtime store.
+ * Clearing an older marker on an already unified store cannot replay cutover.
  */
 function migratedStore(): { store: MultiremiStore; sourceId: string } {
-  const store = createStore();
-  store.ensureLocalWorkspace();
-  const source = store.createFeishuSource({
+  const database = createHistoricalDatabase();
+  const legacy = new FeishuIngestRepo(new StoreContext(database, () => {
+    throw new Error("Historical writers cannot invoke current runtime services");
+  }));
+  const source = legacy.createSource({
     workspaceId: "local",
     name: "研发消息",
     endpointName: "local",
@@ -155,18 +157,19 @@ function migratedStore(): { store: MultiremiStore; sourceId: string } {
       { chatId: "oc_direct1", addedAt: "2026-08-25T10:00:00.000Z" },
     ],
   });
-  store.ingestFeishuBatch(source.id, [
+  legacy.ingestBatch(source.id, [
     legacyMessage("om_dm", "oc_direct1", "2026-08-25T10:00:30.000Z", "ping", { name: "Wang", type: "p2p" }),
     legacyMessage("om_kept", "oc_allowed1", "2026-08-25T10:01:00.000Z", "deploy is stuck", { name: "研发群", type: "group" }),
     legacyMessage("om_done", "oc_allowed1", "2026-08-25T10:02:00.000Z", "small talk", { name: "研发群", type: "group" }),
   ]);
-  store.resolveFeishuMessage("om_done", {
+  legacy.resolveMessage("om_done", {
     workspaceId: "local",
     outcome: "ignored",
     reason: "casual conversation",
   });
   db!.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [MESSAGING_CORE_MIGRATION]);
-  runMigrations(db as unknown as SqlDatabase);
+  bootstrapPreUnifiedSchema(db as unknown as SqlDatabase);
+  const store = new MultiremiStore(database);
   return { store, sourceId: source.id };
 }
 

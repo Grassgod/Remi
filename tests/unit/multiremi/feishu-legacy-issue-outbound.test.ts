@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@multiremi/store/migrations.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { createHistoricalDatabase, db, resetMultiremiTestEnv } from "./helpers.js";
 import { seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 
 let previousKey: string | undefined;
@@ -16,15 +17,8 @@ afterEach(() => {
 
 type PushKind = "round" | "human" | "inbound" | "attachment";
 function scaffold(scenario: "unknown_legacy_group" | "p2p_thread_and_key" | "group_without_thread", kind: PushKind) {
-  const store = createLocalStore();
+  createHistoricalDatabase();
   seedLegacyChatIssueClassificationFixture(db!);
-  store.registerRuntime({ id: "rt_legacy_outbound", name: "Legacy outbound", provider: "codex", workspaceId: "local" });
-  store.heartbeatRuntime("rt_legacy_outbound", { supportsFeishuBotConfig: true });
-  const config = store.upsertFeishuBotConfig("local", {
-    agentId: "agt_chat_migration", runtimeId: "rt_legacy_outbound", appId: "cli_migration", domain: "feishu", enabled: true,
-    appSecretOp: "set", appSecret: "fixture-only", senderAccessPolicy: "agent",
-  });
-  store.reportFeishuBotRuntimeStatus("local", "rt_legacy_outbound", { appliedRevision: config.revision, state: "online" });
   const chatId = `chat_classification_${scenario}`;
   const bindingId = `fcb_${chatId}`;
   const issueId = `iss_classification_${scenario}`;
@@ -51,7 +45,16 @@ function scaffold(scenario: "unknown_legacy_group" | "p2p_thread_and_key" | "gro
     kind === "inbound" ? "User-requested reply" : "Old proactive Issue notification",
     kind === "attachment" ? JSON.stringify([{ id: "attachment_legacy", filename: "report.txt", contentType: "text/plain", sizeBytes: 5 }]) : null,
     now, now, now]);
-  runMigrations(db!);
+  bootstrapPreUnifiedSchema(db!);
+  db!.run("UPDATE multiremi_tasks SET status='cancelled' WHERE status IN ('running','dispatched','awaiting_human')");
+  const store = new MultiremiStore(db!);
+  store.registerRuntime({ id: "rt_legacy_outbound", name: "Legacy outbound", provider: "codex", workspaceId: "local" });
+  store.heartbeatRuntime("rt_legacy_outbound", { supportsFeishuBotConfig: true });
+  const config = store.upsertFeishuBotConfig("local", {
+    agentId: "agt_chat_migration", runtimeId: "rt_legacy_outbound", appId: "cli_migration", domain: "feishu", enabled: true,
+    appSecretOp: "set", appSecret: "fixture-only", senderAccessPolicy: "agent",
+  });
+  store.reportFeishuBotRuntimeStatus("local", "rt_legacy_outbound", { appliedRevision: config.revision, state: "online" });
   const claim = () => store.claimFeishuBotOutbound("local", "rt_legacy_outbound", undefined, true, true, true);
   return { store, config, bindingId, issueId, wakeTaskId, externalChatId, claim, scenario };
 }

@@ -2316,8 +2316,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const second = store.sendChatMessage(chat.id, { content: "second" });
     expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
     expect(second.task.id).toBe(first.task.id);
-    expect(JSON.stringify(store.buildTaskSessionProjection(first.task.id))).toContain("second");
     expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+    expect(JSON.stringify(store.buildTaskSessionProjection(first.task.id))).toContain("second");
+    const inputSeqs = store.listMessages(chat.id).filter(message => message.sender_type === "member").map(message => message.seq);
+    store.recordSessionAgentInlineRead(chat.id, agent.id, inputSeqs, Math.max(...inputSeqs), true, first.task.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     store.startTask(first.task.id);
     store.completeTask(first.task.id, { output: "answer", sessionId: "pg-chat-session", workDir: "/tmp/pg-chat-queue" });

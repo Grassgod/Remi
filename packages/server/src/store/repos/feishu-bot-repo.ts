@@ -771,7 +771,7 @@ export class FeishuBotRepo {
       }
       // Policy extension point: evaluate future workspace Chat delivery policy
       // before creating either the assistant message or outbound rows.
-      const message = this.ctx.chat().appendChatMessageWithinTransaction({ chatSessionId: session.id,
+      const message = this.ctx.chat().appendChatMessageWithinTransaction({ id: createId("msg"), chatSessionId: session.id,
         taskId, role: "assistant", body });
       const attachments = inputs.map(input => this.ctx.issues().createAttachment({ ...input,
         workspaceId: session.workspaceId, chatSessionId: session.id, chatMessageId: message.id,
@@ -1410,25 +1410,35 @@ export class FeishuBotRepo {
           now,
         ],
       );
+      const existingCarrier = this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+        WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(wakeTask.id) as Row | null;
+      const deliveryId = createId("fbo");
+      // A coalesced Turn keeps its existing carrier and delivery claim. The
+      // additional request notification needs its own outbound idempotency key.
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
            id, workspace_id, binding_id, task_id, chat_id, thread_id,
-           reply_to_message_id, body, status, available_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+           reply_to_message_id, body, human_request_id, human_request_task_id,
+           status, available_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
         [
-          createId("fbo"),
+          deliveryId,
           issue.workspaceId,
           bindingId,
-          wakeTask.id,
+          existingCarrier ? null : wakeTask.id,
           topics.chatId,
           cleanOptionalString(binding.thread_id),
           cleanOptionalString(binding.reply_to_message_id),
           humanRequestPushBody(issue, sourceTask, request, payload),
+          request.id,
+          sourceTask.id,
           now,
           now,
           now,
         ],
       );
+      this.ctx.db.run(`UPDATE multiremi_feishu_bot_human_request_pushes SET delivery_id = ?
+        WHERE binding_id = ? AND request_id = ?`, [deliveryId, bindingId, request.id]);
       return wakeTask;
     })();
     if (wakeTask) this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
@@ -2561,6 +2571,7 @@ export class FeishuBotRepo {
       let wakeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
       // Binding changes cannot turn an existing private/different-Issue user
       // turn into an Issue notification. Only coalesce into the same transport.
+      const separatePrivateTurn = Boolean(wakeTask && wakeTask.issueId !== input.issue.id);
       if (wakeTask && (wakeTask.issueId !== input.issue.id
         || wakeTask.workspaceId !== input.issue.workspaceId
         || wakeTask.agentId !== binding.agent_id)) wakeTask = null;
@@ -2576,7 +2587,7 @@ export class FeishuBotRepo {
           prompt: roundPushPrompt(input.issue), wakeSource: "relay",
           requestingUserName: "Multiremi",
           requestingUserProfileDescription: "System-triggered summary for an Issue work round.",
-        }, childStatusChanges, deferredEvents),
+        }, childStatusChanges, deferredEvents, undefined, separatePrivateTurn ? `relay:${input.issue.id}` : undefined),
       });
       wakeTask = turn.task;
       if (!wakeTask) continue;

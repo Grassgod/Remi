@@ -496,7 +496,7 @@ export class ChatRepo {
     const session=this.getChatSession(input.chatSessionId);
     if(!session)throw new Error(`Chat session not found: ${input.chatSessionId}`);
     const staged=input.role==='assistant'&&input.taskId?this.ctx.db.query('SELECT reply_message_id FROM multiremi_turns WHERE current_attempt_id=?').get(input.taskId)?.reply_message_id:null;
-    const id=staged??input.id??createId('msg');
+    const id=input.id??staged??createId('msg');
     const task=input.taskId?this.ctx.tasks().getTask(input.taskId):null;
     const source=input.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(input.taskId):null;
     const creatorMember=this.ctx.workspaces().getWorkspaceMemberByRef(session.creatorId??'local',session.workspaceId);

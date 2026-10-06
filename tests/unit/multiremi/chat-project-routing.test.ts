@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { daemonRuntimeId } from "@multiremi/store.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -17,7 +18,7 @@ describe("Chat Project routing after dispatch and Runtime changes", () => {
       const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
       const task = store.sendChatMessage(chat.id, { body: "Use the selected device" }).task;
       expect(store.claimTask(first.id)?.id).toBe(task.id);
-      db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
 
       // Simulate a lost claim response followed by a routing settings change.
       store.deleteProjectDevice(project.id, "chat-first");
@@ -39,6 +40,7 @@ describe("Chat Project routing after dispatch and Runtime changes", () => {
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const first = store.sendChatMessage(chat.id, { body: "First turn" }).task;
     expect(store.claimTask(directory.id)?.id).toBe(first.id);
+    store.buildTaskSessionProjection(first.id);
     store.startTask(first.id);
     store.completeTask(first.id, { output: "Done", sessionId: "old-native-session", workDir: "/abs/chat-directory" });
     const next = store.sendChatMessage(chat.id, { body: "Continue" }).task;

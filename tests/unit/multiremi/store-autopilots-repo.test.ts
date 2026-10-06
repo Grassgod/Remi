@@ -16,7 +16,7 @@ function createRepo(): AutopilotsRepo {
   db = openSqliteDatabase(":memory:");
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   store = new MultiremiStore(db);
-  const ctx = new StoreContext(db, () => store!);
+  const ctx = (store as unknown as { ctx: StoreContext }).ctx;
   // The analytics recorders are not on the public facade, so they are registered on the context.
   ctx.registerAnalytics(new AnalyticsRepo(ctx));
   return new AutopilotsRepo(ctx);

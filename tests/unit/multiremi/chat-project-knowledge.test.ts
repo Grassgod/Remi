@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { buildTaskEnv } from "@daemon/agent-runtime/env/injector.js";
@@ -17,7 +18,7 @@ async function fixture(options: { bound?: boolean; publisher?: boolean } = {}) {
     projectId: options.bound === false ? null : project.id,
   });
   const task = store.createTask({ agentId: agent.id, chatSessionId: chat.id, prompt: "Record this finding" });
-  db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+  mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
   const token = await store.createTaskAccessToken(store.getTask(task.id)!, "local");
   const app = createMultiremiApp({ store, authToken: "chat-project-knowledge-test" });
   const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };

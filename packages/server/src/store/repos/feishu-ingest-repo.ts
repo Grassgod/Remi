@@ -997,6 +997,7 @@ export class FeishuIngestRepo {
   ): CreateFeishuIssueProposalResult {
     const issueInput = normalizeIssueProposalInput(input);
     return this.ctx.db.transaction(() => {
+      this.lockWorkspace(input.workspaceId);
       const message = this.getMessage(messageId);
       if (!message || message.workspaceId !== input.workspaceId) {
         throw new Error(`Feishu message not found: ${messageId}`);

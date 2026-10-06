@@ -4,7 +4,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonClaimSkillResponse, skillFileCompatibilityResponse } from "@multiremi/api/wire/skills.js";
 import type { MultiremiSkillFile } from "@multiremi/contracts/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, createHistoricalDatabase, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -142,8 +142,10 @@ describe("Skill file encoding", () => {
   });
 
   it("migrates existing text files without changing their public response", () => {
-    const store = createStore();
-    const skill = store.createSkill({ name: "legacy", content: "# Legacy", files: [textFile] });
+    createHistoricalDatabase();
+    const skill = { id: "skill_legacy" };
+    db!.run("INSERT INTO multiremi_skills(id,name,content,created_at,updated_at) VALUES(?,'legacy','# Legacy',?,?)", [skill.id, "2026-09-01", "2026-09-01"]);
+    db!.run("INSERT INTO multiremi_skill_files(id,skill_id,path,content,created_at,updated_at) VALUES('file_legacy',?,?,?,?,?)", [skill.id, textFile.path, textFile.content, "2026-09-01", "2026-09-01"]);
     db!.run("ALTER TABLE multiremi_skill_files DROP COLUMN encoding");
     const upgraded = new MultiremiStore(db!);
     const file = upgraded.listSkillFiles(skill.id!)[0]!;

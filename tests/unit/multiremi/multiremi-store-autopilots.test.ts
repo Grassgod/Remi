@@ -235,7 +235,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       },
     });
 
-    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    const inboxEvents = events.filter((event) => event.type === "inbox:new"
+      && ["autopilot_run_completed", "autopilot_run_failed"].includes((event.payload.item as { type?: string } | undefined)?.type ?? ""));
     expect(inboxEvents).toHaveLength(2);
   });
 
@@ -257,7 +258,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const body = await claim.json();
-    expect(body.task.id).toBe(run.taskId);
+    expect(body.task.attempt_id).toBe(run.taskId);
+    expect(body.task.turn_id).toBe(store.getTurnForAttempt(run.taskId!)!.id);
     expect(body.task.autopilot_run_id).toBe(run.id);
     expect(body.task.autopilotRunId).toBeUndefined();
   });
@@ -529,7 +531,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(updateEvents.map((event) => (event.payload.autopilot as { id: string }).id)).toEqual([offender.id, skippedDiluted.id]);
     expect(updateEvents.every((event) => event.actorType === "system")).toBe(true);
     expect(updateEvents.every((event) => event.payload.reason === "auto_paused_high_failure_rate")).toBe(true);
-    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    const inboxEvents = events.filter((event) => event.type === "inbox:new"
+      && (event.payload.item as { type?: string } | undefined)?.type === "autopilot_paused");
     expect(inboxEvents).toHaveLength(2);
     expect(inboxEvents.map((event) => (event.payload.item as { memberId: string }).memberId).sort()).toEqual([creator.id, owner.id].sort());
 

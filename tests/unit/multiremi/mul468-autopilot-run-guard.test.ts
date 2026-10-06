@@ -161,27 +161,26 @@ describe("MUL-468 autopilot run guard", () => {
       .toHaveLength(1);
   });
 
-  it("fails `task steer` locally when no directive input is supplied", async () => {
+  it("rejects retired `task steer` locally when no directive input is supplied", async () => {
     const baseUrl = startFixture();
     const result = await runDispatch(["task", "steer", "tsk_mul468", ...connectionOptions(baseUrl)]);
 
     const message = String((result.error as Error | null)?.message ?? "");
-    expect(message).toContain("remi task steer requires");
-    expect(message).toContain("remi task steer list <task>");
+    expect(message).toContain("remi message send --to <agent>");
+    expect(message).toContain("remi turn wrap-up <turn>");
+    expect((result.error as { code: string }).code).toBe("usage");
     expect(requests).toEqual([]);
   });
 
-  it("still posts `task steer` when a directive is supplied", async () => {
+  it("rejects retired `task steer` with a directive without sending HTTP", async () => {
     const baseUrl = startFixture();
     const result = await runDispatch([
       "task", "steer", "tsk_mul468", "--content", "wrap up the review", ...connectionOptions(baseUrl),
     ]);
 
-    expect(result.error).toBeNull();
-    const writes = posts();
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toMatchObject({ method: "POST", path: "/api/tasks/tsk_mul468/steer" });
-    expect((writes[0]!.body as { content?: string }).content).toBe("wrap up the review");
+    expect((result.error as { code: string }).code).toBe("usage");
+    expect(String(result.error)).toContain("remi message send --to <agent>");
+    expect(requests).toEqual([]);
   });
 
   it("renders `autopilot run` as a group and names run-now in the parent help", async () => {
@@ -260,7 +259,6 @@ describe("MUL-468 autopilot run guard", () => {
       // `task steer <task>` writes a directive while `task steer list <task>`
       // reads the ones already sent. A bare steer now fails before the request,
       // so the prefix can no longer post anything by accident (see above).
-      "task.steer": "Writes a steer directive; the bare form is guarded locally",
     };
     const violations: string[] = [];
     for (const entry of inventory) {

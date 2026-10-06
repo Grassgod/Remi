@@ -1,6 +1,6 @@
 // The issue-facing CLI an agent uses from inside a task: assignee refs, Go-style
 // table output, attachment upload/download, the API calls daemon prompts document,
-// the Session sub-commands, and the legacy cursor-header fallback.
+// the Session sub-commands, and canonical message range pagination.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,9 +8,17 @@ import { join } from "node:path";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
 import { buildIssueListQuery } from "../../../apps/remi/cli/multiremi/commands/issue.js";
 import { cliCommandHelp } from "../../../apps/remi/cli/index.js";
+import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
+import { unifiedCommandSpecs } from "../../../apps/remi/cli/commands/unified.js";
 import { tableHeaders } from "./helpers.js";
 
 let tmp: string | null = null;
+
+async function runConversationCli(args: string[]): Promise<void> {
+  const registry = new CommandRegistry();
+  for (const spec of unifiedCommandSpecs()) registry.register(spec);
+  await registry.execute(args);
+}
 
 afterEach(() => {
   if (tmp) rmSync(tmp, { recursive: true, force: true });
@@ -341,442 +349,175 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
     }
   });
 
-  test("issue read commands default to Go-style table output", async () => {
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        if (url.pathname === "/api/issues" && request.method === "GET") {
-          return Response.json({
-            issues: [{
-              id: "iss_1",
-              key: "MUL-1",
-              title: "Fix checkout cache",
-              status: "todo",
-              priority: "high",
-              assignee_type: "agent",
-              assignee_id: "agt_codex",
-              start_date: "2026-06-20",
-              due_date: "2026-06-22",
-            }],
-            total: 1,
-          });
-        }
-        if (url.pathname === "/api/issues/search" && request.method === "GET") {
-          return Response.json({
-            issues: [{ id: "iss_1", identifier: "MUL-1", title: "Fix checkout cache", status: "todo", priority: "high", match_source: "title", matched_snippet: "checkout cache" }],
-            total: 1,
-          });
-        }
-        if (url.pathname === "/api/issues/MUL-1/task-runs" && request.method === "GET") {
-          return Response.json([{ id: "tsk_1234567890abcdef", status: "completed", agent_id: "agt_codex", started_at: "2026-06-21T10:30:00.000Z", completed_at: "2026-06-21T10:31:00.000Z", error: "" }]);
-        }
-        if (url.pathname === "/api/tasks/tsk_1/messages" && request.method === "GET") {
-          return Response.json([{ seq: 2, type: "tool_result", tool: "Bash", content: "done" }]);
-        }
-        if (url.pathname === "/api/issues/MUL-1/comments" && request.method === "GET") {
-          return Response.json([{ id: "c_1", parent_id: null, author_type: "member", author_id: "mem_1", type: "comment", created_at: "2026-06-21T10:31:00.000Z", content: "Looks good" }]);
-        }
-        if (url.pathname === "/api/issues/MUL-1/subscribers" && request.method === "GET") {
-          return Response.json([{ id: "sub_1", user_type: "member", user_id: "mem_1", reason: "manual", created_at: "2026-06-21T10:32:00.000Z" }]);
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const logs: string[] = [];
-    const originalLog = console.log;
+  test("issue read commands keep table output and retired run commands send nothing", async () => {
+    const requests: string[] = [], logs: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname; requests.push(path);
+      return Response.json(path.endsWith("/subscribers") ? [{ member_id: "mem_1", reason: "manual", created_at: "2026-06-21T10:32:00.000Z" }]
+        : { issues: [{ identifier: "MUL-1", title: "Fix checkout cache", status: "todo", priority: "high",
+          assignee_id: "agt_codex", assignee_type: "agent", start_date: "2026-06-20", due_date: "2026-06-22",
+          match_source: "title", matched_snippet: "checkout cache" }], total: 1 });
+    } });
+    const original = console.log;
     try {
-      console.log = (value?: unknown) => { logs.push(String(value)); };
-      const serverUrl = `http://127.0.0.1:${server.port}`;
-
-      await runMultiremi(["issue", "list", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "search", "checkout", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "runs", "MUL-1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "run-messages", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--output", "table"], { programName: "multiremi" });
-      await runMultiremi(["issue", "comment", "list", "MUL-1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "subscriber", "list", "MUL-1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "list", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-
+      console.log = value => { logs.push(String(value)); };
+      const connection = ["--server", server.url.toString(), "--token", "fixture"];
+      await runMultiremi(["issue", "list", ...connection]);
+      await runMultiremi(["issue", "search", "Checkout", ...connection]);
+      await runMultiremi(["issue", "subscriber", "list", "MUL-1", ...connection]);
+      await runMultiremi(["issue", "list", ...connection, "--output", "json"]);
       expect(tableHeaders(logs[0])).toEqual(["KEY", "TITLE", "STATUS", "PRIORITY", "ASSIGNEE", "START DATE", "DUE DATE"]);
+      expect(tableHeaders(logs[1])).toEqual(["KEY", "TITLE", "STATUS", "MATCH"]);
+      expect(tableHeaders(logs[2])).toEqual(["USER", "REASON", "CREATED"]);
       expect(logs[0]).toContain("MUL-1");
       expect(logs[0]).toContain("agent:agt_codex");
       expect(logs[0]).toContain("2026-06-20");
-      expect(tableHeaders(logs[1])).toEqual(["KEY", "TITLE", "STATUS", "MATCH"]);
+      expect(logs[0]).toContain("2026-06-22");
       expect(logs[1]).toContain("title: checkout cache");
-      expect(tableHeaders(logs[2])).toEqual(["ID", "AGENT", "STATUS", "PROGRESS", "STARTED", "COMPLETED", "ERROR", "WAIT REASON"]);
-      expect(logs[2]).toContain("tsk_1234567");
-      expect(tableHeaders(logs[3])).toEqual(["SEQ", "TYPE", "TOOL", "CONTENT"]);
-      expect(logs[3]).toContain("Bash");
-      expect(logs[3]).toContain("done");
-      expect(tableHeaders(logs[4])).toEqual(["ID", "PARENT", "AUTHOR", "TYPE", "CONTENT", "CREATED"]);
-      expect(logs[4]).toContain("Looks good");
-      expect(tableHeaders(logs[5])).toEqual(["USER", "REASON", "CREATED"]);
-      expect(logs[5]).toContain("mem_1");
-      expect(JSON.parse(logs[6]).issues[0].title).toBe("Fix checkout cache");
-    } finally {
-      console.log = originalLog;
-      server.stop(true);
-    }
+      expect(logs[2]).toContain("mem_1");
+      expect(JSON.parse(logs[3]).issues[0].title).toBe("Fix checkout cache");
+      const before = [...requests];
+      for (const argv of [["issue", "runs", "MUL-1"], ["issue", "run-messages", "tsk_1"], ["issue", "comment", "list", "MUL-1"]]) {
+        await expect(runMultiremi([...argv, ...connection])).rejects.toThrow("已移除");
+      }
+      expect(requests).toEqual(before);
+    } finally { console.log = original; server.stop(true); }
   });
 
-  test("issue attachment flags upload files and attachment download saves content", async () => {
-    tmp = mkdtempSync(join(tmpdir(), "multiremi-cli-attachments-"));
-    const issueAttachment = join(tmp, "issue-note.txt");
-    const commentAttachmentA = join(tmp, "comment-a.txt");
-    const commentAttachmentB = join(tmp, "comment-b.txt");
-    writeFileSync(issueAttachment, "issue file", "utf8");
-    writeFileSync(commentAttachmentA, "comment a", "utf8");
-    writeFileSync(commentAttachmentB, "comment b", "utf8");
-
-    const uploads: Array<{ issueId: string | null; filename: string; text: string; authorization: string | null }> = [];
-    const jsonRequests: Array<{ method: string; path: string; body?: any }> = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        if (url.pathname === "/api/upload-file" && request.method === "POST") {
-          const form = await request.formData();
-          const file = form.get("file");
-          if (!(file instanceof File)) return Response.json({ error: "missing file" }, { status: 400 });
-          const id = `att_${uploads.length + 1}`;
-          uploads.push({
-            issueId: String(form.get("issue_id") ?? ""),
-            filename: file.name,
-            text: await file.text(),
-            authorization: request.headers.get("authorization"),
-          });
-          return Response.json({
-            id,
-            filename: file.name,
-            url: `/api/attachments/${id}/content`,
-            download_url: `/api/attachments/${id}/download`,
-            size_bytes: file.size,
-          });
-        }
-
-        if (url.pathname === "/api/issues" && request.method === "POST") {
-          const body = await request.json();
-          jsonRequests.push({ method: request.method, path: url.pathname, body });
-          return Response.json({ id: "iss_created", ...body }, { status: 201 });
-        }
-        if (url.pathname === "/api/issues/MUL-1/comments" && request.method === "POST") {
-          const body = await request.json();
-          jsonRequests.push({ method: request.method, path: url.pathname, body });
-          return Response.json({ id: "c_added", ...body }, { status: 201 });
-        }
-        if (url.pathname === "/api/attachments/att_1" && request.method === "GET") {
-          return Response.json({
-            id: "att_1",
-            filename: "download.txt",
-            download_url: "/api/attachments/att_1/download",
-            size_bytes: 10,
-          });
-        }
-        if (url.pathname === "/api/attachments/att_1/download" && request.method === "GET") {
-          return new Response("downloaded!", { headers: { "Content-Type": "text/plain" } });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const logs: string[] = [];
-    const errors: string[] = [];
-    const originalLog = console.log;
-    const originalError = console.error;
+  test("issue attachments upload and canonical message attachments preserve their bytes", async () => {
+    tmp = mkdtempSync(join(tmpdir(), "conversation-cli-attachments-"));
+    const path = join(tmp, "report.txt"); writeFileSync(path, "report bytes");
+    const secondPath = join(tmp, "second.txt"); writeFileSync(secondPath, "second bytes");
+    const uploads: Array<{ path: string; body: unknown; files: Array<{ name: string; text: string }> }> = [];
+    const authorizations: Array<string | null> = [], logs: string[] = [], errors: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const url = new URL(request.url);
+      authorizations.push(request.headers.get("authorization"));
+      if (url.pathname === "/api/cli/capabilities") return Response.json({ commands: [{ id: "message.send", allowed: true }] });
+      if (url.pathname === "/api/upload-file") {
+        const form = await request.formData(); const file = form.get("file") as File;
+        uploads.push({ path: url.pathname, body: form.get("issue_id"), files: [{ name: file.name, text: await file.text() }] });
+        return Response.json({ id: "att_1", filename: file.name });
+      }
+      if (url.pathname === "/api/issues") return Response.json({ id: "iss_created", ...await request.json() }, { status: 201 });
+      if (url.pathname === "/api/sessions/ises_1/messages") {
+        const form = await request.formData();
+        const files = await Promise.all((form.getAll("file") as File[]).map(async file => ({ name: file.name, text: await file.text() })));
+        uploads.push({ path: url.pathname, body: JSON.parse(String(form.get("message"))), files });
+        return Response.json({ message: { id: "msg_1" }, wake_applied: "inbox_only", wake_reason: "requested_inbox_only" });
+      }
+      if (url.pathname === "/api/attachments/att_1") return Response.json({ id: "att_1", filename: "report.txt", download_url: "/api/attachments/att_1/download" });
+      if (url.pathname.endsWith("/download")) return new Response("report bytes");
+      return Response.json({ error: "not found" }, { status: 404 });
+    } });
+    const original = console.log, originalError = console.error;
+    console.log = value => { logs.push(String(value)); };
+    console.error = value => { errors.push(String(value)); };
     try {
-      console.log = (value?: unknown) => { logs.push(String(value)); };
-      console.error = (value?: unknown) => { errors.push(String(value)); };
-      const serverUrl = `http://127.0.0.1:${server.port}`;
-
-      await runMultiremi(["issue", "create", "--server", serverUrl, "--token", "tok_cli", "--workspace", "ws_cli", "--title", "Created", "--attachment", issueAttachment], { programName: "multiremi" });
-      await runMultiremi([
-        "issue",
-        "comment",
-        "add",
-        "MUL-1",
-        "--server",
-        serverUrl,
-        "--token",
-        "tok_cli",
-        "--workspace",
-        "ws_cli",
-        "--content",
-        "Reply",
-        "--attachment",
-        "https://example.test/image.png",
-        "--attachment",
-        commentAttachmentA,
-        "--attachment",
-        commentAttachmentB,
-      ], { programName: "multiremi" });
-      const missingOutputDir = join(tmp, "missing", "downloads");
-      const exactOutput = join(tmp, "renamed", "custom-name.bin");
-      await expect(runMultiremi([
-        "attachment",
-        "download",
-        "att_1",
-        "-o",
-        exactOutput,
-      ], { programName: "multiremi" })).rejects.toThrow(
-        "usage: remi attachment download <attachment-id> [--output <file> | --output-dir <dir>]",
-      );
-      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", missingOutputDir], { programName: "multiremi" });
-      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output", exactOutput], { programName: "multiremi" });
-
-      expect(uploads.map((upload) => [upload.issueId, upload.filename, upload.text])).toEqual([
-        ["iss_created", "issue-note.txt", "issue file"],
-        ["MUL-1", "comment-a.txt", "comment a"],
-        ["MUL-1", "comment-b.txt", "comment b"],
+      const connection = ["--server", server.url.toString(), "--token", "fixture", "--output", "json"];
+      await runMultiremi(["issue", "create", "--title", "Report", "--attachment", path, ...connection]);
+      await runConversationCli(["message", "send", "ises_1", "--kind", "report", "--wake", "inbox_only", "--content", "Report", "--attachment", path, "--attachment", secondPath, ...connection]);
+      const output = join(tmp, "downloads", "renamed.txt");
+      await expect(runMultiremi(["attachment", "download", "att_1", "-o", output]))
+        .rejects.toThrow("usage: remi attachment download <attachment-id> [--output <file> | --output-dir <dir>]");
+      const outputDir = join(tmp, "missing", "downloads");
+      await runMultiremi(["attachment", "download", "att_1", "--output-dir", outputDir, "--server", server.url.toString(), "--token", "fixture"]);
+      await runMultiremi(["attachment", "download", "att_1", "--output", output, "--server", server.url.toString(), "--token", "fixture"]);
+      expect(uploads).toEqual([
+        { path: "/api/upload-file", body: "iss_created", files: [{ name: "report.txt", text: "report bytes" }] },
+        { path: "/api/sessions/ises_1/messages", body: { body_md: "Report", message_kind: "report", wake_requested: "inbox_only", to: { type: "none" }, reply_to_id: null, dedupe_key: null }, files: [{ name: "report.txt", text: "report bytes" }, { name: "second.txt", text: "second bytes" }] },
       ]);
-      expect(uploads.every((upload) => upload.authorization === "Bearer tok_cli")).toBe(true);
-      expect(jsonRequests[0]).toMatchObject({ method: "POST", path: "/api/issues", body: { title: "Created" } });
-      expect(jsonRequests[1]).toMatchObject({
-        method: "POST",
-        path: "/api/issues/MUL-1/comments",
-        body: { content: "Reply", parent_id: null, attachment_ids: ["att_2", "att_3"] },
-      });
-      expect(errors).toContain(`Uploaded ${issueAttachment}`);
-      expect(errors).toContain(`Uploaded ${commentAttachmentA}`);
-      expect(errors).toContain(`Uploaded ${commentAttachmentB}`);
-      expect(errors.some((line) => line.includes("URLs are not supported"))).toBe(true);
-      expect(readFileSync(join(missingOutputDir, "download.txt"), "utf8")).toBe("downloaded!");
-      expect(readFileSync(exactOutput, "utf8")).toBe("downloaded!");
-      expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({ id: "att_1", filename: "custom-name.bin", path: exactOutput });
-    } finally {
-      console.log = originalLog;
-      console.error = originalError;
-      server.stop(true);
-    }
+      expect(authorizations.every(value => value === "Bearer fixture")).toBe(true);
+      expect(errors).toContain(`Uploaded ${path}`);
+      expect(readFileSync(join(outputDir, "report.txt"), "utf8")).toBe("report bytes");
+      expect(readFileSync(output, "utf8")).toBe("report bytes");
+      expect(JSON.parse(logs.at(-1)!)).toMatchObject({ id: "att_1", filename: "renamed.txt", path: output });
+      const before = uploads.length;
+      await expect(runConversationCli(["message", "send", "ises_1", "--attachment", "https://example.test/image.png", ...connection]))
+        .rejects.toThrow("--attachment requires a local file path");
+      expect(uploads).toHaveLength(before);
+    } finally { console.log = original; console.error = originalError; server.stop(true); }
   });
 
-  test("issue commands call the Multiremi API used by daemon prompts", async () => {
-    const requests: Array<{ method: string; path: string; authorization: string | null; body?: any }> = [];
-    const comments = [
-      { id: "c_root", parentId: null, body: "Root", createdAt: "2024-12-31T00:00:00.000Z" },
-      { id: "c_new", parentId: "c_root", body: "New reply", createdAt: "2025-01-01T00:00:01.000Z" },
-    ];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url);
-        const entry: { method: string; path: string; authorization: string | null; body?: any } = {
-          method: request.method,
-          path: `${url.pathname}${url.search}`,
-          authorization: request.headers.get("authorization"),
-        };
-        if (request.method !== "GET" && request.method !== "DELETE") entry.body = await request.json();
-        requests.push(entry);
-        if (url.pathname === "/api/issues" && request.method === "GET") {
-          return Response.json({ issues: [{ id: "iss_1", title: "Issue one" }], total: 1 });
-        }
-        if (url.pathname === "/api/issues/search" && request.method === "GET") {
-          return Response.json({ issues: [{ id: "iss_1", title: "Issue one", match_source: "title" }], total: 1 });
-        }
-        if (url.pathname === "/api/issues" && request.method === "POST") {
-          return Response.json({ id: "iss_created", ...entry.body }, { status: 201 });
-        }
-        if (url.pathname === "/api/issues/iss_1" && request.method === "GET") {
-          return Response.json({ id: "iss_1", title: "Issue one" });
-        }
-        if (url.pathname === "/api/issues/iss_1" && request.method === "PUT") {
-          return Response.json({ id: "iss_1", title: entry.body.title ?? "Issue one", ...entry.body });
-        }
-        if (url.pathname === "/api/issues/iss_delete" && request.method === "DELETE") {
-          return new Response(null, { status: 204 });
-        }
-        if (url.pathname === "/api/issues/iss_1/comments" && request.method === "GET") {
-          return Response.json(comments, {
-            headers: {
-              "X-Multiremi-Next-Before": "2025-01-01T00:00:01.000Z",
-              "X-Multiremi-Next-Before-Id": "c_new",
-            },
-          });
-        }
-        if (url.pathname === "/api/issues/iss_1/comments" && request.method === "POST") {
-          return Response.json({ id: "c_added", ...entry.body }, { status: 201 });
-        }
-        if (url.pathname === "/api/comments/c_new" && request.method === "PUT") {
-          return Response.json({ comment: { id: "c_new", ...entry.body } });
-        }
-        if (url.pathname === "/api/comments/c_new" && request.method === "DELETE") {
-          return Response.json({ ok: true });
-        }
-        if (url.pathname === "/api/comments/c_new/resolve" && request.method === "POST") {
-          return Response.json({ comment: { id: "c_new", resolved_at: "2025-01-01T00:00:02.000Z", ...entry.body } });
-        }
-        if (url.pathname === "/api/comments/c_new/resolve" && request.method === "DELETE") {
-          return Response.json({ comment: { id: "c_new", resolved_at: null } });
-        }
-        if (url.pathname === "/api/issues/iss_1/metadata" && request.method === "GET") {
-          return Response.json({ attempts: 2, ready: true });
-        }
-        if (url.pathname === "/api/issues/iss_1/metadata/attempts" && request.method === "PUT") {
-          return Response.json({ attempts: entry.body.value, ready: true });
-        }
-        if (url.pathname === "/api/issues/iss_1/metadata/attempts" && request.method === "DELETE") {
-          return Response.json({ ready: true });
-        }
-        if (url.pathname === "/api/issues/iss_1/subscribers" && request.method === "GET") {
-          return Response.json([{ id: "sub_1", member_id: "mem_1", reason: "manual" }]);
-        }
-        if (url.pathname === "/api/issues/iss_1/subscribe" && request.method === "POST") {
-          return Response.json({ subscribed: true, ...entry.body });
-        }
-        if (url.pathname === "/api/issues/iss_1/unsubscribe" && request.method === "POST") {
-          return Response.json({ subscribed: false, ...entry.body });
-        }
-        if (url.pathname === "/api/issues/iss_1/task-runs" && request.method === "GET") {
-          return Response.json([{ id: "tsk_1", status: "completed" }]);
-        }
-        if (url.pathname === "/api/tasks/tsk_1/messages" && request.method === "GET") {
-          return Response.json([{ seq: 2, type: "assistant", content: "done" }]);
-        }
-        if (url.pathname === "/api/issues/iss_1/rerun" && request.method === "POST") {
-          return Response.json({ id: "tsk_rerun", issue_id: "iss_1", ...entry.body }, { status: 202 });
-        }
-        if (url.pathname === "/api/tasks/tsk_1/cancel" && request.method === "POST") {
-          return Response.json({ id: "tsk_1", status: "cancelled" });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const logs: string[] = [];
-    const errors: string[] = [];
-    const originalLog = console.log;
-    const originalError = console.error;
+  test("Issue resources and canonical message commands call the API used by daemon prompts", async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [], logs: string[] = [];
+    const authorizations: Array<string | null> = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const url = new URL(request.url), path = url.pathname;
+      authorizations.push(request.headers.get("authorization"));
+      if (path === "/api/cli/capabilities") return Response.json({ commands: ["message.list", "message.send", "message.edit", "message.delete", "message.resolve"].map(id => ({ id, allowed: true })) });
+      const body = ["GET", "DELETE"].includes(request.method) ? null : await request.json();
+      requests.push({ method: request.method, path: `${path}${url.search}`, body });
+      if (path.endsWith("/metadata")) return Response.json({ attempts: 2, ready: true });
+      if (path.endsWith("/metadata/attempts")) return Response.json(request.method === "DELETE" ? { ready: true } : { attempts: 3, ready: true });
+      if (path.endsWith("/subscribers")) return Response.json([{ id: "sub_1", member_id: "mem_1" }]);
+      if (path.endsWith("/subscribe") || path.endsWith("/unsubscribe")) return Response.json({ subscribed: path.endsWith("/subscribe"), member_id: "mem_1" });
+      if (path === "/api/issues" || path === "/api/issues/search") return Response.json(request.method === "GET"
+        ? { issues: [{ id: "iss_1", title: "Issue one", match_source: "title" }], total: 1 }
+        : { id: "iss_created", ...body });
+      if (path === "/api/issues/iss_delete") return Response.json({ deleted: true });
+      if (path === "/api/issues/iss_1") return Response.json({ id: "iss_1", title: "Issue one", ...body });
+      return Response.json(path.endsWith("/messages") && request.method === "GET"
+        ? { messages: [{ id: "msg_1", body_md: "Root" }], next_cursor: null }
+        : { message: { id: "msg_1" }, wake_applied: "inbox_only", wake_reason: "requested_inbox_only" });
+    } });
+    const original = console.log; console.log = value => { logs.push(String(value)); };
     try {
-      console.log = (value?: unknown) => { logs.push(String(value)); };
-      console.error = (value?: unknown) => { errors.push(String(value)); };
-      const serverUrl = `http://127.0.0.1:${server.port}`;
-
-      await runMultiremi(["issue", "list", "--server", serverUrl, "--token", "tok_cli", "--status", "todo", "--project", "prj_1", "--metadata", "ready=true", "--limit", "2", "--offset", "1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "get", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "create", "--server", serverUrl, "--token", "tok_cli", "--title", "Created", "--description", "Body", "--status", "todo", "--priority", "high", "--assignee-id", "agt_1", "--project", "prj_1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "update", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--title", "Updated", "--project=", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "assign", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--to-id", "mem_1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi([
-        "issue",
-        "comment",
-        "list",
-        "iss_1",
-        "--server",
-        serverUrl,
-        "--token",
-        "tok_cli",
-        "--thread",
-        "c_root",
-        "--since",
-        "2025-01-01T00:00:00.000Z",
-        "--tail",
-        "1",
-        "--output",
-        "json",
-      ], { programName: "multiremi" });
-      await runMultiremi([
-        "issue",
-        "comment",
-        "add",
-        "iss_1",
-        "--server",
-        serverUrl,
-        "--token",
-        "tok_cli",
-        "--parent",
-        "c_root",
-        "--content",
-        "Reply from CLI",
-      ], { programName: "multiremi" });
-      await runMultiremi(["issue", "comment", "update", "c_new", "--server", serverUrl, "--token", "tok_cli", "--content", "Edited"], { programName: "multiremi" });
-      await runMultiremi(["issue", "comment", "delete", "c_new", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "comment", "resolve", "c_new", "--server", serverUrl, "--token", "tok_cli", "--actor-type", "member", "--actor-id", "mem_1"], { programName: "multiremi" });
-      await runMultiremi(["issue", "comment", "unresolve", "c_new", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["issue", "status", "iss_1", "in_review", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "metadata", "list", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "metadata", "get", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--key", "attempts", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "metadata", "set", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--key", "attempts", "--value", "3", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "metadata", "delete", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--key", "attempts", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "subscriber", "list", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "subscriber", "add", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--user-id", "mem_1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "subscriber", "remove", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--user-id", "mem_1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "runs", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "run-messages", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--since", "1", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "rerun", "iss_1", "--server", serverUrl, "--token", "tok_cli", "--agent-id", "agt_1", "--prompt", "Again", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "cancel-task", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "search", "Issue", "--server", serverUrl, "--token", "tok_cli", "--limit", "5", "--include-closed", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["issue", "delete", "iss_delete", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
-
-      expect(JSON.parse(logs[0]).issues[0].title).toBe("Issue one");
-      expect(JSON.parse(logs[1]).title).toBe("Issue one");
-      expect(JSON.parse(logs[2])).toMatchObject({ id: "iss_created", title: "Created", assignee_id: "agt_1" });
-      expect(JSON.parse(logs[3])).toMatchObject({ id: "iss_1", title: "Updated", project_id: null });
-      expect(JSON.parse(logs[4])).toMatchObject({ id: "iss_1", assignee_type: "member", assignee_id: "mem_1" });
-      expect(JSON.parse(logs[5]).map((comment: any) => comment.id)).toEqual(["c_root", "c_new"]);
-      expect(JSON.parse(logs[6])).toMatchObject({ id: "c_added", parent_id: "c_root", content: "Reply from CLI" });
-      expect(JSON.parse(logs[7])).toMatchObject({ comment: { id: "c_new", content: "Edited" } });
-      expect(JSON.parse(logs[8])).toEqual({ ok: true });
-      expect(JSON.parse(logs[9])).toMatchObject({ comment: { id: "c_new", actor_type: "member", actor_id: "mem_1" } });
-      expect(JSON.parse(logs[10])).toMatchObject({ comment: { id: "c_new", resolved_at: null } });
-      expect(JSON.parse(logs[11]).status).toBe("in_review");
-      expect(JSON.parse(logs[12])).toEqual({ attempts: 2, ready: true });
-      expect(JSON.parse(logs[13])).toBe(2);
-      expect(JSON.parse(logs[14])).toEqual({ attempts: 3, ready: true });
-      expect(JSON.parse(logs[15])).toEqual({ ready: true });
-      expect(JSON.parse(logs[16])[0]).toMatchObject({ id: "sub_1", member_id: "mem_1" });
-      expect(JSON.parse(logs[17])).toEqual({ subscribed: true, member_id: "mem_1" });
-      expect(JSON.parse(logs[18])).toEqual({ subscribed: false, member_id: "mem_1" });
-      expect(JSON.parse(logs[19])[0]).toMatchObject({ id: "tsk_1", status: "completed" });
-      expect(JSON.parse(logs[20])[0]).toMatchObject({ seq: 2, type: "assistant" });
-      expect(JSON.parse(logs[21])).toMatchObject({ id: "tsk_rerun", agent_id: "agt_1", prompt: "Again" });
-      expect(JSON.parse(logs[22])).toMatchObject({ id: "tsk_1", status: "cancelled" });
-      expect(JSON.parse(logs[23]).issues[0]).toMatchObject({ id: "iss_1", match_source: "title" });
-      expect(JSON.parse(logs[24])).toEqual({ deleted: true });
-      expect(errors).toContain("Next reply cursor: --before 2025-01-01T00:00:01.000Z --before-id c_new");
-      expect(requests.map((request) => request.path)).toEqual([
-        "/api/issues?status=todo&project_id=prj_1&limit=2&offset=1&metadata=%7B%22ready%22%3Atrue%7D",
-        "/api/issues/iss_1",
-        "/api/issues",
-        "/api/issues/iss_1",
-        "/api/issues/iss_1",
-        "/api/issues/iss_1/comments?since=2025-01-01T00%3A00%3A00.000Z&thread=c_root&tail=1",
-        "/api/issues/iss_1/comments",
-        "/api/comments/c_new",
-        "/api/comments/c_new",
-        "/api/comments/c_new/resolve",
-        "/api/comments/c_new/resolve",
-        "/api/issues/iss_1",
-        "/api/issues/iss_1/metadata",
-        "/api/issues/iss_1/metadata",
-        "/api/issues/iss_1/metadata/attempts",
-        "/api/issues/iss_1/metadata/attempts",
-        "/api/issues/iss_1/subscribers",
-        "/api/issues/iss_1/subscribe",
-        "/api/issues/iss_1/unsubscribe",
-        "/api/issues/iss_1/task-runs",
-        "/api/tasks/tsk_1/messages?since=1",
-        "/api/issues/iss_1/rerun",
-        "/api/tasks/tsk_1/cancel",
-        "/api/issues/search?q=Issue&limit=5&include_closed=true",
-        "/api/issues/iss_delete",
+      const connection = ["--server", server.url.toString(), "--token", "fixture", "--output", "json"];
+      await runMultiremi(["issue", "list", "--status", "todo", "--project", "prj_1", "--limit", "2", "--offset", "1", "--metadata", "ready=true", ...connection]);
+      await runMultiremi(["issue", "get", "iss_1", ...connection]);
+      await runMultiremi(["issue", "create", "--title", "Created", "--description", "Body", "--status", "todo", "--priority", "high", "--assignee-type", "agent", "--assignee", "agt_1", "--project", "prj_1", ...connection]);
+      await runMultiremi(["issue", "update", "iss_1", "--title", "Updated", "--project=", ...connection]);
+      await runMultiremi(["issue", "assign", "iss_1", "--to", "mem_1", "--type", "member", ...connection]);
+      await runMultiremi(["issue", "status", "iss_1", "in_review", ...connection]);
+      for (const name of ["list", "get", "set", "delete"]) {
+        await runMultiremi(["issue", "metadata", name, "iss_1", ...(name === "list" ? [] : ["--key", "attempts"]), ...(name === "set" ? ["--value", "3"] : []), ...connection]);
+      }
+      await runMultiremi(["issue", "subscriber", "list", "iss_1", ...connection]);
+      await runMultiremi(["issue", "subscriber", "add", "iss_1", "--user-id", "mem_1", ...connection]);
+      await runMultiremi(["issue", "subscriber", "remove", "iss_1", "--user-id", "mem_1", ...connection]);
+      await runMultiremi(["issue", "search", "Issue", "--limit", "5", "--include-closed", ...connection]);
+      await runMultiremi(["issue", "delete", "iss_delete", ...connection]);
+      expect(logs.map(value => JSON.parse(value))).toEqual([
+        { issues: [{ id: "iss_1", title: "Issue one", match_source: "title" }], total: 1 },
+        { id: "iss_1", title: "Issue one" },
+        { id: "iss_created", title: "Created", description: "Body", status: "todo", priority: "high", assignee_type: "agent", assignee_id: "agt_1", project_id: "prj_1" },
+        { id: "iss_1", title: "Updated", project_id: null },
+        { id: "iss_1", title: "Issue one", assignee_type: "member", assignee_id: "mem_1", task_id: null, cancelled_tasks: 0 },
+        { id: "iss_1", title: "Issue one", status: "in_review" },
+        { attempts: 2, ready: true }, 2, { attempts: 3, ready: true }, { ready: true },
+        [{ id: "sub_1", member_id: "mem_1" }], { subscribed: true, member_id: "mem_1" }, { subscribed: false, member_id: "mem_1" },
+        { issues: [{ id: "iss_1", title: "Issue one", match_source: "title" }], total: 1 }, { deleted: true },
       ]);
-      expect(requests.every((request) => request.authorization === "Bearer tok_cli")).toBe(true);
-      expect(requests[2].body).toMatchObject({ title: "Created", description: "Body", status: "todo", priority: "high", assignee_type: "agent", assignee_id: "agt_1", project_id: "prj_1" });
+      expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/issues?status=todo&project_id=prj_1&limit=2&offset=1&metadata=%7B%22ready%22%3Atrue%7D",
+        "GET /api/issues/iss_1", "POST /api/issues", "PUT /api/issues/iss_1", "PUT /api/issues/iss_1", "PUT /api/issues/iss_1",
+        "GET /api/issues/iss_1/metadata", "GET /api/issues/iss_1/metadata", "PUT /api/issues/iss_1/metadata/attempts", "DELETE /api/issues/iss_1/metadata/attempts",
+        "GET /api/issues/iss_1/subscribers", "POST /api/issues/iss_1/subscribe", "POST /api/issues/iss_1/unsubscribe",
+        "GET /api/issues/search?q=Issue&limit=5&include_closed=true", "DELETE /api/issues/iss_delete",
+      ]);
+      expect(requests[2].body).toEqual({ title: "Created", description: "Body", status: "todo", priority: "high", assignee_type: "agent", assignee_id: "agt_1", project_id: "prj_1" });
       expect(requests[3].body).toEqual({ title: "Updated", project_id: null });
       expect(requests[4].body).toEqual({ assignee_type: "member", assignee_id: "mem_1" });
-      expect(requests[6].body).toEqual({ content: "Reply from CLI", parent_id: "c_root" });
-      expect(requests[7].body).toEqual({ content: "Edited" });
-      expect(requests[9].body).toEqual({ actor_type: "member", actor_id: "mem_1" });
-      expect(requests[14].body).toEqual({ value: 3 });
-      expect(requests[17].body).toEqual({ member_id: "mem_1" });
-      expect(requests[18].body).toEqual({ member_id: "mem_1" });
-      expect(requests[21].body).toEqual({ agent_id: "agt_1", prompt: "Again" });
-      expect(requests[22].body).toEqual({});
-    } finally {
-      console.log = originalLog;
-      console.error = originalError;
-      server.stop(true);
-    }
+      expect(requests[8].body).toEqual({ value: 3 });
+      expect(requests[11].body).toEqual({ member_id: "mem_1" });
+      expect(requests[12].body).toEqual({ member_id: "mem_1" });
+      requests.length = 0;
+      await runConversationCli(["message", "list", "ises_1", "--thread", "msg_root", ...connection]);
+      await runConversationCli(["message", "send", "ises_1", "--kind", "reply", "--reply-to", "msg_root", "--to", "agt_1", "--content", "Reply", ...connection]);
+      await runConversationCli(["message", "edit", "msg_1", "--content", "Edited", ...connection]);
+      await runConversationCli(["message", "resolve", "msg_1", ...connection]);
+      await runConversationCli(["message", "resolve", "msg_1", "--no-resolved", ...connection]);
+      await runConversationCli(["message", "delete", "msg_1", "--yes", ...connection]);
+      expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/sessions/ises_1/messages?thread=msg_root", "POST /api/sessions/ises_1/messages", "PATCH /api/messages/msg_1",
+        "POST /api/messages/msg_1/resolve", "POST /api/messages/msg_1/resolve", "DELETE /api/messages/msg_1",
+      ]);
+      expect(requests[1].body).toEqual({ body_md: "Reply", message_kind: "reply", wake_requested: "now", reply_to_id: "msg_root", to: { type: "agent", ref: "agt_1" }, dedupe_key: null });
+      expect(requests[2].body).toEqual({ body_md: "Edited" });
+      expect(requests.slice(3, 5).map(r => r.body)).toEqual([{ resolved: true }, { resolved: false }]);
+      expect(authorizations.every(value => value === "Bearer fixture")).toBe(true);
+    } finally { console.log = original; server.stop(true); }
   });
 
   test("issue Session CLI lists Sessions and publishes explicit reusable results", async () => {
@@ -950,51 +691,24 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
     }
   });
 
-  test("issue comment list reads legacy cursor headers from older servers", async () => {
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        const url = new URL(request.url);
-        if (url.pathname === "/api/issues/iss_legacy/comments" && request.method === "GET") {
-          return Response.json([{ id: "c_old", content: "Old cursor" }], {
-            headers: {
-              "X-Multimira-Next-Before": "2025-01-01T00:00:01.000Z",
-              "X-Multimira-Next-Before-Id": "c_old",
-            },
-          });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
-      },
-    });
-    const logs: string[] = [];
-    const errors: string[] = [];
-    const originalLog = console.log;
-    const originalError = console.error;
+  test("canonical message range follows cursor pages and joins split bodies", async () => {
+    let count = 0; const logs: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/cli/capabilities") return Response.json({ commands: [{ id: "message.list", allowed: true }] });
+      expect(url.pathname).toBe("/api/sessions/ises_1/messages");
+      expect(url.searchParams.get("from")).toBe("0"); expect(url.searchParams.get("to")).toBe("2");
+      count++;
+      expect(url.searchParams.get("cursor")).toBe(count === 1 ? null : "page2");
+      return Response.json(count === 1 ? { entries: [{ id: "msg_1", seq: 1, body_md: "first ", body_offset: 0, body_omitted_chars: 4 }], next_cursor: "page2" }
+        : { entries: [{ id: "msg_1", seq: 1, body_md: "body", body_offset: 6, body_omitted_chars: 0 }, { id: "msg_2", seq: 2, body_md: "last" }], next_cursor: null });
+    } });
+    const original = console.log;
     try {
-      console.log = (value?: unknown) => { logs.push(String(value)); };
-      console.error = (value?: unknown) => { errors.push(String(value)); };
-      await runMultiremi([
-        "issue",
-        "comment",
-        "list",
-        "iss_legacy",
-        "--server",
-        `http://127.0.0.1:${server.port}`,
-        "--token",
-        "tok_cli",
-        "--recent",
-        "1",
-        "--output",
-        "json",
-      ], { programName: "multiremi" });
-
-      expect(JSON.parse(logs[0])).toEqual([{ id: "c_old", content: "Old cursor" }]);
-      expect(errors).toContain("Next thread cursor: --before 2025-01-01T00:00:01.000Z --before-id c_old");
-    } finally {
-      console.log = originalLog;
-      console.error = originalError;
-      server.stop(true);
-    }
+      console.log = value => { logs.push(String(value)); };
+      await runConversationCli(["message", "list", "ises_1", "--from", "0", "--to", "2", "--server", server.url.toString(), "--token", "fixture", "--output", "json"]);
+      expect(count).toBe(2);
+      expect(JSON.parse(logs[0]).map((entry: { body_md: string }) => entry.body_md)).toEqual(["first body", "last"]);
+    } finally { console.log = original; server.stop(true); }
   });
 });

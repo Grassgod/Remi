@@ -1835,14 +1835,7 @@ describe("Multiremi session archives", () => {
       workspaceId: "local",
       userId: "archive-human",
     });
-    const task = await store.createAccessToken({
-      name: "archive task",
-      type: "task",
-      workspaceId: "local",
-      userId: "archive-human",
-      taskId: "tsk_archive",
-      agentId: "agt_archive",
-    });
+    const task = await store.createTaskAccessToken(store.createTask({ agentId: store.createAgent({ name: "Task credential fixture", provider: "codex" }).id, prompt: "authorization fixture" }), "local");
     for (const token of [human.token, task.token]) {
       const response = await app.request(`${base}/status`, {
         headers: { Authorization: `Bearer ${token}` },

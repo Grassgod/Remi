@@ -86,6 +86,9 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
       claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${workspaceSeq}`,
     });
     const task = store.createTask({ agentId, issueId: issue.id, workspaceId, prompt: "W" });
+    expect(store.claimTask(runtimeId)?.id).toBe(task.id);
+    store.buildTaskSessionProjection(task.id);
+    store.startTask(task.id);
     const request = store.createTaskHumanRequest({
       taskId: task.id, kind: "question",
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -219,8 +222,9 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
     const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
 
     const frames = taskInputSnapshot(store, runtimeId, `d-${runtimeId}`, new Set(), () => {});
-    expect(frames.filter(frame => frame.type === "task.human_request.settled")).toEqual([
-      expect.objectContaining({ payload: { task_id: task.id, request: settled } }),
+    expect(frames.filter(frame => frame.type === "turn.message" && (frame.payload.message as { reply_to_id?: string }).reply_to_id === request.id)).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ attempt_id: task.id,
+        message: expect.objectContaining({ message_kind: "reply", reply_to_id: settled.id }) }) }),
     ]);
   });
 });

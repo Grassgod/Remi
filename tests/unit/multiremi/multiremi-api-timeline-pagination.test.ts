@@ -97,7 +97,7 @@ describe("issue timeline reverse pagination", () => {
     expect(new Set(allIds).size).toBe(allIds.length);
   });
 
-  it("uses id as the tie breaker when entries share created_at and handles exact page division", async () => {
+  it("uses conversation sequence when entries share created_at and handles exact page division", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const issue = store.createIssue({ title: "Cursor ties", workspaceId: "local" });
@@ -107,7 +107,7 @@ describe("issue timeline reverse pagination", () => {
       body: `tie-${index}`,
     }));
     for (const comment of comments) setCommentTime(db, comment.id, "2026-09-05T01:00:00.000Z");
-    const ascendingIds = comments.map((comment) => comment.id).sort();
+    const ascendingIds = comments.map((comment) => comment.id);
 
     const first = await (await app.request(
       `/api/issues/${issue.id}/timeline?issue_session_id=${session.id}&limit=2`,

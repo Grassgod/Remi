@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -564,7 +565,7 @@ describe("knowledge compilation control plane", () => {
       workspaceId: "local", projectId: project.id, scope: "memory", sourceType: "agent",
       body: "raw fact", sourceTaskId: task.id, sourceIssueId: issue.id, authorAgentId: agent.id,
     }).submission;
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', result = ? WHERE id = ?", [JSON.stringify("final task result"), task.id]);
+    mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status = 'completed', result = ? WHERE id = ?", [JSON.stringify("final task result"), task.id]);
     store.updateIssue(issue.id, { status: "done" });
     store.updateIssue(issue.id, { status: "done" });
     const bundles = store.listKnowledgeSubmissions({ workspaceId: "local", projectId: project.id })
@@ -572,7 +573,7 @@ describe("knowledge compilation control plane", () => {
     expect(bundles).toHaveLength(1);
     expect(JSON.parse(bundles[0]!.body)).toMatchObject({
       submission_ids: [raw.id],
-      tasks: [expect.objectContaining({ id: task.id, result: "final task result" })],
+      tasks: [expect.objectContaining({ id: task.id, result: { output: "final task result" } })],
     });
 
     const workspace = store.getWorkspace("local")!;

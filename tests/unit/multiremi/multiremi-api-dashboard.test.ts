@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // The JSON data endpoints the Next.js frontend reads (D11 removed the
 // server-rendered HTML dashboard; only this contract survived).
@@ -263,10 +264,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_window" });
     // Push every timestamp outside a 7-day window but inside the 365-day cap.
     const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-      [stale, stale, stale, stale, seeded.taskId],
-    );
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?", [stale, stale, stale, stale, seeded.taskId]);
 
     const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=7")).json();
     expect(daily).toEqual([]);
@@ -284,10 +282,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_tz" });
     // 2026-08-20T20:00Z is already 2026-08-21 in UTC+8 (Asia/Shanghai).
     const evening = "2026-08-20T20:00:00.000Z";
-    db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ?, completed_at = ? WHERE id = ?",
-      [evening, evening, evening, evening, evening, seeded.taskId],
-    );
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ?, completed_at = ? WHERE id = ?", [evening, evening, evening, evening, evening, seeded.taskId]);
 
     const utc = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=3650")).json();
     expect(utc[0].date).toBe("2026-08-20");
@@ -311,10 +306,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const midnight = new Date(`${shanghaiToday}T00:00:00+08:00`);
     const beforeMidnight = new Date(midnight.getTime() - 60 * 1000).toISOString();
     const afterMidnight = new Date(midnight.getTime() + 60 * 1000).toISOString();
-    const setTimestamps = (taskId: string, iso: string) => db!.run(
-      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-      [iso, iso, iso, iso, taskId],
-    );
+    const setTimestamps = (taskId: string, iso: string) => mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?", [iso, iso, iso, iso, taskId]);
     setTimestamps(before.taskId, beforeMidnight);
     setTimestamps(after.taskId, afterMidnight);
 
@@ -346,10 +338,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
       const app = createMultiremiApp({ store });
       const before = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_before", model: "sonnet" });
       const after = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_after", model: "opus" });
-      const setTimestamps = (taskId: string, iso: string) => db!.run(
-        "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
-        [iso, iso, iso, iso, taskId],
-      );
+      const setTimestamps = (taskId: string, iso: string) => mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?", [iso, iso, iso, iso, taskId]);
       setTimestamps(before.taskId, "2025-09-07T03:30:00.000Z"); // local 09-06 23:30 — previous day
       setTimestamps(after.taskId, "2025-09-07T04:30:00.000Z"); // local 09-07 01:30 — the DST day
 

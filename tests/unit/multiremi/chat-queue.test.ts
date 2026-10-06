@@ -95,7 +95,7 @@ describe("Chat queues", () => {
       store.startTask(sent.task.id);
       store.completeTask(sent.task.id, { output: `answer ${index}`, sessionId: `session-${index}` });
     }
-    expect(store.getChatSession(chat.id)?.unreadCount).toBe(1);
+    expect(store.getChatSession(chat.id)?.unreadCount).toBe(2);
     expect(store.getChatSession(chat.id)?.lastMessage).toMatchObject({ content: "answer 1", role: "assistant" });
     store.markChatSessionRead(chat.id);
     expect(store.getChatSession(chat.id)?.unreadCount).toBe(0);
