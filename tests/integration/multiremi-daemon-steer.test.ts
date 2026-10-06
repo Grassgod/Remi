@@ -1,6 +1,6 @@
 // Mid-run steering e2e against a fake ACP provider: a steer message posted
 // while a turn is streaming soft-interrupts it and is injected as the next
-// prompt on the same provider session; force_answer additionally arms a grace
+// prompt on the same provider session; turn wrap-up additionally arms a grace
 // deadline after which the run completes with the output produced so far.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
@@ -17,6 +17,7 @@ import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-proto
 import { MultiremiStore } from "@multiremi/store.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
+import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
@@ -132,7 +133,12 @@ describe("Bun Multiremi daemon steering", () => {
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
       const steerMessages = daemon.traceStore().read(task.id).events.filter((m) => m.type === "steer");
       expect(steerMessages).toHaveLength(1);
-      expect(steerMessages[0]?.content).toBe("改用中文输出");
+      const message = store.getMessage(steerId!)!;
+      const [range, ...body] = String(steerMessages[0]!.content).split("\n");
+      expect(JSON.parse(range!)).toEqual({ type: "unread_range", session_id: message.session_id,
+        from_seq: 0, to_seq: message.seq, unread_count: 1,
+        instruction: unreadRangeHint(message.session_id, 0, message.seq, 1, true) });
+      expect(body.join("\n")).toBe("改用中文输出");
     } finally {
       await activeDaemon?.stopAndDrainTestWork();
       server.stop(true);
@@ -275,6 +281,7 @@ describe("Bun Multiremi daemon steering", () => {
     activeServers.add(server);
     let steerPushes = 0;
     let steerId = "";
+    let replayedMessage: Record<string, unknown> | null = null;
     const prompts: string[] = [];
     const response: AgentResponse = {
       text: "",
@@ -295,10 +302,11 @@ describe("Bun Multiremi daemon steering", () => {
           return;
         }
         yield chunk("中文结论");
+        expect(replayedMessage).not.toBeNull();
         const replay = setTimeout(() => {
           const session = layer.registry.sessionForRuntime(runtimeId);
-          if (session instanceof DaemonProtocolSession) session.sendEvent({ t: "task.steer", rt: runtimeId,
-            p: { task_id: task.id, steer: store.getTaskSteerMessage(steerId)! } });
+          if (session instanceof DaemonProtocolSession) session.sendEvent({ t: "turn.message", rt: runtimeId,
+            p: replayedMessage! });
         }, 200);
         // Keep turn 2 running while the stale push lands. Like the
         // real ACP provider, an abort cancels the turn — a duplicate-triggered
@@ -327,7 +335,12 @@ describe("Bun Multiremi daemon steering", () => {
         daemonPort: 0,
         workspacesRoot: join(root, "workspaces"),
         repoCacheRoot: join(root, ".repo-cache"),
-        protocolClientOptions: { onFrame: frame => { if (frame.type === "task.steer") steerPushes++; } },
+        protocolClientOptions: { onFrame: frame => {
+          if (frame.type === "turn.message" && (frame.payload.message as { id?: string })?.id === steerId) {
+            steerPushes++;
+            replayedMessage = frame.payload;
+          }
+        } },
         providerFactory,
       });
       await daemon.start();
@@ -346,10 +359,11 @@ describe("Bun Multiremi daemon steering", () => {
     }
   });
 
-  it("force answer wraps up within the grace window even if the agent keeps going", async () => {
+  it("turn wrap-up finishes within the grace window even if the agent keeps going", async () => {
     const { store, root } = testBed("multiremi-daemon-force-answer-");
     const agent = store.createAgent({ name: "Force Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Research deeply" });
+    const turn = store.listTurns({ workspace_id: "local" }).find(value => value.current_attempt_id === task.id)!;
     const daemonToken = await store.createAccessToken({ name: "Force daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-force", "claude");
     store.registerRuntime({ id: runtimeId, name: "force-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
@@ -371,7 +385,9 @@ describe("Bun Multiremi daemon steering", () => {
         prompts.push(message);
         if (prompts.length === 1) {
           yield chunk("Partial findings. ");
-          store.createTaskSteerMessage({ taskId: task.id, kind: "force_answer", content: "先给结论" });
+          const messages = store.listConversationLogEntries(turn.session_id).filter(entry => entry.kind === "message");
+          store.wrapUpTurn(turn.id);
+          expect(store.listConversationLogEntries(turn.session_id).filter(entry => entry.kind === "message")).toEqual(messages);
           while (!options?.signal?.aborted) await Bun.sleep(20);
           throw new Error("Cancelled");
         }
@@ -411,7 +427,10 @@ describe("Bun Multiremi daemon steering", () => {
       expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "Partial findings. " }));
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("Deliver now");
-      expect(prompts[1]).toContain("先给结论");
+      expect(prompts[1]).toBe("[Deliver now] The user asked for the result immediately. Stop exploring and stop making new changes. "
+        + "Based on the work completed so far, produce your best final conclusion and wrap up the task now.\n\n"
+        + "Close out directly: summarize what was done, state your conclusion, and finish.");
+      expect(store.getTurn(turn.id)?.wrap_up_requested_at).toBeTruthy();
     } finally {
       await activeDaemon?.stopAndDrainTestWork();
       server.stop(true);
