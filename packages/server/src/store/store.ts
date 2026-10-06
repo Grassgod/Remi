@@ -1462,6 +1462,14 @@ runMigrations(this.db);
     return this.agents.listAgents(options);
   }
 
+  listAgentCompatibilityCandidates(workspaceId: string, options?: { includeArchived?: boolean }): MultiremiAgent[] {
+    return this.agents.listAgentCompatibilityCandidates(workspaceId, options);
+  }
+
+  listAgentSkillSummaries(agents: readonly MultiremiAgent[]): Map<string, MultiremiSkill[]> {
+    return this.agents.listAgentSkillSummaries(agents);
+  }
+
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MultiremiWorkspaceMember {
     return this.workspaces.createWorkspaceMember(input);
   }
@@ -4754,6 +4762,10 @@ runMigrations(this.db);
     return this.sessions.listIssueSessionResults(issueId);
   }
 
+  listActiveTasksForIssue(...args: Parameters<TasksRepo["listActiveTasksForIssue"]>): MultiremiTask[] {
+    return this.tasks.listActiveTasksForIssue(...args);
+  }
+
   listTasksForIssue(issueId: string): MultiremiTask[] {
     return this.tasks.listTasksForIssue(issueId);
   }
@@ -4788,6 +4800,10 @@ runMigrations(this.db);
 
   listProjects(workspaceId?: string | null): MultiremiProject[] {
     return this.projects.listProjects(workspaceId);
+  }
+
+  listProjectSummaries(workspaceId: string): import("./repos/projects-repo.js").ProjectSummary[] {
+    return this.projects.listProjectSummaries(workspaceId);
   }
 
   searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MultiremiProjectSearchResult[]; total: number } {
@@ -5702,8 +5718,8 @@ runMigrations(this.db);
     return this.tasks.listAgentTasks(agentId);
   }
 
-  listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MultiremiTask[] {
-    return this.tasks.listWorkspaceAgentTaskSnapshot(workspaceId);
+  listWorkspaceAgentTaskSnapshot(...args: Parameters<TasksRepo["listWorkspaceAgentTaskSnapshot"]>): MultiremiTask[] {
+    return this.tasks.listWorkspaceAgentTaskSnapshot(...args);
   }
 
   listWorkspaceAgentRunCounts(workspaceId = "local", days = 30): MultiremiAgentRunCount[] {

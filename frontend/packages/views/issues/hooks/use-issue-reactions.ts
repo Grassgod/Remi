@@ -2,7 +2,8 @@
 
 import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient, useMutationState } from "@tanstack/react-query";
-import type { IssueReaction } from "@multiremi/core/types";
+import { useWorkspaceId } from "@multiremi/core/hooks";
+import type { Issue, IssueReaction } from "@multiremi/core/types";
 import type {
   IssueReactionAddedPayload,
   IssueReactionRemovedPayload,
@@ -13,8 +14,14 @@ import { useWSEvent, useWSReconnect } from "@multiremi/core/realtime";
 
 export function useIssueReactions(issueId: string, userId?: string) {
   const qc = useQueryClient();
+  const wsId = useWorkspaceId();
   const { data: serverReactions = [], isLoading: loading } = useQuery(
-    issueReactionsOptions(issueId),
+    { ...issueReactionsOptions(issueId), staleTime: Infinity, initialData: () => {
+      const issue = qc.getQueryData<Issue>(issueKeys.detail(wsId, issueId));
+      // The detail API omits the optional field when there are no reactions.
+      // A loaded detail with that shape still supplies an authoritative empty set.
+      return issue ? issue.reactions ?? [] : undefined;
+    } },
   );
 
   const toggleMutation = useToggleIssueReaction(issueId);

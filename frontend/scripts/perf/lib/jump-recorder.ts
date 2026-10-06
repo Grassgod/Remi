@@ -158,6 +158,7 @@ export interface PerfClick {
 export interface PerfStateTransition {
   t: number;
   value: string;
+  scrollRoot?: string | null;
   /**
    * `data-perf-fresh` sampled in the same mutation callback, or null while that
    * attribute is absent. Kept with the state so the Node side can tell a real
@@ -257,7 +258,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
   type Frame = { t: number; profiles: Record<string, Profile>; satisfied: Record<string, boolean> };
   type Shift = { t: number; value: number; hadRecentInput: boolean; sources: string[] };
   type Click = { t: number; href: string | null; label: string };
-  type Transition = { t: number; value: string; fresh?: string | null };
+  type Transition = { t: number; value: string; fresh?: string | null; scrollRoot?: string | null };
 
   const MAX_ROWS = typeof config.maxRows === "number" && config.maxRows > 0 ? config.maxRows : 60;
   const THRESHOLD_PX = 1;
@@ -587,7 +588,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
         const fresh = target.getAttribute("data-perf-fresh");
         const last = state.stateTransitions[state.stateTransitions.length - 1];
         if (last && last.value === value && (last.fresh ?? null) === fresh) continue;
-        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value, fresh });
+        state.stateTransitions.push({ t: Math.round(performance.now() * 10) / 10, value, fresh, scrollRoot: target.getAttribute("data-perf-scroll") });
       }
     });
     // `addInitScript` runs at document-start, where `documentElement` can still
@@ -615,6 +616,7 @@ export function installJumpRecorder(config: PerfRecorderConfig): void {
           t: Math.round(performance.now() * 10) / 10,
           value,
           fresh: el.getAttribute("data-perf-fresh"),
+          scrollRoot: el.getAttribute("data-perf-scroll"),
         });
       }
     }
@@ -884,9 +886,9 @@ export interface PerfJump {
 
 export interface PerfJumpResult {
   jumps: PerfJump[];
-  jumpCount: number;
-  jumpPx: number;
-  jumpScrollPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
+  jumpScrollPx: number | null;
 }
 
 /**
@@ -905,7 +907,7 @@ export function computeJumps(
   const ordered = orderedFrames(frames);
   const threshold = options.thresholdPx ?? JUMP_THRESHOLD_PX;
   const jumps: PerfJump[] = [];
-  if (options.fromMs === null) return { jumps, jumpCount: 0, jumpPx: 0, jumpScrollPx: 0 };
+  if (options.fromMs === null) return { jumps, jumpCount: null, jumpPx: null, jumpScrollPx: null };
   const toMs = options.toMs ?? Number.POSITIVE_INFINITY;
 
   let active: PerfJump | null = null;
@@ -1279,8 +1281,8 @@ export interface PerfScenarioRound {
   readyMs: number | null;
   readyTimeout: boolean;
   firstRealMs: number | null;
-  jumpCount: number;
-  jumpPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
   serialDepth: number | null;
   apiCallsTotal: number | null;
   slowestServerTotalMs: number | null;
@@ -1288,6 +1290,8 @@ export interface PerfScenarioRound {
 
 export interface PerfScenarioStats {
   n: number;
+  jumpObserved?: number;
+  jumpUnobserved?: number;
   /** Rounds whose ready wait timed out; excluded from every percentile. */
   timeouts: number;
   readyP50: number | null;
@@ -1314,11 +1318,13 @@ export function computeScenarioStats(rounds: PerfScenarioRound[]): PerfScenarioS
   const serverTotals = rounds
     .map((round) => round.slowestServerTotalMs)
     .filter((value): value is number => value !== null);
-  const jumpCounts = rounds.map((round) => round.jumpCount);
-  const jumpPx = rounds.map((round) => round.jumpPx);
+  const jumpCounts = rounds.filter((round) => round.firstRealMs !== null).map((round) => round.jumpCount).filter((value): value is number => value !== null);
+  const jumpPx = rounds.filter((round) => round.firstRealMs !== null).map((round) => round.jumpPx).filter((value): value is number => value !== null);
 
   return {
     n: rounds.length,
+    jumpObserved: jumpCounts.length,
+    jumpUnobserved: rounds.length - jumpCounts.length,
     timeouts: rounds.filter((round) => round.readyTimeout).length,
     readyP50: round1(nearestRankPercentile(ready, 0.5)),
     readyP75: round1(nearestRankPercentile(ready, 0.75)),

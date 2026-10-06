@@ -34,11 +34,13 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
-Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，列表等运行卡片首次查询结束再显现，避免卡片插入造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，揭示只等待 Issue、会话和日志窗口；运行卡片用缓存与预留槽位首绘，active-task reconcile、订阅者和本地目录资源在揭示后读取，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 
 客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
+
+日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
 
 ## 一次任务读取与更新
 
@@ -132,3 +134,7 @@ Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯�
 | 浏览器端到端 | [tests/integration/e2e-frontend-ours.ts](../../tests/integration/e2e-frontend-ours.ts)：仓库实际 E2E 入口，运行条件以该脚本为准 |
 
 文案使用 [views/i18n/](../../frontend/packages/views/i18n/) 的 `useT`；语言资源在 [locales/](../../frontend/packages/views/locales/)，键一致性检查在 [parity.test.ts](../../frontend/packages/views/locales/parity.test.ts)，术语维护见 [glossary.md](../../frontend/packages/views/locales/glossary.md)。
+
+Issue 的结果列表、代码工作区、用量、标签、归档和代码变更查询延后到当前详情揭示。结果发布行仍使用已有固定单行与 metadata 标题，缓存数据继续可读；查询晚到只更新该行文字。收件箱在同一路径切换选中 Issue 时，详情访问门单独重置，不能复用入口页已经开启的首屏门。DOM 布局、揭示预算及滚动锚定路径不变。
+
+CSR 详情在 sessions 解出 activeId 后即启动 useIssueLog 的 tail/head 读取，不等待成员或 children 的既有渲染门；活动区复用同一个副本，不重新读取窗口。task-runs 与窗口独立并行，并与侧栏共用原查询键和策略。描述 reactions 用详情缓存里的完整 reactions 播种原 reactions 查询，保留 WS/重连失效与 mutation 行为，避免首屏再次读取同一 Issue。

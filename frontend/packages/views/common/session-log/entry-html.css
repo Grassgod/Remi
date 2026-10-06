@@ -29,3 +29,13 @@
   margin: 0;
   line-height: 20px;
 }
+
+/* No intrinsic dimensions: reserve the final box before the first reveal.
+   Neither decoding nor a broken-image/alt fallback can grow this row. Sized
+   images retain their declared ratio. Keep lazy loading for SSR stream dedup. */
+.rich-text-editor[data-entry-html] img[data-entry-image-frame] {
+  display: block;
+  width: min(100%, 640px);
+  height: 240px;
+  object-fit: scale-down;
+}

@@ -35,7 +35,7 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 ## 收件箱已具备的加载边界
 
 - [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx) 通过 [inboxPageOptions](../../frontend/packages/core/inbox/queries.ts) 每页读取 50 条；[listInboxItemsPage](../../packages/server/src/store/repos/issues-repo.ts) 按 `created_at DESC, id DESC` 使用游标，SQL 读取 `limit + 1` 判断后续页，服务端上限 100。`hydrateInboxRows` 已按最多 400 个 issue ID 批量补全关联对象，不能再将收件箱描述为逐行 `getIssue`。
-- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue，仅成功自动运行保留分组所需的 `details`。但服务端仍读取该成员所有未归档精简行，在 JavaScript 中去重和计数；分页并未把这部分成本变成常数。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
+- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue。普通通知按 selection key 取最新行并聚合；成功自动运行在 SQL 中提取字符串 `autopilot_id`，按用户时区的 today/yesterday/this_week/earlier 桶去重并统计未读。PG 对普通 JSON 走安全校验后的字段提取；NUL/孤立代理项等不能解码成 PG text 的合法 JSON 走词法提取，仅将最后一个顶层字符串字段规范成 UTF-16 分组键，保持 JS JSON.parse 的重复键与转义语义。SQLite 保留 json_each 最后键语义；非法 JSON/缺失或非字符串字段按独立行计数。两个聚合各只返回一行，`details` 和逐 run 行均不跨桥；SQL 扫描工作仍随未归档记录数增长。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
 - 测量时分别记录首屏、摘要、追加页、定位较后页通知，以及 mutation/WS 失效后的刷新。来源筛选和展示折叠仅处理已加载项；URL 定位可能连续读取多页，不能把 50 条默认页大小当作每次页面交互的总工作量。当前没有这些场景的延迟或内存基线。
 
 ## 请求级观测：Server-Timing 与两类日志（MUL-367）
@@ -283,16 +283,21 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 - **属性存在**时，只有 `data-perf-state = ready` **且** `data-perf-fresh = 1` 的帧才算加载完成；`ready` 但 `fresh = 0` 不算，`ready-forced` 也不算通过，但会在报告里**单独列出**（`appReadyForced`）。
 - **属性不存在**时，维持原逻辑（只看 `data-perf-state`），所以 MUL-443 上线前后同一份清单都可用。
 
+### Snapshot 数据裁剪（MUL-395 S9-6）
+
+两个 agent-task-snapshot 路由把 Chat 创建者/任务凭证可见性下推到 SQL。仍先选每个 Agent 的最新 completed/failed，再过滤权限；无权最新结果不会让较旧结果补位。请求身份版本仅投影公开任务响应需要的列，保留 prompt/result/plugin/usage，省去内部执行配置及委派状态；内部无身份调用仍返回原任务对象。
+
 ### 判定口径
 
 | 项 | 口径 |
 | --- | --- |
-| 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
+| 终点 | 详情/深链：anchor（detail-running 必须 agent-stream，非运行详情为 latest-comment；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
 | 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
 | 列表页滚动根 | 11 个列表页没有自己的滚动根，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根）。列表 *根* 不在两种表之间分开，`selectorEquivalence.scrollRoot` 才能继续读 `same` |
 | 列表页就绪标记（MUL-472 第 5 项） | issues / my-issues / inbox / projects / agents / runtimes / skills / autopilots / workbench 的列表容器由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在自己那条列表请求 `status === "success"` 且不是 `keepPreviousData` 占位数据时才写 `data-perf-scroll="list"`。`--selectors auto` 从 `[data-perf-scroll]` 判定，所以带标记的列表轮从此记 `contract`（此前 09-28 两轮 32/32 行都是 `legacy`）；标记出现即代表「屏幕上的行是本轮自己那次请求的答案」，事件量是 `mounted && listPerfFresh(query)`，脚本无需再加时钟 |
 | 首屏请求 gate（MUL-472 返工） | [use-after-first-screen.ts](../../frontend/packages/core/platform/use-after-first-screen.ts) 等当前路由主内容就绪，再经下一帧和 `requestIdleCallback({ timeout: 1000 })` 打开。列表由上述同一个标记条件发布，空成功、失败也发布；Issue 详情正常等 timeline reveal，空日志或失败立即发布，日志或会话持续 pending 时由详情自身在 2s 上限发布 ready，列表骨架与 reveal 仍独立。未接入发布者的路由从路由开始等 2s 再进 idle；其他有发布者的慢请求不会被共享兜底抢先打开。默认页面级每次切页关闭，首个 render 即 false；`scope: "shell"` 会话内只等一次。筛选依赖 snapshot 时立即取，数据未到不显示空列表，也不写就绪标记 |
 | 跳动 | 首次出现目标页真实内容之后，相邻帧中同一 `data-perf-key` 且同一 DOM 元素的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格。入口页行换成目标页行是导航，不能把两个不同锚点的坐标差计作同一行的位移 |
+| 缺观测（S9-6） | `firstRealMs = null` 时 jumpCount/jumpPx/jumpScrollPx 均为 null，MD/HTML/compare 显示「未观测」；stats 保留 jumpObserved/jumpUnobserved 和 n，不算作零跳动通过。contract 列表用 fresh 的 `[data-perf-scroll="list"] [data-perf-item]`，设置页标真实账号控件。Chat 使用现有 chat/session-log 滚动根、选有消息的会话并等待 latest-message，空 chat 单列跳过 |
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
 | 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
@@ -331,7 +336,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### 选择器回退：contract / legacy
 
-生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+当前前端已经提供 `data-perf-*`；为读取历史基线， [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
 
 | 用途 | legacy 选择器 / 规则 |
 | --- | --- |
@@ -341,13 +346,13 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | target-comment | `#comment-<id>` |
 | 骨架 | `[data-slot="skeleton"]` |
 | issue 列表行 | `[data-slot="sidebar-inset"] a[href$="/issues/<issueId>"]` |
-| inbox 行 | `section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]`。**不可靠**：QA 在 209 上实测未加作用域的形式匹配到工具栏按钮（`cmt_3d2bb3s7ceeh`）；该表只保留给等价性比对，**不得用它驱动点击**，深链 warm 的行序由 `core/inbox/grouping.ts` 的纯函数给出 |
-| agent-stream | **没有稳定钩子**，禁止用 class 选择器凑：legacy 下 `detail-running` 以 latest-comment 为 anchor，记 `anchorRule: legacy-latest-comment` |
+| inbox 行 | `section[aria-labelledby^="inbox-group-"] div[role="button"][tabindex="0"]`。**不可靠**：QA 在 209 上实测未加作用域的形式匹配到工具栏按钮（`cmt_3d2bb3s7ceeh`）；该表只保留给等价性比对，**不得用它驱动点击**，深链 warm 直接按目标通知 `data-perf-key` 选择行根，不用 API 行号或子链接驱动点击 |
+| agent-stream | `detail-running` 两种采样表均要求现有 `[data-perf-anchor="agent-stream"]`，缺失记 anchor-mismatch；目标预选先核对实际可见运行行，不能降级 latest-comment |
 | chat | 退回 `h1-no-skeleton`，记 `anchor: none` |
 
 **等价性证明**不用比较两次运行的时间（噪声太大），而是比较**同一 DOM 上元素的同一性**：contract 模式的每一轮在就绪时刻同时用 legacy 表求值，记 `selectorEquivalence: { scrollRoot, anchor: same|differs, itemsContractOnly, itemsLegacyOnly }`，元素用 `===` 比较。两个门槛：
 
-1. 本地端到端：除 `detail-running`（anchor 已知不同）外全部 `anchor: same` 且 `itemsLegacyOnly = 0`，否则不推送。
+1. 本地端到端：详情/深链核对 anchor 对应元素；列表 contract 真实行与 legacy H1 是不同口径，`anchor: absent`、`itemsContractOnly > 0` 是预期，必须独立验证真实行。两种列表采样仍共享滚动根。
 2. 209 上第一次 contract 运行（高峰基线或终验）由 QA 复核同一字段；不通过则对应场景的 legacy 基线标 `invalid` 并重跑。
 
 两版基线按实际 `selectorMode` 如实标注；`--compare` 遇到模式不同**只警告不拒绝**。
@@ -411,8 +416,10 @@ schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两�
 
 两条容易踩的实现事实：
 
+MUL-395 的图片回归由 [zero-jump-image-cases.ts](../../tests/integration/zero-jump-image-cases.ts) 扩展 fixture：真实 640×240 PNG 的晚到、404、canonical 元素锚点，以及有尺寸/快速加载对照。晚到请求以第一次正常揭示为条件屏障释放，图片和行高前后必须一致；位置仍由原收集器和零跳动判定检查。五类用例默认进入 CI，`--only detail-image-late` 等可以定向运行，关闭 SSR cookie 可复核 CSR。不改原 fixture 延迟或 allowlist。
+
 - **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
-- **深链冷启动的 URL 是 `/{slug}/inbox?issue=…&session=…`**，不是 `/issues/:id`。`highlightCommentId` 只在 inbox 面板里被传给 `IssueDetail`（`inbox-page.tsx`），因此 `target-comment` 这个 anchor 只在深链 URL 上存在；改成 issue 详情路由会让该 anchor 永远找不到。
+- **收件箱通知深链使用 `/{slug}/inbox?issue=…&session=…`。** 这条入口由 inbox 面板把通知 comment 传给 `IssueDetail`，不能用普通详情 URL 替代。独立详情深链现支持 `/issues/:id?comment=…`，由 SSR/CSR 的 locate 窗口提供目标锚点；`detail-locate` 和 `detail-image-element` 单独验证该路径。
 
 ### 已知失败清单与判定规则
 
@@ -540,3 +547,22 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 ```
 
 与基线比较时先证明结果、权限和事件语义一致，再报告相同环境下的差值；没有数据时只能提出待验证假设。
+
+### S9-6：活跃 Issue 任务读
+
+`GET /api/issues/:id/active-task` 先按活跃状态及 Chat creator/task capability 在 SQL 中筛选，再只读取完整公开任务字段；公开 prompt/result/usage/plugin 与 queue blocker、顺序保持原形状。Issue workspace 已授权且一致的行无需逐行重复权限读取，历史 workspace 不一致的行保留旧权限守卫。终态任务和私有执行 profile 不跨桥。正式测试 `first-screen-hotspots-s96-active.test.ts` 对双方言、状态、空/不存在/无权 Issue、Chat/非 Chat、任务凭证逐字段对拍。
+
+### S9-6：Agent 列表批量水合
+
+`GET /api/agents` 按 workspace/归档条件取未水合候选，先过滤可见 Agent，再批量读取技能关联（有界 IN 批次，不读 Skill files）；结构化技能优先、关联创建时间/名称排序和 inline fallback 去重不变。MCP 配置的 workspace 设置/角色每 workspace 只查一次，保留 X-Agent-ID、owner/admin、Agent owner 与 always_redact_env 规则；custom_env 仍只输出键数量。native 列表和单 Agent 详情保留原路径。双方言正式对拍覆盖角色、私有/其他 workspace、两种归档参数和脱敏。
+
+### S9-6：Project 列表投影
+
+`GET /api/projects` 使用专用摘要投影，保持原 issue/done/resource 聚合、排序、null/归档及权限行为；instructions、delta_instructions 和修订元数据不跨桥。详情、native 列表及搜索仍用完整 Project。正式双方言用例逐字段对拍，增大两条说明至各64KiB后摘要内容和回包字节不变，详情仍返回完整说明。
+
+
+## S9-6 本地详情复核
+
+S1 的 `--ssr-cookie` 默认开启，仅在目标 origin 的浏览器内存 context 设置 HttpOnly `multimira_auth`；`--no-ssr-cookie` 用于 CSR 对照。开关不代表播种成功，逐轮以实际日志 DOM 的 seed 标记报告 SSR/CSR。`renderMs` 只量目标 Session 的窗口 `responseEnd` 到首次正常 fresh 揭示，warm 沿用 click 原点；SSR seed 没有浏览器窗口 responseEnd，缺观测或 forced 揭示记 null 并说明原因。各来源单列分位数；compare 不对不同 Cookie/实际来源或混合来源做差。
+
+S7 整轮等待延后 API 与真实 Hub `stream.ack` 处理安静后才统计回读、附件和跳动；使用原波次算法与 8ms 容差。SSR 普通详情 warm 的揭示前波次 ≤2 为阻塞项；日志提前与去重后的 CSR warm 以 ≤2 为目标，未达到时逐波保留链路与原因，10/9 生产 S1 决定最终达标。cold、运行中 warm 和收件箱未读通知深链 warm 的波次只记录，保留逐请求及逐波链路；这些场景的回读=0、同附件 content≤1、跳动=0 和非强制揭示仍严格检查。`detail-locate` 验证独立详情 `?comment`，`detail-child` 验证带父 Issue 的详情，均可分别跑 SSR/CSR。150ms 渲染目标仅记录，剩余同步布局/面板注册热点不在本批改动范围内。

@@ -707,6 +707,8 @@ function MachineRow({
   });
   return (
     <button
+      data-perf-item="machine"
+      data-perf-key={machine.id}
       type="button"
       onClick={onClick}
       className={cn(
