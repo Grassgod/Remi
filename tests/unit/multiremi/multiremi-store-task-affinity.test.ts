@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -130,29 +129,26 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
   });
 
-  it("prefers local_directory affinity over chat session affinity", () => {
+  it("prefers local_directory affinity over an Issue conversation's provider session", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
     const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
     const agent = store.createAgent({ name: "Pref", provider: "codex" });
-    // Establish a topic session whose provider session lives on sessRuntime.
     const issue = store.createIssue({ title: "dir", workspaceId: "local" });
-    const session = prepareFeishuIssueTopic(store, { runtimeId: sessRuntime.id, agentId: agent.id, issueId: issue.id });
-    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "hi" });
+    const warmup = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "hi" });
     expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
+    store.buildTaskSessionProjection(warmup.id);
     store.startTask(warmup.id);
     store.completeTask(warmup.id, { output: "ok", sessionId: "sess_pref", workDir: "/tmp/pref" });
-
-    // A follow-up that is ALSO a directory-project issue must go to the
-    // directory machine, not the session machine, and must not inherit the
-    // foreign-machine session.
-    const project = store.createProject({
-      title: "P",
-      workspaceId: "local",
-      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" } }],
+    expect(store.getSessionAgentLane(warmup.issueSessionId!, agent.id)).toMatchObject({
+      providerSessionId: "sess_pref", runtimeId: sessRuntime.id,
     });
+
+    const project = store.createProject({ title: "P", workspaceId: "local", resources: [{
+      resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" },
+    }] });
     store.updateIssue(issue.id, { projectId: project.id });
-    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "work" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(task.sessionId).toBeNull();
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
