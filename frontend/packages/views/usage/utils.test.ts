@@ -3,6 +3,12 @@ import { usageMetrics, usageReport } from "./test-fixtures";
 import { formatKnownCost, hasKnownTokens, tokenCoverage, trendRows, taskTrendRows, usageCsv } from "./utils";
 
 describe("Usage presentation", () => {
+  it("exports historical attribution and identity uncertainty alongside the measured subtotal", () => {
+    const metrics = usageMetrics({ task_attributed_tokens: 150, task_attributed_task_count: 1, time_provenance: "task_attributed", identity_conflict_task_count: 1 });
+    const csv = usageCsv([{ label: "2026-10-02", metrics }]);
+    expect(csv).toContain('"time_provenance","task_attributed_tokens","task_attributed_task_count","identity_conflict_task_count"');
+    expect(csv).toContain('"task_attributed","150","1","1"');
+  });
   it("keeps lifecycle trends separate from cross-day consumption and exports unknowns as blanks", () => {
     const report = usageReport({ task_daily: [{ date: "2026-10-03", task_count: 1, total_seconds: 120, status_counts: { completed: 0, failed: 1, cancelled: 0, active: 0, queued: 0 } }] });
     expect(taskTrendRows(report, false)).toEqual([{ label: "2026-10-03", seconds: 120, completed: 0, failed: 1, cancelled: 0, active: 0, queued: 0 }]);

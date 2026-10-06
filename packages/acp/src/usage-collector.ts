@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PromptResult } from "@shared/contracts/acp-protocol.js";
 import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 
@@ -13,6 +13,11 @@ export function actualUnit(input: {
   inputTokens?: unknown; outputTokens?: unknown; cacheReadTokens?: unknown; cacheWriteTokens?: unknown;
   totalTokens?: unknown; costAmount?: unknown; costCurrency?: string | null; evidenceRef?: string;
   costSource?: TaskUsageUnit["costSource"];
+  providerSessionId?: string | null;
+  providerRequestId?: string | null;
+  providerObservationId?: string | null;
+  identityKind?: TaskUsageUnit["identityKind"];
+  meterEvidence?: TaskUsageUnit["meterEvidence"];
   allowActualTotal?: boolean;
 }): TaskUsageUnit {
   let inputTokens = tokenCount(input.inputTokens);
@@ -37,7 +42,40 @@ export function actualUnit(input: {
     costCurrency: costAmount != null ? input.costCurrency ?? null : null,
     costSource: input.costSource ?? "unknown",
     occurredAt: new Date().toISOString(), evidenceRef: input.evidenceRef ?? null,
+    ...(input.providerSessionId && input.providerRequestId ? { identityKind: "request", providerSessionId: input.providerSessionId, providerRequestId: input.providerRequestId } : {}),
+    ...(input.providerSessionId && input.providerObservationId && input.meterEvidence ? {
+      identityKind: "cumulative_meter", providerSessionId: input.providerSessionId,
+      providerObservationId: input.providerObservationId, meterEvidence: input.meterEvidence,
+    } : {}),
   };
+}
+
+export function requestUnitId(requestId: string, sessionId?: string | null, connectionId?: string | null): string {
+  return sessionId ? `request:${createHash("sha256").update(JSON.stringify(connectionId ? [sessionId, requestId, connectionId] : [sessionId, requestId])).digest("hex")}` : `request:${requestId}`;
+}
+
+export function meterObservationId(epochId: string, after: NonNullable<TaskUsageUnit["meterEvidence"]>["after"]): string {
+  return createHash("sha256").update(JSON.stringify([epochId, after.inputTokens, after.outputTokens, after.cacheReadTokens, after.cacheWriteTokens, after.totalTokens])).digest("hex");
+}
+
+export function readMeterEvidence(value: unknown): TaskUsageUnit["meterEvidence"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const meter = value as Record<string, any>;
+  const fields = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"] as const;
+  const valid = (vector: any) => vector && typeof vector === "object" && fields.every(key => Number.isSafeInteger(vector[key]) && vector[key] >= 0)
+    && vector.totalTokens === vector.inputTokens + vector.outputTokens + vector.cacheReadTokens + vector.cacheWriteTokens;
+  if (typeof meter.epochId !== "string" || !meter.epochId || !valid(meter.before) || !valid(meter.after)
+    || (meter.last !== undefined && !valid(meter.last)) || fields.some(key => meter.before[key] > meter.after[key])) return undefined;
+  return meter as NonNullable<TaskUsageUnit["meterEvidence"]>;
+}
+
+export function meterIntervalsOverlap(left: NonNullable<TaskUsageUnit["meterEvidence"]>, right: NonNullable<TaskUsageUnit["meterEvidence"]>): boolean {
+  // Different evidence formats for a reset cannot prove different epochs.
+  const kind = (epoch: string) => epoch.split(":", 1)[0];
+  if (left.epochId !== right.epochId && (left.epochId === "initial" || right.epochId === "initial" || kind(left.epochId) === kind(right.epochId))) return false;
+  return (["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"] as const).some(field =>
+    left.before[field] !== null && left.after[field] !== null && right.before[field] !== null && right.after[field] !== null
+    && left.before[field]! < right.after[field]! && right.before[field]! < left.after[field]!);
 }
 
 export function unitActualTotal(unit: TaskUsageUnit): number {
@@ -57,8 +95,15 @@ export class UsageCollector {
     const value = raw as Record<string, unknown>;
     const snapshot = value.scope === "request_snapshot";
     const stableId = typeof value.id === "string" ? value.id : `${this.promptId}:legacy:${this.observed.size}`;
+    const meter = value.source === "codex_thread_token_usage" && typeof value.threadId === "string" && value.threadId
+      ? readMeterEvidence(value.meterEvidence) : undefined;
+    const sessionId = meter ? value.threadId as string : typeof value.providerSessionId === "string" ? value.providerSessionId : null;
+    const requestId = typeof value.providerRequestId === "string" ? value.providerRequestId : null;
+    const observationId = meter ? meterObservationId(meter.epochId, meter.after) : null;
     const entry = actualUnit({
-      unitId: `request:${stableId}`, provider: "", model: typeof value.model === "string" ? value.model : null,
+      unitId: requestUnitId(observationId ?? stableId, sessionId), provider: "", model: typeof value.model === "string" ? value.model : null,
+      providerSessionId: sessionId, providerRequestId: requestId,
+      providerObservationId: observationId, meterEvidence: meter,
       requestedModel: typeof value.requestedModel === "string" ? value.requestedModel : requestedModel,
       modelSource: value.model ? "provider_reported" : value.modelSource === "session_acknowledged" ? "session_acknowledged" : modelSource,
       scope: "request", source: "provider_request",
@@ -82,6 +127,11 @@ export class UsageCollector {
       entry.revision = previous.revision;
       if (JSON.stringify(entry) === JSON.stringify(previous)) return;
       entry.revision++;
+    }
+    if (value.source === "codex_thread_token_usage" && !meter) {
+      entry.inputTokens = entry.outputTokens = entry.cacheReadTokens = entry.cacheWriteTokens = entry.actualUnsplitTokens = null;
+      entry.accuracy = "unknown";
+      entry.evidenceRef = "codex_meter_epoch_unresolved";
     }
     this.observed.set(entry.unitId, entry);
     this.changed.add(entry.unitId);
@@ -117,18 +167,19 @@ export class UsageCollector {
     }
   }
 
-  cost(amount: unknown, currency: unknown, scope: TaskUsageUnit["scope"], source: TaskUsageUnit["costSource"], requestId?: string): void {
+  cost(amount: unknown, currency: unknown, scope: TaskUsageUnit["scope"], source: TaskUsageUnit["costSource"], requestId?: string, sessionId?: string): void {
     const value = tokenCount(amount);
     if (value === null || typeof currency !== "string" || !currency) return;
-    const unitId = `cost:${requestId ?? this.promptId}:${scope}:${source}:${currency}`;
+    const unitId = `cost:${requestId ? requestUnitId(requestId, sessionId) : this.promptId}:${scope}:${source}:${currency}`;
     const previous = this.observed.get(unitId);
     if (previous?.costAmount === value) return;
     const entry = actualUnit({ unitId, provider: "", scope, source: scope === "request" ? "provider_request" : "provider_turn",
       accuracy: source === "provider_reported" ? "exact" : "unknown", costAmount: value, costCurrency: currency,
-      costSource: source, evidenceRef: source === "sdk_estimate" ? "claude_sdk_prompt_cost_estimate" : "acp_monetary_evidence" });
+      costSource: source, providerSessionId: sessionId, providerRequestId: requestId,
+      evidenceRef: source === "sdk_estimate" ? "claude_sdk_prompt_cost_estimate" : "acp_monetary_evidence" });
     entry.occurredAt = previous?.occurredAt ?? entry.occurredAt;
     entry.revision = (previous?.revision ?? 0) + 1;
-    if (source === "provider_reported" && scope === "request" && requestId) entry.coveredUnitIds = [`request:${requestId}`];
+    if (source === "provider_reported" && scope === "request" && requestId) entry.coveredUnitIds = [requestUnitId(requestId, sessionId)];
     this.observed.set(unitId, entry);
     this.changed.add(unitId);
     if (source === "provider_reported" && scope === "turn") {

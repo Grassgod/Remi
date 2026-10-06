@@ -1,7 +1,7 @@
 /** Pure, conservative historical parsers. No database writes or model fallback. */
 import { createHash } from "node:crypto";
 import type { TaskUsageUnit } from "../packages/contracts/src/usage-accounting.js";
-import { actualUnit, tokenCount } from "../packages/acp/src/usage-collector.js";
+import { actualUnit, meterObservationId, readMeterEvidence, requestUnitId, tokenCount } from "../packages/acp/src/usage-collector.js";
 
 type Row = Record<string, any>;
 export interface UsageEvidenceResult { units: TaskUsageUnit[]; rejected: number; replayed: number; stableRequestIdentity?: boolean; }
@@ -38,7 +38,16 @@ export function parseRawUsageEvidence(input: {
     return { units, rejected: 1, replayed: 0 };
   }
   const stable = typeof details.id === "string" ? details.id : digest(input.evidenceRef);
-  const actual = actualUnit({ unitId: `request:${stable}`, provider: input.provider,
+  const meter = input.provider === "codex" && details.source === "codex_thread_token_usage" ? readMeterEvidence(details.meterEvidence) : undefined;
+  const providerSessionId = meter ? details.threadId : details.providerSessionId ?? details.sessionId;
+  const providerRequestId = details.providerRequestId
+    ?? (input.provider === "claude" && typeof details.id === "string" ? details.id : null);
+  const observationId = meter ? meterObservationId(meter.epochId, meter.after) : null;
+  const strong = typeof providerSessionId === "string" && !!providerSessionId && (!!meter || typeof providerRequestId === "string" && !!providerRequestId);
+  const connectionId = typeof details.connectionId === "string" && details.connectionId ? details.connectionId : null;
+  const actual = actualUnit({ unitId: requestUnitId(observationId ?? stable, strong ? providerSessionId : null, connectionId), provider: input.provider,
+    providerSessionId: strong ? providerSessionId : null, providerRequestId: strong ? providerRequestId : null,
+    providerObservationId: observationId, meterEvidence: meter,
     model: typeof details.model === "string" ? details.model : null,
     requestedModel: typeof details.requestedModel === "string" ? details.requestedModel : null,
     modelSource: details.model ? "provider_reported" : details.requestedModel ? "session_acknowledged" : "unknown",
@@ -46,8 +55,10 @@ export function parseRawUsageEvidence(input: {
     inputTokens: split[0], outputTokens: split[1], cacheReadTokens: split[2], cacheWriteTokens: split[3], totalTokens: total,
     evidenceRef: input.evidenceRef });
   actual.occurredAt = timestamp(input.occurredAt)!;
+  actual.timeProvenance = "observed_at";
+  if (connectionId) actual.connectionId = connectionId;
   units.push(actual);
-  return { units, rejected: 0, replayed: 0, stableRequestIdentity: typeof details.id === "string" };
+  return { units, rejected: 0, replayed: 0, stableRequestIdentity: strong };
 }
 
 interface CodexCounts { input: number; output: number; cached: number; total: number; }
@@ -65,6 +76,8 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
   const units = new Map<string, TaskUsageUnit>();
   let rejected = 0, replayed = 0;
   let sessionId: string | null = null, requestedModel: string | null = null;
+  let meterEpochId: string | null = null, pendingMeterEpochId: string | null = null;
+  let parentSessionId: string | null = null, forkedAt: number | null = null;
   let previous: CodexCounts | null = null;
   let epoch = 0;
   let compactionAt: number | null = null;
@@ -87,13 +100,16 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
       const input = count(usage.input_tokens), output = count(usage.output_tokens);
       const cached = count(usage.cache_read_input_tokens ?? 0), write = count(usage.cache_creation_input_tokens ?? 0);
       if ([input, output, cached, write].some(v => v === null)) { rejected++; continue; }
-      const unitId = `claude:${message.id}`;
+      const nativeSessionId = typeof row.sessionId === "string" ? row.sessionId : typeof row.session_id === "string" ? row.session_id : null;
+      const unitId = nativeSessionId ? requestUnitId(message.id, nativeSessionId) : `claude:${message.id}`;
       const old = units.get(unitId);
       const next = actualUnit({ unitId, provider, model: typeof message.model === "string" ? message.model : null,
+        providerSessionId: nativeSessionId, providerRequestId: message.id,
         scope: "request", source: "provider_request", inputTokens: Math.max(old?.inputTokens ?? 0, input!),
         outputTokens: Math.max(old?.outputTokens ?? 0, output!), cacheReadTokens: Math.max(old?.cacheReadTokens ?? 0, cached!),
         cacheWriteTokens: Math.max(old?.cacheWriteTokens ?? 0, write!), evidenceRef: ref });
       next.occurredAt = old?.occurredAt ?? occurredAt;
+      next.timeProvenance = "provider_timestamp";
       if (old && ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "model"].every(k => (old as any)[k] === (next as any)[k])) { replayed++; continue; }
       // Consolidated native requests have final disjoint counters. Replayed
       // archive snapshots use stable request IDs and the same plan revision.
@@ -102,14 +118,23 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
       continue;
     }
     if (row.type === "session_meta" && typeof row.payload?.id === "string") {
+      const changed = sessionId !== row.payload.id;
       if (sessionId && sessionId !== row.payload.id) { epoch++; previous = null; seenCumulative.clear(); requestedModel = null; compactionAt = null; }
       sessionId = row.payload.id;
+      if (changed) {
+        meterEpochId = "initial"; pendingMeterEpochId = null;
+        parentSessionId = typeof row.payload.forked_from_id === "string" ? row.payload.forked_from_id : null;
+        forkedAt = parentSessionId && occurredAt ? Date.parse(occurredAt) : null;
+        if (parentSessionId && forkedAt === null) meterEpochId = null;
+      }
     }
     if ((row.type === "compacted" || (row.type === "event_msg" && row.payload?.type === "context_compacted")) && occurredAt) {
       const identity = `${sessionId}:${occurredAt}`;
       if (!seenCompactions.has(identity)) {
         seenCompactions.add(identity);
         compactionAt = Date.parse(occurredAt);
+        pendingMeterEpochId = typeof row.payload?.item_id === "string" ? `compaction-item:${row.payload.item_id}`
+          : typeof row.payload?.turn_id === "string" ? `compaction-turn:${row.payload.turn_id}` : `compaction-timestamp:${occurredAt}`;
       }
     }
     if (row.type === "turn_context" && typeof row.payload?.model === "string") requestedModel = row.payload.model;
@@ -134,16 +159,29 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
     if (!exact) delta = last;
     const firstWholeRequest = !previous && last && JSON.stringify(last) === JSON.stringify(cumulative);
     if (!delta) { rejected++; continue; }
-    if (reset) { epoch++; seenCumulative.clear(); }
+    if (reset) { epoch++; seenCumulative.clear(); meterEpochId = pendingMeterEpochId; }
     compactionAt = null;
     seenCumulative.add(fingerprint);
     previous = cumulative;
-    const unitId = `codex:${sessionId}:epoch:${epoch}:${digest(cumulative)}`;
+    const vector = (value: CodexCounts) => ({ inputTokens: value.input - value.cached, outputTokens: value.output,
+      cacheReadTokens: value.cached, cacheWriteTokens: 0, totalTokens: value.total });
+    const meter = meterEpochId ? readMeterEvidence({ epochId: meterEpochId,
+      before: vector({ input: cumulative.input - delta.input, output: cumulative.output - delta.output,
+        cached: cumulative.cached - delta.cached, total: cumulative.total - delta.total }),
+      after: vector(cumulative), ...(last ? { last: vector(last) } : {}) }) : undefined;
+    // Forked archives can contain copied parent history. Real timestamps before
+    // the explicit fork metadata belong to the origin session, never the child.
+    const originSessionId = parentSessionId && forkedAt !== null && Date.parse(occurredAt) < forkedAt ? parentSessionId : sessionId;
+    const observationId = meter ? meterObservationId(meter.epochId, meter.after) : null;
+    const unitId = observationId ? requestUnitId(observationId, originSessionId) : `codex:${sessionId}:epoch:${epoch}:${digest(cumulative)}`;
     const unit = actualUnit({ unitId, provider, requestedModel, modelSource: requestedModel ? "session_acknowledged" : "unknown",
-      scope: "request", source: "provider_request", accuracy: exact || firstWholeRequest ? "exact" : "partial",
+      scope: "request", source: "provider_request", providerSessionId: meter ? originSessionId : null,
+      providerObservationId: observationId, meterEvidence: meter,
+      accuracy: exact || firstWholeRequest ? "exact" : "partial",
       inputTokens: delta.input - delta.cached, outputTokens: delta.output, cacheReadTokens: delta.cached,
       cacheWriteTokens: 0, totalTokens: delta.total, evidenceRef: ref });
     unit.occurredAt = occurredAt;
+    unit.timeProvenance = "provider_timestamp";
     if (units.has(unitId)) { replayed++; continue; }
     units.set(unitId, unit);
   }

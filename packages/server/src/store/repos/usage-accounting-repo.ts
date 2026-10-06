@@ -124,7 +124,11 @@ export class UsageAccountingRepo {
         ? "GREATEST(0,EXTRACT(EPOCH FROM (CAST(t.ended_at AS TIMESTAMPTZ)-CAST(COALESCE(t.started_at,t.dispatched_at,t.created_at) AS TIMESTAMPTZ))))"
         : "MAX(0,(julianday(t.ended_at)-julianday(COALESCE(t.started_at,t.dispatched_at,t.created_at)))*86400)";
       const tokenEvidence = (alias: string) => `(${alias}.input_tokens IS NOT NULL OR ${alias}.output_tokens IS NOT NULL OR ${alias}.cache_read_tokens IS NOT NULL OR ${alias}.cache_write_tokens IS NOT NULL OR ${alias}.actual_unsplit_tokens IS NOT NULL)`;
-      const cte = `WITH tasks AS (${tasksSql}), cost_links AS (
+      const identityConflict = `EXISTS(SELECT 1 FROM identity_conflict_tasks identity WHERE identity.task_id=t.id ${relevantRun("identity")})`;
+      const cte = `WITH tasks AS (${tasksSql}), identity_conflict_tasks AS (
+        SELECT c.task_id,c.run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.task_id
+        UNION SELECT c.owner_task_id,c.owner_run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.owner_task_id
+      ), cost_links AS (
         SELECT l.task_id,l.run_id,l.monetary_unit_id,l.covered_unit_id FROM multiremi_usage_cost_coverage l JOIN tasks scoped ON scoped.id=l.task_id
         UNION SELECT own.task_id,own.run_id,own.unit_id,own.unit_id FROM multiremi_usage_units own JOIN tasks scoped ON scoped.id=own.task_id
           WHERE cost_source='provider_reported' AND cost_amount IS NOT NULL AND ${tokenEvidence("own")}
@@ -164,6 +168,8 @@ export class UsageAccountingRepo {
           CASE WHEN v.unit_id IS NULL THEN COALESCE(u.purpose,'agent') WHEN d.model_groups=1 THEN d.purpose ELSE 'mixed' END AS purpose,
           u.connection_id,u.context_tokens,
           COALESCE(u.runtime_provenance,'unknown') AS runtime_provenance,
+          CASE WHEN u.source='legacy_task' THEN 'task_attributed' ELSE u.time_provenance END AS time_provenance,
+          CASE WHEN ${identityConflict} THEN 1 ELSE 0 END AS identity_conflict,
           COALESCE(u.input_tokens,0) AS actual_input_tokens,COALESCE(u.output_tokens,0) AS actual_output_tokens,
           COALESCE(u.cache_read_tokens,0) AS actual_cache_read_tokens,COALESCE(u.cache_write_tokens,0) AS actual_cache_write_tokens,
           COALESCE(u.actual_unsplit_tokens,0) AS actual_unsplit_tokens,(${TOTAL}) AS actual_total_tokens,
@@ -178,7 +184,7 @@ export class UsageAccountingRepo {
           CASE WHEN u.cost_amount IS NOT NULL AND u.cost_source='provider_reported' AND v.unit_id IS NULL THEN 0 ELSE 1 END AS price_complete,
           CASE WHEN cc.model_groups>1 OR d.model_groups>1 THEN 0 ELSE 1 END AS cost_allocation_complete,
           CASE WHEN u.cost_amount IS NOT NULL THEN CASE WHEN u.cost_source='provider_reported' THEN 0 ELSE 2 END WHEN p.source='published' THEN 1 ELSE 0 END AS reference_amount,
-          CASE WHEN u.task_id IS NULL OR NOT EXISTS(SELECT 1 FROM multiremi_usage_units observed WHERE observed.task_id=t.id AND observed.run_id=u.run_id
+          CASE WHEN ${identityConflict} OR u.task_id IS NULL OR NOT EXISTS(SELECT 1 FROM multiremi_usage_units observed WHERE observed.task_id=t.id AND observed.run_id=u.run_id
               AND observed.source<>'context_snapshot' AND (observed.input_tokens IS NOT NULL OR observed.output_tokens IS NOT NULL
                 OR observed.cache_read_tokens IS NOT NULL OR observed.cache_write_tokens IS NOT NULL OR observed.actual_unsplit_tokens IS NOT NULL))
             OR EXISTS(SELECT 1 FROM multiremi_usage_runs missing_run WHERE missing_run.task_id=t.id ${relevantRun("missing_run")} AND NOT EXISTS(
@@ -202,13 +208,17 @@ export class UsageAccountingRepo {
             AND pp.effective_from<=u.occurred_at AND (pp.effective_to IS NULL OR pp.effective_to>u.occurred_at)
           ORDER BY pp.effective_from DESC LIMIT 1) WHERE u.task_id IS NOT NULL OR (${lifePredicate})
       )`;
-      const queryParams = [...params, ...lifeParams, ...runParams, ...runParams, ...runParams, ...unitParams, input.workspaceId, ...lifeParams];
+      const queryParams = [...params, ...lifeParams, ...runParams, ...runParams, ...runParams, ...runParams, ...runParams, ...unitParams, input.workspaceId, ...lifeParams];
       const aggregate = (keys: string[]): Array<UsageMetrics & Row> => {
         const keySelect = keys.length ? `${keys.join(",")},` : "";
         const group = keys.length ? `GROUP BY ${keys.join(",")}` : "";
         const totals = this.ctx.db.query(`${cte} SELECT ${keySelect}
           ${["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"].map((f) => `COALESCE(SUM(${f}),0) AS ${f}`).join(",")},
           COUNT(DISTINCT task_id) AS task_count,COUNT(DISTINCT CASE WHEN unknown=1 THEN task_id END) AS unknown_task_count,
+          COUNT(DISTINCT CASE WHEN identity_conflict=1 THEN task_id END) AS identity_conflict_task_count,
+          COUNT(DISTINCT CASE WHEN time_provenance='task_attributed' THEN task_id END) AS task_attributed_task_count,
+          COALESCE(SUM(CASE WHEN time_provenance='task_attributed' THEN actual_total_tokens ELSE 0 END),0) AS task_attributed_tokens,
+          CASE WHEN MIN(time_provenance) IS NULL THEN NULL WHEN MIN(time_provenance)=MAX(time_provenance) THEN MIN(time_provenance) ELSE 'mixed' END AS time_provenance,
           MAX(context_tokens) AS context_peak_tokens,MIN(run_complete) AS run_complete,MIN(price_complete) AS price_complete,MIN(cost_allocation_complete) AS cost_allocation_complete,
           CASE WHEN MIN(runtime_provenance)=MAX(runtime_provenance) THEN MIN(runtime_provenance) ELSE 'mixed' END AS runtime_provenance,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status='completed' THEN task_id END) AS completed,
@@ -233,8 +243,11 @@ export class UsageAccountingRepo {
         const durationMap = new Map(durations.map((r) => [key(r), Number(r.total_seconds ?? 0)]));
         return totals.map((r) => {
           const c = costs.get(key(r));
-          const numericFields = new Set(["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens", "task_count", "unknown_task_count", "context_peak_tokens"]);
+          const numericFields = new Set(["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens", "task_count", "unknown_task_count", "context_peak_tokens", "identity_conflict_task_count", "task_attributed_task_count", "task_attributed_tokens"]);
           const metrics = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, numericFields.has(k) && v !== null ? Number(v) : v])) as Row;
+          if (Number(r.identity_conflict_task_count) === 0) delete metrics.identity_conflict_task_count;
+          if (Number(r.task_attributed_task_count) === 0) { delete metrics.task_attributed_task_count; delete metrics.task_attributed_tokens; }
+          if (r.time_provenance === null) delete metrics.time_provenance;
           const status_counts = Object.fromEntries(["completed", "failed", "cancelled", "active", "queued"].map((s) => [s, Number(r[s] ?? 0)]));
           const allocationComplete = !keys.includes("model") || Number(r.cost_allocation_complete) === 1;
           if (allocationComplete) delete metrics.cost_allocation_complete;
@@ -277,7 +290,7 @@ export class UsageAccountingRepo {
       applyLife(daily, "date", task_daily); applyLife(by_agent, "agent_id", lifeAggregate(["agent_id"])); applyLife(by_runtime, "runtime_id", lifeAggregate(["runtime_id"]));
       const prices = this.ctx.db.query("SELECT revision FROM multiremi_usage_price_revisions WHERE workspace_id=?").get(input.workspaceId) as Row | null;
       return { summary, daily, by_agent, by_model, by_runtime, task_daily,
-        time_basis: { consumption: "unit_occurred_at", terminal_tasks: "terminal_lifecycle_at", active_tasks: "current_snapshot" },
+        time_basis: { consumption: "unit_occurred_at", terminal_tasks: "terminal_lifecycle_at", active_tasks: "current_snapshot", ...(summary.task_attributed_task_count ? { historical_aggregates: "task_attribution_at" } : {}) },
         coverage: { priced_tokens: summary.priced_tokens, unpriced_tokens: summary.unpriced_tokens,
           token_ratio: summary.actual_total_tokens ? summary.priced_tokens / summary.actual_total_tokens : null, unknown_task_count: summary.unknown_task_count },
         as_of: asOf, pricing_revision: String(prices?.revision ?? 0),

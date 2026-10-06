@@ -20,7 +20,13 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 [采集器](../packages/acp/src/usage-collector.ts)输出可计量单位，[task usage ledger](../packages/server/src/worker/task-usage-ledger.ts)为一次执行建立稳定 run ID，`task.start` 携带 `usage_run_id`，服务端在接受开始的同一事务固化认证 Runtime、执行项目和当前 active run。daemon 只有收到 `execution_authorized:true` 的 start ACK 才进入 provider 执行；首次 ACK 丢失后旧 run 可排出历史重放，但换机、终态或 active run 已变时返回 false，不重新运行模型。网络不可用期间暂停 provider 启动；等待有超时与取消，不因超时继续执行。可靠报告通过 daemon outbox 发送 `usageSnapshot`；换机后原 Runtime 的 start 重放和迟到用量按不可变 run 绑定授权，不允许另一个 Runtime 冒报。失败、取消和正常结束前已有消费都可检查点持久化。验证或相同 revision 内容冲突不可重试，数据库等基础设施故障可重试。
 
-单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 的真实执行消费相加。
+换机后过期 execution 报告收到 `authority_revoked` 时，outbox 丢弃同任务后续 execution 报告并保留 usage，让每个用量帧独立通过当前 daemon 身份与不可变 run 授权。单个 usage 帧被拒绝时仅持久阻塞该帧，不将拒绝伪装为送达，也不阻塞其他已绑定 run 的用量。重启可以恢复旧版因 execution 拒绝而封锁的 usage，但不绕过服务端全局身份撤权。
+
+单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 中已证明独立的执行消费相加。旧报告边界在任务锁内用上一 revision 加一，不把毫秒时间戳写入 PostgreSQL INTEGER。
+
+真实上游 `providerSessionId` 与 `providerRequestId` 建立跨 task/run 的请求身份；调用引擎、工作区、连接也是命名空间。同请求的 token 与独立金额证据可以在同一 owner run 保存，跨归属竞争不能再加一份消费。两个明确不同连接可区分；未知连接不能证明独立，因此与相同 session/request 的已知连接竞争。PostgreSQL 在 domain 写入前按稳定顺序取得身份事务锁，持久 owner 保证并发只认领一次。竞争证据及此前弱证据写入 `multiremi_usage_identity_conflicts`，报表保留规范 owner 的已知小计，双方显示 `identity_conflict_task_count` 和 incomplete，不把归属争议伪成零消费。上下文和 legacy 聚合不能认领请求身份。
+
+Codex 累计通知使用 `identityKind=cumulative_meter`，真实 session、`providerObservationId` 和 `meterEvidence` 保留 epoch、before/after 及可用 last 的五类规范计数；turn ID 不是 request ID。相同 meter namespace/epoch 内相邻 `(before,after]` 区间可累计，重叠观察跨 run 只保留审计而不另加消费。不同形式的 compaction 时间戳与 item/turn 身份可能指向同一次重置，重叠时保守判为竞争。没有可靠 session、baseline 或 epoch 的证据不建立强身份。计量器 owner 用标量区间检索，证据 JSON 供审计，不用于正常报表逐行解析。
 
 用量报告按字节与单位数分块，避免长任务超过 daemon 的 1 MiB frame 上限。单个 turn 金额关联的请求列表也可分块：`coverageExpectedCount` 和 `coverageSha256` 固定完整排序列表的数量与 SHA-256（UTF-8 `JSON.stringify(sortedIds)`），各块保留同 unit/revision、金额和不可变事实，仅发送列表子集。同 revision 的列表块幂等追加，更新 revision 清空旧关联；较旧 revision 不回退。数量及哈希验证完成前金额只保留诊断，不能提前计入已知费用或与配置估价相加。所有块持久化后才发送 run 完整标记。采集器在金额观测与 turn settle 时关联覆盖，避免每个请求写入不断增长的完整列表。
 
@@ -38,7 +44,7 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 Runtime 列表/详情和 task/status/Issue 用量兼容响应同样只从规范化标量单位聚合；旧 task JSON 仅在迁移审计和弃用客户端的幂等上报入口读取。旧形状的 consumption 日/小时接口按单位 occurred_at、固化 Runtime/项目过滤；任务活动与时长接口按生命周期过滤。完整的未知覆盖、参考金额和出处使用 report 接口，不能从旧形状缺失字段推断已知零。
 
-消费和金额按 unit 的 `occurredAt` 过滤、分日。完成、失败、取消任务按各自生命周期时间统计；时间缺失时回退到已有 updated/created 时间，不能据此推断精确结束时刻。`task_daily` 独立承载任务趋势和已结束任务耗时。active、queued 描述当前状态快照，不代表已完成。响应 `time_basis` 声明这两种口径。
+消费和金额按 unit 的 `occurredAt` 过滤、分日，但时间证据并不总是逐请求时间。`time_provenance` 区分上游时间 `provider_timestamp`、采集时间 `observed_at`、历史任务归属时间 `task_attributed`、未知或混合。旧 task 聚合没有逐请求时间时保留任务结束/已有记录归属日，不拆成虚构的逐日请求；报表返回 `task_attributed_tokens` 与 `task_attributed_task_count`，`time_basis.historical_aggregates=task_attribution_at`，页面显示明显历史归属日提示，CSV 同步保留时间出处。完成、失败、取消任务按各自生命周期时间统计；时间缺失时回退到已有 updated/created 时间，不能据此推断精确结束时刻。`task_daily` 独立承载任务趋势和已结束任务耗时。active、queued 描述当前状态快照，不代表已完成。响应 `time_basis` 声明这些口径。
 
 `summary.task_count` 是当前报告范围内相关 task 的 distinct 数。一个 task 可以跨日、跨模型、跨 Runtime，因此各组 task count 不可加总；状态与耗时也不能由 token 日期推导。actual token 分量、priced/unpriced tokens、同币种已知金额是可对账的加性指标；context peak、task count 和比例不是。每日 token 表中没有消费的生命周期日可以只出现在 `task_daily`。
 

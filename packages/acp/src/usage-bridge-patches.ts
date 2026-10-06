@@ -1,11 +1,14 @@
 /** Patches only upstream values, never context occupancy or inferred prices. */
-export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v4";
-export const CLAUDE_USAGE_PATCH_VERSION = "claude-usage-v2";
+export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v5";
+export const CLAUDE_USAGE_PATCH_VERSION = "claude-usage-v3";
 
 export function codexUsagePatch(source: string): string | null {
   if (source.includes(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH_VERSION}";`)) return source;
   const notificationAnchor = "  async createUpdateEvent(notification) {";
   if (!source.includes(notificationAnchor)) return null;
+  // Only opening a genuinely new upstream session proves the initial epoch.
+  // Resuming/forking a session without its reset history leaves epoch unknown.
+  source = source.replaceAll("const sessionState = {\n      sessionId,\n      currentModelId,", "const sessionState = {\n      sessionId,\n      remiMeterEpochId: \"sessionId\" in request ? null : \"initial\",\n      currentModelId,");
   source = source.replace(notificationAnchor, notificationAnchor + `
     // Upstream's two explicit successful compaction notifications are reset
     // evidence. Error/start notifications and display text are not evidence.
@@ -16,7 +19,9 @@ export function codexUsagePatch(source: string): string | null {
       const seen = this.sessionState.remiUsageCompactions ??= new Set();
       if (!seen.has(key)) {
         seen.add(key);
-        this.sessionState.remiUsageCompactionPending = { threadId };
+        this.sessionState.remiUsageCompactionPending = { threadId,
+          epochId: typeof p.item?.id === "string" ? "compaction-item:" + p.item.id
+            : typeof p.turnId === "string" ? "compaction-turn:" + p.turnId : null };
       }
     }
 `);
@@ -37,7 +42,7 @@ export function codexUsagePatch(source: string): string | null {
     const state = this.sessionState.remiUsageAccounting ??= { baseline: previous, seen: new Set(previous ? [JSON.stringify(previous)] : []), epoch: 0, threadId };
     // A different upstream thread proves a new counter identity. A smaller
     // total within one thread can be a previously unseen delayed notification.
-    if (state.threadId !== threadId) { state.threadId = threadId; state.epoch++; state.baseline = null; state.seen.clear(); }
+    if (state.threadId !== threadId) { state.threadId = threadId; state.epoch++; state.baseline = null; state.seen.clear(); this.sessionState.remiMeterEpochId = null; }
     const fingerprint = JSON.stringify(current);
     if (!valid(current) || !valid(last)) {
       this.sessionState.totalTokenUsage = state.baseline;
@@ -58,7 +63,10 @@ export function codexUsagePatch(source: string): string | null {
       return { sessionUpdate: "usage_update", used: last.totalTokens, size: this.sessionState.modelContextWindow ?? 0,
         _meta: { remiUsagePatch: CODEX_USAGE_PATCH, remiUncertainUsage: { reportedTotalTokens: current.totalTokens, reason: "non_monotonic_cumulative_usage" } } };
     }
-    if (reset) { state.epoch++; state.seen.clear(); delta = last; }
+    if (reset) {
+      state.epoch++; state.seen.clear(); delta = last;
+      this.sessionState.remiMeterEpochId = this.sessionState.remiUsageCompactionPending.epochId;
+    }
     this.sessionState.remiUsageCompactionPending = null;
     state.seen.add(fingerprint);
     state.baseline = current;
@@ -79,9 +87,18 @@ export function codexUsagePatch(source: string): string | null {
           requestedModel: this.sessionState.currentModelId ?? null,
           modelSource: this.sessionState.currentModelId ? "session_acknowledged" : "unknown",
           id: threadId + ":epoch:" + state.epoch + ":" + fingerprint,
-          threadId: params.threadId,
+          threadId,
           turnId: params.turnId ?? this.sessionState.currentTurnId,
-          cumulative: current
+          cumulative: current,
+          meterEvidence: typeof this.sessionState.remiMeterEpochId === "string" ? {
+            epochId: this.sessionState.remiMeterEpochId,
+            before: { inputTokens: current.inputTokens - delta.inputTokens, outputTokens: current.outputTokens - delta.outputTokens,
+              cacheReadTokens: current.cachedInputTokens - delta.cachedInputTokens, cacheWriteTokens: 0, totalTokens: current.totalTokens - delta.totalTokens },
+            after: { inputTokens: current.inputTokens, outputTokens: current.outputTokens, cacheReadTokens: current.cachedInputTokens,
+              cacheWriteTokens: 0, totalTokens: current.totalTokens },
+            last: { inputTokens: last.inputTokens, outputTokens: last.outputTokens, cacheReadTokens: last.cachedInputTokens,
+              cacheWriteTokens: 0, totalTokens: last.totalTokens }
+          } : null
         }
       }
     };
@@ -114,7 +131,7 @@ export function claudeUsagePatch(source: string): string | null {
                 if (message.type === "stream_event") {
                     const event = message.event;
                     if (event.type === "message_start" && event.message.model !== "<synthetic>") {
-                        request = { id: event.message.id, model: event.message.model, usage: event.message.usage, accuracy: "partial" };
+                        request = { id: event.message.id, sessionId: message.session_id, model: event.message.model, usage: event.message.usage, accuracy: "partial" };
                         session.remiUsageRequests.set(lane, request);
                     } else if (event.type === "message_delta") {
                         const previous = session.remiUsageRequests.get(lane);
@@ -122,7 +139,7 @@ export function claudeUsagePatch(source: string): string | null {
                         if (request) session.remiUsageRequests.set(lane, request);
                     }
                 } else if (message.type === "assistant" && message.message.model !== "<synthetic>") {
-                    request = { id: message.message.id, model: message.message.model, usage: message.message.usage, accuracy: "exact" };
+                    request = { id: message.message.id, sessionId: message.session_id, model: message.message.model, usage: message.message.usage, accuracy: "exact" };
                     if (session.remiUsageRequests.get(lane)?.id === request.id) session.remiUsageRequests.delete(lane);
                 }
                 if (request?.id && request.usage) {
@@ -135,6 +152,8 @@ export function claudeUsagePatch(source: string): string | null {
                         sessionUpdate: "usage_update", used: 0, size: 0,
                         _meta: { remiUsagePatch: CLAUDE_USAGE_PATCH, remiTokenUsage: {
                             id: request.id, model: request.model, scope: "request_snapshot",
+                            providerSessionId: request.sessionId ?? message.session_id ?? null,
+                            providerRequestId: request.sessionId || message.session_id ? request.id : null,
                             source: "claude_assistant_usage", accuracy: request.accuracy,
                             parentToolUseId: message.parent_tool_use_id ?? null,
                             inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens,

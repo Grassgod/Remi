@@ -32,6 +32,109 @@ function fixture() {
 }
 
 describe("historical reconciliation checkpoints", () => {
+  it.each(["shared", "missing-session", "different-session", "different-connection", "unknown-connection", "modern-competitor"] as const)(
+    "uses global provider ownership for %s stored telemetry even with --task-id", async scenario => {
+      const store = createLocalStore();
+      const agent = store.createAgent({ name: "Global request attribution", provider: "claude", workspaceId: "local" });
+      const first = store.createTask({ agentId: agent.id, prompt: "first historical owner" });
+      const second = store.createTask({ agentId: agent.id, prompt: "second historical owner" });
+      db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage=?", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
+      migrateLegacyUsage(db!);
+      for (const [index, task] of [first, second].entries()) store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
+        id: "same-short-request", providerRequestId: "same-short-request", source: "claude_assistant_usage",
+        ...(scenario !== "missing-session" ? { providerSessionId: scenario === "different-session" ? `session-${index}` : "same-real-session" } : {}),
+        ...(scenario === "different-connection" ? { connectionId: `connection-${index}` }
+          : scenario === "unknown-connection" && index === 1 ? { connectionId: "known-connection" } : {}),
+        inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
+      } } } }]);
+      if (scenario === "modern-competitor") store.reportTaskUsageSnapshot(second.id, { version: 2, runId: "accepted-modern", revision: 1, complete: true,
+        units: [actualUnit({ unitId: "live-request", provider: "claude", scope: "request", source: "provider_request",
+          providerSessionId: "same-real-session", providerRequestId: "same-short-request", inputTokens: 10, outputTokens: 2 })] });
+      const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+      const independent = ["different-session", "different-connection"].includes(scenario);
+      const plan = await buildReconcileUsagePlan(sql, independent ? {} : { taskId: first.id });
+      expect(plan.tasks.reduce((sum, task) => sum + task.countedActualTokens, 0)).toBe(independent ? 24 : 0);
+      expect(plan.counts.replayed).toBe(0); // Equal counters are not request identity.
+      if (!independent) {
+        expect(plan.tasks[0]!.attributionEvidence).toHaveLength(1);
+        expect(plan.tasks[0]!.attributionEvidence![0]!.reason).toBe(scenario === "missing-session" ? "missing_request_namespace" : "competing_request_owners");
+        expect(plan.tasks[0]!.attributionEvidence![0]!.unit.inputTokens).toBe(10);
+        expect(plan.tasks[0]!.snapshot.units[0]).toMatchObject({ inputTokens: null, outputTokens: null, reportedTotalTokens: 12, accuracy: "unknown" });
+      }
+      applyUsageReconciliation(db!, plan);
+      expect(verifyUsageReconciliation(db!, plan).actualTokens).toBe(independent ? 24 : 0);
+      expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(independent ? 24 : scenario === "modern-competitor" ? 12 : 0);
+      expect(applyUsageReconciliation(db!, plan)).toMatchObject({ applied: 0, resumed: plan.tasks.length });
+      if (!independent) {
+        db!.run("UPDATE multiremi_usage_reconciliation_attribution SET evidence_json='[]' WHERE task_id=?", [first.id]);
+        expect(() => verifyUsageReconciliation(db!, plan)).toThrow("Reconciliation attribution mismatch");
+      }
+    });
+
+  it("keeps equal short request IDs distinct on two explicitly known connections within one task", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "two routes", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, prompt: "two actual upstream routes" });
+    db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage='[]' WHERE id=?", [task.id]);
+    migrateLegacyUsage(db!);
+    store.appendTaskMessages(task.id, ["known-route-one", "known-route-two"].map(connectionId => ({ type: "usage" as const, meta: { _meta: { remiTokenUsage: {
+      id: "same-short-id", providerSessionId: "real-provider-session", connectionId, inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
+    } } } })));
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    const plan = await buildReconcileUsagePlan(sql);
+    expect(plan.tasks[0]!.actualTokens).toBe(24);
+    expect(plan.tasks[0]!.attributionEvidence).toEqual([]);
+    expect(new Set(plan.tasks[0]!.snapshot.units.map(unit => unit.unitId)).size).toBe(2);
+    applyUsageReconciliation(db!, plan);
+    expect(verifyUsageReconciliation(db!, plan).actualTokens).toBe(24);
+  });
+
+  it("rolls back a stale generated plan when another live owner claims its request after planning", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "ownership race", provider: "claude" });
+    const first = store.createTask({ agentId: agent.id, prompt: "historical" }), second = store.createTask({ agentId: agent.id, prompt: "live" });
+    db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage=?", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
+    migrateLegacyUsage(db!);
+    store.appendTaskMessages(first.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: { id: "raced-request", providerSessionId: "real-session",
+      inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12 } } } }]);
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    const plan = await buildReconcileUsagePlan(sql, { taskId: first.id });
+    expect(plan.tasks[0]!.countedActualTokens).toBe(12);
+    store.reportTaskUsageSnapshot(second.id, { version: 2, runId: "late-live-owner", revision: 1, complete: true,
+      units: [actualUnit({ unitId: "live-unit", provider: "claude", scope: "request", source: "provider_request", providerSessionId: "real-session",
+        providerRequestId: "raced-request", inputTokens: 10, outputTokens: 2 })] });
+    expect(() => applyUsageReconciliation(db!, plan)).toThrow("Canonical ownership changed after plan");
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? AND run_id='historical-evidence-v2'").get(first.id)).toBeNull();
+    expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(first.id)).not.toBeNull();
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(12);
+    const safer = await buildReconcileUsagePlan(sql, { taskId: first.id });
+    expect(safer.tasks[0]!.countedActualTokens).toBe(0);
+    applyUsageReconciliation(db!, safer);
+    expect(verifyUsageReconciliation(db!, safer).actualTokens).toBe(0);
+  });
+
+  it("keeps competing Codex cumulative meter intervals as evidence rather than double-counting different endpoints", async () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "historical meter", provider: "codex" });
+    const first = store.createTask({ agentId: agent.id, prompt: "first interval" }), second = store.createTask({ agentId: agent.id, prompt: "overlapping interval" });
+    db!.run("UPDATE multiremi_tasks SET provider='codex',status='completed',usage='[]'");
+    migrateLegacyUsage(db!);
+    const vector = (n: number) => ({ inputTokens: n * 10, outputTokens: n * 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: n * 12 });
+    for (const [index, task] of [first, second].entries()) store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
+      id: `raw-observation-${index}`, threadId: "same-native-thread", source: "codex_thread_token_usage", inputTokens: (index + 1) * 10,
+      outputTokens: (index + 1) * 2, cachedInputTokens: 0, totalTokens: (index + 1) * 12,
+      meterEvidence: { epochId: "initial", before: vector(1), after: vector(index + 2), last: vector(1) },
+    } } } }]);
+    const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
+    const plan = await buildReconcileUsagePlan(sql);
+    expect(plan.tasks.reduce((sum, task) => sum + task.countedActualTokens, 0)).toBe(0);
+    expect(plan.tasks.every(task => task.attributionEvidence?.[0]?.reason === "competing_request_owners")).toBe(true);
+    expect(plan.tasks.map(task => task.attributionEvidence![0]!.unit.providerRequestId)).toEqual([undefined, undefined]);
+    applyUsageReconciliation(db!, plan);
+    expect(verifyUsageReconciliation(db!, plan).actualTokens).toBe(0);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(0);
+  });
+
   it("preserves a 102-token aggregate alongside 25-token partial evidence and resumes without double counting", () => {
     const { store, first, original, plan } = fixture();
     expect(applyUsageReconciliation(db!, plan)).toMatchObject({ applied: 2, resumed: 0 });
@@ -78,14 +181,15 @@ describe("historical reconciliation checkpoints", () => {
   it("generates plans from stored telemetry with distinct equal request IDs and preserves unidentified observations", async () => {
     const { store, first } = fixture();
     const observation = (id?: string) => ({ type: "usage" as const, meta: { used: 100, size: 200000, _meta: { remiTokenUsage: {
-      ...(id ? { id } : {}), accuracy: "partial", inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
+      ...(id ? { id, providerSessionId: "native-provider-session" } : {}), accuracy: "partial", inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
     } } } });
     store.appendTaskMessages(first.id, [observation("one"), observation("two"), observation(), observation()]);
     const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
     const plan = await buildReconcileUsagePlan(sql, { taskId: first.id });
     expect(plan.tasks).toHaveLength(1);
-    expect(plan.tasks[0]).toMatchObject({ actualTokens: 48, countedActualTokens: 0, supersedeLegacyRun: false });
-    expect(plan.tasks[0]!.snapshot.units.filter(unit => unit.source === "provider_request")).toHaveLength(4);
+    expect(plan.tasks[0]).toMatchObject({ actualTokens: 24, countedActualTokens: 0, supersedeLegacyRun: false });
+    expect(plan.tasks[0]!.snapshot.units.filter(unit => unit.source === "provider_request")).toHaveLength(2);
+    expect(plan.tasks[0]!.attributionEvidence?.map(value => value.reason)).toEqual(["missing_request_namespace", "missing_request_namespace"]);
     expect(plan.counts.replayed).toBe(0);
   });
 
@@ -107,7 +211,7 @@ describe("historical reconciliation checkpoints", () => {
     try {
       const buffers: Buffer[] = [];
       const writer = new ZipStreamWriter({ write: chunk => { buffers.push(chunk); } });
-      const body = Buffer.from(JSON.stringify({ type: "assistant", timestamp: "2026-10-01T01:00:00Z", message: {
+      const body = Buffer.from(JSON.stringify({ type: "assistant", sessionId: "shared-native-session", timestamp: "2026-10-01T01:00:00Z", message: {
         id: "shared-request", model: "haiku", usage: { input_tokens: 20, output_tokens: 5 },
       } }) + "\n");
       const member = await writer.addBuffer("sessions/root/native.jsonl", body, hash(body.toString()));
@@ -154,7 +258,7 @@ describe("historical reconciliation checkpoints", () => {
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
-      id: "established-request", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
+      id: "established-request", providerSessionId: "established-native-session", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
     } } } }]);
     const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
     const first = await buildReconcileUsagePlan(sql, { taskId: task.id });
@@ -170,7 +274,7 @@ describe("historical reconciliation checkpoints", () => {
     expect(verifyUsageReconciliation(db!, first).ledgerActualTokens).toBe(25);
 
     store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
-      id: "established-request", model: "haiku", inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
+      id: "established-request", providerSessionId: "established-native-session", model: "haiku", inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
     } } } }]);
     const narrower = await buildReconcileUsagePlan(sql, { taskId: task.id });
     expect(narrower.tasks[0]!.actualTokens).toBe(12);
@@ -193,7 +297,7 @@ describe("historical reconciliation checkpoints", () => {
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     const append = (id: string, inputTokens: number, outputTokens: number) => store.appendTaskMessages(task.id, [{ type: "usage",
-      meta: { _meta: { remiTokenUsage: { id, model: "haiku", inputTokens, outputTokens, cachedInputTokens: 0, totalTokens: inputTokens + outputTokens } } } }]);
+      meta: { _meta: { remiTokenUsage: { id, providerSessionId: "expandable-native-session", model: "haiku", inputTokens, outputTokens, cachedInputTokens: 0, totalTokens: inputTokens + outputTokens } } } }]);
     const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
     append("retained", 20, 5);
     const first = await buildReconcileUsagePlan(sql, { taskId: task.id });
@@ -215,7 +319,7 @@ describe("historical reconciliation checkpoints", () => {
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
-      id: "charged", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
+      id: "charged", providerSessionId: "charged-native-session", model: "haiku", inputTokens: 20, outputTokens: 5, cachedInputTokens: 0, totalTokens: 25,
     } } } }]);
     const sql = { unsafe: async (statement: string, params: any[] = []) => db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
     const plan = await buildReconcileUsagePlan(sql, { taskId: task.id });

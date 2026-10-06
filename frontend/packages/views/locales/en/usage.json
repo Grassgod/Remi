@@ -13,7 +13,9 @@
     "weekly": "Weekly"
   },
   "summary": {
-    "time_hint": "Tokens and costs follow consumption time. Terminal status and run time follow completion, failure or cancellation time; active and queued counts are current snapshots.",
+    "time_hint": "Request records follow reported or observed timestamps. Legacy aggregates without request timestamps use task attribution dates. Terminal status and run time follow completion, failure or cancellation time; active and queued counts are current snapshots.",
+    "historical_date_hint": "Includes legacy aggregates assigned to task dates; their consumption cannot be split by request day.",
+    "identity_conflict_hint": "Some provider requests have conflicting task or run attribution. They are counted once; conflicting observations remain in audit evidence.",
     "actual": "Recorded actual tokens",
     "known_cost": "Known cost subtotal",
     "coverage": "Token pricing coverage",

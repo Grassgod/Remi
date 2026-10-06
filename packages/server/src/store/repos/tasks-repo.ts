@@ -5306,7 +5306,7 @@ ${placementAfter.sql}
       );
       const snapshot = legacyUsageSnapshot(taskId, [...merged.values()], nowIso());
       const previous = this.ctx.db.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(taskId) as Row | null;
-      snapshot.revision = Math.max(Date.now(), Number(previous?.revision ?? -1) + 1);
+      snapshot.revision = Number(previous?.revision ?? 0) + 1;
       for (const unit of snapshot.units) unit.revision = snapshot.revision;
       writeUsageSnapshot(this.ctx.db, taskId, snapshot);
       return this.getTask(taskId)!;

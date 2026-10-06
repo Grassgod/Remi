@@ -38,6 +38,7 @@ export type MultiremiOutboxKind =
   | "plugin.state";
 
 const TERMINAL_KINDS = new Set<MultiremiOutboxKind>(["complete", "fail"]);
+const EXECUTION_KINDS = new Set<MultiremiOutboxKind>(["start", "prompt", "session_pin", "progress", "messages", "workspace", "complete", "fail"]);
 
 export interface MultiremiOutboxRecord {
   id: number;
@@ -89,7 +90,9 @@ const DISCARDED_TASK_TTL_MS = 24 * 60 * 60 * 1_000;
  * One durable process-wide pump. Row ids are reliable WS seqs; each task or
  * rt: partition is ordered, while independent partitions share the bounded
  * frame/byte window. Only covered overwrite reports are compacted at the soft size cap.
- * Permanent errors block a partition; task_not_found discards it instead,
+ * Revoked task execution drops obsolete execution reports; usage frames retain
+ * their own server authorization. Other permanent errors block a partition;
+ * task_not_found discards it instead,
  * and steer_pending hands completion back to the executor or reports recovery.
  */
 export class MultiremiTaskReportOutbox {
@@ -161,6 +164,16 @@ export class MultiremiTaskReportOutbox {
     this.onTaskBlocked = options.onTaskBlocked ?? null;
     this.deliveryBatchSize = Math.max(1, Math.floor(options.deliveryBatchSize ?? DEFAULT_TASK_MESSAGE_BATCH_COUNT));
     this.db.run("UPDATE outbox_events SET next_attempt_at = NULL WHERE status = 'pending'");
+    // Older versions parked late usage behind a rejected execution report.
+    // Recovered usage must still pass the server's immutable-run AND current
+    // daemon authorization; this only removes the local delivery obstruction.
+    const revoked = this.db.query("SELECT key FROM outbox_meta WHERE key LIKE 'blocked-code:%' AND value='authority_revoked'").all() as Array<{ key: string }>;
+    for (const row of revoked) {
+      const taskId = row.key.slice("blocked-code:".length);
+      if (!this.db.query("SELECT id FROM outbox_events WHERE task_id=? AND kind='usage' LIMIT 1").get(taskId)) continue;
+      this.purgeTask(taskId, { keepUsage: true });
+      this.db.run("UPDATE outbox_events SET status='pending',last_error=NULL,next_attempt_at=NULL WHERE task_id=? AND kind='usage'", [taskId]);
+    }
   }
 
   /** Persist a report and wake the task's delivery pump. Never throws on queue pressure. */
@@ -403,6 +416,7 @@ export class MultiremiTaskReportOutbox {
   private taskDrainState(taskId: string): MultiremiOutboxDrainResult | null {
     if (this.closed) return "aborted";
     if (this.readMeta(`blocked:${taskId}`) !== null) return "blocked";
+    if (this.db.query("SELECT id FROM outbox_events WHERE task_id=? AND status='pending' LIMIT 1").get(taskId)) return null;
     const row = this.db.query(
       "SELECT status FROM outbox_events WHERE task_id = ? ORDER BY seq ASC LIMIT 1",
     ).get(taskId) as { status: string } | null;
@@ -510,6 +524,24 @@ export class MultiremiTaskReportOutbox {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof DaemonProtocolRpcError && error.code === "authority_revoked"
+        && (record.kind === "usage" || EXECUTION_KINDS.has(record.kind))) {
+        for (const id of recordIds) {
+          this.recordWaiters.get(id)?.reject(error);
+          this.recordWaiters.delete(id);
+        }
+        if (record.kind === "usage") {
+          // One invalid run cannot prevent a later frame for a bound run from
+          // reaching its independent authorization check. Keep rejected facts
+          // durable for inspection; never turn rejection into a delivery ACK.
+          this.db.run("UPDATE outbox_events SET status='blocked',last_error=? WHERE id=? AND status='pending'", [message.slice(0, 2_000), record.id]);
+        } else {
+          // After reassignment, every remaining execution report is obsolete.
+          // The immutable run can still own consumption that occurred earlier.
+          this.purgeTask(taskId, { keepUsage: true });
+        }
+        return;
+      }
       if (isPermanentDeliveryError(error)) {
         const blocked = this.db.run(
           `UPDATE outbox_events SET status = 'blocked', last_error = ?
@@ -560,7 +592,7 @@ export class MultiremiTaskReportOutbox {
 
   private nextDelivery(taskId: string): OutboxDelivery | null {
     const rows = this.db.query(
-      "SELECT * FROM outbox_events WHERE task_id = ? ORDER BY id ASC LIMIT ?",
+      "SELECT * FROM outbox_events WHERE task_id = ? AND status = 'pending' ORDER BY id ASC LIMIT ?",
     ).all(taskId, this.deliveryBatchSize) as Array<Record<string, unknown>>;
     const firstRow = rows[0];
     if (!firstRow) return null;

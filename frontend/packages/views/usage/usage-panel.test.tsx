@@ -16,6 +16,25 @@ vi.mock("../runtimes/components/custom-pricing-dialog", () => ({ UsagePricingDia
 afterEach(() => { cleanup(); state.error = false; state.report = null; vi.clearAllMocks(); });
 
 describe("Unified usage panel", () => {
+  it("shows one model origin hint and omits requested models equal to the reported model", () => {
+    state.report = usageReport({ by_model: [
+      { ...usageMetrics(), provider: "claude", model: "opus", requested_model: "opus", model_source: "reported", model_provenance: "provider_reported", connection_id: null },
+      { ...usageMetrics(), provider: "codex", model: null, requested_model: null, model_source: "unknown", model_provenance: "unknown", connection_id: null },
+    ] });
+    render(<UsagePanel wsId="ws" />);
+    fireEvent.click(screen.getByRole("button", { name: locale.views.models }));
+    const reported = within(screen.getByText("claude · opus").closest("tr")!);
+    expect(reported.getAllByText(locale.price.reported_model)).toHaveLength(1);
+    expect(reported.queryByText(`${locale.price.requested}: opus`)).toBeNull();
+    const unknown = within(screen.getByText(`codex · ${locale.price.unknown_model}`).closest("tr")!);
+    expect(unknown.queryByText(locale.price.unknown_model)).toBeNull();
+  });
+  it("explains task-attributed historical dates and conflicting request attribution", () => {
+    state.report = usageReport({ summary: usageMetrics({ task_attributed_tokens: 150, task_attributed_task_count: 1, time_provenance: "mixed", identity_conflict_task_count: 1, complete: false }) });
+    render(<UsagePanel wsId="ws" />);
+    expect(screen.getByText(locale.summary.historical_date_hint)).toBeVisible();
+    expect(screen.getByText(locale.summary.identity_conflict_hint)).toBeVisible();
+  });
   it("shows unallocated multi-model charges without displaying a model's missing amount as zero", () => {
     state.report = usageReport({ by_model: [
       { ...usageMetrics({ known_cost_by_currency: {}, cost_allocation_complete: false, complete: false }), provider: "claude", model: "opus", requested_model: null, model_source: "reported", model_provenance: "provider_reported", connection_id: null },

@@ -338,6 +338,24 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(attempts).toBe(before);
   });
 
+  it("recovers usage from an older persisted authority-blocked execution partition and authorizes each run separately", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    first.enqueue("old-task", "progress", { step: "obsolete" });
+    first.enqueue("old-task", "usage", { usageSnapshot: { version: 2, runId: "accepted", revision: 1, complete: true, units: [] } });
+    await first.close();
+    const persisted = openSqliteDatabase(path);
+    persisted.run("UPDATE outbox_events SET status='blocked',last_error='authority_revoked'");
+    persisted.run("INSERT INTO outbox_meta(key,value) VALUES('blocked:old-task','authority_revoked'),('blocked-code:old-task','authority_revoked')");
+    persisted.close();
+    const sent: string[] = [];
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { sent.push(record.kind); return { ok: true }; } }));
+    expect(await second.waitForTaskDrain("old-task")).toBe("delivered");
+    expect(sent).toEqual(["usage"]);
+    expect(second.stats()).toMatchObject({ blocked: 0, pending: 0 });
+    expect(second.enqueue("old-task", "complete", {})).toBeNull();
+  });
+
   it("treats a start replay 400 as delivered and drops rejected best-effort reports", async () => {
     const delivered: string[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({

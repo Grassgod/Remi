@@ -1399,7 +1399,8 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
     const source = established && monetary.source === "provider_reported" ? "provider_reported"
       : established && monetary.source === "sdk_estimate" || providerType === "claude" ? "sdk_estimate" : "unknown";
     state.collector.cost(cost, u.cost?.currency, established ? monetary.scope : providerType === "claude" ? "turn" : "task", source,
-      established && typeof monetary.requestId === "string" ? monetary.requestId : undefined);
+      established && typeof monetary.requestId === "string" ? monetary.requestId : undefined,
+      established && typeof monetary.providerSessionId === "string" ? monetary.providerSessionId : undefined);
   }
 }
 

@@ -5,7 +5,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { parseSessionArchiveIndex, type SessionArchiveIndex } from "../packages/contracts/src/session-archive.js";
 import type { TaskUsageSnapshot, TaskUsageUnit } from "../packages/contracts/src/usage-accounting.js";
 import { readZipCentralDirectory, readZipMember, readZipMemberBody } from "../packages/shared/src/zip/reader.js";
-import { unitActualTotal } from "../packages/acp/src/usage-collector.js";
+import { meterIntervalsOverlap, unitActualTotal } from "../packages/acp/src/usage-collector.js";
 import { createHash } from "node:crypto";
 import { PostgresSyncDatabase } from "../packages/server/src/store/db/postgres.js";
 import { applyUsageReconciliation, verifyUsageReconciliation } from "./usage-reconciliation-store.js";
@@ -13,7 +13,7 @@ import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/se
 import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, type HistoricalTaskBoundary } from "./usage-evidence.js";
 import { readLegacyUsageMembers } from "./legacy-usage-archive.js";
 
-interface Task extends HistoricalTaskBoundary { agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
+interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 interface Archive { id: string; relative_path: string; subject_kind: string; subject_id: string; format: string; }
 export function detectNativeProvider(body: string): "claude" | "codex" | null {
   // Provider identity comes from structural records, never prompt text.
@@ -30,19 +30,21 @@ export interface ReconcileUsagePlan {
   version: 2; mode: "read-only"; generatedAt: string;
   counts: { tasks: number; rawEvents: number; archives: number; nativeMembers: number; rejected: number; replayed: number; ambiguousRawEvents: number; ambiguousTaskEvents: number; archiveReadFailures: number; bytesRead: number };
   tasks: Array<{ taskId: string; expectedLegacyUsageSha256: string; supersedeLegacyRun: boolean; snapshot: TaskUsageSnapshot; actualTokens: number; source: "native" | "raw" | "context_only";
-    coverage: "partial" | "none"; legacyKnownTokens: number; countedActualTokens: number; knownDeltaTokens: number; ambiguousRawEvents: number; unrecoverableReason: string | null }>;
+    coverage: "partial" | "none"; legacyKnownTokens: number; countedActualTokens: number; knownDeltaTokens: number; ambiguousRawEvents: number; unrecoverableReason: string | null;
+    attributionEvidence?: Array<{ reason: "missing_request_namespace" | "competing_request_owners"; unit: TaskUsageUnit; competingTaskIds: string[] }> }>;
   limitations: string[];
   excludedTasks?: Array<{ taskId: string; reason: "modern_live_usage" | "nonterminal_task" }>;
 }
 
 export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
-  const source: Record<string, number> = {}, coverage: Record<string, number> = {}, unrecoverable: Record<string, number> = {};
+  const source: Record<string, number> = {}, coverage: Record<string, number> = {}, unrecoverable: Record<string, number> = {}, attribution: Record<string, number> = {};
   const delta = { lower: 0, equal: 0, higher: 0, legacyPreserved: 0 };
   const evidenceDelta = { lower: 0, equal: 0, higher: 0, noActualEvidence: 0 };
   const excluded: Record<string, number> = {};
   for (const task of plan.excludedTasks ?? []) excluded[task.reason] = (excluded[task.reason] ?? 0) + 1;
   let originalKnownTokens = 0, recoveredKnownSubtotal = 0, preservedLegacyTokens = 0, countedEvidenceTokens = 0;
   for (const task of plan.tasks) {
+    for (const evidence of task.attributionEvidence ?? []) attribution[evidence.reason] = (attribution[evidence.reason] ?? 0) + 1;
     source[task.source] = (source[task.source] ?? 0) + 1;
     coverage[task.coverage] = (coverage[task.coverage] ?? 0) + 1;
     if (task.unrecoverableReason) unrecoverable[task.unrecoverableReason] = (unrecoverable[task.unrecoverableReason] ?? 0) + 1;
@@ -57,7 +59,7 @@ export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
     else if (task.knownDeltaTokens > 0) delta.higher++;
     else delta.equal++;
   }
-  return { counts: plan.counts, taskManifestCount: plan.tasks.length, excluded, source, coverage, unrecoverable, delta, evidenceDelta,
+  return { counts: plan.counts, taskManifestCount: plan.tasks.length, excluded, source, coverage, unrecoverable, attribution, delta, evidenceDelta,
     originalKnownTokens, recoveredKnownSubtotal, countedEvidenceTokens, preservedLegacyTokens, plannedLedgerKnownTokens: countedEvidenceTokens + preservedLegacyTokens };
 }
 
@@ -92,12 +94,13 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
     "Native events require unique task time boundaries within the archived subject; overlapping or missing boundaries remain unattributed.",
     "Legacy raw v1 reports without request identity remain separate observations; numeric equality never proves replay.",
     "Native facts take precedence over overlapping raw actual reports for the same task; missing native coverage remains unknown.",
-    "Historical connection IDs are unknown. Configured/current runtime models never become actual models.",
+    "Historical connection IDs require explicit event evidence; current configuration never fills them. Configured/current runtime models never become actual models.",
     "Partial native/raw evidence never replaces a known legacy aggregate without proven complete coverage; it is retained separately for reconciliation. Only unknown legacy consumption can gain a request subtotal; no task is claimed completely recovered.",
     "Modern live and nonterminal tasks are excluded from historical evidence application but retained as competing task ownership boundaries; explicit legacy schema migration still covers every task.",
+    "A request requires real provider session/request identity; Codex cumulative meters require real session, explicit epoch and before/after intervals, never a fabricated turn request ID. Missing namespaces and cross-task competing identities remain non-additive attribution evidence; unknown routes compete with known routes rather than being guessed independent.",
   ] };
   // Ownership resolution must see every competing task, even --task-id.
-  const tasks = await sql.unsafe<Task[]>(`SELECT t.id,t.agent_id,t.provider,t.status,t.session_id,t.issue_session_id,t.issue_id,t.chat_session_id,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,t.usage,
+  const tasks = await sql.unsafe<Task[]>(`SELECT t.id,t.workspace_id,t.agent_id,t.provider,t.status,t.session_id,t.issue_session_id,t.issue_id,t.chat_session_id,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,t.usage,
     EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id NOT IN ('legacy','historical-evidence-v2')) AS has_live_usage FROM multiremi_tasks t`);
   const terminal = (task: Task) => ["completed", "failed", "cancelled"].includes(task.status);
   const selected = (task: Task) => !task.has_live_usage && terminal(task) && (!options.taskId || task.id === options.taskId);
@@ -110,7 +113,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
   for (;;) {
     const rows = await sql.unsafe<Array<{ task_id: string; seq: number; created_at: string; meta: string }>>(
       `SELECT task_id,seq,created_at,meta FROM multiremi_task_messages WHERE type=$1 AND (task_id,seq)>($2,$3)
-       ${options.taskId ? "AND task_id=$4" : ""} ORDER BY task_id,seq LIMIT 1000`, options.taskId ? ["usage", afterTask, afterSeq, options.taskId] : ["usage", afterTask, afterSeq]);
+       ORDER BY task_id,seq LIMIT 1000`, ["usage", afterTask, afterSeq]);
     if (!rows.length) break;
     for (const row of rows) {
       plan.counts.rawEvents++;
@@ -208,20 +211,75 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       if (plan.counts.archives % 100 === 0) options.onProgress?.(`Read ${plan.counts.archives} archive indexes and ${plan.counts.nativeMembers} native members`);
     }
   }
+  const ownership = new Map<string, Array<{ taskId: string; connectionId: string | null; unit: TaskUsageUnit }>>();
+  const identity = (workspaceId: string, unit: TaskUsageUnit) => unit.providerSessionId && (unit.providerRequestId || (unit.providerObservationId && unit.meterEvidence))
+    ? JSON.stringify([workspaceId, unit.provider, unit.providerSessionId, unit.identityKind ?? "request", unit.meterEvidence ? "meter-stream" : unit.providerRequestId]) : null;
+  const claim = (workspaceId: string, taskId: string, unit: TaskUsageUnit) => {
+    const key = identity(workspaceId, unit);
+    if (!key || unit.source === "context_snapshot") return;
+    const claims = ownership.get(key) ?? [];
+    const connectionId = unit.connectionId ?? null;
+    if (!claims.some(value => value.taskId === taskId && value.connectionId === connectionId && value.unit.unitId === unit.unitId)) claims.push({ taskId, connectionId, unit });
+    ownership.set(key, claims);
+  };
+  for (const [taskId, target] of byTask) {
+    for (const unit of target.native.size ? target.native.values() : target.raw.values()) claim(target.task.workspace_id, taskId, unit);
+  }
+  // Existing live facts are ownership evidence even when their task and raw
+  // telemetry are excluded from the requested historical application cohort.
+  const liveClaims = await sql.unsafe<Array<{ workspace_id: string; task_id: string; unit_id: string; provider: string; connection_id: string | null; provider_session_id: string; provider_request_id: string | null; provider_observation_id: string | null; identity_kind: TaskUsageUnit["identityKind"]; meter_evidence: string | null }>>(`
+    SELECT t.workspace_id,u.task_id,u.unit_id,u.provider,u.connection_id,u.provider_session_id,u.provider_request_id,u.provider_observation_id,u.identity_kind,u.meter_evidence
+    FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id
+    WHERE u.run_id NOT IN ('legacy','historical-evidence-v2') AND u.provider_session_id IS NOT NULL AND (u.provider_request_id IS NOT NULL OR u.provider_observation_id IS NOT NULL)
+      AND u.source IN ('provider_request','provider_turn')`);
+  const vector = (values: number[]) => ({ inputTokens: values[0]!, outputTokens: values[1]!, cacheReadTokens: values[2]!, cacheWriteTokens: values[3]!, totalTokens: values[4]! });
+  for (const row of liveClaims) {
+    const meter = row.meter_evidence ? JSON.parse(row.meter_evidence) : null;
+    claim(row.workspace_id, row.task_id, { unitId: row.unit_id, provider: row.provider, connectionId: row.connection_id,
+      providerSessionId: row.provider_session_id, providerRequestId: row.provider_request_id, providerObservationId: row.provider_observation_id,
+      identityKind: row.identity_kind ?? undefined,
+      ...(meter ? { meterEvidence: { epochId: meter.epochId, before: vector(meter.before), after: vector(meter.after) } } : {}) } as TaskUsageUnit);
+  }
+  const conflictingClaims = await sql.unsafe<Array<{ workspace_id: string; task_id: string; unit_json: string }>>(`
+    SELECT t.workspace_id,c.task_id,c.unit_json FROM multiremi_usage_identity_conflicts c JOIN multiremi_tasks t ON t.id=c.task_id`);
+  for (const row of conflictingClaims) {
+    try { claim(row.workspace_id, row.task_id, JSON.parse(row.unit_json) as TaskUsageUnit); }
+    catch { plan.counts.rejected++; }
+  }
   for (const [taskId, target] of byTask) {
     if (!selected(target.task)) continue;
-    const actual = target.native.size ? [...target.native.values()] : [...target.raw.values()].filter(u => u.source !== "context_snapshot");
+    const evidenceUnits = target.native.size ? [...target.native.values()] : [...target.raw.values()].filter(u => u.source !== "context_snapshot");
+    const actual: TaskUsageUnit[] = [], diagnostics: TaskUsageUnit[] = [];
+    const attributionEvidence: NonNullable<ReconcileUsagePlan["tasks"][number]["attributionEvidence"]> = [];
+    for (const unit of evidenceUnits) {
+      const key = identity(target.task.workspace_id, unit);
+      const competitors = key ? (ownership.get(key) ?? []).filter(owner => (owner.connectionId === (unit.connectionId ?? null)
+        || owner.connectionId === null || unit.connectionId == null) && (!unit.meterEvidence || (owner.unit.meterEvidence && (
+          owner.unit.providerObservationId === unit.providerObservationId || meterIntervalsOverlap(owner.unit.meterEvidence, unit.meterEvidence))))) : [];
+      const competingTaskIds = [...new Set(competitors.map(owner => owner.taskId))].sort();
+      if (key && competingTaskIds.length === 1 && !competitors.some(owner => owner.unit.unitId !== unit.unitId && owner.unit.meterEvidence)) { actual.push(unit); continue; }
+      const reason = key ? "competing_request_owners" : "missing_request_namespace";
+      attributionEvidence.push({ reason, unit, competingTaskIds });
+      if (key) plan.counts.ambiguousTaskEvents++;
+      diagnostics.push({ ...unit, unitId: `unattributed:${createHash("sha256").update(unit.unitId).digest("hex")}`,
+        scope: "turn", source: "context_snapshot", accuracy: "unknown", inputTokens: null, outputTokens: null,
+        cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null,
+        reportedTotalTokens: unit.reportedTotalTokens ?? unitActualTotal(unit), costAmount: null, costCurrency: null,
+        providerSessionId: undefined, providerRequestId: undefined, providerObservationId: undefined, identityKind: undefined, meterEvidence: undefined, coveredUnitIds: undefined });
+    }
     const context = target.context;
-    const units = [...actual, ...(context ? [context] : [])];
+    const units = [...actual, ...diagnostics, ...(context ? [context] : [])];
     const actualTokens = actual.reduce((sum, u) => sum + unitActualTotal(u), 0);
     const legacyKnownTokens = legacyUsageSnapshot(taskId, target.task.usage, plan.generatedAt).units.reduce((sum, unit) => sum + unitActualTotal(unit), 0);
     plan.tasks.push({ taskId, expectedLegacyUsageSha256: createHash("sha256").update(target.task.usage ?? "").digest("hex"),
       supersedeLegacyRun: actualTokens > 0 && legacyKnownTokens === 0, countedActualTokens: legacyKnownTokens === 0 ? actualTokens : 0,
-      source: target.native.size ? "native" : actual.length ? "raw" : "context_only",
+      source: target.native.size ? "native" : evidenceUnits.length ? "raw" : "context_only",
       coverage: actual.length ? "partial" : "none", legacyKnownTokens, knownDeltaTokens: actualTokens > 0 ? actualTokens - legacyKnownTokens : 0,
       ambiguousRawEvents: target.ambiguousRawEvents,
-      unrecoverableReason: actual.length ? (legacyKnownTokens > 0 ? "partial_evidence_legacy_preserved" : "partial_request_coverage") : context ? "context_only_no_request_evidence" : "no_request_evidence",
-      snapshot: { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false, units }, actualTokens });
+      unrecoverableReason: actual.length ? (legacyKnownTokens > 0 ? "partial_evidence_legacy_preserved" : "partial_request_coverage")
+        : attributionEvidence.some(e => e.reason === "competing_request_owners") ? "competing_request_owners"
+        : attributionEvidence.length ? "missing_request_namespace" : context ? "context_only_no_request_evidence" : "no_request_evidence",
+      attributionEvidence, snapshot: { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false, units }, actualTokens });
   }
   return plan;
 }

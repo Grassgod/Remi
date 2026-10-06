@@ -2,7 +2,56 @@ import { expect, spyOn, test } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { actualUnit } from "@acp/usage-collector.js";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
+import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+
+test("rejected obsolete progress cannot strand independently authorized late usage over the real socket", async () => {
+  const h = await DaemonProtocolHarness.create();
+  let outbox: MultiremiTaskReportOutbox | undefined;
+  try {
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "late accounting owner", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "manual protocol run", maxAttempts: 1 });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 900_000,
+      p: { task_id: task.id, usage_run_id: "accepted-original" } })).resolves.toMatchObject({ execution_authorized: true });
+    const replacement = h.store.registerRuntime({ name: "replacement accounting owner", provider: "claude", workspaceId: "local", daemonId: "other-device" });
+    h.db.run("UPDATE multiremi_tasks SET runtime_id=?,status='dispatched' WHERE id=?", [replacement.id, task.id]);
+    const attempts: string[] = [];
+    const unit = actualUnit({ unitId: "request-original", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 });
+    outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "obsolete-report-accounting.db"),
+      canSend: () => h.client.connectionState() === "connected",
+      deliver: async record => {
+        attempts.push(record.kind + ":" + ((record.payload.usageSnapshot as any)?.runId ?? "execution"));
+        return h.client.event({ ...outboxRecordFrame(record), seq: 900_000 + record.seq });
+      } });
+    outbox.enqueue(task.id, "progress", { runtime_id: runtimeId, step: "obsolete" });
+    outbox.enqueue(task.id, "usage", { runtime_id: runtimeId, usageSnapshot: { version: 2, runId: "not-accepted", revision: 1, complete: false, units: [unit] } });
+    outbox.enqueue(task.id, "usage", { runtime_id: runtimeId, usageSnapshot: { version: 2, runId: "accepted-original", revision: 1, complete: true, units: [unit] } });
+    outbox.enqueue(task.id, "complete", { runtime_id: runtimeId, output: "obsolete completion" });
+    expect(await outbox.waitForTaskDrain(task.id)).toBe("blocked"); // Only the invalid run remains durable.
+    expect(attempts).toEqual(["progress:execution", "usage:not-accepted", "usage:accepted-original"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(12);
+    expect(h.store.getTask(task.id)).toMatchObject({ runtimeId: replacement.id, status: "dispatched" });
+    expect(outbox.enqueue(task.id, "progress", { runtime_id: runtimeId, step: "still obsolete" })).toBeNull();
+    const extra = actualUnit({ unitId: "late-helper", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 });
+    await expect(outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted-original", revision: 2, complete: true, units: [extra] } })).resolves.toMatchObject({ ok: true });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    // Immutable run ownership does not override current daemon/runtime authority.
+    h.db.run("UPDATE multiremi_runtimes SET daemon_id='revoked-device' WHERE id=?", [runtimeId]);
+    await expect(outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
+      usageSnapshot: { version: 2, runId: "accepted-original", revision: 3, complete: true,
+        units: [actualUnit({ unitId: "revoked-request", provider: "claude", scope: "request", source: "provider_request", inputTokens: 99 })] } })).rejects.toMatchObject({ code: "authority_revoked" });
+    expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 2 });
+  } finally { await outbox?.close(); await h.dispose(); }
+}, 15_000);
 
 for (const confirmed of [false, true]) {
   test(`recovers start after ${confirmed ? "confirmed" : "unconfirmed"} acceptance disconnect without running twice`, async () => {

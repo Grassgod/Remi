@@ -66,7 +66,7 @@ remi runtime model list <runtime> --json
 
 ## 验证入口
 
-`claude-usage-v2` 补丁按原生 assistant request ID 收集输入、输出、cache read/write 快照；同请求后续累计输出替换 earlier revision，子 Agent 保留实际 assistant model。context occupancy 与消费分开，流式请求数据在失败或取消前即进入 worker durable outbox；turn settle 只补请求明细未覆盖的未知部分，避免重复计量。SDK result 的 `total_cost_usd` 单独保留为 turn 范围的 `sdk_estimate`，包括显式零金额，不当作网关账单。安装与 release candidate 检查同时要求该补丁。回归见 [usage-bridge-patches.test.ts](../../tests/unit/acp/usage-bridge-patches.test.ts) 与 [usage-failure.test.ts](../../tests/unit/acp/usage-failure.test.ts)。
+`claude-usage-v3` 补丁按原生 SDK session ID 与 assistant request ID 收集输入、输出、cache read/write 快照；ACP 会话 ID 不替代原生 session 身份。同请求后续累计输出替换 earlier revision，子 Agent 保留实际 assistant model。服务端按工作区、provider、连接、原生 session/request 规范化归属；跨任务或 run 的竞争证据单独审计，不重复累加消费，缺少原生 session 的历史请求保持未知归属。context occupancy 与消费分开，流式请求数据在失败或取消前即进入 worker durable outbox；turn settle 只补请求明细未覆盖的未知部分，避免重复计量。SDK result 的 `total_cost_usd` 单独保留为 turn 范围的 `sdk_estimate`，包括显式零金额，不当作网关账单。安装与 release candidate 检查同时要求该补丁。回归见 [usage-bridge-patches.test.ts](../../tests/unit/acp/usage-bridge-patches.test.ts)、[usage-request-ownership.test.ts](../../tests/unit/acp/usage-request-ownership.test.ts) 与 [usage-failure.test.ts](../../tests/unit/acp/usage-failure.test.ts)。
 
 - [配置、权限、加密版本和任务亲和性](../../tests/unit/multiremi/runtime-claude-profile.test.ts)
 - [注入、旧配置覆盖和密钥不落盘](../../tests/unit/daemon/claude-profile.test.ts)

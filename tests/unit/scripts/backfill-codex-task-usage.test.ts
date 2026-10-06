@@ -82,7 +82,7 @@ describe("historical consumption evidence", () => {
       token(counts(100, 10))), "explicit-compaction");
     expect(parsed.rejected).toBe(1);
     expect(parsed.units.map(unit => [unitActualTotal(unit), unit.accuracy])).toEqual([[110, "partial"], [110, "partial"], [110, "exact"]]);
-    expect(parsed.units[1]!.unitId).toContain(":epoch:1:");
+    expect(parsed.units[1]!.meterEvidence!.epochId).toBe(`compaction-timestamp:${at}`);
     expect(parsed.replayed).toBe(1);
   });
 
@@ -96,5 +96,18 @@ describe("historical consumption evidence", () => {
     expect(assignHistoricalUnit(unit, [first, second])?.id).toBe("second");
     expect(assignHistoricalUnit(unit, [second, { ...second, id: "overlap" }])).toBeNull();
     expect(assignHistoricalUnit(unit, [{ ...second, started_at: null }])).toBeNull();
+  });
+
+  it("identifies cumulative meter observations without claiming a request UID and preserves forked history's origin", () => {
+    const first = token(counts(100, 10), counts(100, 10), "2026-10-01T00:30:00.000Z");
+    const parent = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", timestamp: "2026-10-01T00:00:00Z", payload: { id: "parent" } }, first), "parent-member");
+    const fork = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", timestamp: at, payload: { id: "child", forked_from_id: "parent" } }, first,
+      token(counts(200, 20), counts(100, 10), "2026-10-01T01:30:00.000Z")), "fork-member");
+    expect(parent.units[0]).toMatchObject({ identityKind: "cumulative_meter", providerSessionId: "parent" });
+    expect(parent.units[0]!.providerRequestId).toBeUndefined();
+    expect(fork.units[0]!.providerSessionId).toBe("parent");
+    expect(fork.units[0]!.providerObservationId).toBe(parent.units[0]!.providerObservationId);
+    expect(fork.units[1]!.providerSessionId).toBe("child");
+    expect(fork.units[1]!.meterEvidence).toMatchObject({ epochId: "initial", before: { totalTokens: 110 }, after: { totalTokens: 220 } });
   });
 });

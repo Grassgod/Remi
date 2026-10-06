@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import type { SetUsagePriceInput, TaskUsageSnapshot, TaskUsageUnit, UsageMetrics } from "@multiremi/contracts/usage-accounting.js";
-import { validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { migrateLegacyUsage, validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -31,6 +31,60 @@ const price = (overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput 
 });
 
 describe("normalized task consumption", () => {
+  it("keeps one canonical native request across tasks and retry runs, including separate charge evidence", () => {
+    const { store, task, agent } = fixture();
+    const other = store.createTask({ agentId: agent.id, prompt: "Duplicate archive owner", workspaceId: "local" });
+    const tokens = unit({ providerSessionId: "native-session", providerRequestId: "message-123", connectionId: "route" });
+    const money = unit({ ...tokens, unitId: "charge", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null,
+      actualUnsplitTokens: null, reportedTotalTokens: null, accuracy: "unknown", costAmount: 0.25, costCurrency: "USD", costSource: "provider_reported", coveredUnitIds: [tokens.unitId] });
+    store.reportTaskUsageSnapshot(task.id, snapshot([tokens, money]));
+    store.reportTaskUsageSnapshot(other.id, snapshot([tokens, money]));
+    store.reportTaskUsageSnapshot(other.id, snapshot([tokens, money]));
+    store.reportTaskUsageSnapshot(task.id, snapshot([tokens], { runId: "retry" }));
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary).toMatchObject({ actual_total_tokens: 12, known_cost_by_currency: { USD: 0.25 }, identity_conflict_task_count: 2, complete: false });
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_usage_identity_conflicts").get()).toEqual({ n: 3 });
+    const audit = db!.query("SELECT unit_json,owner_task_id FROM multiremi_usage_identity_conflicts WHERE task_id=? AND unit_id=?").get(other.id, tokens.unitId) as { unit_json: string; owner_task_id: string };
+    expect(JSON.parse(audit.unit_json)).toMatchObject({ providerSessionId: "native-session", providerRequestId: "message-123", inputTokens: 10 });
+    expect(audit.owner_task_id).toBe(task.id);
+    expect(() => validateUsageSnapshot(snapshot([unit({ ...tokens, source: "context_snapshot" })]))).toThrow("provider identity");
+  });
+  it("treats a missing connection as competing evidence but preserves distinct confirmed routes", () => {
+    const { store, task } = fixture();
+    const tokens = unit({ providerSessionId: "session", providerRequestId: "short-id", connectionId: "route-a" });
+    store.reportTaskUsageSnapshot(task.id, snapshot([tokens]));
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit({ ...tokens, connectionId: "route-b" })], { runId: "distinct-route" }));
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit({ ...tokens, connectionId: null })], { runId: "unknown-route" }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 24, identity_conflict_task_count: 1, complete: false });
+    expect(db!.query("SELECT owner_run_id FROM multiremi_usage_identity_conflicts ORDER BY owner_run_id").all()).toEqual([{ owner_run_id: "attempt1" }, { owner_run_id: "distinct-route" }]);
+  });
+  it("rejects overlapping cross-run cumulative intervals while retaining adjacent checkpoints", () => {
+    const { store, task } = fixture();
+    const vector = (n: number) => ({ inputTokens: n, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: n });
+    const meter = (id: string, before: number, after: number, epochId = "initial") => unit({ unitId: id, provider: "codex", providerSessionId: "thread", identityKind: "cumulative_meter",
+      providerObservationId: id, meterEvidence: { epochId, before: vector(before), after: vector(after) }, inputTokens: after - before, outputTokens: 0, reportedTotalTokens: after - before });
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("a", 0, 100), meter("b", 100, 200)]));
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("c", 0, 300)], { runId: "reset-local-baseline" }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 200, identity_conflict_task_count: 1, complete: false });
+    expect(db!.query("SELECT owner_unit_id FROM multiremi_usage_identity_conflicts WHERE unit_id='c' ORDER BY owner_unit_id").all()).toEqual([{ owner_unit_id: "a" }, { owner_unit_id: "b" }]);
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("d", 200, 300)], { runId: "verified-next" }));
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("e", 0, 50, "explicit-reset")], { runId: "verified-epoch" }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(350);
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_usage_meter_owners").get()).toEqual({ n: 4 });
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("f", 0, 50, "compaction-item:upstream-marker")], { runId: "live-compaction" }));
+    store.reportTaskUsageSnapshot(task.id, snapshot([meter("g", 0, 50, "compaction-timestamp:2026-10-01T03:00:00Z")], { runId: "native-compaction" }));
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(400);
+  });
+  it("labels historical aggregate dates as task attribution rather than fabricating request times", () => {
+    const { store, task } = fixture();
+    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T23:30:00Z',completed_at='2026-10-02T00:30:00Z',usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", model: "old", inputTokens: 100, outputTokens: 2 }]), task.id]);
+    migrateLegacyUsage(db!);
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 5, outputTokens: 0, reportedTotalTokens: 5, occurredAt: "2026-10-01T23:40:00Z", timeProvenance: "provider_timestamp" })]));
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.daily.map(row => [row.date, row.actual_total_tokens, row.time_provenance])).toEqual([["2026-10-01", 5, "provider_timestamp"], ["2026-10-02", 102, "task_attributed"]]);
+    expect(report.summary).toMatchObject({ actual_total_tokens: 107, task_attributed_tokens: 102, task_attributed_task_count: 1, time_provenance: "mixed" });
+    expect(report.time_basis.historical_aggregates).toBe("task_attribution_at");
+  });
   it("serializes legacy snapshots when receipt clocks collide or move backwards", () => {
     const { store, task } = fixture();
     const clock = spyOn(Date, "now").mockReturnValue(1000);
@@ -40,7 +94,7 @@ describe("normalized task consumption", () => {
       clock.mockReturnValue(500);
       store.reportTaskUsage(task.id, [{ provider: "codex", model: "old-model", inputTokens: 30, outputTokens: 4 }]);
       expect(store.getTask(task.id)?.usage).toMatchObject([{ inputTokens: 30, outputTokens: 4, totalTokens: 34 }]);
-      expect(db!.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 1002 });
+      expect(db!.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 3 });
     } finally { clock.mockRestore(); }
   });
   it("persists progress-summary purpose and separates helper/model rows without losing additive totals", () => {

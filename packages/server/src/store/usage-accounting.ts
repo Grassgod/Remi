@@ -1,14 +1,18 @@
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { createHash } from "node:crypto";
-import { advisoryLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { advisoryLock, advisoryXactLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 type Row = Record<string, unknown>;
 export class UsageValidationError extends Error {}
 export class UsageAccountingNotReadyError extends Error {}
 export const USAGE_CUTOVER_MARKER = "20261006_usage_accounting_v2";
 export interface UsageScopeEvidence { id: string | null; provenance: string; }
-export interface UsageWriteOptions { historical?: boolean; runtimeScope?: UsageScopeEvidence; projectScope?: UsageScopeEvidence; }
-const UNIT_FIELDS = ["provider", "model", "model_source", "purpose", "requested_model", "connection_id", "scope", "source", "accuracy", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "context_tokens", "context_window", "cost_amount", "cost_currency", "cost_source", "cost_coverage_expected_count", "cost_coverage_sha256", "occurred_at", "evidence_ref"];
+export interface UsageWriteOptions { historical?: boolean; runtimeScope?: UsageScopeEvidence; projectScope?: UsageScopeEvidence; identityLocksHeld?: boolean; }
+const UNIT_FIELDS = ["provider", "model", "model_source", "purpose", "requested_model", "connection_id", "provider_session_id", "provider_request_id", "provider_observation_id", "identity_kind", "meter_evidence", "time_provenance", "scope", "source", "accuracy", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "actual_unsplit_tokens", "reported_total_tokens", "context_tokens", "context_window", "cost_amount", "cost_currency", "cost_source", "cost_coverage_expected_count", "cost_coverage_sha256", "occurred_at", "evidence_ref"];
+const METER_FIELDS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"] as const;
+const meterJson = (unit: TaskUsageUnit) => unit.meterEvidence ? JSON.stringify({ epochId: unit.meterEvidence.epochId,
+  before: METER_FIELDS.map(key => unit.meterEvidence!.before[key]), after: METER_FIELDS.map(key => unit.meterEvidence!.after[key]),
+  last: unit.meterEvidence.last ? METER_FIELDS.map(key => unit.meterEvidence!.last![key]) : null }) : null;
 const coverageHash = (ids: string[]) => createHash("sha256").update(JSON.stringify([...ids].sort())).digest("hex");
 // Fixed-width UTF-16 code units preserve JavaScript sort order, including
 // supplementary Unicode characters, independently of database collation.
@@ -62,6 +66,7 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL, agent_id TEXT NOT NULL, runtime_id TEXT, project_id TEXT,
       runtime_provenance TEXT NOT NULL DEFAULT 'unknown', project_provenance TEXT NOT NULL DEFAULT 'unknown',
       provider TEXT NOT NULL, model TEXT, model_source TEXT NOT NULL DEFAULT 'unknown', purpose TEXT NOT NULL DEFAULT 'agent', requested_model TEXT, connection_id TEXT,
+      provider_session_id TEXT,provider_request_id TEXT,provider_observation_id TEXT,identity_kind TEXT,meter_evidence TEXT,time_provenance TEXT NOT NULL DEFAULT 'observed_at',
       scope TEXT NOT NULL, source TEXT NOT NULL, accuracy TEXT NOT NULL,
       input_tokens BIGINT, output_tokens BIGINT, cache_read_tokens BIGINT, cache_write_tokens BIGINT,
       actual_unsplit_tokens BIGINT, reported_total_tokens BIGINT, context_tokens BIGINT, context_window BIGINT,
@@ -80,6 +85,27 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
       FOREIGN KEY(task_id,run_id,monetary_unit_id) REFERENCES multiremi_usage_units(task_id,run_id,unit_id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_usage_cost_covered ON multiremi_usage_cost_coverage(task_id,run_id,covered_unit_id);
+    CREATE TABLE IF NOT EXISTS multiremi_usage_request_owners (
+      identity_key TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,provider TEXT NOT NULL,connection_id TEXT,
+      provider_session_id TEXT NOT NULL,provider_request_id TEXT NOT NULL,task_id TEXT NOT NULL,run_id TEXT NOT NULL,
+      token_unit_id TEXT,provider_money_unit_id TEXT,sdk_money_unit_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS multiremi_usage_identity_conflicts (
+      task_id TEXT NOT NULL,run_id TEXT NOT NULL,unit_id TEXT NOT NULL,revision INTEGER NOT NULL,evidence_sha256 TEXT NOT NULL,
+      identity_key TEXT NOT NULL,owner_task_id TEXT NOT NULL,owner_run_id TEXT NOT NULL,owner_unit_id TEXT,unit_json TEXT NOT NULL,previous_unit_json TEXT,recorded_at TEXT NOT NULL,
+      PRIMARY KEY(task_id,run_id,unit_id,revision,evidence_sha256,identity_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_identity_conflict_task ON multiremi_usage_identity_conflicts(task_id,run_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_identity_conflict_owner ON multiremi_usage_identity_conflicts(owner_task_id,owner_run_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_request_namespace ON multiremi_usage_request_owners(workspace_id,provider,provider_session_id,provider_request_id);
+    CREATE TABLE IF NOT EXISTS multiremi_usage_meter_owners (
+      identity_key TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,provider TEXT NOT NULL,connection_id TEXT,
+      provider_session_id TEXT NOT NULL,epoch_id TEXT NOT NULL,observation_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,run_id TEXT NOT NULL,unit_id TEXT NOT NULL,
+      before_input BIGINT,after_input BIGINT,before_output BIGINT,after_output BIGINT,before_read BIGINT,after_read BIGINT,
+      before_write BIGINT,after_write BIGINT,before_total BIGINT,after_total BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_meter_namespace ON multiremi_usage_meter_owners(workspace_id,provider,provider_session_id,epoch_id);
     CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_audit (
       task_id TEXT PRIMARY KEY, original_usage TEXT, migrated_at TEXT NOT NULL,
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
@@ -104,6 +130,8 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_usage_cost_order ON multiremi_usage_cost_coverage(task_id,run_id,monetary_unit_id,covered_unit_sort_key ${db.dialect === "postgres" ? 'COLLATE "C"' : "COLLATE BINARY"})`);
   if (!unitColumns.some(field => field.name === "cost_source")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_source TEXT NOT NULL DEFAULT 'unknown'");
   if (!unitColumns.some(field => field.name === "purpose")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN purpose TEXT NOT NULL DEFAULT 'agent'");
+  for (const column of ["provider_session_id", "provider_request_id", "provider_observation_id", "identity_kind", "meter_evidence"]) if (!unitColumns.some(field => field.name === column)) db.run(`ALTER TABLE multiremi_usage_units ADD COLUMN ${column} TEXT`);
+  if (!unitColumns.some(field => field.name === "time_provenance")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN time_provenance TEXT NOT NULL DEFAULT 'observed_at'");
   if (!unitColumns.some(field => field.name === "cost_coverage_expected_count")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_expected_count INTEGER");
   if (!unitColumns.some(field => field.name === "cost_coverage_sha256")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_sha256 TEXT");
   if (!unitColumns.some(field => field.name === "cost_coverage_complete")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_complete INTEGER NOT NULL DEFAULT 1");
@@ -136,6 +164,31 @@ export function validateUsageSnapshot(input: unknown): TaskUsageSnapshot {
     ids.add(u.unitId);
     if (u.modelSource !== undefined && !["provider_reported", "session_acknowledged", "configured", "unknown"].includes(u.modelSource)) throw new UsageValidationError("Invalid modelSource");
     if (u.purpose !== undefined && (typeof u.purpose !== "string" || !u.purpose.trim() || u.purpose.length > 64)) throw new UsageValidationError("Invalid purpose");
+    if (u.timeProvenance !== undefined && !["provider_timestamp", "observed_at", "task_attributed", "unknown"].includes(u.timeProvenance)) throw new UsageValidationError("Invalid time provenance");
+    const sessionId = u.providerSessionId ?? null, requestId = u.providerRequestId ?? null;
+    if (u.identityKind !== undefined && !["request", "cumulative_meter"].includes(u.identityKind)) throw new UsageValidationError("Invalid identity kind");
+    if (sessionId !== null && (typeof sessionId !== "string" || !sessionId.trim() || sessionId.length > 512 || !["provider_request", "provider_turn"].includes(u.source) || u.scope === "task")) throw new UsageValidationError("Invalid provider identity");
+    if (u.meterEvidence) {
+      const meter = u.meterEvidence;
+      if (!sessionId || requestId !== null || u.identityKind !== "cumulative_meter" || typeof u.providerObservationId !== "string" || !u.providerObservationId.trim() || u.providerObservationId.length > 512
+        || typeof meter.epochId !== "string" || !meter.epochId.trim() || meter.epochId.length > 512 || !meter.before || !meter.after) throw new UsageValidationError("Invalid cumulative meter identity");
+      let measured = false;
+      for (const key of METER_FIELDS) {
+        const before = meter.before[key], after = meter.after[key];
+        if ((before === null) !== (after === null) || (before !== null && (!Number.isSafeInteger(before) || before < 0 || !Number.isSafeInteger(after) || after! < before))) throw new UsageValidationError("Invalid cumulative meter interval");
+        if (before !== null) measured = true;
+        if (meter.last && meter.last[key] !== null && (!Number.isSafeInteger(meter.last[key]) || meter.last[key]! < 0)) throw new UsageValidationError("Invalid cumulative meter last observation");
+        if (key !== "totalTokens" && u[key] !== null && (before === null || u[key] !== after! - before)) throw new UsageValidationError("Actual tokens disagree with cumulative meter interval");
+      }
+      for (const vector of [meter.before, meter.after, ...(meter.last ? [meter.last] : [])]) {
+        const components = METER_FIELDS.slice(0, 4).map(key => vector[key]);
+        if (vector.totalTokens !== null && components.every(value => value !== null) && vector.totalTokens !== components.reduce<number>((sum, value) => sum + value!, 0)) throw new UsageValidationError("Cumulative meter components do not reconcile");
+      }
+      if (!measured) throw new UsageValidationError("Unmeasured cumulative meter interval");
+      const actual = [u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.actualUnsplitTokens].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+      if (meter.before.totalTokens !== null && actual > meter.after.totalTokens! - meter.before.totalTokens) throw new UsageValidationError("Actual tokens exceed cumulative meter interval");
+    } else if (u.providerObservationId !== undefined || u.identityKind === "cumulative_meter" || ((sessionId === null) !== (requestId === null))) throw new UsageValidationError("Invalid provider identity");
+    if (requestId !== null && (typeof requestId !== "string" || !requestId.trim() || requestId.length > 512)) throw new UsageValidationError("Invalid provider request identity");
     if (u.costSource !== undefined && !["provider_reported", "sdk_estimate", "unknown"].includes(u.costSource)) throw new UsageValidationError("Invalid costSource");
     if (u.coveredUnitIds !== undefined && (!Array.isArray(u.coveredUnitIds) || u.coveredUnitIds.length > 10_000
       || new Set(u.coveredUnitIds).size !== u.coveredUnitIds.length
@@ -160,6 +213,107 @@ export function validateUsageSnapshot(input: unknown): TaskUsageSnapshot {
   return s;
 }
 
+function saveIdentityConflict(db: SqlDatabase, taskId: string, runId: string, unit: TaskUsageUnit, previous: Row | null, identityKey: string, owner: Row): void {
+  const payload = JSON.stringify(unit);
+  db.run(`INSERT INTO multiremi_usage_identity_conflicts(task_id,run_id,unit_id,revision,evidence_sha256,identity_key,owner_task_id,owner_run_id,owner_unit_id,unit_json,previous_unit_json,recorded_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, [taskId, runId, unit.unitId, unit.revision, createHash("sha256").update(payload).digest("hex"), identityKey,
+    owner.task_id, owner.run_id, owner.unit_id ?? owner.token_unit_id ?? owner.provider_money_unit_id ?? owner.sdk_money_unit_id ?? null, payload, previous ? JSON.stringify(previous) : null, new Date().toISOString()]);
+}
+
+function claimMeterIdentity(db: SqlDatabase, workspaceId: string, taskId: string, runId: string, unit: TaskUsageUnit, previous: Row | null): boolean {
+  const meter = unit.meterEvidence!;
+  const intervalColumns = ["input", "output", "read", "write", "total"];
+  // Strict intervals (before,after] overlap only when they share consumption;
+  // adjacent checkpoints can share a boundary without being duplicate usage.
+  const intervals = METER_FIELDS.flatMap((key, index) => meter.before[key] === null || meter.after[key] === meter.before[key] ? [] : [{ name: intervalColumns[index]!, before: meter.before[key]!, after: meter.after[key]! }]);
+  const overlaps = intervals.map(({ name }) => `(before_${name}<? AND after_${name}>?)`).join(" OR ");
+  const epochClass = (value: string) => value === "initial" ? "initial" : value.split(":", 1)[0]!;
+  const epochType = epochClass(meter.epochId);
+  const ownerEpochType = "CASE WHEN epoch_id='initial' THEN 'initial' WHEN epoch_id LIKE 'compaction-item:%' THEN 'compaction-item' WHEN epoch_id LIKE 'compaction-turn:%' THEN 'compaction-turn' WHEN epoch_id LIKE 'compaction-timestamp:%' THEN 'compaction-timestamp' ELSE epoch_id END";
+  // A timestamp and an item/turn ID can describe the same reset. Different
+  // evidence formats do not prove separate physical epochs.
+  const comparableEpoch = epochType.startsWith("compaction-") ? `(epoch_id=? OR (epoch_id LIKE 'compaction-%' AND ${ownerEpochType}<>?))` : "epoch_id=?";
+  let cursor = "", conflicted = false;
+  for (;;) {
+    const owners = db.query(`SELECT identity_key,task_id,run_id,unit_id FROM multiremi_usage_meter_owners
+    WHERE workspace_id=? AND provider=? AND provider_session_id=? AND ${comparableEpoch}
+      AND (CAST(? AS TEXT) IS NULL OR connection_id IS NULL OR connection_id=?)
+      AND NOT (task_id=? AND run_id=? AND unit_id=?)
+      AND (observation_id=?${overlaps ? ` OR ${overlaps}` : ""}) AND identity_key>? ORDER BY identity_key LIMIT 512`).all(
+    workspaceId, unit.provider, unit.providerSessionId, meter.epochId, ...(epochType.startsWith("compaction-") ? [epochType] : []), unit.connectionId ?? null, unit.connectionId ?? null,
+    taskId, runId, unit.unitId, unit.providerObservationId, ...intervals.flatMap(interval => [interval.after, interval.before]), cursor) as Row[];
+    if (!owners.length) break;
+    for (const owner of owners) { saveIdentityConflict(db, taskId, runId, unit, previous, String(owner.identity_key), owner); conflicted = true; }
+    cursor = String(owners[owners.length - 1]!.identity_key);
+  }
+  if (conflicted) return false;
+  const identityKey = createHash("sha256").update(JSON.stringify([workspaceId, unit.provider, unit.connectionId ?? null, unit.providerSessionId, "cumulative_meter", meter.epochId, taskId, runId, unit.unitId])).digest("hex");
+  const columns = ["identity_key", "workspace_id", "provider", "connection_id", "provider_session_id", "epoch_id", "observation_id", "task_id", "run_id", "unit_id", ...intervalColumns.flatMap(name => [`before_${name}`, `after_${name}`])];
+  db.run(`INSERT INTO multiremi_usage_meter_owners(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")})
+    ON CONFLICT(identity_key) DO UPDATE SET observation_id=excluded.observation_id,${intervalColumns.flatMap(name => [`before_${name}=excluded.before_${name}`, `after_${name}=excluded.after_${name}`]).join(",")}`,
+    [identityKey, workspaceId, unit.provider, unit.connectionId ?? null, unit.providerSessionId, meter.epochId, unit.providerObservationId, taskId, runId, unit.unitId,
+      ...METER_FIELDS.flatMap(key => [meter.before[key], meter.after[key]])]);
+  return true;
+}
+
+function claimProviderIdentity(db: SqlDatabase, workspaceId: string, taskId: string, runId: string, unit: TaskUsageUnit, previous: Row | null): boolean {
+  if (unit.meterEvidence) return claimMeterIdentity(db, workspaceId, taskId, runId, unit, previous);
+  if (!unit.providerSessionId || !unit.providerRequestId) return true;
+  const roles: string[] = [];
+  if ([unit.inputTokens, unit.outputTokens, unit.cacheReadTokens, unit.cacheWriteTokens, unit.actualUnsplitTokens, unit.reportedTotalTokens].some(value => value !== null) || unit.costAmount === null) roles.push("token_unit_id");
+  if (unit.costAmount !== null && (unit.costSource ?? "provider_reported") === "provider_reported") roles.push("provider_money_unit_id");
+  if (unit.costAmount !== null && unit.costSource === "sdk_estimate") roles.push("sdk_money_unit_id");
+  if (!roles.length) return true; // Unscoped/unknown money is diagnostic only.
+  let identityKey = createHash("sha256").update(JSON.stringify([workspaceId, unit.provider, unit.connectionId ?? null, unit.providerSessionId, unit.providerRequestId])).digest("hex");
+  // A missing route cannot establish a separate request namespace. The batch
+  // already holds its session/request transaction lock before this lookup.
+  const candidate = db.query(`SELECT identity_key FROM multiremi_usage_request_owners
+    WHERE workspace_id=? AND provider=? AND provider_session_id=? AND provider_request_id=?
+      AND (CAST(? AS TEXT) IS NULL OR connection_id IS NULL OR connection_id=?) ORDER BY identity_key LIMIT 1`).get(workspaceId, unit.provider, unit.providerSessionId, unit.providerRequestId, unit.connectionId ?? null, unit.connectionId ?? null) as Row | null;
+  if (candidate) identityKey = String(candidate.identity_key);
+  // Unknown routes compete with every compatible owner, not an arbitrary
+  // first match. Keep all attribution conflicts in bounded cursor pages.
+  let cursor = "", conflicted = false;
+  for (;;) {
+    const owners = db.query(`SELECT identity_key,task_id,run_id,token_unit_id,provider_money_unit_id,sdk_money_unit_id FROM multiremi_usage_request_owners
+      WHERE workspace_id=? AND provider=? AND provider_session_id=? AND provider_request_id=? AND identity_key>?
+        AND (CAST(? AS TEXT) IS NULL OR connection_id IS NULL OR connection_id=?) ORDER BY identity_key LIMIT 512`).all(workspaceId, unit.provider, unit.providerSessionId, unit.providerRequestId, cursor, unit.connectionId ?? null, unit.connectionId ?? null) as Row[];
+    if (!owners.length) break;
+    for (const owner of owners) {
+      const roleConflict = roles.find(role => owner[role] !== null && owner[role] !== unit.unitId);
+      if (owner.task_id !== taskId || owner.run_id !== runId || roleConflict) {
+        saveIdentityConflict(db, taskId, runId, unit, previous, String(owner.identity_key), { ...owner, unit_id: roleConflict ? owner[roleConflict] : undefined });
+        conflicted = true;
+      }
+    }
+    cursor = String(owners[owners.length - 1]!.identity_key);
+  }
+  if (conflicted) return false;
+  db.run(`INSERT INTO multiremi_usage_request_owners(identity_key,workspace_id,provider,connection_id,provider_session_id,provider_request_id,task_id,run_id)
+    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(identity_key) DO NOTHING`, [identityKey, workspaceId, unit.provider, unit.connectionId ?? null, unit.providerSessionId, unit.providerRequestId, taskId, runId]);
+  const owner = db.query(`SELECT task_id,run_id,token_unit_id,provider_money_unit_id,sdk_money_unit_id FROM multiremi_usage_request_owners WHERE identity_key=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(identityKey) as Row;
+  const roleConflict = roles.find(role => owner[role] !== null && owner[role] !== unit.unitId);
+  if (owner.task_id !== taskId || owner.run_id !== runId || roleConflict) {
+    saveIdentityConflict(db, taskId, runId, unit, previous, identityKey, { ...owner, unit_id: roleConflict ? owner[roleConflict] : undefined });
+    return false;
+  }
+  for (const role of roles) if (owner[role] === null) db.run(`UPDATE multiremi_usage_request_owners SET ${role}=? WHERE identity_key=?`, [unit.unitId, identityKey]);
+  return true;
+}
+
+/** Prelock a reviewed batch before domain writes; callers retain the transaction. */
+export function lockUsageIdentities(db: SqlDatabase, workspaceId: string, units: TaskUsageUnit[]): void {
+  const identityLocks = new Set(units.filter(unit => unit.providerSessionId && (unit.providerRequestId || unit.meterEvidence)).map(unit =>
+    createHash("sha256").update(JSON.stringify([workspaceId, unit.provider, unit.providerSessionId,
+      // All epochs share a lock because differently represented compaction
+      // evidence may describe the same reset and compete for overlapping usage.
+      unit.meterEvidence ? "cumulative_meter" : unit.providerRequestId])).digest("hex").slice(0, 1)));
+  // Fixed stripes keep a large reviewed history plan within PostgreSQL's
+  // advisory-lock memory budget. Collisions serialize unrelated claims only;
+  // exact ownership is still keyed by the full identity in the scalar table.
+  for (const key of [...identityLocks].sort()) advisoryXactLock(db, `usage-request:${workspaceId}:${key}`);
+}
+
 /** One transaction serializes snapshot revisions; only newer unit revisions replace facts. */
 export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskUsageSnapshot, options: UsageWriteOptions = {}): boolean {
   const s = validateUsageSnapshot(input);
@@ -171,6 +325,11 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
       LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.task_id=t.id ORDER BY ar.created_at DESC LIMIT 1)
       LEFT JOIN multiremi_task_traces tr ON tr.task_id=t.id LEFT JOIN multiremi_trace_backfill_tasks b ON b.task_id=t.id WHERE t.id=?`).get(taskId) as Row | null;
     if (!task) throw new Error(`Task not found: ${taskId}`);
+    // Identity namespace locks precede all domain writes (W -> N -> D).
+    if (!options.identityLocksHeld) {
+      const existingScope = db.query("SELECT workspace_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(taskId, s.runId) as Row | null;
+      lockUsageIdentities(db, String(existingScope?.workspace_id ?? task.workspace_id), s.units);
+    }
     let scheduledProject: string | null = null;
     if (typeof task.schedule_target === "string") {
       try { const target: unknown = JSON.parse(task.schedule_target); if (target && typeof target === "object" && "kind" in target && target.kind === "project" && "id" in target && typeof target.id === "string") scheduledProject = target.id; } catch { /* Missing evidence stays unknown. */ }
@@ -210,11 +369,13 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
     for (const u of s.units) {
       const coverageExpectedCount = u.coverageExpectedCount ?? (u.coveredUnitIds === undefined ? null : u.coveredUnitIds.length);
       const coverageSha256 = u.coverageSha256 ?? (u.coveredUnitIds === undefined ? null : coverageHash(u.coveredUnitIds));
-      const values = [u.provider, u.model, u.modelSource ?? "unknown", u.purpose ?? "agent", u.requestedModel ?? null, u.connectionId ?? null, u.scope, u.source, u.accuracy,
+      const values = [u.provider, u.model, u.modelSource ?? "unknown", u.purpose ?? "agent", u.requestedModel ?? null, u.connectionId ?? null,
+        u.providerSessionId ?? null, u.providerRequestId ?? null, u.providerObservationId ?? null, u.identityKind ?? (u.providerRequestId ? "request" : null), meterJson(u), u.timeProvenance ?? (u.source === "legacy_task" ? "task_attributed" : "observed_at"), u.scope, u.source, u.accuracy,
         u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.actualUnsplitTokens, u.reportedTotalTokens,
         u.contextTokens, u.contextWindow, u.costAmount, u.costCurrency, u.costSource ?? (u.costAmount !== null ? "provider_reported" : "unknown"), coverageExpectedCount, coverageSha256, new Date(u.occurredAt).toISOString(), u.evidenceRef ?? null];
       const columns = ["task_id", "run_id", "unit_id", "revision", "workspace_id", "agent_id", "runtime_id", "project_id", "runtime_provenance", "project_provenance", ...UNIT_FIELDS, "cost_coverage_complete", "cost_coverage_received_count"];
       const previous = db.query(`SELECT revision,cost_coverage_received_count,cost_coverage_complete,${UNIT_FIELDS.join(",")} FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?`).get(taskId, s.runId, u.unitId) as Row | null;
+      if (previous && Number(previous.revision) > u.revision) continue;
       let receivedCount = 0;
       if (previous && Number(previous.revision) === u.revision) {
         // Upgrade a previously stored full link set lazily under this run lock.
@@ -232,8 +393,18 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
         if (coverageExpectedCount !== null) receivedCount = previous.cost_coverage_received_count === null
           ? Number((db.query("SELECT COUNT(*) AS n FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id=? AND monetary_unit_id=?").get(taskId, s.runId, u.unitId) as Row).n)
           : Number(previous.cost_coverage_received_count);
-      } else {
-        if (previous && Number(previous.revision) > u.revision) continue;
+      }
+      if (!claimProviderIdentity(db, String(scope.workspace_id), taskId, s.runId, u, previous)) {
+        // Strong evidence can identify an earlier weak unit as an already owned
+        // request. Retain that earlier observation in the conflict audit too.
+        if (previous) {
+          db.run("DELETE FROM multiremi_usage_cost_coverage WHERE task_id=? AND run_id=? AND monetary_unit_id=?", [taskId, s.runId, u.unitId]);
+          db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id=? AND unit_id=?", [taskId, s.runId, u.unitId]);
+        }
+        changed = true;
+        continue;
+      }
+      if (!previous || Number(previous.revision) !== u.revision) {
         changed = true;
         db.run(`INSERT INTO multiremi_usage_units(${columns.join(",")}) VALUES(${columns.map(() => "?").join(",")})
           ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision, ${UNIT_FIELDS.map((f) => `${f}=excluded.${f}`).join(",")},cost_coverage_complete=excluded.cost_coverage_complete,cost_coverage_received_count=0
@@ -275,6 +446,7 @@ export function legacyUsageSnapshot(taskId: string, raw: unknown, occurredAt: st
       model: e.modelSource === "upstream" && typeof e.model === "string" && e.model.trim() ? e.model : null,
       requestedModel: typeof e.model === "string" && e.model.trim() ? e.model : null,
       modelSource: e.modelSource === "upstream" ? "provider_reported" : typeof e.model === "string" && e.model.trim() ? "configured" : "unknown",
+      timeProvenance: "task_attributed",
       scope: "task", source: "legacy_task", accuracy: hasSplit ? "partial" : "unknown",
       inputTokens: hasSplit ? split[0]! : null, outputTokens: hasSplit ? split[1]! : null, cacheReadTokens: hasSplit ? split[2]! : null, cacheWriteTokens: hasSplit ? split[3]! : null,
       actualUnsplitTokens: null, reportedTotalTokens: token("totalTokens"), contextTokens: null, contextWindow: null,

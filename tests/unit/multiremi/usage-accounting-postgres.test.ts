@@ -64,6 +64,65 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     expect(Number((db!.query("SELECT count(*) AS count FROM multiremi_usage_units").get() as { count: string }).count)).toBe(3);
   });
 
+  it("assigns bounded legacy revisions on PostgreSQL at current epoch milliseconds", () => {
+    const runtime = store.registerRuntime({ name: "legacy-pg", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "legacy-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Legacy revision", workspaceId: "local" });
+    store.claimTask(runtime.id); store.startTask(task.id);
+    expect(Date.now()).toBeGreaterThan(2_147_483_647);
+    for (const inputTokens of [10, 20, 30]) store.reportTaskUsage(task.id, [{ provider: "claude", model: "legacy-model", inputTokens, outputTokens: 2 }]);
+    expect(db!.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 3 });
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({ actual_total_tokens: 32, task_attributed_tokens: 32, time_provenance: "task_attributed" });
+  });
+
+  it("serializes competing native request ownership from two real PostgreSQL processes", async () => {
+    const runtime = store.registerRuntime({ name: "ownership-pg", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "ownership-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const tasks = [0, 1].map(index => store.createTask({ agentId: agent.id, prompt: `Owner ${index}`, workspaceId: "local" }));
+    db!.exec("CREATE TABLE usage_claim_barrier (participant TEXT PRIMARY KEY)");
+    const isolated = new URL(adminUrl!); isolated.pathname = `/${databaseName}`;
+    const script = `import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+      import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+      const db=new PostgresSyncDatabase(process.env.USAGE_TEST_URL);
+      db.run("INSERT INTO usage_claim_barrier(participant) VALUES(?)",[process.env.USAGE_TEST_TASK]);
+      let ready=false; for(let i=0;i<500;i++){if(Number(db.query("SELECT COUNT(*) AS n FROM usage_claim_barrier").get().n)===2){ready=true;break;}await Bun.sleep(10);}
+      if(!ready)throw Error("Ownership test barrier timed out");
+      writeUsageSnapshot(db,process.env.USAGE_TEST_TASK,{version:2,runId:"concurrent",revision:1,complete:true,units:[{
+        unitId:"request",revision:1,provider:"claude",model:"concurrent-model",providerSessionId:"concurrent-session",providerRequestId:"concurrent-message",
+        connectionId:process.env.USAGE_TEST_ROUTE||null,scope:"request",source:"provider_request",accuracy:"exact",inputTokens:10,outputTokens:2,
+        cacheReadTokens:0,cacheWriteTokens:0,actualUnsplitTokens:0,reportedTotalTokens:12,contextTokens:null,contextWindow:null,
+        costAmount:null,costCurrency:null,occurredAt:"2026-10-01T00:00:00Z"}]});db.close();`;
+    const children = tasks.map((task, index) => Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env, USAGE_TEST_URL: isolated.toString(), USAGE_TEST_TASK: task.id, USAGE_TEST_ROUTE: index ? "confirmed-route" : "" }, stdout: "pipe", stderr: "pipe" }));
+    const results = await Promise.all(children.map(async child => ({ exit: await child.exited, error: await new Response(child.stderr).text() })));
+    for (const result of results) expect(result).toEqual({ exit: 0, error: "" });
+    expect(Number((db!.query("SELECT SUM(input_tokens+output_tokens) AS n FROM multiremi_usage_units WHERE provider_request_id='concurrent-message'").get() as { n: string }).n)).toBe(12);
+    expect(Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_usage_request_owners WHERE provider_request_id='concurrent-message'").get() as { n: string }).n)).toBe(1);
+    expect(Number((db!.query("SELECT COUNT(*) AS n FROM multiremi_usage_identity_conflicts WHERE run_id='concurrent'").get() as { n: string }).n)).toBe(1);
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({ actual_total_tokens: 12, identity_conflict_task_count: 2, complete: false });
+  });
+
+  it("keeps cumulative-meter overlap auditable on PostgreSQL without counting it twice", () => {
+    const runtime = store.registerRuntime({ name: "meter-pg", provider: "codex", workspaceId: "local" });
+    const agent = store.createAgent({ name: "meter-pg", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Meter interval", workspaceId: "local" });
+    const vector = (n: number) => ({ inputTokens: n, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: n });
+    const meter = (id: string, before: number, after: number, epochId = "initial"): TaskUsageUnit => ({ unitId: id, revision: 1, provider: "codex", model: null,
+      providerSessionId: "pg-meter-session", providerObservationId: id, identityKind: "cumulative_meter", meterEvidence: { epochId, before: vector(before), after: vector(after) },
+      source: "provider_turn", scope: "turn", accuracy: "exact", inputTokens: after - before, outputTokens: 0, cacheReadTokens: 0,
+      cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: after - before, contextTokens: null, contextWindow: null,
+      costAmount: null, costCurrency: null, occurredAt: "2026-10-01T00:00:00Z" });
+    const write = (runId: string, units: TaskUsageUnit[]) => store.reportTaskUsageSnapshot(task.id, { version: 2, runId, revision: 1, complete: true, units });
+    write("original", [meter("first", 0, 100), meter("second", 100, 200)]);
+    write("duplicate-resume", [meter("overlap", 0, 300)]);
+    write("verified-continuation", [meter("next", 200, 300)]);
+    write("live-reset", [meter("reset", 0, 50, "compaction-item:explicit-id")]);
+    write("native-same-reset", [meter("native-reset", 0, 50, "compaction-timestamp:2026-10-01T00:00:00Z")]);
+    expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({ actual_total_tokens: 350, identity_conflict_task_count: 1, complete: false });
+    const stored = db!.query("SELECT meter_evidence,identity_kind FROM multiremi_usage_units WHERE task_id=? AND unit_id='first'").get(task.id) as { meter_evidence: string; identity_kind: string };
+    expect(JSON.parse(stored.meter_evidence)).toEqual({ epochId: "initial", before: [0, 0, 0, 0, 0], after: [100, 0, 0, 0, 100], last: null });
+    expect(stored.identity_kind).toBe("cumulative_meter");
+  });
+
   it("persists charge coverage and never adds reported charges to covered configured estimates", () => {
     const runtime = store.registerRuntime({ name: "charge-pg", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "charge-pg", provider: "claude", workspaceId: "local", runtimeId: runtime.id });

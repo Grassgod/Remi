@@ -7,6 +7,14 @@ import { usageMetrics, usageReport } from "../../usage/test-fixtures";
 afterEach(() => vi.unstubAllGlobals());
 function mock(body: unknown) { const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } })); vi.stubGlobal("fetch", fetch); return fetch; }
 describe("Usage accounting response boundary", () => {
+  it("preserves historical time attribution and identity-conflict coverage", async () => {
+    const report = usageReport({ summary: usageMetrics({ task_attributed_tokens: 150, task_attributed_task_count: 1, time_provenance: "task_attributed", identity_conflict_task_count: 1, complete: false }) });
+    report.time_basis.historical_aggregates = "task_attribution_at";
+    mock(report);
+    const parsed = await new UsageAccountingEndpoints(new HttpClient("https://api.example.test")).getUsageReport("ws", { tz: "UTC" });
+    expect(parsed.summary).toMatchObject({ task_attributed_tokens: 150, task_attributed_task_count: 1, time_provenance: "task_attributed", identity_conflict_task_count: 1 });
+    expect(parsed.time_basis.historical_aggregates).toBe("task_attribution_at");
+  });
   it("preserves unknown context-only usage and sends workspace, history and both filters", async () => {
     const metrics = usageMetrics({ actual_input_tokens: 0, actual_output_tokens: 0, actual_cache_read_tokens: 0, actual_cache_write_tokens: 0, actual_unsplit_tokens: 0, actual_total_tokens: 0,
       unknown_task_count: 1, priced_tokens: 0, unpriced_tokens: 0, known_cost_by_currency: {}, complete: false });

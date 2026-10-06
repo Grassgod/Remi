@@ -11,6 +11,8 @@ export const UsageMetricsSchema = z.object({
   sdk_estimate_cost_by_currency: z.record(z.string().regex(/^[A-Z]{3}$/), amount).optional(),
   price_quality: z.string(), complete: z.boolean(),
   cost_allocation_complete: z.boolean().optional(),
+  task_attributed_tokens: count.optional(), task_attributed_task_count: count.optional(), identity_conflict_task_count: count.optional(),
+  time_provenance: z.enum(["provider_timestamp", "observed_at", "task_attributed", "unknown", "mixed"]).optional(),
   status_counts: z.object({ completed: count, failed: count, cancelled: count, active: count, queued: count }).loose(),
 }).loose();
 
@@ -21,7 +23,7 @@ export const UsageReportSchema = z.object({
   by_model: z.array(UsageMetricsSchema.extend({ provider: z.string(), model: z.string().nullable(), requested_model: z.string().nullable(), model_source: z.string(), model_provenance: z.string(), purpose: z.string().optional(), connection_id: z.string().nullable() })),
   by_runtime: z.array(UsageMetricsSchema.extend({ runtime_id: z.string().nullable(), runtime_provenance: z.string() })),
   task_daily: z.array(z.object({ date: z.string(), task_count: count, total_seconds: amount, status_counts: UsageMetricsSchema.shape.status_counts }).loose()),
-  time_basis: z.object({ consumption: z.string(), terminal_tasks: z.string(), active_tasks: z.string() }).loose(),
+  time_basis: z.object({ consumption: z.string(), terminal_tasks: z.string(), active_tasks: z.string(), historical_aggregates: z.literal("task_attribution_at").optional() }).loose(),
   coverage: z.object({ priced_tokens: count, unpriced_tokens: count, token_ratio: z.number().min(0).max(1).nullable(), unknown_task_count: count }).loose(),
   as_of: z.string(), pricing_revision: z.string(),
   window: z.object({ since: z.string().nullable(), until: z.string().nullable(), days: count.nullable(), tz: z.string(), project_id: z.string().nullable(), runtime_id: z.string().nullable() }).loose(),

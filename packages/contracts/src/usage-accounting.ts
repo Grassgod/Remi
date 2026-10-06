@@ -1,3 +1,11 @@
+export interface UsageMeterVector {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  totalTokens: number | null;
+}
+
 /** Recorded actual consumption is separate from diagnostic context occupancy. */
 export interface TaskUsageUnit {
   unitId: string;
@@ -8,6 +16,13 @@ export interface TaskUsageUnit {
   purpose?: string;
   requestedModel?: string | null;
   connectionId?: string | null;
+  /** Strong upstream identity; both fields must be evidenced, never task-derived. */
+  providerSessionId?: string | null;
+  providerRequestId?: string | null;
+  providerObservationId?: string;
+  identityKind?: "request" | "cumulative_meter";
+  meterEvidence?: { epochId: string; before: UsageMeterVector; after: UsageMeterVector; last?: UsageMeterVector };
+  timeProvenance?: "provider_timestamp" | "observed_at" | "task_attributed" | "unknown";
   scope: "request" | "turn" | "task";
   source: "provider_request" | "provider_turn" | "legacy_task" | "context_snapshot";
   accuracy: "exact" | "partial" | "unknown";
@@ -70,6 +85,10 @@ export interface UsageMetrics {
   status_counts: UsageStatusCounts;
   /** False when a known charge covers multiple model groups without an allocation. */
   cost_allocation_complete?: boolean;
+  task_attributed_tokens?: number;
+  task_attributed_task_count?: number;
+  time_provenance?: "provider_timestamp" | "observed_at" | "task_attributed" | "unknown" | "mixed";
+  identity_conflict_task_count?: number;
 }
 
 export interface UsageReport {
@@ -79,7 +98,7 @@ export interface UsageReport {
   by_model: Array<UsageMetrics & { provider: string; model: string | null; requested_model: string | null; model_source: "reported" | "requested" | "unknown"; model_provenance: string; purpose?: string; connection_id: string | null }>;
   by_runtime: Array<UsageMetrics & { runtime_id: string | null; runtime_provenance: string }>;
   task_daily: Array<{ date: string; task_count: number; total_seconds: number; status_counts: UsageStatusCounts }>;
-  time_basis: { consumption: "unit_occurred_at"; terminal_tasks: "terminal_lifecycle_at"; active_tasks: "current_snapshot" };
+  time_basis: { consumption: "unit_occurred_at"; terminal_tasks: "terminal_lifecycle_at"; active_tasks: "current_snapshot"; historical_aggregates?: "task_attribution_at" };
   coverage: { priced_tokens: number; unpriced_tokens: number; token_ratio: number | null; unknown_task_count: number };
   as_of: string;
   pricing_revision: string;
