@@ -65,7 +65,7 @@ describe("MUL-427 ruling (e): comment task associations", () => {
       });
     }, 30_000);
 
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment clears the tombstone task and publishes the NULL patch`, async () => {
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment preserves its frozen source and publishes only the tombstone patch`, async () => {
       await withStore(backend, (store) => {
         const issue = store.createIssue({ title: "Deleted task association", workspaceId: "local" });
         const agent = store.createAgent({ name: "Comment source", provider: "codex" });
@@ -79,12 +79,14 @@ describe("MUL-427 ruling (e): comment task associations", () => {
         } });
         store.deleteIssueComment(comment.id);
         const tombstone = store.getConversationLogEntryById(comment.id)!;
-        expect(tombstone.task_id).toBeNull();
+        expect(tombstone).toMatchObject({ id: before.id, seq: before.seq, task_id: before.task_id });
         expect(tombstone.deleted_at).not.toBeNull();
         expect(tombstone.body_md).toBe("");
         expect(tombstone.metadata.deleted_body).toBe("Task-linked comment");
         expect(tombstone.revision).toBe(before.revision + 1);
-        expect(patches.find((patch) => patch.target_seq === before.seq)?.fields.task_id).toBeNull();
+        const patch = patches.find(candidate => candidate.target_seq === before.seq)!;
+        expect(patch.fields.task_id).toBeUndefined();
+        expect(patch.fields).toMatchObject({ body_md: "", deleted_at: tombstone.deleted_at });
       });
     }, 30_000);
   }
