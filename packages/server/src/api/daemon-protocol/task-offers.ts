@@ -291,7 +291,7 @@ export class DaemonTaskOffers {
       if (!pump || !pending || pending.session !== session || String(pending.seq) !== frame.re) continue;
       if (frame.payload.ok !== true) {
         const reason = frame.payload.reason ?? frame.payload.code;
-        this.rescind(runtimeId, pump, pending.taskId, typeof reason === "string" ? reason : null);
+        this.rescind(runtimeId, pump, pending.taskId, typeof reason === "string" ? reason : null, frame.payload.ok === false);
         return;
       }
       this.clock.clearTimeout(pending.timer);
@@ -309,7 +309,7 @@ export class DaemonTaskOffers {
     }
   }
 
-  private rescind(runtimeId: string, pump: RuntimePump, taskId: string, reason: string | null = null): void {
+  private rescind(runtimeId: string, pump: RuntimePump, taskId: string, reason: string | null = null, rejected = false): void {
     if (pump.pending?.taskId === taskId) {
       this.clock.clearTimeout(pump.pending.timer);
       pump.pending = null;
@@ -323,7 +323,7 @@ export class DaemonTaskOffers {
       this.kick(runtimeId);
     }, DAEMON_OFFER_COOLDOWN_MS);
     (pump.cooldownTimer as ReturnType<typeof setTimeout>).unref?.();
-    this.options.store.requeueTaskOffer(taskId, runtimeId);
+    this.options.store.requeueTaskOffer(taskId, runtimeId, rejected ? "rejected" : "unknown");
   }
 
   private resume(session: DaemonProtocolSession): void {

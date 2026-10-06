@@ -950,14 +950,14 @@ export class RuntimesRepo {
           const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
           const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
           if (targetId !== runtimeId) {
-            runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+            runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
               [targetId, now, String(row.id)],
             );
           }
         }
         continue;
       }
-      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
       );
     }
@@ -1279,7 +1279,10 @@ export class RuntimesRepo {
         ), updated_at = ? WHERE runtime_id = ?`,
         [newRuntimeId, newRuntimeId, now, oldRuntimeId],
       ).changes;
-      const tasks = runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+      const tasks = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET runtime_id = ?,
+          offered_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN offered_at ELSE NULL END,
+          accepted_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN accepted_at ELSE NULL END,
+          updated_at = ? WHERE runtime_id = ?`,
         [newRuntimeId, now, oldRuntimeId],
       ).changes;
       // Move the chat-session affinity metadata too, or the follow-up would

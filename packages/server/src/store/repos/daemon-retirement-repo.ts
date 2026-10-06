@@ -711,7 +711,7 @@ export class DaemonRetirementRepo {
           [now, ...runtimeIds],
         ).changes;
         queuedTasksRequeued = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
-           SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ?
+           SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ?
            WHERE runtime_id IN (${placeholders}) AND status = 'queued'`,
           [now, ...runtimeIds],
         ).changes;

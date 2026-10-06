@@ -107,6 +107,7 @@ describe("A-3 task offers", () => {
     await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
     await h.send("res", { ok: false, code: "capacity" }, { re: String(first.seq), ack: first.seq });
     await h.layer.drain();
+    expect(h.store.getTask(task.id)).toMatchObject({ status: "queued", offeredAt: null, acceptedAt: null });
     expect(h.offered()).toHaveLength(1);
     await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
     expect(h.offered().map(frame => frame.p.id)).toEqual([task.id, task.id]);
@@ -131,11 +132,12 @@ describe("A-3 task offers", () => {
 
   for (const reason of ["draining", "claims_paused", "binary_skill_files_unsupported"] as const) {
     it(`keeps ${reason} rejection on the full cooldown despite a changed heartbeat`, async () => {
-      const h = fixture(); h.task(); await h.hello();
+      const h = fixture(); const task = h.task(); await h.hello();
       const first = h.offered()[0]!;
       await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
       await h.send("res", { ok: false, code: reason }, { re: String(first.seq), ack: first.seq });
       await h.layer.drain();
+      expect(h.store.getTask(task.id)).toMatchObject({ status: "queued", offeredAt: null, acceptedAt: null });
       await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
       h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
       expect(h.offered()).toHaveLength(1);
@@ -145,9 +147,11 @@ describe("A-3 task offers", () => {
   }
 
   it("does not clear a timed-out offer cooldown on changed heartbeat", async () => {
-    const h = fixture(); h.task(); await h.hello();
+    const h = fixture(); const task = h.task(); await h.hello();
     await h.send("hb", { active_task_count: 1 }); await h.layer.drain();
     h.clock.advance(DAEMON_OFFER_TIMEOUT_MS); await h.layer.drain();
+    expect(h.store.getTask(task.id)).toMatchObject({ status: "queued", acceptedAt: null });
+    expect(h.store.getTask(task.id)?.offeredAt).toBeString();
     await h.send("hb", { active_task_count: 0 }); await h.layer.drain();
     h.clock.advance(DAEMON_OFFER_COOLDOWN_MS - 1); await h.layer.drain();
     expect(h.offered()).toHaveLength(1);
@@ -156,8 +160,10 @@ describe("A-3 task offers", () => {
   });
 
   it("keeps disconnect cooldown through a new hello and changed heartbeat", async () => {
-    const h = fixture(); h.task(); await h.hello();
+    const h = fixture(); const task = h.task(); await h.hello();
     h.session.handleSocketClose();
+    expect(h.store.getTask(task.id)).toMatchObject({ status: "queued", acceptedAt: null });
+    expect(h.store.getTask(task.id)?.offeredAt).toBeString();
     const reconnected = h.layer.openSession({ send: text => { h.frames.push(JSON.parse(text)); return text.length; }, close() {} },
       { accessToken: null, masterToken: true });
     await reconnected.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2,

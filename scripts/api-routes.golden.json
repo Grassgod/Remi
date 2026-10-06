@@ -3677,16 +3677,38 @@
     {
       "key": "daemon-task-lifecycle#001 POST /api/daemon/tasks/:taskId/wait-local-directory",
       "route": "POST /api/daemon/tasks/:taskId/wait-local-directory",
-      "path": "/api/daemon/tasks/tsk_lnktpkuv95wd/wait-local-directory",
-      "status": 400,
+      "path": "/api/daemon/tasks/tsk_jez2ujdp6d5n/wait-local-directory",
+      "status": 200,
       "body": {
-        "error": "mark task waiting_local_directory: no rows in result set"
+        "id": "tsk_jez2ujdp6d5n",
+        "agent_id": "agt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "issue_id": "",
+        "holds_workspace": true,
+        "workspace_id": "local",
+        "status": "waiting_local_directory",
+        "priority": 0,
+        "dispatched_at": null,
+        "started_at": null,
+        "completed_at": null,
+        "result": null,
+        "error": null,
+        "attempt": 1,
+        "max_attempts": 3,
+        "created_at": "<timestamp>",
+        "kind": "quick_create",
+        "wait_reason": "missing repo",
+        "progress_summary": "Waiting for local directory: missing repo",
+        "plugin_snapshot": [],
+        "codex_profile": null,
+        "claude_profile": null,
+        "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
       }
     },
     {
       "key": "daemon-task-lifecycle#002 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
-      "path": "/api/tasks/tsk_lnktpkuv95wd/prompt",
+      "path": "/api/tasks/tsk_jez2ujdp6d5n/prompt",
       "status": 410,
       "body": {
         "code": "route_retired",
@@ -3696,7 +3718,7 @@
     {
       "key": "daemon-task-lifecycle#003 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_lnktpkuv95wd/human-requests/hrq_q98004mis9bx/respond",
+      "path": "/api/multiremi/tasks/tsk_jez2ujdp6d5n/human-requests/hrq_q98004mis9bx/respond",
       "status": 410,
       "body": {
         "code": "route_retired",
@@ -3706,7 +3728,7 @@
     {
       "key": "daemon-task-lifecycle#004 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_lnktpkuv95wd/human-requests/hrq_ee1nx8n37scg/respond",
+      "path": "/api/tasks/tsk_jez2ujdp6d5n/human-requests/hrq_ee1nx8n37scg/respond",
       "status": 410,
       "body": {
         "code": "route_retired",

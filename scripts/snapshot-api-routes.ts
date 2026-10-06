@@ -1632,18 +1632,21 @@ flow("daemon", async (rec, refs, store) => {
 });
 
 flow("daemon-task-lifecycle", async (rec, refs, store) => {
+  // Keep this lifecycle turn independent of the seeded running Issue lane.
   await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
-    issueId: refs.issueId,
     prompt: "Snapshot lifecycle task",
   });
-  const id = store.createTask({ agentId: refs.agentId, issueId: refs.issueId,
+  const id = store.createTask({ agentId: refs.agentId,
     prompt: "Snapshot lifecycle task" }).id;
+  let claimed = false;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
     const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
-    if (claim?.id === id) break;
+    if (claim?.id === id) { claimed = true; break; }
   }
+  if (!claimed) throw new Error("Snapshot lifecycle task was not actually claimed");
+  store.recordTaskOffered(id, refs.runtimeId);
   // waiting_local_directory only applies to a dispatched task, so it runs
   // before start (startTask accepts dispatched and waiting_local_directory).
   await rec.json("POST", `/api/daemon/tasks/${id}/wait-local-directory`, { reason: "missing repo" });

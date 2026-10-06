@@ -310,10 +310,11 @@ export class ChatRepo {
   updateQueuedChatTask(chatSessionId: string, taskId: string, content: string): QueuedChatTask {
     const result = this.ctx.db.transaction(() => {
       this.lockActiveSession(chatSessionId);
-      this.requireQueuedTask(chatSessionId, taskId);
+      const task = this.requireQueuedTask(chatSessionId, taskId);
+      if (task.offeredAt) throw new ChatConflictError("Task was already dispatched and can no longer be edited");
       const body = content.trim();
       if (!body) throw new Error("content is required");
-      const changed = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET prompt = ?, updated_at = ? WHERE id = ? AND status = 'queued'`,
+      const changed = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET prompt = ?, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ? AND status = 'queued'`,
         [body, nowIso(), taskId],
       );
       if (!changed.changes) throw new ChatConflictError("Task is no longer queued");

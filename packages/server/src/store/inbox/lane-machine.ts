@@ -40,6 +40,9 @@ export function ensurePendingTurn(ctx: StoreContext, message: UnifiedMessage, in
   if (['pair_round_trip_limit','dependencies_unmet','source_side_session','no_issue_target'].includes(message.wake_reason)) return;
   const pending=active.find(t=>t.status==='pending');
   if (pending) {
+    // A sent offer requeued after disconnect still belongs to its original attempt.
+    const attempt=ctx.tasks().getTask(pending.current_attempt_id);
+    if(attempt?.offeredAt)return message.wake_applied==='now'?deliverToRunningTurn(ctx,pending,message):undefined;
     ctx.db.run('UPDATE multiremi_turns SET wake_seq=CASE WHEN wake_seq<? THEN ? ELSE wake_seq END WHERE id=?', [message.seq,message.seq,pending.id]);
     appendPendingTurnAuditWithinTransaction(ctx.db,{id:pending.id,issueId:pending.issue_id,workspaceId:pending.workspace_id},
       'turn_merged',{message_id:message.id,seq:message.seq,reason:message.wake_reason});

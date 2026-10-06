@@ -14,7 +14,7 @@ import { taskSessionInput } from '../task-session-input.js';
 import { TRIGGER_MESSAGE_INLINE_CHARS, expandHint } from '@multiremi/contracts/session-input.js';
 
 // Structurally identical to S3's transport interface, without coupling the store to API routers.
-export interface DaemonTurnScope {runtimeId:string;daemonId:string;workspaceId:string}
+export interface DaemonTurnScope {runtimeId:string;daemonId:string;workspaceId:string;userId?:string|null}
 export type DaemonTurnRpc='turn.input'|'turn.decision'|'turn.decision.get'|'turn.decision.expire';
 export interface DaemonTurnInput {turn_id:string;attempt_id:string;input_from_seq:number;input_to_seq:number;input_messages:UnifiedMessage[]}
 export interface DaemonTurnCompletePayload {turn_id:string;attempt_id:string;input_to_seq:number;reply:{body_md:string;message_kind:'reply'|'final'};session_id?:string|null;work_dir?:string|null}
@@ -160,10 +160,12 @@ export class DaemonTurnBridge {
     try{
       const prior=this.transaction(()=>{const turn=this.authorized(p.turn_id,p.attempt_id,scope,true);
         if(turn.status==='completed')return {ok:true,turn_id:turn.id,reply_message_id:turn.reply_message_id};
-        if(!['running','awaiting_human'].includes(turn.status)||!Number.isSafeInteger(p.input_to_seq)||p.input_to_seq>Number(turn.offered_to??0)||p.input_to_seq<Number(turn.input_to_seq??0))throw new Error('invalid_report');return null;});
+        const attempt=this.ctx.tasks().getTask(p.attempt_id);
+        if(!['running','awaiting_human'].includes(turn.status)&&!(turn.status==='pending'&&attempt?.offeredAt))throw new Error('invalid_report');
+        if(!Number.isSafeInteger(p.input_to_seq)||p.input_to_seq>Number(turn.offered_to??0)||p.input_to_seq<Number(turn.input_to_seq??0))throw new Error('invalid_report');return null;});
       if(prior)return prior;
       this.ctx.tasks().completeTask(p.attempt_id,{output:p.reply.body_md,sessionId:p.session_id,workDir:p.work_dir,completionFields:input.completionFields,traceEventCount:input.traceEventCount,
-        turnInputToSeq:p.input_to_seq,replyKind:p.reply.message_kind,expectedRuntimeId:scope.runtimeId,expectedDaemonId:scope.daemonId});
+        turnInputToSeq:p.input_to_seq,replyKind:p.reply.message_kind,expectedRuntimeId:scope.runtimeId,expectedDaemonId:scope.daemonId},scope);
       const turn=this.ctx.db.query('SELECT reply_message_id FROM multiremi_turns WHERE id=?').get(p.turn_id);
       return {ok:true,turn_id:p.turn_id,reply_message_id:turn?.reply_message_id??null};
     }catch(error){

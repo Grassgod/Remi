@@ -761,6 +761,12 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  */
 export class TaskSteerPendingError extends Error {}
 
+export interface TaskDaemonReportAuthority { runtimeId: string; workspaceId: string; daemonId: string; userId?: string | null }
+
+/** A reliable report must either change state, be a terminal replay, or remain pending. */
+export class TaskDaemonReportError extends Error {
+  constructor(readonly code: "authority_revoked" | "server_error", readonly retryable: boolean) { super(code); }
+}
 
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
@@ -1199,7 +1205,7 @@ export class TasksRepo {
     return true;
   }
 
-  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
+  requeueTaskOffer(taskId: string, runtimeId: string, outcome: "unknown" | "rejected" = "unknown"): boolean {
     this.acceptedOfferLeases.delete(taskId);
     const run = () => {
       // No pre-lock read snapshot on SQLite, no recover-after-UNIQUE on PG.
@@ -1209,10 +1215,13 @@ export class TasksRepo {
         AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL`).get(taskId, runtimeId);
       if (!offered) return false;
       if (this.coalesceDispatchedTurnWithinTransaction(taskId)) return true;
+      // Preserve a sent offer when the receipt is unknown. An explicit refusal
+      // proves this offer did not authorize execution and restores an editable queue.
       const row = turnExecutionMutationStatement(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'queued', dispatched_at = NULL,
-           offered_at = NULL, accepted_at = NULL, updated_at = ?
+           offered_at = CASE WHEN ? = 1 THEN NULL ELSE offered_at END,
+           accepted_at = NULL, updated_at = ?
          WHERE id = ? AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL RETURNING *`,
-      ).get(nowIso(), taskId, runtimeId) as Row | null;
+      ).get(outcome === "rejected" ? 1 : 0, nowIso(), taskId, runtimeId) as Row | null;
       if (row) this.ctx.notifyTaskEnqueued(toTask(row));
       return Boolean(row);
     };
@@ -2278,6 +2287,7 @@ export class TasksRepo {
         const frozen = source.executionFingerprint;
         runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
           SET status = 'queued', session_id = NULL, work_dir = NULL, dispatched_at = NULL,
+              offered_at = NULL, accepted_at = NULL,
               runtime_id = (SELECT runtime_id FROM multiremi_agents WHERE id = multiremi_turn_execution_records.agent_id),
               execution_fingerprint = ?
           WHERE id = ?`, [frozen ? chatWorkspaceTransitionFingerprint(workspace.fingerprint(frozen), source.runtimeId) : null, String(task.id)]);
@@ -3868,7 +3878,8 @@ ${routing.sql}
       const repool = () => {
         if (this.coalesceDispatchedTurnWithinTransaction(String(row.id))) return;
         runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'queued', runtime_id = NULL, session_id = NULL,
-             work_dir = NULL, dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             work_dir = NULL, dispatched_at = NULL, offered_at = NULL, accepted_at = NULL,
+             projection_from_seq = NULL, projection_to_seq = NULL,
              projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
              projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
              inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
@@ -3889,7 +3900,8 @@ ${routing.sql}
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
         if (this.coalesceDispatchedTurnWithinTransaction(String(row.id))) return null;
         runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'queued', runtime_id = ?, session_id = NULL,
-             dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             dispatched_at = NULL, offered_at = NULL, accepted_at = NULL,
+             projection_from_seq = NULL, projection_to_seq = NULL,
              projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
              projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
              inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
@@ -3966,7 +3978,7 @@ ${routing.sql}
         || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agent);
       if (!workspaceConflict && !routingRefused && !runtimeUnusable) continue;
       const updated = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
-         SET runtime_id = ?, session_id = NULL, work_dir = NULL,
+         SET runtime_id = ?, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL,
              ${OBSERVER_WAIT_REASON_CLEAR_SQL},
              updated_at = ?
          WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
@@ -4034,7 +4046,7 @@ ${routing.sql}
       // Re-pooling abandons the lineage, so any device-routing text the
       // observer had written about the old pin is stale immediately rather
       // than only after the next sweep (MUL-449).
-      runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = ?, work_dir = ?,
+      runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = ?, work_dir = ?, offered_at = NULL, accepted_at = NULL,
           ${OBSERVER_WAIT_REASON_CLEAR_SQL}
         WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
         [runtimeId, inherit ? chat.sessionId : null, inherit ? chat.workDir : null,
@@ -4057,6 +4069,8 @@ ${routing.sql}
     const deviceRouting = deviceRoutingSql(this.ctx, runtime);
     const placementAfter = placementAfterRoutingSql(runtime);
     const params = [
+      runtime.id,
+      runtime.id,
       runtime.id,
       now,
       now,
@@ -4084,7 +4098,9 @@ ${routing.sql}
     // of authorization). Kept as a JS comment, not inline SQL: an apostrophe
     // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
     const claimOne = (): Row | null => turnExecutionMutationStatement(this.ctx.db, `UPDATE multiremi_turn_execution_records
-       SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
+       SET offered_at = CASE WHEN runtime_id = ? THEN offered_at ELSE NULL END,
+           accepted_at = CASE WHEN runtime_id = ? THEN accepted_at ELSE NULL END,
+           status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
          SELECT t.id
          ${TASK_CLAIM_FROM_SQL}
@@ -4235,9 +4251,53 @@ ${placementAfter.sql}
       return started;
     };
     const task = this.ctx.db.inTransaction ? startWithinTransaction() : this.ctx.db.transaction(startWithinTransaction)();
-    this.ctx.notifyTaskEvent("task:running", task);
-    afterCommit(this.ctx.db, () => this.runChildStatusChanges(childStatusChanges));
-    this.ctx.emitCommitEvents(deferredEvents);
+    afterCommit(this.ctx.db, () => {
+      this.ctx.notifyTaskEvent("task:running", task);
+      this.runChildStatusChanges(childStatusChanges);
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
+    return task;
+  }
+
+  /** Network requeue keeps the actual offer receipt; fresh affinity is not execution authority. */
+  startTaskFromDaemon(taskId: string, authority: TaskDaemonReportAuthority): "started" | "replayed" {
+    const startWithinTransaction = (): "started" | "replayed" => {
+      const task = this.lockTaskDaemonReport(taskId, authority);
+      if (["running", "awaiting_human", "completed", "failed", "cancelled"].includes(task.status)) return "replayed";
+      if (task.status === "queued") {
+        if (!task.offeredAt) throw new TaskDaemonReportError("server_error", true);
+        const restored = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'dispatched'
+          WHERE id = ? AND runtime_id = ? AND workspace_id = ? AND status = 'queued' AND offered_at IS NOT NULL`,
+        [taskId, authority.runtimeId, authority.workspaceId]);
+        if (!restored.changes) throw new TaskDaemonReportError("server_error", true);
+      } else if (task.status !== "dispatched" && task.status !== "waiting_local_directory") {
+        throw new TaskDaemonReportError("server_error", true);
+      }
+      this.startTask(taskId);
+      return "started";
+    };
+    return this.ctx.db.inTransaction ? startWithinTransaction() : this.ctx.db.transaction(startWithinTransaction)();
+  }
+
+  completeTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["completeTask"]>[1], authority: TaskDaemonReportAuthority): MultiremiTask {
+    return this.completeTask(taskId, input, authority);
+  }
+
+  failTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["failTask"]>[1], authority: TaskDaemonReportAuthority): MultiremiTask {
+    return this.failTask(taskId, input, authority);
+  }
+
+  private lockTaskDaemonReport(taskId: string, authority: TaskDaemonReportAuthority): MultiremiTask {
+    this.ctx.lockWorkspaceRuntimeLifecycle(authority.workspaceId);
+    const task = this.getTask(taskId);
+    const runtime = this.ctx.runtimes().getRuntime(authority.runtimeId);
+    if (!task || task.runtimeId !== authority.runtimeId || task.workspaceId !== authority.workspaceId
+      || !runtime || (runtime.workspaceId ?? "local") !== authority.workspaceId
+      || (runtime.daemonId && runtime.daemonId !== authority.daemonId)
+      || this.ctx.runtimes().isDaemonRetired(authority.workspaceId, authority.daemonId)
+      || (authority.userId && authority.userId !== "local" && !this.ctx.workspaces().getUserRoleInWorkspace(authority.userId, authority.workspaceId))) {
+      throw new TaskDaemonReportError("authority_revoked", false);
+    }
     return task;
   }
 
@@ -4753,17 +4813,31 @@ ${placementAfter.sql}
     replyKind?:'reply'|'final';
     expectedRuntimeId?:string;
     expectedDaemonId?:string;
-  }): MultiremiTask {
+  }, daemonAuthority?: TaskDaemonReportAuthority): MultiremiTask {
     const initial = this.getTask(taskId);
-    if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
+    if (!initial || (!daemonAuthority && !isActiveTaskStatus(initial.status))) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
     let deferredEvents = createCommitEventQueue();
     const ownsTransaction = !this.ctx.db.inTransaction;
     let skipAutoReply = false;
     const completeWithinTransaction = () => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      const current = this.getTask(taskId);
-      if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      if (!daemonAuthority) this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const current = daemonAuthority ? this.lockTaskDaemonReport(taskId, daemonAuthority) : this.getTask(taskId);
+      if (current && daemonAuthority) {
+        if (["completed", "failed", "cancelled"].includes(current.status)) return { task: current, followUps: null };
+        if (current.status !== "running" && current.status !== "awaiting_human") {
+          if (!["queued", "dispatched"].includes(current.status) || !current.offeredAt) {
+            throw new TaskDaemonReportError("server_error", true);
+          }
+          const restored = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'dispatched',
+            started_at = COALESCE(started_at, ?)
+            WHERE id = ? AND runtime_id = ? AND workspace_id = ? AND status IN ('queued', 'dispatched') AND offered_at IS NOT NULL`,
+          [nowIso(), taskId, daemonAuthority.runtimeId, daemonAuthority.workspaceId]);
+          if (!restored.changes) throw new TaskDaemonReportError("server_error", true);
+        }
+      }
+      if (!current || (!isActiveTaskStatus(current.status) && !(daemonAuthority && current.status === "queued"))
+        || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       if(input.expectedRuntimeId&&(current.runtimeId!==input.expectedRuntimeId||this.ctx.runtimes().getRuntime(input.expectedRuntimeId)?.daemonId!==input.expectedDaemonId))throw new Error('stale_attempt');
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
       this.getTaskChatExecutionKind(current);
@@ -4827,16 +4901,18 @@ ${placementAfter.sql}
       terminal = this.ctx.db.transaction(completeWithinTransaction)();
     }
     const task = terminal.task;
+    const followUps = terminal.followUps;
+    if (!followUps) return task;
     // Chat's turn card is the assistant reply, so it exists only after the
     // terminal transaction. Issue turn cards already receive their receipt at claim.
     afterCommit(this.ctx.db, () => {
       this.recordChatInboxDeliveryAfterReply(task);
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents(deferredEvents);
-      for (const delegationReturn of terminal.followUps.delegationReturns) {
+      for (const delegationReturn of followUps.delegationReturns) {
         this.ctx.notifyTaskEnqueued(delegationReturn);
       }
-      for (const roundPushTask of terminal.followUps.roundPushTasks) this.ctx.notifyTaskEnqueued(roundPushTask);
+      for (const roundPushTask of followUps.roundPushTasks) this.ctx.notifyTaskEnqueued(roundPushTask);
       this.ctx.notifyTaskEvent("task:completed", task);
     });
     return task;
@@ -4850,15 +4926,29 @@ ${placementAfter.sql}
     workDir?: string | null;
     failureReason?: string | null;
     failure_reason?: string | null;
-  }): MultiremiTask {
+  }, daemonAuthority?: TaskDaemonReportAuthority): MultiremiTask {
     const initial = this.getTask(taskId);
-    if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
+    if (!initial || (!daemonAuthority && !isActiveTaskStatus(initial.status))) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
     const failWithinTransaction = () => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      const current = this.getTask(taskId);
-      if (!current || !isActiveTaskStatus(current.status) || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      if (!daemonAuthority) this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const current = daemonAuthority ? this.lockTaskDaemonReport(taskId, daemonAuthority) : this.getTask(taskId);
+      if (current && daemonAuthority) {
+        if (["completed", "failed", "cancelled"].includes(current.status)) return { task: current, followUps: null };
+        if (current.status === "dispatched" && !current.offeredAt) throw new TaskDaemonReportError("server_error", true);
+        if (current.status === "queued") {
+          if (!current.offeredAt) throw new TaskDaemonReportError("server_error", true);
+          const restored = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET status = 'dispatched'
+            WHERE id = ? AND runtime_id = ? AND workspace_id = ? AND status = 'queued' AND offered_at IS NOT NULL`,
+          [taskId, daemonAuthority.runtimeId, daemonAuthority.workspaceId]);
+          if (!restored.changes) throw new TaskDaemonReportError("server_error", true);
+        } else if (!["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(current.status)) {
+          throw new TaskDaemonReportError("server_error", true);
+        }
+      }
+      if (!current || (!isActiveTaskStatus(current.status) && !(daemonAuthority && current.status === "queued"))
+        || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
       this.getTaskChatExecutionKind(current);
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
@@ -4885,18 +4975,20 @@ ${placementAfter.sql}
       return { task: failed, followUps };
     };
     const terminal = this.ctx.db.inTransaction ? failWithinTransaction() : this.ctx.db.transaction(failWithinTransaction)();
+    const followUps = terminal.followUps;
+    if (!followUps) return terminal.task;
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
       this.ctx.emitCommitEvents(deferredEvents);
       if (
-        !terminal.followUps.retry
+        !followUps.retry
         && terminal.task.issueId
         && terminal.task.failureReason === "agent_error.context_overflow"
       ) {
         this.postContextOverflowSystemComment(terminal.task);
       }
-      if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
-      for (const delegationReturn of terminal.followUps.delegationReturns) {
+      if (followUps.retry) this.ctx.notifyTaskEnqueued(followUps.retry);
+      for (const delegationReturn of followUps.delegationReturns) {
         this.ctx.notifyTaskEnqueued(delegationReturn);
       }
       this.ctx.notifyTaskEvent("task:failed", terminal.task);

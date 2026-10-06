@@ -1,6 +1,7 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { normalizeTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
+import { TaskDaemonReportError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
   ReportRuntimeUpdateInput, ReportRuntimeCommandInput, ReportRuntimeModelListInput,
   ReportRuntimeLocalSkillListInput, ReportRuntimeLocalSkillImportInput, ReportRuntimeDirectoryScanInput,
@@ -108,6 +109,7 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
   if (!task) reject("task_not_found");
   if (!task.runtimeId || (runtimeId && runtimeId !== task.runtimeId)) reject("authority_revoked");
   authorizeReportRuntime(store, session, task.runtimeId);
+  if ((store.getRuntimeLite(task.runtimeId)?.workspaceId ?? "local") !== task.workspaceId) reject("authority_revoked");
   return task;
 }
 
@@ -131,7 +133,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         if (fields) fields.final_reply_md = reply.body_md;
         const result = await turns.complete({ payload: p as unknown as DaemonTurnCompletePayload, completionFields: fields,
           traceEventCount: completionTraceEventCount(p.trace, string(p.attempt_id)) },
-        { runtimeId, daemonId: session.daemonId, workspaceId: store.getRuntimeLite(runtimeId)!.workspaceId ?? "local" });
+        { runtimeId, daemonId: session.daemonId, workspaceId: store.getRuntimeLite(runtimeId)!.workspaceId ?? "local", userId: session.ownerAccessToken?.userId });
         if (result.ok === true && fields?.trace) onTraceClosed?.(string(p.attempt_id), fields.trace.head, runtimeId);
         return result;
       }
@@ -139,13 +141,16 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const taskId = string(p.task_id);
         if (!taskId) reject();
         const task = authorizeReportTask(store, session, taskId, frame.rt);
+        const authority = { runtimeId: task.runtimeId!, workspaceId: task.workspaceId,
+          daemonId: session.daemonId, userId: session.ownerAccessToken?.userId };
         const isCompletion = frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
         const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
         switch (frame.type) {
           case "task.start":
-            if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
-            store.startTask(taskId);
+            if (store.startTaskFromDaemon(taskId, authority) === "replayed") {
+              return { ok: true, code: "start_replayed" };
+            }
             break;
           case "task.prompt":
             if (!["bootstrap", "delta"].includes(string(p.mode)) || typeof p.prompt !== "string" || typeof p.sha256 !== "string") reject();
@@ -199,12 +204,11 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             catch { reject(); }
             break;
           }
+
           case "task.fail":
-            if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
-              store.failTask(taskId, {
-                error: string(p.error) || "Task failed", traceEventCount,
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason), completionFields: fields });
-            }
+            store.failTaskFromDaemon(taskId, {
+              error: string(p.error) || "Task failed", traceEventCount,
+              sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason), completionFields: fields }, authority);
             break;
           default: reject();
         }
@@ -323,6 +327,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
       }
       return { ok: true };
     } catch (error) {
+      if (error instanceof TaskDaemonReportError) return { ok: false, code: error.code, retryable: error.retryable };
       if (error instanceof ReportRejection) return { ok: false, code: error.code, retryable: false };
       throw error;
     }

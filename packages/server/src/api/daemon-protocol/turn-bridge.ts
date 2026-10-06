@@ -3,7 +3,7 @@ import type { DaemonTurnInput, DaemonTurnMessagePayload, DaemonTurnWrapUpPayload
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 
 export type DaemonTurnRpc = "turn.input" | "turn.decision" | "turn.decision.get" | "turn.decision.expire";
-export interface DaemonTurnScope { runtimeId: string; daemonId: string; workspaceId: string }
+export interface DaemonTurnScope { runtimeId: string; daemonId: string; workspaceId: string; userId?: string | null }
 
 /**
  * The protocol owns transport validation; the unified store owns transactions.

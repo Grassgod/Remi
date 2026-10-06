@@ -56,6 +56,25 @@ async function openTurn(backend: (typeof backends)[number]) {
 
 for (const backend of backends) {
   describe.skipIf(!backend.available)(`daemon turn error classification (${backend.name})`, () => {
+    for (const startFirst of [false, true]) {
+      it(`recovers a sent offer after disconnect with ${startFirst ? "start then completion" : "completion first"}`, async () => {
+        await withTurn(backend, async ({ store, db, task, runtime, report, completion }) => {
+          db.run("UPDATE multiremi_turn_attempts SET status='accepted',started_at=NULL,offered_at=? WHERE id=?", [new Date().toISOString(), task.id]);
+          expect(store.requeueTaskOffer(task.id, runtime.id)).toBe(true);
+          expect(store.getTask(task.id)?.status).toBe("queued");
+          if (startFirst) {
+            expect(await report("task.start", { task_id: task.id })).toEqual({ ok: true });
+            expect(await report("task.start", { task_id: task.id })).toEqual({ ok: true, code: "start_replayed" });
+          }
+          const done = await report("turn.complete", completion);
+          expect(done).toMatchObject({ ok: true });
+          expect(store.getTask(task.id)?.status).toBe("completed");
+          expect(await report("turn.complete", completion)).toEqual(done);
+          expect(store.getMessage(String(done.reply_message_id))?.body_md).toBe("Done");
+        });
+      }, 60_000);
+    }
+
     it("keeps stale bindings, input gaps and invalid reports permanent", async () => {
       await withTurn(backend, async world => {
         const { bridge, scope, input, completion, report, store, task } = world;
