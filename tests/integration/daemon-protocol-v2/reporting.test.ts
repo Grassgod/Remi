@@ -1,5 +1,6 @@
 import { turnCompletion } from "../../fixtures/turn-report.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import type { Database } from "bun:sqlite";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
@@ -24,6 +25,16 @@ async function readInput(h: DaemonProtocolHarness, id: string) {
   const input = h.store.getDaemonTurnBridge().offerInput(h.store.getTaskWithAgent(id)!);
   expect(await h.client.rpc("turn.input", { ...input, message_ids: input.input_messages.map(m => m.id) }, runtime(h)))
     .toMatchObject({ ok: true, input_to_seq: input.input_to_seq });
+}
+
+function usageState(db: Database, taskId: string) {
+  const tables = ["multiremi_usage_runs", "multiremi_usage_units", "multiremi_usage_unit_receipts",
+    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes", "multiremi_usage_legacy_audit",
+    "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources"];
+  return { task: db.query("SELECT * FROM multiremi_tasks WHERE id=?").get(taskId) as Record<string, unknown>,
+    ledger: Object.fromEntries(tables.map(table => [table,
+      db.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
+        ? db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY rowid`).all(taskId) : []])) };
 }
 
 describe("v2 report reconciliation with real sockets and DB", () => {
@@ -58,7 +69,23 @@ describe("v2 report reconciliation with real sockets and DB", () => {
         return result;
       });
       const progress = spyOn(h.store, "reportProgress");
-      const usageReport = spyOn(h.store, "reportTaskUsage");
+      const usageChanges = new Map<string, number>();
+      const realUsage = h.store.reportTaskUsage.bind(h.store);
+      const usageReport = spyOn(h.store, "reportTaskUsage").mockImplementation((id, entries) => {
+        const before = usageState(h.db, id);
+        const result = realUsage(id, entries);
+        const after = usageState(h.db, id);
+        // A replay must not touch the task clock, canonical facts, revision
+        // receipts or source audits, even when its ACK was lost across restart.
+        if (before.task.usage === after.task.usage) expect(after).toEqual(before);
+        else {
+          const runs = (state: ReturnType<typeof usageState>) => state.ledger.multiremi_usage_runs as Array<{ run_id: string; revision: number }>;
+          const priorRevision = runs(before).find(run => run.run_id === "legacy")?.revision ?? 0;
+          expect(runs(after).find(run => run.run_id === "legacy")?.revision).toBe(priorRevision + 1);
+          usageChanges.set(id, (usageChanges.get(id) ?? 0) + 1);
+        }
+        return result;
+      });
       try {
         for (let round = 0; round < 20; round++) {
           const t = task(h);
@@ -88,7 +115,11 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           expect(usage.reduce((sum, entry) => sum + entry.outputTokens, 0)).toBe(5);
           expect(completed.get(t.id)).toBe(1);
           expect(progress.mock.calls.filter(([id]) => id === t.id)).toHaveLength(2);
-          expect(usageReport.mock.calls.filter(([id]) => id === t.id)).toHaveLength(2);
+          expect(usageChanges.get(t.id)).toBe(2);
+          // A server restart may checkpoint the accepted old source at a newer
+          // revision. Replay stability is checked around each Store call above.
+          expect(h.db.query(`SELECT COUNT(*) AS units,SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens
+            FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'`).get(t.id)).toEqual({ units: 2, input_tokens: 12, output_tokens: 5 });
           const entries = h.ledger.filter(entry => entry.partition === t.id && entry.seq !== null);
           entries.forEach(entry => arrived.add(`${t.id}:${entry.seq}`));
           const unique = [...new Map(entries.map(entry => [entry.seq, entry])).values()];

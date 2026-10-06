@@ -250,6 +250,8 @@ export function DataTable<TData>({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
+                  data-perf-item="table-row"
+                  data-perf-key={row.id}
                   data-state={row.getIsSelected() && "selected"}
                   onClick={
                     onRowClick ? () => onRowClick(row) : undefined

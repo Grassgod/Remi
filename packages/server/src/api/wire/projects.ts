@@ -16,6 +16,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
+import type { ProjectSummary } from "@multiremi/store/repos/projects-repo.js";
 import { currentRequestUserId } from "./context.js";
 
 export function projectCompatibilityResponse(project: MultiremiProject): Record<string, unknown> {
@@ -29,7 +30,7 @@ export function projectCompatibilityResponse(project: MultiremiProject): Record<
   };
 }
 
-export function projectCompatibilitySummaryResponse(project: MultiremiProject): Record<string, unknown> {
+export function projectCompatibilitySummaryResponse(project: ProjectSummary): Record<string, unknown> {
   return {
     id: project.id,
     workspace_id: project.workspaceId,

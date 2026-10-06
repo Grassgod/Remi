@@ -43,20 +43,23 @@ import { anchorPlan, type PageShape } from "./selectors";
 // in `harness.ts`; `ResourceEntry` is the shape `readResourceEntries` returns.
 import { parseServerTiming, type ResourceEntry } from "./harness";
 import type { ReportRoundSummary } from "./report";
+import type { RenderMeasurement } from "./render-measurement";
 
 /** Everything one round contributes to the report, derived from the raw buffer. */
 export interface RoundComputation {
   selectorMode: PerfProfileName;
   anchorRule: string;
   firstRealMs: number | null;
+  firstRealKeys?: string[];
+  observedFrames?: number;
   anchorVisibleMs: number | null;
   anchorName: string | null;
   anchorRectAtReady: PerfAnchorRect | null;
   readyMs: number | null;
   readyTimeout: boolean;
-  jumpCount: number;
-  jumpPx: number;
-  jumpScrollPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
+  jumpScrollPx: number | null;
   jumps: PerfJump[];
   layoutShiftCount: number;
   cls: number;
@@ -79,8 +82,9 @@ export function profileForMeasurement(
   mode: PerfProfileName,
   shape: PageShape,
   targetCommentId: string | null,
+  requireAgentStream = false,
 ): { anchorName: string; anchorRule: string; config: PerfProfileConfig } {
-  const plan = anchorPlan({ mode, shape, targetCommentId });
+  const plan = anchorPlan({ mode, shape, targetCommentId, requireAgentStream });
   return {
     anchorName: plan.anchorName,
     anchorRule: plan.anchorRule,
@@ -136,6 +140,7 @@ export function computeRoundMeasurement(input: {
   mode: PerfProfileName;
   shape: PageShape;
   targetCommentId: string | null;
+  requireAgentStream?: boolean;
   navStartMs: number;
   frames: PerfFrame[];
   shifts: PerfLayoutShift[];
@@ -160,7 +165,7 @@ export function computeRoundMeasurement(input: {
   const stateTransitions = input.stateTransitions.filter(afterOrigin).map(rebase);
   const timeoutMs = input.timeoutMs ?? ROUND_TIMEOUT_MS;
 
-  const profile = profileForMeasurement(input.mode, input.shape, input.targetCommentId);
+  const profile = profileForMeasurement(input.mode, input.shape, input.targetCommentId, input.requireAgentStream);
   const firstRealMs = computeFirstRealMs(frames, input.mode);
   const ready = computeReadyWindow(frames, {
     profile: profile.config,
@@ -242,6 +247,8 @@ export function computeRoundMeasurement(input: {
     selectorMode: input.mode,
     anchorRule: profile.anchorRule,
     firstRealMs,
+    firstRealKeys: frameAt(frames, firstRealMs)?.profiles[input.mode]?.items.filter(item => item.top < (frameAt(frames, firstRealMs)?.profiles[input.mode]?.rootHeight ?? 0) && item.bottom > 0).map(item => item.key) ?? [],
+    observedFrames: frames.filter(frame => firstRealMs !== null && frame.t >= firstRealMs && (readyMs === null || frame.t <= readyMs + input.quietMs)).length,
     anchorVisibleMs: ready.anchorVisibleMs,
     anchorName: ready.anchorName ?? profile.anchorName,
     anchorRectAtReady: ready.anchorRectAtReady,
@@ -286,6 +293,8 @@ export function computeRoundMeasurement(input: {
 export interface RoundDriverState {
   round: number;
   url: string;
+  finalUrl?: string;
+  clickedRowKey?: string | null;
   /**
    * Time origin this round's numbers are relative to: 0 for a cold round, the
    * in-page click timestamp for a warm one. Persisted because the 09-27 baseline
@@ -327,7 +336,7 @@ export interface RoundDriverState {
 }
 
 /** One measured round: the derived numbers plus the driver's own state. */
-export type RoundMeasurement = RoundComputation & RoundDriverState;
+export type RoundMeasurement = RoundComputation & RoundDriverState & Partial<RenderMeasurement> & { ssrSeed?: boolean; ssrSeedSource?: string };
 
 /**
  * The persistence projection of one round.
@@ -343,8 +352,18 @@ export function roundSummary(round: RoundMeasurement): ReportRoundSummary {
     navStartMs: round.navStartMs,
     clickT: round.clickT,
     readyMs: round.readyMs,
+    renderMs: round.renderMs,
+    renderSource: round.renderSource,
+    renderReason: round.renderReason,
+    windowResponseEndMs: round.windowResponseEndMs,
+    ssrSeed: round.ssrSeed,
+    ssrSeedSource: round.ssrSeedSource,
     readyTimeout: round.readyTimeout,
     firstRealMs: round.firstRealMs,
+    firstRealKeys: round.firstRealKeys,
+    observedFrames: round.observedFrames,
+    finalUrl: round.finalUrl,
+    clickedRowKey: round.clickedRowKey,
     anchorVisibleMs: round.anchorVisibleMs,
     anchorName: round.anchorName,
     anchorRule: round.anchorRule,

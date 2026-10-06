@@ -313,6 +313,7 @@ export function SessionDropdown({
     return (
       <div
         key={session.id}
+        data-perf-chat-session={session.id}
         aria-current={isCurrent ? "true" : undefined}
         tabIndex={0}
         onClick={() => {

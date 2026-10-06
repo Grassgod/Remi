@@ -31,10 +31,12 @@ import { useT } from "../../i18n";
 
 export function IssueSessionArchivesSection({
   issueId,
+  enabled = true,
   issueStatus,
   canManage,
 }: {
   issueId: string;
+  enabled?: boolean;
   issueStatus: IssueStatus;
   canManage: boolean;
 }) {
@@ -43,7 +45,7 @@ export function IssueSessionArchivesSection({
   const terminal = issueStatus === "done" || issueStatus === "cancelled";
   const archivesQuery = useQuery({
     ...issueSessionArchivesOptions(issueId),
-    enabled: canManage && Boolean(issueId),
+    enabled: enabled && canManage && Boolean(issueId),
     refetchInterval: (query) => sessionArchiveRefetchInterval(
       terminal,
       query.state.data?.latest?.status,

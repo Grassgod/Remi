@@ -35,6 +35,7 @@ import type { ChildStatusChange, ChildStatusChangeCollector, TriggerCommentRecov
 import { DelegationRoundTripLimitError, pairRoundTripLimit } from "./tasks-repo.js";
 import type { Envelope } from "@multiremi/contracts/inbox.js";
 import { envelopeSummary } from "../envelope-body.js";
+import { postgresJsonStringGroupingKey } from "../json-string-grouping-key.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -6004,34 +6005,42 @@ export class IssuesRepo {
     const attention = Number(totals?.attention ?? 0);
     let unread = Number(totals?.unread_plain ?? 0);
 
-    // Successful automation runs are the one type the UI merges by autopilot
-    // within a day bucket, so they are the only rows whose payload this route
-    // still reads. Ledger rows are already keyed by row id, so "one row per
-    // selection" is simply "every row" for this type; the filter keeps the
-    // bridge payload proportional to the completed runs, not to the inbox.
-    const runRows = this.ctx.db.query(
-      `SELECT read, created_at, details FROM multiremi_member_inbox_records
-       WHERE member_id = ?${workspaceFilter} AND archived = 0 AND type = 'autopilot_run_completed'
-       ORDER BY created_at DESC, id DESC`,
-    ).all(...params) as Row[];
-    const now = new Date();
-    const mergedSuccessfulRuns = new Map<string, { unread: boolean }>();
-    for (const row of runRows) {
-      const isUnread = Number(row.read ?? 0) === 0;
-      const details = parseJson<Record<string, unknown> | null>(row.details, null);
-      const autopilotId = typeof details?.autopilot_id === "string" ? details.autopilot_id : null;
-      // A completed run without an autopilot id has nothing to merge with, so it
-      // counts as its own unread row — the same branch the old loop took.
-      if (!autopilotId) {
-        if (isUnread) unread += 1;
-        continue;
-      }
-      const mergeKey = `${inboxDateGroup(String(row.created_at), now, timezoneOffsetMinutes)}:${autopilotId}`;
-      const merged = mergedSuccessfulRuns.get(mergeKey);
-      if (merged) merged.unread ||= isUnread;
-      else mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
-    }
-    unread += [...mergedSuccessfulRuns.values()].filter((entry) => entry.unread).length;
+    // Count merged runs in the database. Neither details nor one row per run
+    // crosses the synchronous bridge; the reply is a single scalar even when
+    // thousands of completed runs carry large transcripts in details.
+    const postgres = this.ctx.db.dialect === "postgres";
+    const safeDetails = "CASE WHEN json_valid(details) THEN details ELSE NULL END";
+    const autopilotId = postgres
+      ? postgresJsonStringGroupingKey("details", "autopilot_id")
+      : `(SELECT CASE WHEN entry.type = 'text' THEN entry.value ELSE NULL END
+          FROM json_each(${safeDetails}) entry WHERE entry.key = 'autopilot_id'
+          ORDER BY entry.id DESC LIMIT 1)`;
+    const timestamp = postgres
+      ? "CASE WHEN pg_input_is_valid(created_at, 'timestamp with time zone') THEN EXTRACT(EPOCH FROM created_at::timestamptz) END"
+      : "unixepoch(created_at, 'subsec')";
+    const boundaries = inboxDateGroupBoundaries(new Date(), timezoneOffsetMinutes);
+    // Materialize the narrow projection once: both aggregate branches consume
+    // it, and inlining would repeatedly parse the large details JSON per run.
+    const runs = this.ctx.db.query(
+      `WITH runs AS MATERIALIZED (
+         SELECT read, ${autopilotId} AS autopilot_id, ${timestamp} AS created_epoch
+         FROM multiremi_member_inbox_records
+         WHERE member_id = ?${workspaceFilter} AND archived = 0 AND type = 'autopilot_run_completed'
+       ), bucketed AS (
+         SELECT read, autopilot_id,
+                CASE WHEN created_epoch >= ? THEN 'today'
+                     WHEN created_epoch >= ? THEN 'yesterday'
+                     WHEN created_epoch >= ? THEN 'this_week' ELSE 'earlier' END AS date_bucket
+         FROM runs
+       ), merged AS (
+         SELECT date_bucket, autopilot_id, MAX(CASE WHEN read = 0 THEN 1 ELSE 0 END) AS unread
+         FROM bucketed WHERE autopilot_id IS NOT NULL AND autopilot_id != ''
+         GROUP BY date_bucket, autopilot_id
+       )
+       SELECT (SELECT COUNT(*) FROM merged WHERE unread = 1)
+            + (SELECT COUNT(*) FROM bucketed WHERE (autopilot_id IS NULL OR autopilot_id = '') AND read = 0) AS unread`,
+    ).get(...params, ...boundaries) as Row | null;
+    unread += Number(runs?.unread ?? 0);
     return { unread, attention };
   }
 
@@ -7562,26 +7571,14 @@ function normalizeIssueDate(value: string | null | undefined, field: string): st
   return date.toISOString();
 }
 
-function inboxDateGroup(
-  createdAt: string,
-  now: Date,
-  timezoneOffsetMinutes: number,
-): "today" | "yesterday" | "this_week" | "earlier" {
-  const localTimestamp = (value: Date) => value.getTime() - timezoneOffsetMinutes * 60_000;
-  const shiftedNow = new Date(localTimestamp(now));
-  const startToday = Date.UTC(
-    shiftedNow.getUTCFullYear(),
-    shiftedNow.getUTCMonth(),
-    shiftedNow.getUTCDate(),
-  );
-  const startYesterday = startToday - 86_400_000;
+/** UTC epoch boundaries for the UI's today/yesterday/Monday buckets. */
+function inboxDateGroupBoundaries(now: Date, timezoneOffsetMinutes: number): number[] {
+  const shiftedNow = new Date(now.getTime() - timezoneOffsetMinutes * 60_000);
+  const startToday = Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate());
   const daySinceMonday = (shiftedNow.getUTCDay() + 6) % 7;
-  const startWeek = startToday - daySinceMonday * 86_400_000;
-  const timestamp = localTimestamp(new Date(createdAt));
-  if (timestamp >= startToday) return "today";
-  if (timestamp >= startYesterday) return "yesterday";
-  if (timestamp >= startWeek) return "this_week";
-  return "earlier";
+  const offset = timezoneOffsetMinutes * 60_000;
+  return [startToday, startToday - 86_400_000, startToday - daySinceMonday * 86_400_000]
+    .map((boundary) => (boundary + offset) / 1000);
 }
 
 function encodeInboxCursor(row: Row): string {

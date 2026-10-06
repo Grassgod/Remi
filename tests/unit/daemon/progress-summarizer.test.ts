@@ -440,6 +440,62 @@ describe("buildSummaryPrompt", () => {
 });
 
 describe("TaskProgressSummarizer", () => {
+  for (const response of ["success", "http failure"] as const) {
+    it(`closes without a terminal request while a periodic ${response} settles`, async () => {
+      let requests = 0;
+      let cliRequests = 0;
+      let closed = 0;
+      let reports = 0;
+      let release!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      const summarizer = new TaskProgressSummarizer({
+        config: config({ transport: "auto", minNewMessages: 1, minIntervalMs: 0 }),
+        credentials: CREDENTIALS, taskTitle: "startup", taskPrompt: "pending", now: () => 10_000,
+        fetchImpl: async () => {
+          requests++;
+          await pending;
+          return response === "success" ? summaryResponse("existing call settled") : modelResponse({ error: "unavailable" }, 503);
+        },
+        whichImpl: () => "/fixture/claude",
+        spawnImpl: successfulCliSpawn("must not start", () => { cliRequests++; }),
+        report: async () => { reports++; }, onClosed: () => { closed++; },
+      });
+      summarizer.onMessages([textMessage()]);
+      expect(requests).toBe(1);
+      const finalization = summarizer.finalize("failed");
+      const closing = summarizer.closeWithoutSummary();
+      expect(closing).toBe(finalization);
+      expect(closed).toBe(0);
+      summarizer.onMessages([textMessage("must not trigger another request")]);
+      release();
+      await closing;
+      await summarizer.finalize("failed");
+      await summarizer.closeWithoutSummary();
+      expect(requests).toBe(1);
+      expect(cliRequests).toBe(0);
+      expect(reports).toBe(response === "success" ? 1 : 0);
+      expect(closed).toBe(1);
+    });
+  }
+
+  it("closes before an awaited CLI preparation can spawn or create usage evidence", async () => {
+    let requests = 0;
+    let usageEvents = 0;
+    let closed = 0;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli", minNewMessages: 1, minIntervalMs: 0 }),
+      taskTitle: "startup", taskPrompt: "pending", now: () => 10_000,
+      whichImpl: () => "/fixture/claude",
+      spawnImpl: successfulCliSpawn("must not start", () => { requests++; }),
+      report: async () => {}, onUsage: () => { usageEvents++; }, onClosed: () => { closed++; },
+    });
+    summarizer.onMessages([textMessage()]);
+    await summarizer.closeWithoutSummary();
+    expect(requests).toBe(0);
+    expect(usageEvents).toBe(0);
+    expect(closed).toBe(1);
+  });
+
   it("reports a periodic summary once the dual trigger fires", async () => {
     const reported: Array<{ result: ProgressSummaryResult; final: boolean }> = [];
     let now = 0;

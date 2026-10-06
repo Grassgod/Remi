@@ -37,7 +37,8 @@ export const CONTRACT = {
   /** Any measured viewport (used to detect whether the contract DOM is deployed). */
   scrollRoot: "[data-perf-scroll]",
   scrollRootIssueDetail: '[data-perf-scroll="issue-detail"]',
-  scrollRootChat: '[data-perf-scroll="chat"]',
+  // Chat now uses SessionLogList; retain the pre-migration marker as well.
+  scrollRootChat: '[data-perf-scroll="chat"], [data-perf-scroll="session-log"]',
   /**
    * The list pages' own readiness marker (MUL-472 item 5):
    * `frontend/packages/views/common/use-list-perf-marker.ts` writes
@@ -137,15 +138,15 @@ export function issueRowSelector(mode: SelectorMode, issueId: string): string {
 }
 
 /**
- * Inbox rows. Contract mode wraps the row in `data-perf-item="inbox"` and keeps
- * its inner link/button; legacy rows are the focusable role=button divs.
+ * Contract selects the notification root itself (the actual role=button).
+ * Descendant links/buttons can navigate elsewhere; legacy is comparison-only.
  */
 export function inboxRowSelector(mode: SelectorMode, inboxItemId?: string): string {
   if (mode === "legacy") return LEGACY.inboxRow;
   const row = `${CONTRACT.item("inbox")}${inboxItemId
     ? `[data-perf-key="${cssEscape(inboxItemId)}"]`
     : ""}`;
-  return `${row} a, ${row} [role="button"], ${row}`;
+  return row;
 }
 
 export interface AnchorPlan {
@@ -160,18 +161,21 @@ export interface AnchorPlan {
 /**
  * Terminal elements and the readiness rule for one page shape.
  *
- * Legacy has no stable hook for the agent stream or for chat, and the ruling
- * forbids substituting a class selector: `detail-running` therefore falls back
- * to the last timeline row, and chat to the MUL-367 heading rule.
+ * Running detail always requires the stream contract, including legacy samples.
+ * List/chat legacy heading rules remain available only for historical comparison.
  */
 export function anchorPlan(options: {
   mode: SelectorMode;
   shape: PageShape;
   targetCommentId?: string | null;
+  requireAgentStream?: boolean;
 }): AnchorPlan {
   const { mode, shape } = options;
 
   if (shape === "inbox") return { specs: [{ name: "target-message", selector: `[data-inbox-message="${cssEscape(options.targetCommentId ?? "")}"]`, pick: "first", visibility: "top-visible" }], rule: { kind: "anchor", anchors: ["target-message"] }, anchorRule: "canonical-inbox-message", anchorName: "target-message" };
+  if (shape === "list" && mode === "contract") {
+    return { specs: [], rule: { kind: "items" }, anchorRule: "real-list-row", anchorName: "none" };
+  }
   if (shape === "list" || (shape === "chat" && mode === "legacy")) {
     return { specs: [], rule: { kind: "heading" }, anchorRule: "h1-no-skeleton", anchorName: "none" };
   }
@@ -193,6 +197,9 @@ export function anchorPlan(options: {
   }
 
   if (mode === "legacy") {
+    if (options.requireAgentStream) {
+      return { specs: [{ name: "agent-stream", selector: CONTRACT.anchor("agent-stream"), pick: "first", visibility: "contained" }], rule: { kind: "anchor", anchors: ["agent-stream"] }, anchorRule: "agent-stream", anchorName: "agent-stream" };
+    }
     if (options.targetCommentId) {
       return {
         specs: [
@@ -234,17 +241,12 @@ export function anchorPlan(options: {
     };
   }
 
-  // Browsing an issue: the agent stream row (when an agent is running) or the
-  // newest comment. Both anchors are sampled; either one can satisfy the rule,
-  // and the report records which one did.
+  const name = options.requireAgentStream ? "agent-stream" : "latest-comment";
   return {
-    specs: [
-      { name: "agent-stream", selector: CONTRACT.anchor("agent-stream"), pick: "first", visibility: "contained" },
-      { name: "latest-comment", selector: CONTRACT.anchor("latest-comment"), pick: "first", visibility: "contained" },
-    ],
-    rule: { kind: "anchor", anchors: ["agent-stream", "latest-comment"] },
-    anchorRule: "agent-stream|latest-comment",
-    anchorName: "agent-stream",
+    specs: [{ name, selector: CONTRACT.anchor(name), pick: "first", visibility: "contained" }],
+    rule: { kind: "anchor", anchors: [name] },
+    anchorRule: name,
+    anchorName: name,
   };
 }
 
@@ -253,6 +255,7 @@ export function profileFor(options: {
   mode: SelectorMode;
   shape: PageShape;
   targetCommentId?: string | null;
+  requireAgentStream?: boolean;
 }): PerfProfileConfig {
   const plan = anchorPlan(options);
   const fallback = scrollRootFallbackSelector(options.mode, options.shape);
@@ -260,7 +263,9 @@ export function profileFor(options: {
     name: options.mode,
     scrollRoot: scrollRootSelector(options.mode, options.shape),
     ...(fallback ? { scrollRootFallback: fallback } : null),
-    items: options.shape === "inbox" ? CONTRACT.item("message") : options.shape === "list" ? "" : options.mode === "legacy" ? LEGACY.items : CONTRACT.items,
+    items: options.shape === "inbox" ? CONTRACT.item("message") : options.shape === "list"
+      ? options.mode === "contract" ? `${CONTRACT.listMarker} ${CONTRACT.items}` : ""
+      : options.mode === "legacy" ? LEGACY.items : CONTRACT.items,
     skeleton: options.mode === "legacy" ? LEGACY.skeleton : CONTRACT.skeleton,
     anchors: plan.specs,
     rule: plan.rule,
@@ -276,6 +281,7 @@ export function profilesFor(options: {
   modes: SelectorMode[];
   shape: PageShape;
   targetCommentId?: string | null;
+  requireAgentStream?: boolean;
 }): PerfProfileConfig[] {
   return options.modes.map((mode) => profileFor({ ...options, mode }));
 }

@@ -22,6 +22,8 @@ vi.mock("../api", () => ({ api: { getSessionLog: vi.fn() } }));
 const memoryEnv = { hasOpfs: false };
 import { useIssueLog } from "./use-issue-log";
 import { IssueLogReplica } from "./issue-log";
+import { api } from "../api";
+import type { HubStreamAckPayload } from "@multiremi/contracts/live-hub";
 
 const row = (seq: number) => SessionLogEntrySchema.parse({ session_id: "s", id: `r${seq}`, seq,
   kind: "system", revision: 1, body_md: `body ${seq}`, body_html: `<p>body ${seq}</p>`,
@@ -61,6 +63,36 @@ describe("useIssueLog visibility lifecycle", () => {
     } finally { hook.unmount(); }
   });
 
+  it.each([false, true])("fills a write between window read and subscribe through the actual onGap (ack=%s)", async withAck => {
+    const events: string[] = [];
+    const first = { ...row(1), kind: "message" };
+    const next = { ...row(2), kind: "message", body_md: "written behind the read barrier", metadata: { attachments: [], reactions: [{ emoji: "+1" }] } };
+    let stored = [first];
+    vi.mocked(api.getSessionLog).mockImplementation(async (_id, params = {}) => {
+      if (params.anchor === 0) return { ...initial.window, entries: [row(0)] };
+      events.push(`read:${stored.length}`);
+      return { ...initial.window, entries: [...stored], head_seq: stored.length };
+    });
+    socket.subscribeStream.mockImplementation((_stream, _id, handlers: {
+      onAck: (ack: HubStreamAckPayload) => void; onGap: () => void;
+    }, options: { fromSeq: number }) => {
+      // Deterministic barrier: the tail reader has returned; the wire has not subscribed yet.
+      expect(events).toEqual(["read:1"]);
+      expect(options.fromSeq).toBe(2);
+      if (withAck) handlers.onAck({ stream: "log", id: "s", first_seq: 0, head_seq: 1, log_version: 1, gap: null });
+      stored = [first, next]; events.push("write:2"); events.push("subscribe:2");
+      handlers.onGap(); events.push("onGap");
+      return { unsubscribe: vi.fn() };
+    });
+    const hook = renderHook(() => useIssueLog("s"));
+    try {
+      await waitFor(() => expect(hook.result.current.snapshot.entries.filter(entry => entry.id === next.id)).toHaveLength(1));
+      expect(events).toEqual(["read:1", "write:2", "subscribe:2", "read:2", "onGap"]);
+      expect(hook.result.current.snapshot.entries.find(entry => entry.id === next.id)).toEqual(next);
+      expect(hook.result.current.error).toBe(false);
+    } finally { hook.unmount(); vi.mocked(api.getSessionLog).mockReset(); }
+  });
+
   it("resubscribes after a hidden interval and retains the new stream when the old handle cleans up", async () => {
     const handles: Array<{ fromSeq: number; onFrames: (frames: unknown[]) => void; unsubscribe: ReturnType<typeof vi.fn> }> = [];
     socket.subscribeStream.mockImplementation((_stream: string, _id: string,
@@ -73,13 +105,13 @@ describe("useIssueLog visibility lifecycle", () => {
       initialProps: { enabled: true },
     });
     await waitFor(() => expect(handles).toHaveLength(1));
-    expect(handles[0]!.fromSeq).toBe(1);
+    expect(handles[0]!.fromSeq).toBe(2);
     hook.rerender({ enabled: false });
     await waitFor(() => expect(handles[0]!.unsubscribe).toHaveBeenCalled());
     expect(handles).toHaveLength(1);
     hook.rerender({ enabled: true });
     await waitFor(() => expect(handles).toHaveLength(2));
-    expect(handles[1]!.fromSeq).toBe(1);
+    expect(handles[1]!.fromSeq).toBe(2);
     expect(handles[1]!.unsubscribe).not.toHaveBeenCalled();
     await act(async () => {
       handles[1]!.onFrames([{ seq: 2, kind: "entry", payload: row(2) }]);
@@ -154,7 +186,7 @@ describe("useIssueLog visibility lifecycle", () => {
     await waitFor(() => expect(nextSubscribe).toHaveBeenCalledTimes(1));
 
     expect(firstUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(nextSubscribe.mock.calls[0]?.[3]).toEqual({ fromSeq: 1 });
+    expect(nextSubscribe.mock.calls[0]?.[3]).toEqual({ fromSeq: 2 });
     expect(nextUnsubscribe).not.toHaveBeenCalled();
     hook.unmount();
   });

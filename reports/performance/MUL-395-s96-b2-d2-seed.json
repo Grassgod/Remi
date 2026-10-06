@@ -1,0 +1,218 @@
+{
+  "fixture": "250 comments / default window head 84 / fixed S7 seed",
+  "modes": [
+    {
+      "ssrCookie": false,
+      "rounds": [
+        {
+          "key": "detail-parent",
+          "mode": "cold",
+          "ssrSeed": false,
+          "logSingleRowReads": 0,
+          "logRequests": [
+            {
+              "query": "before=30",
+              "startMs": 1519.7999992370605,
+              "responseEndMs": 1530.599998474121
+            },
+            {
+              "query": "anchor=0&before=1",
+              "startMs": 1520.8999977111816,
+              "responseEndMs": 1530.099998474121
+            }
+          ],
+          "state": null,
+          "readyMs": 1747.3999977111816,
+          "firstRealMs": 1680.1999969482422,
+          "anchorVisibleMs": null,
+          "jumps": [
+            {
+              "startMs": 1747.3999977111816,
+              "endMs": 1747.3999977111816,
+              "px": 16,
+              "scrollPx": 0,
+              "kind": "content",
+              "frames": 1
+            }
+          ],
+          "error": null
+        },
+        {
+          "key": "detail-parent",
+          "mode": "warm",
+          "ssrSeed": false,
+          "logSingleRowReads": 0,
+          "logRequests": [
+            {
+              "query": "before=30",
+              "startMs": 1721.8000030517578,
+              "responseEndMs": 1731.6000022888184
+            },
+            {
+              "query": "anchor=0&before=1",
+              "startMs": 1722.900001525879,
+              "responseEndMs": 1731.3000030517578
+            }
+          ],
+          "state": null,
+          "readyMs": 1897.6000022888184,
+          "firstRealMs": 1877,
+          "anchorVisibleMs": null,
+          "jumps": [
+            {
+              "startMs": 1897.6000022888184,
+              "endMs": 1897.6000022888184,
+              "px": 16,
+              "scrollPx": 0,
+              "kind": "content",
+              "frames": 1
+            }
+          ],
+          "error": null
+        },
+        {
+          "key": "detail-locate",
+          "mode": "cold",
+          "ssrSeed": false,
+          "logSingleRowReads": 0,
+          "logRequests": [
+            {
+              "query": "anchor=14&before=15&after=15",
+              "startMs": 1156.7999992370605,
+              "responseEndMs": 1165
+            },
+            {
+              "query": "anchor=0&before=1",
+              "startMs": 1157.2000007629395,
+              "responseEndMs": 1164.6000022888184
+            }
+          ],
+          "state": null,
+          "readyMs": 1421,
+          "firstRealMs": 1421,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-short",
+          "mode": "cold",
+          "ssrSeed": false,
+          "logSingleRowReads": 0,
+          "logRequests": [
+            {
+              "query": "before=30",
+              "startMs": 1122.5,
+              "responseEndMs": 1134.900001525879
+            },
+            {
+              "query": "anchor=0&before=1",
+              "startMs": 1123.7999992370605,
+              "responseEndMs": 1135.1000022888184
+            }
+          ],
+          "state": null,
+          "readyMs": 1284.7999992370605,
+          "firstRealMs": 1284.7999992370605,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-short",
+          "mode": "warm",
+          "ssrSeed": false,
+          "logSingleRowReads": 0,
+          "logRequests": [
+            {
+              "query": "before=30",
+              "startMs": 1698.5,
+              "responseEndMs": 1708.400001525879
+            },
+            {
+              "query": "anchor=0&before=1",
+              "startMs": 1699.6000022888184,
+              "responseEndMs": 1707.8000030517578
+            }
+          ],
+          "state": null,
+          "readyMs": 1873.5,
+          "firstRealMs": 1873.5,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        }
+      ]
+    },
+    {
+      "ssrCookie": true,
+      "rounds": [
+        {
+          "key": "detail-parent",
+          "mode": "cold",
+          "ssrSeed": true,
+          "logSingleRowReads": 0,
+          "logRequests": [],
+          "state": null,
+          "readyMs": 1565.7999992370605,
+          "firstRealMs": 1555.3999977111816,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-parent",
+          "mode": "warm",
+          "ssrSeed": true,
+          "logSingleRowReads": 0,
+          "logRequests": [],
+          "state": null,
+          "readyMs": 1584.599998474121,
+          "firstRealMs": 1584.599998474121,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-locate",
+          "mode": "cold",
+          "ssrSeed": true,
+          "logSingleRowReads": 0,
+          "logRequests": [],
+          "state": null,
+          "readyMs": 1353.900001525879,
+          "firstRealMs": 1310.2999992370605,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-short",
+          "mode": "cold",
+          "ssrSeed": true,
+          "logSingleRowReads": 0,
+          "logRequests": [],
+          "state": null,
+          "readyMs": 1015.0999984741211,
+          "firstRealMs": 1003.0999984741211,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        },
+        {
+          "key": "detail-short",
+          "mode": "warm",
+          "ssrSeed": true,
+          "logSingleRowReads": 0,
+          "logRequests": [],
+          "state": null,
+          "readyMs": 1586.099998474121,
+          "firstRealMs": 1586.099998474121,
+          "anchorVisibleMs": null,
+          "jumps": [],
+          "error": null
+        }
+      ]
+    }
+  ]
+}

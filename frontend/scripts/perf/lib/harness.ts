@@ -202,10 +202,14 @@ export async function mktContext(
   initScripts: unknown[] = [],
   /** Target origin, when the caller needs the dashboard's session cookie too. */
   origin?: string,
+  ssrCookie = false,
 ): Promise<BrowserContext> {
   const context = await browser.newContext({ viewport: VIEWPORT, ignoreHTTPSErrors: false });
   await seedContext(context, token, initScripts);
   if (origin) await seedSessionCookies(context, origin);
+  if (origin && ssrCookie) await context.addCookies([{
+    name: "multimira_auth", value: token, url: origin, httpOnly: true, sameSite: "Strict",
+  }]);
   return context;
 }
 

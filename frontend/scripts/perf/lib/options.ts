@@ -109,6 +109,7 @@ export interface Options {
   entryQuietMs: number | null;
   only: string | null;
   warmup: boolean;
+  ssrCookie: boolean;
 }
 
 export function defaultOptions(): Options {
@@ -132,6 +133,7 @@ export function defaultOptions(): Options {
     entryQuietMs: DEFAULT_ENTRY_QUIET_MS,
     only: null,
     warmup: false,
+    ssrCookie: true,
   };
 }
 
@@ -208,6 +210,12 @@ export function parseArgs(argv: string[]): Options {
       case "--only":
         opts.only = next();
         break;
+      case "--ssr-cookie":
+        opts.ssrCookie = true;
+        break;
+      case "--no-ssr-cookie":
+        opts.ssrCookie = false;
+        break;
       case "--warmup":
         opts.warmup = true;
         break;
@@ -256,6 +264,7 @@ export function usageLines(): string[] {
     "  --compare <baseline>   also emit a before/after comparison",
     "  --only <prefix>        run only scenarios whose key starts with this prefix",
     "  --warmup               visit every scenario once first (for a `next dev` server; not for baselines)",
+    "  --ssr-cookie            enable same-origin HttpOnly auth cookie (default on; --no-ssr-cookie for CSR)",
     "",
   ];
 }

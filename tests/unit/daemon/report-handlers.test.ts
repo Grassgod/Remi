@@ -46,6 +46,15 @@ function success(store: MultiremiStore, type: string) {
   expect(turn.reply_message_id).toBeString();
   return { ok: true, turn_id: turn.id, reply_message_id: turn.reply_message_id };
 }
+function usageState(db: Database, taskId: string) {
+  const tables = ["multiremi_usage_runs", "multiremi_usage_units", "multiremi_usage_unit_receipts",
+    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes", "multiremi_usage_legacy_audit",
+    "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources"];
+  return { task: db.query("SELECT * FROM multiremi_turn_attempts WHERE id=?").get(taskId) as Record<string, unknown>,
+    ledger: Object.fromEntries(tables.map(table => [table,
+      db.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
+        ? db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY rowid`).all(taskId) : []])) };
+}
 
 describe("v2 reports", () => {
   it("restores a queued sent offer and binds a modern run before authorizing execution", async () => {
@@ -115,11 +124,20 @@ describe("v2 reports", () => {
     } finally { write.mockRestore(); }
   });
 
-  it("absorbs identical progress and normalized usage subset replays without rewriting usage", async () => {
+  it("keeps normalized usage subset replays side-effect free after Store source verification", async () => {
     const { db, store, task, report } = fixture();
     store.startTask(task.id);
     const progress = spyOn(store, "reportProgress");
-    const usage = spyOn(db, "run");
+    const realUsage = store.reportTaskUsage.bind(store);
+    const changed: ReturnType<typeof usageState>[] = [];
+    const usage = spyOn(store, "reportTaskUsage").mockImplementation((id, entries) => {
+      const before = usageState(db, id);
+      const result = realUsage(id, entries);
+      const after = usageState(db, id);
+      if (before.task.usage === after.task.usage) expect(after).toEqual(before);
+      else changed.push(after);
+      return result;
+    });
     try {
       for (let index = 0; index < 2; index++) {
         expect(await report("task.progress", { summary: "first", step: 1, total: 2 })).toEqual({ ok: true });
@@ -132,7 +150,17 @@ describe("v2 reports", () => {
       for (const entries of [[a], [b], [a], [b], [{ ...a, input_tokens: 999 }, a]]) {
         expect(await report("task.usage", { usage: entries })).toEqual({ ok: true });
       }
-      expect(usage.mock.calls.filter(([sql]) => /^UPDATE multiremi_turn_attempts SET usage=/.test(sql))).toHaveLength(2);
+      // Source/canonical verification may run on every replay. Only the first
+      // two distinct aggregates may change persisted facts or revision receipts.
+      const settled = usageState(db, task.id);
+      for (let index = 0; index < 120; index++) {
+        expect(await report("task.usage", { usage: index % 2 ? [a] : [b] })).toEqual({ ok: true });
+      }
+      expect(usageState(db, task.id)).toEqual(settled);
+      expect(changed).toHaveLength(2);
+      expect(db.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 2 });
+      expect(db.query(`SELECT COUNT(*) AS units,SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens,MAX(revision) AS revision
+        FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'`).get(task.id)).toEqual({ units: 2, input_tokens: 12, output_tokens: 5, revision: 2 });
       expect(store.getTask(task.id)?.usage.map(entry => [entry.model, entry.inputTokens, entry.outputTokens])).toEqual([
         ["a", 5, 2], ["b", 7, 3],
       ]);

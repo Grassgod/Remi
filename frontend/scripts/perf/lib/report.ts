@@ -11,6 +11,7 @@
  */
 
 import type { PerfApiEntry, PerfApiPathStats, PerfScenarioStats, PerfSelectorEquivalence } from "./jump-recorder";
+import type { RenderMeasurement, renderStatsBySource } from "./render-measurement";
 
 /**
  * The artifact schema version.
@@ -24,7 +25,9 @@ import type { PerfApiEntry, PerfApiPathStats, PerfScenarioStats, PerfSelectorEqu
  */
 export const REPORT_SCHEMA = 3;
 
-export interface ReportRoundSummary {
+export interface ReportRoundSummary extends Partial<RenderMeasurement> {
+  ssrSeed?: boolean;
+  ssrSeedSource?: string;
   round: number;
   /**
    * Time origin this round's numbers are relative to: 0 for cold rounds, the
@@ -38,14 +41,18 @@ export interface ReportRoundSummary {
   readyMs: number | null;
   readyTimeout: boolean;
   firstRealMs: number | null;
+  firstRealKeys?: string[];
+  observedFrames?: number;
+  finalUrl?: string;
+  clickedRowKey?: string | null;
   anchorVisibleMs: number | null;
   anchorName: string | null;
   anchorRule: string;
   appReadyMs: number | null;
   appReadyForced: boolean;
   dataFreshAtReady: boolean;
-  jumpCount: number;
-  jumpPx: number;
+  jumpCount: number | null;
+  jumpPx: number | null;
   /** Per-jump detail: a bare count cannot say where or in which direction. */
   jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
   layoutShiftCount: number;
@@ -150,6 +157,7 @@ export interface ReportScenario {
 
 /** `stats` plus the per-path aggregate that only the report needs to carry. */
 export interface ReportScenarioStats extends PerfScenarioStats {
+  bySource?: ReturnType<typeof renderStatsBySource>;
   /**
    * Per-path aggregate over the scenario's rounds. The acceptance rule is stated
    * per path ("每个 path 的 total p95 ≤ 200ms; gap p50 ≤ 80ms" — plan §9), so a
@@ -258,7 +266,7 @@ export function buildMarkdown(report: {
     const stats = scenario.stats;
     const status = scenario.skipped ? `skipped: ${scenario.skipReason ?? "unknown"}` : "measured";
     lines.push(
-      `| ${scenario.key} | ${scenario.mode} | ${status} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "-"} | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
+      `| ${scenario.key} | ${scenario.mode} | ${status} | ${scenario.target.identifier}${scenario.target.note ? `（${scenario.target.note}）` : ""} | ${scenario.selectorMode} | ${scenario.anchorRule} | ${stats.n} | ${fmtMs(stats.readyP50)} | ${fmtMs(stats.readyP75)} | ${fmtMs(stats.readyP95)} | ${fmtMs(stats.readyMax)} | ${stats.timeouts} | ${fmtMs(stats.firstRealP50)} | ${stats.jumpsMax ?? "未观测"}（${stats.jumpObserved ?? scenario.rounds.filter(r => r.firstRealMs !== null).length}/${stats.n}） | ${fmtMs(stats.jumpPxMax)} | ${stats.serialDepthMax ?? "-"} | ${fmtMs(stats.apiFirstScreenP50)} |`,
     );
   }
   lines.push("");
@@ -286,10 +294,19 @@ export function buildMarkdown(report: {
         ? `${rect.top}/${rect.bottom}/${rect.height}/${rect.rootHeight}`
         : "-";
       lines.push(
-        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.inboxInjected ? "注入" : "-"} | ${round.inboxPageRequestsBeforeStub ?? "-"} | ${(round.clickedRowText ?? "-").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 60)} | ${round.error ?? "-"} |`,
+        `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${fmtMs(round.readyMs)}${round.readyTimeout ? " ⚠" : ""} | ${fmtMs(round.firstRealMs)} | ${fmtMs(round.anchorVisibleMs)} | ${round.anchorName ?? "-"} | ${rectText} | ${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""} | ${round.jumpCount ?? "未观测"} | ${fmtMs(round.jumpPx)} | ${round.cls} | ${fmtMs(round.lcpMs)} | ${fmtMs(round.slowestServerTotalMs)} | ${round.chunksLoaded} | ${fmtBytes(round.chunkBytes)} | ${round.serialDepth ?? "-"} | ${round.apiFirstScreen}/${round.apiCallsTotal} | ${round.blockedWrites} | ${round.stubbedWrites} | ${fmtMs(round.urlCommitMs)} | ${round.inboxInjected ? "注入" : "-"} | ${round.inboxPageRequestsBeforeStub ?? "-"} | ${(round.clickedRowText ?? "-").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 60)} | ${round.error ?? "-"} |`,
       );
     }
   }
+  lines.push("");
+  lines.push("## 日志渲染与 SSR/CSR（按实际 seed 分组）", "", "SSR seed 没有浏览器窗口 responseEnd，renderMs 记未观测；强制揭示、缺窗口和非日志页均保留原因。", "",
+    "| 场景 | 模式 | 轮 | 实际 seed / 来源 | renderMs | 窗口 responseEnd | 渲染来源 / 缺观测原因 |",
+    "| --- | --- | ---: | --- | ---: | ---: | --- |");
+  for (const scenario of report.scenarios) for (const round of scenario.rounds) lines.push(
+    `| ${scenario.key} | ${scenario.mode} | ${round.round} | ${round.ssrSeed ?? "未知"} / ${round.ssrSeedSource ?? "未知"} | ${fmtMs(round.renderMs ?? null)} | ${fmtMs(round.windowResponseEndMs ?? null)} | ${round.renderSource ?? "旧数据"} / ${round.renderReason ?? "-"} |`);
+  lines.push("", "| 场景 | 模式 | 来源 | n | render 已观测 | render p50 / p95 / max | ready p50 / p95 |", "| --- | --- | --- | ---: | ---: | --- | --- |");
+  for (const scenario of report.scenarios) for (const group of scenario.stats.bySource ?? []) lines.push(
+    `| ${scenario.key} | ${scenario.mode} | ${group.source} | ${group.n} | ${group.renderObserved} | ${fmtMs(group.renderP50)} / ${fmtMs(group.renderP95)} / ${fmtMs(group.renderMax)} | ${fmtMs(group.readyP50)} / ${fmtMs(group.readyP95)} |`);
   lines.push("");
   lines.push("## 首屏 API 表（按 path 聚合，跨本场景各轮）");
   lines.push("");
@@ -426,7 +443,7 @@ export function buildHtml(report: {
       <td class="num">${fmtMs(stats.readyMax)}</td>
       <td class="num">${stats.timeouts}</td>
       <td class="num">${fmtMs(stats.firstRealP50)}</td>
-      <td class="num${bad ? " bad" : " good"}">${stats.jumpsMax ?? "-"}</td>
+      <td class="num${bad ? " bad" : stats.jumpsMax === null ? "" : " good"}">${stats.jumpsMax ?? "未观测"}（${stats.jumpObserved ?? scenario.rounds.filter(r => r.firstRealMs !== null).length}/${stats.n}）</td>
       <td class="num">${fmtMs(stats.jumpPxMax)}</td>
       <td class="num">${stats.serialDepthMax ?? "-"}</td>
       <td class="num">${fmtMs(stats.apiFirstScreenP50)}</td>
@@ -518,7 +535,7 @@ ${body}
         ? `${round.anchorRectAtReady.top}/${round.anchorRectAtReady.bottom}/${round.anchorRectAtReady.height}/${round.anchorRectAtReady.rootHeight}`
         : "-"}</td>
       <td class="num">${fmtMs(round.appReadyMs)}${round.appReadyForced ? " (forced)" : ""}</td>
-      <td class="num${round.jumpCount > 0 ? " bad" : " good"}">${round.jumpCount}</td>
+      <td class="num${(round.jumpCount ?? 0) > 0 ? " bad" : round.jumpCount === null ? "" : " good"}">${round.jumpCount ?? "未观测"}</td>
       <td class="num">${fmtMs(round.jumpPx)}</td>
       <td class="num">${round.cls}</td>
       <td class="num">${fmtMs(round.lcpMs)}</td>
@@ -581,7 +598,7 @@ ${body}
         return `<tr class="withheld">
       <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
       <td><code>${esc(row.path)}</code></td>
-      <td class="muted" colspan="8">不可比（schema 2 warm 已作废）</td>
+      <td class="muted" colspan="8">${esc(withheldLabel(row.notComparableReason))}</td>
     </tr>`;
       }
       return `<tr>
@@ -607,7 +624,7 @@ ${body}
         return `<tr class="withheld">
       <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
       <td>${esc(row.beforeMode ?? "-")} → ${esc(row.afterMode ?? "-")}</td>
-      <td class="muted" colspan="7">不可比（schema 2 warm 已作废）</td>
+      <td class="muted" colspan="8">${esc(withheldLabel(row.notComparableReason))}</td>
     </tr>`;
       }
       return `<tr>
@@ -615,13 +632,17 @@ ${body}
       <td>${esc(row.beforeMode ?? "-")} → ${esc(row.afterMode ?? "-")}</td>
       <td class="num">${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)}</td><td class="num">${delta(row.beforeReadyP75, row.afterReadyP75)}</td>
       <td class="num">${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)}</td><td class="num">${delta(row.beforeReadyP95, row.afterReadyP95)}</td>
-      <td class="num">${row.beforeJumpsMax ?? "-"} → ${row.afterJumpsMax ?? "-"}</td>
+      <td class="num">${row.beforeJumpsMax ?? "未观测"} → ${row.afterJumpsMax ?? "未观测"}</td>
       <td class="num">${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"}</td>
-      <td class="num">${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)}</td>
+      <td class="num">${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)}</td><td class="num">${fmtMs(row.beforeRenderP95 ?? null)} → ${fmtMs(row.afterRenderP95 ?? null)}</td>
     </tr>`;
     })
     .join("\n");
 
+  const renderRows = report.scenarios.flatMap(scenario => scenario.rounds.map(round =>
+    `<tr><td>${esc(scenario.key)} / ${esc(scenario.mode)} / ${round.round}</td><td>${round.ssrSeed ?? "未知"} / ${esc(round.ssrSeedSource ?? "未知")}</td><td>${fmtMs(round.renderMs ?? null)}</td><td>${fmtMs(round.windowResponseEndMs ?? null)}</td><td>${esc(round.renderSource ?? "旧数据")} / ${esc(round.renderReason ?? "-")}</td></tr>`)).join("");
+  const sourceRows = report.scenarios.flatMap(scenario => (scenario.stats.bySource ?? []).map(group =>
+    `<tr><td>${esc(scenario.key)} / ${esc(scenario.mode)} / ${group.source}</td><td>${group.n}</td><td>${group.renderObserved}</td><td>${fmtMs(group.renderP50)} / ${fmtMs(group.renderP95)} / ${fmtMs(group.renderMax)}</td><td>${fmtMs(group.readyP50)} / ${fmtMs(group.readyP95)}</td></tr>`)).join("");
   return `<!doctype html>
 <html lang="zh-Hans">
 <head>
@@ -691,9 +712,12 @@ ${jumpRows ? `<h2>跳动明细</h2>\n<div class="tablewrap"><table>\n<thead><tr>
 ${stubbedRows ? `<h2>被允许表接管的写请求（浏览器内 fulfill）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">次数</th></tr></thead>\n<tbody>\n${stubbedRows}\n</tbody>\n</table></div>` : ""}
 ${blockedRows ? `<h2>被拦截的写请求（全部为 abort）</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>页面</th><th>方法</th><th>path 模式</th><th class="num">尝试</th></tr></thead>\n<tbody>\n${blockedRows}\n</tbody>\n</table></div>` : ""}
 ${comparePathRows ? `<h2>与基线对比：按 path</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>path</th><th class="num">n</th><th class="num">total p95</th><th class="num">Δ</th><th class="num">gap p50</th><th class="num">Δ</th><th class="num">dbq max</th></tr></thead>\n<tbody>\n${comparePathRows}\n</tbody>\n</table></div>` : ""}
-${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>选择器</th><th class="num">ready p75</th><th class="num">Δ</th><th class="num">ready p95</th><th class="num">Δ</th><th class="num">jumps max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>\n<tbody>\n${compareRows}\n</tbody>\n</table></div>` : ""}
+${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thead><tr><th>场景</th><th>模式</th><th>选择器</th><th class="num">ready p75</th><th class="num">Δ</th><th class="num">ready p95</th><th class="num">Δ</th><th class="num">jumps max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th><th class="num">render p95（CSR）</th></tr></thead>\n<tbody>\n${compareRows}\n</tbody>\n</table></div>` : ""}
 <footer>由 frontend/scripts/perf/page-speed.ts 生成。自包含 HTML：无外链资源、无存储、无父窗口访问。</footer>
 </main>
+<h2>日志渲染与实际 SSR/CSR</h2><p>SSR seed 没有浏览器窗口 responseEnd，renderMs 记未观测；缺观测和 forced 揭示保留原因。SSR/CSR 分组统计，混合来源不汇总 ready 分位数。</p>
+<div class="tablewrap"><table><thead><tr><th>场景 / 模式 / 轮</th><th>实际 seed / 来源</th><th>renderMs</th><th>window responseEnd</th><th>渲染来源 / 原因</th></tr></thead><tbody>${renderRows}</tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>场景 / 模式 / 来源</th><th>n</th><th>render 已观测</th><th>render p50 / p95 / max</th><th>ready p50 / p95</th></tr></thead><tbody>${sourceRows}</tbody></table></div>
 </body>
 </html>
 `;
@@ -714,6 +738,8 @@ export interface CompareRow {
   notComparableReason: string | null;
   beforeMode: string | null;
   afterMode: string | null;
+  beforeRenderP95?: number | null;
+  afterRenderP95?: number | null;
   beforeReadyP75: number | null;
   afterReadyP75: number | null;
   beforeReadyP95: number | null;
@@ -748,6 +774,7 @@ export interface CompareWarning {
 
 /** One `key::mode::path` pairing in the per-path comparison table. */
 export interface ComparePathRow {
+  notComparableReason?: string | null;
   key: string;
   mode: string;
   path: string;
@@ -783,8 +810,8 @@ export interface ComparePathRow {
  * a request.
  */
 export function buildCompareByPath(
-  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number } },
-  current: { scenarios: ReportScenario[]; meta?: { schema?: number } },
+  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number; ssrCookie?: boolean } },
+  current: { scenarios: ReportScenario[]; meta?: { schema?: number; ssrCookie?: boolean } },
 ): ComparePathRow[] {
   const bucket = (scenarios: ReportScenario[]): Map<string, PerfApiPathStats> => {
     const out = new Map<string, PerfApiPathStats>();
@@ -809,13 +836,15 @@ export function buildCompareByPath(
     // unbounded first-screen set, so neither their p95s nor their counts are
     // subtractable from a schema 3 warm path. (A schema 2 count also included the
     // entry page's trailing requests, which is what the lower bound removed.)
-    const withhold = compareIncomparability(baseline, mode) !== null;
+    const reason = compareIncomparability(baseline, mode) ?? sourceComparisonReason(baseline, current, scenarioKey, mode);
+    const withhold = reason !== null;
     return {
       key: scenarioKey,
       mode,
       path,
       method: a?.method ?? b?.method ?? method,
       comparable: !withhold,
+      notComparableReason: reason,
       beforeCount: withhold ? null : a?.count ?? null,
       afterCount: withhold ? null : b?.count ?? null,
       beforeTotalP50: withhold ? null : a?.totalP50 ?? null,
@@ -837,6 +866,23 @@ export function buildCompareByPath(
     || left.method.localeCompare(right.method));
 }
 
+function sourceComparisonReason(
+  baseline: { scenarios: ReportScenario[]; meta?: { ssrCookie?: boolean } },
+  current: { scenarios: ReportScenario[]; meta?: { ssrCookie?: boolean } }, key: string, mode: string,
+): string | null {
+  if (baseline.meta?.ssrCookie !== undefined && current.meta?.ssrCookie !== undefined
+      && baseline.meta.ssrCookie !== current.meta.ssrCookie) return "SSR Cookie 开关不同，来源不可比";
+  const kinds = (report: typeof baseline): string | null => {
+    const rounds = report.scenarios.find(row => row.key === key && row.mode === mode)?.rounds;
+    if (!rounds?.length || rounds.some(round => round.ssrSeed === undefined)) return null;
+    return [...new Set(rounds.map(round => round.ssrSeed ? "SSR" : "CSR"))].sort().join("+");
+  };
+  const before = kinds(baseline), after = kinds(current);
+  return before !== after || before?.includes("+") || after?.includes("+")
+    ? "实际 SSR/CSR 来源不同、混合或一侧未观测，来源不可比" : null;
+}
+const withheldLabel = (reason?: string | null) => reason?.includes("来源不可比") ? "不可比（SSR/CSR 来源）" : "不可比（schema 2 warm 已作废）";
+
 /**
  * The reason a comparison is impossible, or null when the two sides measure the
  * same quantity.
@@ -849,7 +895,7 @@ export function buildCompareByPath(
  * Cold rows share the document origin on both sides, so they stay comparable.
  */
 export function compareIncomparability(
-  baseline: { meta?: { schema?: number } },
+  baseline: { meta?: { schema?: number; ssrCookie?: boolean } },
   mode: string,
 ): string | null {
   if (mode !== "warm") return null;
@@ -872,8 +918,8 @@ export function compareIncomparability(
  * rows are emitted without values and only warn.
  */
 export function buildCompare(
-  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number } },
-  current: { scenarios: ReportScenario[]; meta?: { schema?: number } },
+  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number; ssrCookie?: boolean } },
+  current: { scenarios: ReportScenario[]; meta?: { schema?: number; ssrCookie?: boolean } },
 ): { rows: CompareRow[]; pathRows: ComparePathRow[]; warnings: CompareWarning[]; markdown: string } {
   const pairKey = (scenario: { key: string; mode: string }): string => `${scenario.key}::${scenario.mode}`;
   const before = new Map(baseline.scenarios.map((scenario) => [pairKey(scenario), scenario]));
@@ -892,7 +938,7 @@ export function buildCompare(
     // invalidated time base, and its current numbers would read as the other half
     // of a comparison that cannot be made. Those numbers are in the scenario's own
     // `rounds[]`/`stats` (schema 3, same run) for anyone who wants them alone.
-    const incomparableReason = compareIncomparability(baseline, mode);
+    const incomparableReason = compareIncomparability(baseline, mode) ?? sourceComparisonReason(baseline, current, scenarioKey, mode);
     // Withheld means *every* number is null, not "the renderer remembers to hide
     // it": a later consumer reading `batch.rows` from the JSON gets nothing to
     // subtract either.
@@ -904,12 +950,14 @@ export function buildCompare(
       notComparableReason: incomparableReason,
       beforeMode: a?.selectorMode ?? null,
       afterMode: b?.selectorMode ?? null,
+      beforeRenderP95: withhold ? null : a?.stats.bySource?.find(group => group.source === "CSR")?.renderP95 ?? null,
+      afterRenderP95: withhold ? null : b?.stats.bySource?.find(group => group.source === "CSR")?.renderP95 ?? null,
       beforeReadyP75: withhold ? null : a?.stats.readyP75 ?? null,
       afterReadyP75: withhold ? null : b?.stats.readyP75 ?? null,
       beforeReadyP95: withhold ? null : a?.stats.readyP95 ?? null,
       afterReadyP95: withhold ? null : b?.stats.readyP95 ?? null,
-      beforeJumpsMax: withhold ? null : a?.stats.jumpsMax ?? null,
-      afterJumpsMax: withhold ? null : b?.stats.jumpsMax ?? null,
+      beforeJumpsMax: withhold || !a?.rounds.some(r => r.firstRealMs !== null) ? null : a?.stats.jumpsMax ?? null,
+      afterJumpsMax: withhold || !b?.rounds.some(r => r.firstRealMs !== null) ? null : b?.stats.jumpsMax ?? null,
       beforeSerialDepthMax: withhold ? null : a?.stats.serialDepthMax ?? null,
       afterSerialDepthMax: withhold ? null : b?.stats.serialDepthMax ?? null,
       beforeApiFirstScreenP50: withhold ? null : a?.stats.apiFirstScreenP50 ?? null,
@@ -955,22 +1003,22 @@ export function buildCompare(
   }
 
   const lines: string[] = [];
-  lines.push("| 场景 | 模式 | 选择器 | ready p75 | 差值 | ready p95 | 差值 | jumps max | 串行深度 | 首屏 API p50 |");
-  lines.push("| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |");
+  lines.push("| 场景 | 模式 | 选择器 | ready p75 | 差值 | ready p95 | 差值 | jumps max | 串行深度 | 首屏 API p50 | render p95（CSR） |");
+  lines.push("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |");
   for (const row of rows) {
     // A withheld row renders as one phrase across its numeric columns. There is no
     // "-3500.0" to misread: the row's values are null upstream, and this branch
     // never formats a number for it.
     if (!row.comparable) {
       lines.push(
-        `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | 不可比（schema 2 warm 已作废） | - | 不可比（schema 2 warm 已作废） | - | - | - | - |`,
+        `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | ${withheldLabel(row.notComparableReason)} | - | ${withheldLabel(row.notComparableReason)} | - | - | - | - | - |`,
       );
       continue;
     }
     const delta = (beforeValue: number | null, afterValue: number | null): string =>
       beforeValue === null || afterValue === null ? "-" : `${afterValue - beforeValue > 0 ? "+" : ""}${(afterValue - beforeValue).toFixed(1)}`;
     lines.push(
-      `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | ${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)} | ${delta(row.beforeReadyP75, row.afterReadyP75)} | ${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)} | ${delta(row.beforeReadyP95, row.afterReadyP95)} | ${row.beforeJumpsMax ?? "-"} → ${row.afterJumpsMax ?? "-"} | ${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"} | ${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)} |`,
+      `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | ${fmtMs(row.beforeReadyP75)} → ${fmtMs(row.afterReadyP75)} | ${delta(row.beforeReadyP75, row.afterReadyP75)} | ${fmtMs(row.beforeReadyP95)} → ${fmtMs(row.afterReadyP95)} | ${delta(row.beforeReadyP95, row.afterReadyP95)} | ${row.beforeJumpsMax ?? "未观测"} → ${row.afterJumpsMax ?? "未观测"} | ${row.beforeSerialDepthMax ?? "-"} → ${row.afterSerialDepthMax ?? "-"} | ${fmtMs(row.beforeApiFirstScreenP50)} → ${fmtMs(row.afterApiFirstScreenP50)} | ${fmtMs(row.beforeRenderP95 ?? null)} → ${fmtMs(row.afterRenderP95 ?? null)} |`,
     );
   }
   if (warnings.length > 0) {
@@ -1002,7 +1050,7 @@ export function buildCompare(
         // page's trailing requests, so "5 → 3" would put a corrected number next
         // to an uncorrected one.
         lines.push(
-          `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | 不可比（schema 2 warm 已作废） | - | - | - | - | - | - |`,
+          `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | ${withheldLabel(row.notComparableReason)} | - | - | - | - | - | - |`,
         );
         continue;
       }

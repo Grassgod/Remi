@@ -42,6 +42,8 @@ export interface ZeroJumpFixture {
   decisionActivityIssueId: string;
   parentOwnerAgentId: string;
   replacementAgentId: string;
+  xlongIssueId: string;
+  htmlAttachmentId: string;
   longIssueId: string;
   longDefaultSessionId: string;
   longSessionIds: string[];
@@ -160,6 +162,11 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
   });
   store.createIssue({ title: "Blocked child", status: "blocked", parentIssueId: parentIssue.id });
   const waitingChild = store.createIssue({ title: "Waiting child", status: "backlog", parentIssueId: parentIssue.id });
+  const waitingChildSession = store.getOrCreateDefaultIssueSession(waitingChild.id, user.id);
+  store.createIssueComment(waitingChild.id, {
+    issueSessionId: waitingChildSession.id, authorType: "member", authorId: user.id,
+    body: "A child Issue with a parent and a real message anchor.",
+  });
   const activeChild = store.createIssue({
     title: "Active child",
     status: "in_progress",
@@ -370,6 +377,18 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     ?? store.getLatestActiveIssueSession(longIssue.id)?.id
     ?? defaultSession.id;
 
+  // A separate ≥200-row session exercises the HTML preview without changing
+  // the long issue used by D0's before/after profile.
+  const xlongIssue = store.createIssue({ id: "iss_zerojump_xlong", title: "Zero-jump extra long HTML issue", description: "200 comments in one session", status: "in_progress" });
+  const xlongSession = store.getOrCreateDefaultIssueSession(xlongIssue.id, user.id);
+  const htmlAttachment = store.createAttachment({ id: "att_zerojump_html", workspaceId: workspace.id, issueId: xlongIssue.id,
+    uploaderType: "member", uploaderId: user.id, filename: "zero-jump.html", url: "/api/attachments/att_zerojump_html/content",
+    contentType: "text/html", sizeBytes: 45000 });
+  for (let index = 0; index < 200; index++) store.createIssueComment(xlongIssue.id, {
+    issueSessionId: xlongSession.id, authorType: "member", authorId: user.id, body: filler("extra long", index, 6),
+    ...(index === 199 ? { attachmentIds: [htmlAttachment.id] } : {}),
+  });
+
   // ── running task: the agent stream row's reason to exist ──────────────────
   const runningIssue = store.createIssue({
     id: "iss_zerojump_running",
@@ -430,6 +449,8 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     decisionActivityIssueId: decisionActivityIssue.id,
     parentOwnerAgentId: parentOwner.id,
     replacementAgentId: replacementAgent.id,
+    xlongIssueId: xlongIssue.id,
+    htmlAttachmentId: htmlAttachment.id,
     longIssueId: longIssue.id,
     longDefaultSessionId: defaultSession.id,
     longSessionIds,

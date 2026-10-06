@@ -23,6 +23,8 @@ bun run test tests/arch/
 
 API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api-issues.test.ts)的进程内 `app.request()`，共享夹具在 [helpers.ts](tests/unit/multiremi/helpers.ts)。需要真实服务的测试应在自身入口明确配置和隔离方式，不能把本地凭据或生产数据作为普通单测前提。
 
+[公开参考价格 PG/CLI 回归](tests/unit/scripts/usage-reference-prices.test.ts)沿用 CI 的 `MULTIREMI_TEST_POSTGRES_URL`；可用 `MULTIREMI_TEST_REFERENCE_DATABASE_URL` 单独覆盖。所选测试连接必须具有创建测试库的权限，两条用例各创建随机命名的独立数据库，所有并发 writer 与 CLI 只连接该库，完成后仅删除本次成功创建的数据库。不要指向生产；连接或清理失败会使测试失败，不会跳过或强制删除公共表。
+
 ## 真实服务与手动验证
 
 | 根脚本 | 验证内容 | 运行前准备 |

@@ -167,7 +167,7 @@ describe("Issue log presentation over C7", () => {
     const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe, unsubscribe: vi.fn(),
       env: { hasOpfs: false, locks: {} as LockManager } });
     try {
-      expect(subscribe).toHaveBeenCalledWith("s", 1);
+      expect(subscribe).toHaveBeenCalledWith("s", 82);
       expect(replica.getSnapshot("s")).toMatchObject({ ready: true, fresh: true });
       expect(replica.getSnapshot("s").entries.map(entry => entry.id)).toEqual(["r0", "r80", "r81"]);
     } finally { cleanup(); }
@@ -279,8 +279,8 @@ describe("Issue log presentation over C7", () => {
 
   it("hydrates live message metadata before forwarding ordered frames to C7", async () => {
     mocks.read.mockReset().mockImplementation(async (_sessionId: string, input: { anchor: number }) => {
-      if (input.anchor === 10) await new Promise(resolve => setTimeout(resolve, 10));
-      return windowOf([row(input.anchor)]);
+      if (input.anchor === 9) await new Promise(resolve => setTimeout(resolve, 10));
+      return windowOf([row(input.anchor + 1)]);
     });
     const replica = new IssueLogReplica("s");
     const delivered: number[][] = [];
@@ -294,7 +294,7 @@ describe("Issue log presentation over C7", () => {
     const frame = (seq: number) => ({ seq, kind: "entry" as const,
       payload: { session_id: "s", id: `r${seq}`, seq, kind: "message", metadata: {} } });
     await Promise.all([replica.hydratedFrames("s", [frame(10)]), replica.hydratedFrames("s", [frame(11)])]);
-    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 10, before: 1, after: 0 });
+    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 9, after: 1 });
     expect(delivered).toEqual([[10], [11]]);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
@@ -76,27 +76,33 @@ function useResultTitle(result: SessionResult): string {
   return result.title.trim() || t(($) => $.detail.result_untitled);
 }
 
-export function useVisibleResults(issueId: string): SessionResult[] {
-  const { data: results = [] } = useQuery(issueSessionResultsOptions(issueId));
-  const { data: workspace, isPending: workspacePending } = useQuery(issueWorkspaceOptions(issueId));
-  if (workspacePending) return [];
-  if (!workspace) return results;
-  return results.filter((result) => {
+const EMPTY_RESULTS: SessionResult[] = [];
+
+export function useVisibleResults(issueId: string, enabled = true): SessionResult[] {
+  const { data: results = EMPTY_RESULTS } = useQuery({ ...issueSessionResultsOptions(issueId), enabled });
+  const { data: workspace, isPending: workspacePending } = useQuery({ ...issueWorkspaceOptions(issueId), enabled });
+  return useMemo(() => {
+    if (workspacePending) return EMPTY_RESULTS;
+    if (!workspace) return results;
+    return results.filter((result) => {
     const worktrees = result.metadata?.worktrees;
     return sessionResultKind(result) !== "branch" || !Array.isArray(worktrees) || worktrees.length === 0;
-  });
+    });
+  }, [results, workspace, workspacePending]);
 }
 
 export function IssueKeyResultsSection({
   issueId,
   sessions,
+  enabled = true,
 }: {
   issueId: string;
   sessions: IssueSession[];
+  enabled?: boolean;
 }) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
-  const results = useVisibleResults(issueId);
+  const results = useVisibleResults(issueId, enabled);
 
   if (results.length === 0) return null;
 

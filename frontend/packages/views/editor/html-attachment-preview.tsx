@@ -23,9 +23,13 @@
  * back to AttachmentCard chrome — standalone attachment lists filter URLs
  * already inlined in the markdown body, so a silent unmount would remove the
  * user's only Preview/Download entry point. Instead the body collapses to an
- * 80px placeholder and the toolbar pins itself open with all actions enabled.
+ * 80px placeholder outside the log; inside a revealed log the reserved height
+ * stays fixed. The toolbar pins itself open with all actions enabled.
  */
 
+import { useRef, useLayoutEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useDeferredContent } from "../common/deferred-content-context";
 import { Download, ExternalLink, Maximize2, Trash2 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { paths, useWorkspaceSlug } from "@multiremi/core/paths";
@@ -57,13 +61,28 @@ export function HtmlAttachmentPreview({
   // toolbar can pin itself open during error. Re-subscribing is free — the
   // useQuery dedupe means no extra fetch.
   const query = useAttachmentHtmlText(attachmentId);
-  const isError = !query.isLoading && (!!query.error || !query.data?.text);
+  const isError = !query.isPending && (!!query.error || !query.data?.text);
   // useWorkspaceSlug — NOT useWorkspacePaths. The Paths-bound variant throws
   // when there's no slug; we want to render gracefully (just hide the
   // new-tab button) when the component is somehow mounted outside a
   // workspace route.
   const slug = useWorkspaceSlug();
   const navigation = useNavigation();
+  const deferred = useDeferredContent();
+  const qc = useQueryClient();
+  const heightKey = ["attachment-preview-height", slug ?? "", attachmentId];
+  // Fix the slot for this mount. Arrival, errors and remounts cannot resize it.
+  const heightState = useRef({ slug, attachmentId, height: qc.getQueryData<number>(heightKey) ?? 240 });
+  if (heightState.current.slug !== slug || heightState.current.attachmentId !== attachmentId) {
+    heightState.current = { slug, attachmentId, height: qc.getQueryData<number>(heightKey) ?? 240 };
+  }
+  const height = heightState.current.height;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (deferred === null || !bodyRef.current) return;
+    const measured = bodyRef.current.getBoundingClientRect().height;
+    if (measured > 0) qc.setQueryData(heightKey, measured);
+  }, [deferred, qc, slug, attachmentId]);
 
   // Only enable the new-tab button when the workspace slug is resolvable —
   // outside a workspace context the path is meaningless. Prefer desktop's
@@ -87,13 +106,15 @@ export function HtmlAttachmentPreview({
       className="group/html-preview relative my-1"
       onMouseDown={(e) => e.stopPropagation()}
     >
+      <div ref={bodyRef} data-attachment-preview-slot={attachmentId} style={deferred === null ? undefined : { height }}>
       <HtmlPreviewBody
         source={{ kind: "attachment", attachmentId }}
         title={filename}
-        className={PREVIEW_HEIGHT}
-        placeholderClassName={isError ? ERROR_PLACEHOLDER_HEIGHT : PREVIEW_HEIGHT}
+        className={deferred === null ? PREVIEW_HEIGHT : "h-full"}
+        placeholderClassName={deferred === null ? (isError ? ERROR_PLACEHOLDER_HEIGHT : PREVIEW_HEIGHT) : "h-full"}
         errorTestId="html-attachment-preview-error"
       />
+      </div>
       <div
         className={cn(
           "absolute right-2 top-2 flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-sm transition-opacity",
