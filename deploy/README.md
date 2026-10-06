@@ -54,8 +54,11 @@ without loading old JSON payloads into the process. Null or default `[]`
 deprecated fields for new v2-only tasks do not create empty legacy runs.
 An empty first-attempt queued task with no dispatch/start/terminal evidence is
 audited without a phantom execution run, so its later complete v2 usage remains
-complete. Empty retries or prior execution evidence still retain unknown coverage
-for the old attempt, without inventing any additional tokens.
+complete. Actual retries create new task IDs. A matching direct parent chain
+with a complete, Runtime-bound live v2 parent run keeps prior consumption on the
+parent; restart does not manufacture an old execution on its child. An attempt
+ordinal without that attribution evidence still retains unknown coverage,
+without inventing any additional tokens.
 
 An optional `scripts/migrate-usage-accounting.ts --execute` preparation retains
 the original audit and all observed source versions, but does not write the
@@ -70,7 +73,8 @@ Keep the updater's drain-protected switch: stop the old API writers before
 allowing the new processes to finish cutover. Running an old image against the
 database after the startup marker has been established can still write JSON
 without updating the ledger. A new startup detects such changes. If the task
-already has counted historical/native facts, it commits a source-conflict audit,
+already has counted native facts under any run, including ordinary authenticated
+v2 and recovered historical runs, it commits a source-conflict audit,
 revokes readiness and fails without advancing the processed source or changing
 those facts. The deprecated ingestion entry likewise rejects changed aggregates
 as nonretryable `invalid_report`; identical processed snapshots remain idempotent.

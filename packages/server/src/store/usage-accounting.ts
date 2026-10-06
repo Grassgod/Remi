@@ -507,10 +507,21 @@ export function ensureLegacyUsageMigrationSchema(db: SqlDatabase): void {
 }
 
 const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t.started_at,t.dispatched_at,t.updated_at,t.created_at)";
+// A normal retry creates a DISTINCT task, not another execution on this ID.
+// An accepted live v2 parent run establishes where its prior consumption lives.
+// An attempt ordinal without this task/owner evidence cannot establish coverage.
+const LEGACY_RECORDED_RETRY = `EXISTS (SELECT 1 FROM multiremi_tasks parent
+  JOIN multiremi_usage_task_scopes parent_scope ON parent_scope.task_id=parent.id
+  JOIN multiremi_usage_runs parent_run ON parent_run.task_id=parent.id AND parent_run.run_id=parent_scope.active_run_id
+  JOIN multiremi_usage_run_scopes parent_owner ON parent_owner.task_id=parent.id AND parent_owner.run_id=parent_run.run_id
+  WHERE parent.id=t.parent_task_id AND parent.id<>t.id AND parent.workspace_id=t.workspace_id AND parent.agent_id=t.agent_id
+    AND parent.attempt+1=t.attempt AND parent.status IN ('failed','cancelled')
+    AND parent_run.run_id NOT IN ('legacy','historical-evidence-v2') AND parent_run.complete=1
+    AND parent_owner.runtime_id IS NOT NULL AND parent_owner.runtime_provenance='live_task')`;
 // New protocol executions do not write the deprecated JSON column. A missing
 // checkpoint (or a changed lifecycle timestamp) for their null source must not
 // manufacture an empty legacy run and downgrade established consumption.
-const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR t.attempt>1 OR NOT EXISTS (
+const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR (t.attempt>1 AND NOT ${LEGACY_RECORDED_RETRY}) OR NOT EXISTS (
   SELECT 1 FROM multiremi_usage_runs modern WHERE modern.task_id=t.id AND modern.run_id NOT IN ('legacy','historical-evidence-v2')))`;
 const LEGACY_PENDING = `${LEGACY_SOURCE_EXISTS} AND (s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
 
@@ -519,9 +530,9 @@ export function hasPendingLegacyUsage(db: SqlDatabase): boolean {
 }
 
 /** Deprecated aggregates cannot establish independence from reviewed native evidence. */
-export function hasProtectedHistoricalUsage(db: SqlDatabase, taskId: string): boolean {
+export function hasProtectedNativeUsage(db: SqlDatabase, taskId: string): boolean {
   return Boolean(db.query(`SELECT unit_id FROM multiremi_usage_units WHERE task_id=?
-    AND (run_id='historical-evidence-v2' OR (run_id='legacy' AND source<>'legacy_task'))
+    AND source<>'legacy_task'
     AND (COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(cache_write_tokens,0)+COALESCE(actual_unsplit_tokens,0)>0
       OR (cost_amount>0 AND cost_source='provider_reported')) LIMIT 1`).get(taskId));
 }
@@ -544,7 +555,9 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
     let rejectedHistoricalSource = false;
     const migrateTask = db.transaction(() => {
       // Read the current source AFTER taking the task lock, never a stale batch payload.
-      const row = db.query(`SELECT t.id,t.usage,t.status,t.attempt,t.dispatched_at,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,${LEGACY_OCCURRED_AT} AS occurred_at FROM multiremi_tasks t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
+      const row = db.query(`SELECT t.id,t.usage,t.status,t.attempt,t.dispatched_at,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,
+        CASE WHEN ${LEGACY_RECORDED_RETRY} THEN 1 ELSE 0 END AS recorded_retry,${LEGACY_OCCURRED_AT} AS occurred_at
+        FROM multiremi_tasks t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
       if (!row) return 0;
       const state = db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(row.id) as Row | null;
       const runs = db.query("SELECT run_id,revision FROM multiremi_usage_runs WHERE task_id=?").all(row.id) as Row[];
@@ -553,14 +566,21 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       // proves neither overlap nor complete coverage of the old aggregate.
       // Only reviewed identity-based reconciliation may retire that evidence.
       if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return 0;
-      if (Number(row.attempt) <= 1 && (row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
+      if ((Number(row.attempt) <= 1 || Number(row.recorded_retry) === 1) && (row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
         && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")) return 0;
       const timestamp = new Date().toISOString();
+      const priorAudit = db.query("SELECT original_usage FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row | null;
+      // The original preparation had an audit and legacy run but no source
+      // checkpoints. A newly committed conflict audit alone is not acceptance
+      // proof, or the next restart would silently accept the same conflict.
+      const establishedAudit = priorAudit && runs.some(run => run.run_id === "legacy");
+      const priorSource = state ? state.source_usage : establishedAudit ? priorAudit.original_usage : undefined;
+      const changedAggregate = state || establishedAudit ? priorSource !== row.usage : row.usage != null && row.usage !== "[]";
       db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);
       const original = db.query("SELECT original_usage,migrated_at FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row;
       db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,0,?,?,?) ON CONFLICT(task_id,source_version) DO NOTHING",
         [row.id, original.original_usage, null, original.migrated_at]);
-      if (hasProtectedHistoricalUsage(db, String(row.id))) {
+      if (changedAggregate && hasProtectedNativeUsage(db, String(row.id))) {
         // Commit the newly observed raw source to audit, but leave its consumed
         // checkpoint and all canonical facts untouched. Throw AFTER commit:
         // throwing inside this transaction would erase the conflict evidence.
@@ -592,7 +612,7 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
           if (db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND unit_id=? AND source<>'legacy_task'").get(row.id, unit.unitId)) unit.unitId = `legacy-aggregate:${unit.unitId}`;
           unit.revision = snapshot.revision;
         }
-        const neverExecuted = row.status === "queued" && Number(row.attempt) <= 1
+        const neverExecuted = row.status === "queued" && (Number(row.attempt) <= 1 || Number(row.recorded_retry) === 1)
           && [row.dispatched_at, row.started_at, row.completed_at, row.failed_at, row.cancelled_at].every(value => value == null)
           && runs.every(run => run.run_id === "legacy");
         // A queued first attempt with no execution evidence has no missing
@@ -606,7 +626,7 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       return 1;
     });
     migrated += (migrateTask as typeof migrateTask & { immediate?: () => number }).immediate?.() ?? migrateTask();
-    if (rejectedHistoricalSource) throw new UsageValidationError("Legacy usage changed after historical reconciliation; stop legacy writers and provide reviewed source evidence before resuming migration");
+    if (rejectedHistoricalSource) throw new UsageValidationError("Legacy usage changed after native accounting; stop legacy writers and provide reviewed source evidence before resuming migration");
   }
   const lastTaskId = rows.length ? String(rows[rows.length - 1]!.id) : options.afterTaskId;
   // Internal keyset passes need only know whether another bounded batch exists;

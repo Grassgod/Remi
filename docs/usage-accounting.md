@@ -89,11 +89,11 @@ remi dashboard usage reconcile --workspace <id> --days all --tz Asia/Shanghai --
 
 启动先创建 schema，释放全局 migration 锁后自动执行必需的标量迁移；UI/runtime 两个 API 进程都在迁移完成后才开启后台任务、HTTP listener 和 `/readyz`。每批默认 500 task、最多 5000，每个 task 独立提交，持久化游标和源版本检查点支持中断恢复；失败或默认五分钟启动预算耗尽会使启动失败，不会把未完成迁移当作就绪。空库同样自动完成切换，已就绪启动仍在数据库内检查 pending task ID，复检旧 writer 或镜像回滚后的来源变化，不向进程读取全部旧 JSON。v2-only 任务的旧字段为 null 或默认 `[]` 时，不因缺少旧来源检查点或生命周期变化生成空 legacy run。启动不扫描 archive、trace 或原始 telemetry，常规报表仍只读规范化账本。配置与部署边界见[部署切换说明](../deploy/README.md#usage-accounting-startup-cutover)。
 
-`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；新代码每次启动都检查旧来源变化。迁移只替换自身创建的 provisional legacy aggregate。已有计量的 historical/native 消费或提供商金额时，变化的旧累计无法证明与这些事实独立：弃用上报入口返回不可重试 `invalid_report`，保留原 canonical 和 outbox payload；相同已处理旧快照重放不改事实或 revision。迁移观察到此类来源变化时，提交新源审计、撤销就绪标记并失败，既不推进 processed source，也不相加或自动覆盖消费，需受审查证据修复。空 modern/historical run 或仅 context 的历史观测没有已计消费，不阻止明确旧 split 被规范化。新 run 的 start ACK 或部分请求证据不证明其覆盖旧聚合，不能据此删除旧消费；只有经审核的身份与覆盖证据才能退休旧聚合。
+`multiremi_usage_legacy_audit` 保留第一次审计的原始值；`multiremi_usage_legacy_versions` 保存所有实际观察到的源版本。维护脚本可提前进行标量预回填，但不会写启动切换标记；新代码每次启动都检查旧来源变化。迁移只替换自身创建的 provisional legacy aggregate。任意 run 下已有计量的 native 消费或提供商金额（包括普通已认证 v2 run 和 historical 恢复）时，变化的旧累计无法证明与这些事实独立：弃用上报入口返回不可重试 `invalid_report`，保留原 canonical 和 outbox payload；相同已处理旧快照重放不改事实或 revision。迁移观察到此类来源变化时，提交新源审计、撤销就绪标记并失败，既不推进 processed source，也不相加或自动覆盖消费，需受审查证据修复。没有已处理基线的非空旧来源与 native 消费并存时同样需要审查；一次拒绝产生的审计不能在下次启动变成接受证明。原预迁移已建立的 legacy run 和一致的原审计可继续幂等建立检查点。空 modern/historical run 或仅 context 的历史观测没有已计消费，不阻止明确旧 split 被规范化。新 run 的 start ACK 或部分请求证据不证明其覆盖旧聚合，不能据此删除旧消费；只有经审核的身份与覆盖证据才能退休旧聚合。
 
 生产准备允许先创建本范围 schema；历史 evidence 回填必须在停止旧 writers、排空旧上报并完成新代码切换后，重新生成和审核 source cohort 与恢复计划。仅写 JSON 的旧镜像不得与回填并行；若自动回滚后修改了受保护历史来源，下次新代码启动同样失败关闭。恢复演练与源码合入不代表已经部署、发版或在线修复。
 
-首次 attempt 的新 queued task 若旧来源为空、没有 dispatch/start/terminal 时间或此前执行 run，仅审计旧来源，不创建缺失消费的 legacy run。重启后其完整 v2 消费可正常成为已知；已有重试或旧执行迹象时，旧尝试覆盖缺证据仍保留 unknown，不增加 token 小计，也不能凭空确认先前消费为零。
+首次 attempt 的新 queued task 若旧来源为空、没有 dispatch/start/terminal 时间或此前执行 run，仅审计旧来源，不创建缺失消费的 legacy run。实际失败重试创建新 task ID，以 `parentTaskId` 指向前一任务；attempt 是链上的序号。相同 workspace/Agent、直接父子 attempt 连续、父任务已 failed/cancelled，且父任务有完整、绑定 Runtime 的 live v2 run 时，前一执行消费属于父 task。这样的新 retry 在排队启动或已有完整 v2 消费后重启，都不额外产生旧执行 run；父子消费各计一次。缺少这些归属证据的旧 retry 仍保留 unknown，不增加 token 小计，也不能凭空确认先前消费为零。
 
 下面是数据库维护脚本，不是普通 API 的隐式写操作。先备份并在恢复克隆演练；`MULTIREMI_DATABASE_URL` 由维护环境显式设置，不通过 API 传数据库凭据。
 

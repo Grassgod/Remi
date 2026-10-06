@@ -5,12 +5,13 @@ import { actualUnit } from "@acp/usage-collector.js";
 import { hasPendingLegacyUsage, migrateLegacyUsage, UsageValidationError, USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER } from "@multiremi/store/usage-accounting.js";
 import { ensureUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
 
-export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDatabase, taskId: string): void {
-  const old = [{ provider: "claude", model: "configured-opus", totalTokens: 70, inputTokens: 0, outputTokens: 0 }];
+export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDatabase, taskId: string,
+  runId = "historical-evidence-v2"): void {
+  const old = runId === "historical-evidence-v2" ? [{ provider: "claude", model: "configured-opus", totalTokens: 70, inputTokens: 0, outputTokens: 0 }] : [];
   const original = JSON.stringify(old);
   db.run("UPDATE multiremi_tasks SET status='completed',completed_at='2026-10-01T01:00:00Z',usage=? WHERE id=?", [original, taskId]);
   migrateLegacyUsage(db);
-  store.reportTaskUsageSnapshot(taskId, { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false,
+  store.reportTaskUsageSnapshot(taskId, { version: 2, runId, revision: 1, complete: false,
     units: [actualUnit({ unitId: "native", provider: "claude", model: "opus", scope: "request", source: "provider_request",
       providerSessionId: `native:${taskId}`, providerRequestId: "request", inputTokens: 10, outputTokens: 2,
       cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12 })] });
@@ -36,7 +37,7 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [changed, taskId]);
   // Real startup must invalidate an already-ready marker after an old-image
   // rollback, before it can open listeners or run background jobs.
-  expect(() => ensureUsageAccountingStartup(db)).toThrow("Legacy usage changed after historical reconciliation");
+  expect(() => ensureUsageAccountingStartup(db)).toThrow("Legacy usage changed after native accounting");
   expect(hasPendingLegacyUsage(db)).toBe(true);
   expect(db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(taskId)).toEqual(checkpoint);
   expect(db.query("SELECT id FROM multiremi_schema_migrations WHERE id IN (?,?)").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER)).toEqual([]);
@@ -52,6 +53,42 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [original, taskId]);
   ensureUsageAccountingStartup(db);
   expect(hasPendingLegacyUsage(db)).toBe(false);
+}
+
+/** Real Store failure recovery creates a second task ID for the next attempt. */
+export async function assertRecordedV2RetryChain(store: MultiremiStore, db: SqlDatabase, startupWhileQueued: boolean): Promise<void> {
+  const runtime = store.registerRuntime({ name: `native retry ${startupWhileQueued}`, provider: "claude", workspaceId: "local" });
+  const agent = store.createAgent({ name: `native retry ${startupWhileQueued}`, provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+  const issue = store.createIssue({ title: "synthetic recovery", workspaceId: "local" });
+  const parent = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "synthetic retry chain", workspaceId: "local", maxAttempts: 2 });
+  expect(store.claimTask(runtime.id)?.id).toBe(parent.id);
+  store.startTask(parent.id, "v2-parent", runtime.id);
+  const snapshot = (taskId: string, runId: string, tokens: number) => ({ version: 2 as const, runId, revision: 1, complete: true,
+    units: [actualUnit({ unitId: `native:${taskId}`, provider: "claude", model: "reported", scope: "request", source: "provider_request",
+      providerSessionId: `provider-session:${taskId}`, providerRequestId: "request", inputTokens: tokens, outputTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: tokens, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" })] });
+  store.reportTaskUsageSnapshot(parent.id, snapshot(parent.id, "v2-parent", 12));
+  store.failTask(parent.id, { error: "synthetic retry", failureReason: "runtime_recovery" });
+  const retry = store.listTasks().find(task => task.parentTaskId === parent.id)!;
+  expect(retry.id).not.toBe(parent.id);
+  expect(retry).toMatchObject({ attempt: 2, parentTaskId: parent.id, status: "queued" });
+  if (startupWhileQueued) {
+    ensureUsageAccountingStartup(db);
+    expect(db.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(retry.id)).toEqual([]);
+  }
+  expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
+  store.startTask(retry.id, "v2-retry", runtime.id);
+  store.reportTaskUsageSnapshot(retry.id, snapshot(retry.id, "v2-retry", 5));
+  store.completeTask(retry.id, { output: "synthetic complete" });
+  const before = store.getUsageReport({ workspaceId: "local", days: null, runtimeId: runtime.id }).summary;
+  expect(before).toMatchObject({ actual_total_tokens: 17, unknown_task_count: 0, complete: true });
+  ensureUsageAccountingStartup(db);
+  ensureUsageAccountingStartup(db);
+  expect(db.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(retry.id)).toEqual([{ run_id: "v2-retry" }]);
+  expect(store.getUsageReport({ workspaceId: "local", days: null, runtimeId: runtime.id }).summary).toEqual(before);
+  const perTask = db.query(`SELECT task_id,SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)) AS actual
+    FROM multiremi_usage_units WHERE task_id IN (?,?) GROUP BY task_id ORDER BY task_id`).all(parent.id, retry.id) as { task_id: string; actual: number | string }[];
+  expect(perTask.map(row => [row.task_id, Number(row.actual)])).toEqual([[parent.id, 12], [retry.id, 5]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
 export function assertNonconsumingHistoryBoundary(store: MultiremiStore, db: SqlDatabase, taskId: string,

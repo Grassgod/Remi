@@ -8,7 +8,7 @@ import { migrateLegacyUsage } from "@multiremi/store/usage-accounting.js";
 import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
-test("late deprecated aggregates park as invalid without blocking independent bound usage over the real socket", async () => {
+for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`late deprecated aggregates beside ${nativeRunId} park as invalid without blocking independent bound usage over the real socket`, async () => {
   const h = await DaemonProtocolHarness.create();
   let outbox: MultiremiTaskReportOutbox | undefined;
   try {
@@ -17,15 +17,16 @@ test("late deprecated aggregates park as invalid without blocking independent bo
     const agent = h.store.createAgent({ name: "late legacy", provider: "claude", runtimeId });
     const task = h.store.createTask({ agentId: agent.id, prompt: "synthetic overlap", maxAttempts: 1 });
     expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
-    const original = [{ provider: "claude", model: "configured", totalTokens: 70 }];
+    const original = nativeRunId === "current" ? [] : [{ provider: "claude", model: "configured", totalTokens: 70 }];
     h.db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify(original), task.id]);
     migrateLegacyUsage(h.db);
     await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 920000,
       p: { task_id: task.id, usage_run_id: "current" } })).resolves.toMatchObject({ execution_authorized: true });
-    h.store.reportTaskUsageSnapshot(task.id, { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false,
+    h.store.reportTaskUsageSnapshot(task.id, { version: 2, runId: nativeRunId, revision: 1, complete: false,
       units: [actualUnit({ unitId: "native", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 })] });
     const before = h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
-    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920001, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", total_tokens: 70 }] } })).resolves.toMatchObject({ ok: true });
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920001, p: { task_id: task.id,
+      usage: original.length ? [{ provider: "claude", model: "configured", total_tokens: 70 }] : [] } })).resolves.toMatchObject({ ok: true });
     expect(h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(before);
     outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "late-legacy.db"), canSend: () => h.client.connectionState() === "connected",
       deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 920010 + record.seq }) });

@@ -2,7 +2,7 @@
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
-import { hasProtectedHistoricalUsage, legacyUsageSnapshot, UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { hasProtectedNativeUsage, legacyUsageSnapshot, UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import { taskUsageProjection } from "@multiremi/store/usage-projection.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
@@ -5303,11 +5303,11 @@ ${placementAfter.sql}
       const keyed = (raw: unknown) => [...parseTaskUsageEntries(raw)].sort((a, b) => `${a.provider}\u0000${a.model}`.localeCompare(`${b.provider}\u0000${b.model}`));
       const previousEntries = toJson(keyed(legacy.usage));
       const unchanged = previousEntries === toJson(keyed(toJson([...merged.values()])));
-      if (hasProtectedHistoricalUsage(this.ctx.db, taskId)) {
-        if (!unchanged) throw new UsageValidationError("Changed legacy usage cannot replace or add to historical evidence; use reviewed reconciliation");
+      if (hasProtectedNativeUsage(this.ctx.db, taskId)) {
+        if (!unchanged) throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
         const baseline = this.ctx.db.query("SELECT source_usage FROM multiremi_usage_legacy_sources WHERE task_id=?").get(taskId) as Row | null;
         if (baseline && previousEntries !== toJson(keyed(baseline.source_usage))) {
-          throw new UsageValidationError("Changed legacy usage cannot replace or add to historical evidence; use reviewed reconciliation");
+          throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
         }
         // Identical old snapshots acknowledge without touching facts, clocks,
         // revision receipts, or the historical aggregate's audit checkpoint.

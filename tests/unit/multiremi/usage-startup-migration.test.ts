@@ -124,11 +124,27 @@ describe("automatic scalar usage cutover", () => {
       if (changed) return;
       changed = true;
       db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
+      // Establish the old aggregate before the v2 arrival. An uncheckpointed
+      // nonempty aggregate beside consuming native facts requires review.
+      migrateLegacyUsage(db!);
       writeUsageSnapshot(db!, tasks[1]!.id, live("modern"));
     } });
     expect(db!.query("SELECT source_version FROM multiremi_usage_legacy_sources WHERE task_id=?").get(tasks[0]!.id)).toEqual({ source_version: 2 });
     expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(tasks[1]!.id)).toEqual([{ run_id: "legacy" }, { run_id: "modern" }]);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(107);
+  });
+
+  it("does not turn a rejected first source audit into acceptance proof on restart", async () => {
+    const { tasks } = fixture();
+    writeUsageSnapshot(db!, tasks[0]!.id, live("already-native"));
+    await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after native accounting");
+    const facts = db!.query("SELECT * FROM multiremi_usage_units WHERE task_id=?").all(tasks[0]!.id);
+    const audits = db!.query("SELECT * FROM multiremi_usage_legacy_versions WHERE task_id=?").all(tasks[0]!.id);
+    await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after native accounting");
+    expect(db!.query("SELECT * FROM multiremi_usage_units WHERE task_id=?").all(tasks[0]!.id)).toEqual(facts);
+    expect(db!.query("SELECT * FROM multiremi_usage_legacy_versions WHERE task_id=?").all(tasks[0]!.id)).toEqual(audits);
+    expect(db!.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(tasks[0]!.id)).toBeNull();
+    expect(marker()).toBeNull();
   });
 
   it("never replaces evidence-verified recovered facts with changed legacy JSON", async () => {
@@ -138,7 +154,7 @@ describe("automatic scalar usage cutover", () => {
     writeUsageSnapshot(db!, tasks[0]!.id, live("historical-evidence-v2"), { historical: true });
     const before = db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all();
     db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
-    await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after historical reconciliation");
+    await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after native accounting");
     expect(db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all()).toEqual(before);
     expect(marker()).toBeNull();
   });
