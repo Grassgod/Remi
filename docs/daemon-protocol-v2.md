@@ -722,8 +722,9 @@ model: { provider: string; model: string } | null;                // 最后一�
 
 - `type_histogram` 按 `(type, tool)` 分桶，`tool` 只在 `tool_use` / `tool_result` 上非空（A11）；
   organizer 今天就是这么算的（`api/helpers/organizer.ts:52-58`），只按 type 会让它丢掉工具维度。
-- `final_reply_md` 与 `deriveFinalReply(events)` 使用相同规则，见 §5.4c；它只记录 trace 摘要。
-  字段缺失或畸形时，终态照常生效并打日志，不去读 trace 补算。
+- daemon 的 `final_reply_md` 与 `deriveFinalReply(events)` 使用相同规则，见 §5.4c。
+  统一完成入口以 `reply.body_md` 为最终正文，trace 摘要不覆盖消息；卡片仅保留回复引用。
+  摘要字段缺失或畸形时，终态照常生效并打日志，不去读 trace 补算。
 - `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。卡片的最终回复以 `reply.body_md` 为准。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**回填的历史 trace 是稀疏的**，
   `head ≠ event_count`（A11）。

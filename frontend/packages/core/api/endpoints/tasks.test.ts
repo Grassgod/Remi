@@ -22,7 +22,8 @@ describe("turn trace and issue projection", () => {
 
 const turn = turnFixture({ status: "completed" });
 const attempt = { id: "attempt_1", turn_id: turn.id, attempt_no: 1, status: "failed", runtime_id: "runtime",
-  provider: "codex", execution_model: null, started_at: null, ended_at: null, error: "Prior attempt failed" };
+  provider: "codex", execution_model: "prior-model", execution_thinking_level: "high", fallback_switched: true,
+  switch_reason: "fallback", usage: [{ totalTokens: 40 }], started_at: null, ended_at: null, error: "Prior attempt failed" };
 function endpoint(response: unknown) {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } })));
   return new TasksEndpoints(new HttpClient("https://example.test"));
@@ -30,6 +31,7 @@ function endpoint(response: unknown) {
 it("maps a chosen historical attempt to the transcript view model", async () => {
   await expect(endpoint({ turn, attempts: [attempt] }).getTask(attempt.id, turn.id)).resolves.toMatchObject({
     id: attempt.id, turn_id: turn.id, agent_id: turn.agent_id, runtime_id: "runtime", issue_id: "", status: "failed", error: attempt.error,
+    usage: attempt.usage, executionModel: "prior-model", executionThinkingLevel: "high", fallbackSwitched: true, switchReason: "fallback",
   });
   expect(fetch).toHaveBeenCalledWith("https://example.test/api/turns/turn_1?attempts=true", expect.anything());
 });

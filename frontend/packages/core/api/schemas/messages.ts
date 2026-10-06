@@ -56,6 +56,13 @@ export const AttemptSchema = z.object({
   id: z.string(), turn_id: z.string(), attempt_no: z.number().int().positive(), status: z.string(),
   provider: z.string().nullable(), execution_model: z.string().nullable(),
   started_at: z.string().nullable(), ended_at: z.string().nullable(), error: z.string().nullable(),
+  usage: z.array(z.object({
+    provider: z.string().optional(), model: z.string().optional(), inputTokens: z.number().optional(),
+    outputTokens: z.number().optional(), totalTokens: z.number().optional(),
+    cacheReadTokens: z.number().optional(), cacheWriteTokens: z.number().optional(),
+  }).loose()).optional(),
+  execution_thinking_level: z.string().nullable().optional(),
+  fallback_switched: z.boolean().optional(), switch_reason: z.string().nullable().optional(),
 }).loose();
 export const TurnInputSchema = z.object({ from_seq: z.number().int().nonnegative(), to_seq: z.number().int().nonnegative(), messages: z.array(MessageSchema), legacy_prompt: z.string().nullable() });
 export const TurnDetailSchema = z.object({ turn: TurnSchema, attempts: z.array(AttemptSchema).optional(), input: TurnInputSchema.optional() });

@@ -16,6 +16,8 @@ export function turnToTask(turn: z.infer<typeof TurnSchema>, attempt?: z.infer<t
     completed_at: attempt?.ended_at ?? turn.ended_at, created_at: turn.created_at,
     error: attempt?.error ?? null, result: null, attempt: attempt?.attempt_no,
     execution_model: attempt?.execution_model ?? null, execution_thinking_level: text(attempt?.execution_thinking_level),
+    executionModel: attempt?.execution_model ?? null, executionThinkingLevel: attempt?.execution_thinking_level,
+    usage: attempt?.usage, fallbackSwitched: attempt?.fallback_switched, switchReason: attempt?.switch_reason,
     progress_summary: text(attempt?.progress_summary), wait_reason: text(attempt?.wait_reason),
     prompt: text(turn.legacy_prompt) ?? undefined,
   };
