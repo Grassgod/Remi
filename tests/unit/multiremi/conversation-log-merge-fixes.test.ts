@@ -1,29 +1,30 @@
+import { MultiremiStore } from "@multiremi/store.js";
 import { describe, expect, it } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { resetDbReplyLimitForTest } from "@multiremi/store/db/postgres.js";
 import { DB_REPLY_TRANSITION_EXCEPTIONS } from "@multiremi/observability/request-metrics.js";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, withHistoricalConversationStore } from "./fixtures/conversation-log-store.js";
 
 describe("MUL-427 merge rulings", () => {
   for (const backend of ["sqlite", "pg"] as const) {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: inherited windows include a trailing legacy delegation report`, async () => {
-      await withStore(backend, (store, db) => {
-        const agent = store.createAgent({ name: "Inherited reader", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Legacy return window", workspaceId: "local" });
-        const parent = store.getOrCreateDefaultIssueSession(issue.id);
-        db.run(`INSERT INTO multiremi_session_events
-          (id, session_id, seq, author_type, author_id, kind, body, metadata, created_at)
-          VALUES ('legacy_tail', ?, 1, 'system', NULL, 'delegation_report', 'Trailing legacy report', '{}', ?)`,
-        [parent.id, "2026-09-29T00:00:00.000Z"]);
-        for (const inheritMode of ["snapshot", "follow"] as const) {
-          const child = store.createIssueSession(issue.id, { title: inheritMode, parentSessionId: parent.id, inheritMode });
-          const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: child.id, prompt: "Read inheritance" });
-          expect(store.buildTaskSessionProjection(task.id)!.inheritedSessionProjection!.jsonl).toContain("Trailing legacy report");
-          if (inheritMode === "follow") expect(store.getSessionInheritedContext(child.id)!.parent_max_seq).toBe(1);
+      await withHistoricalConversationStore(backend, (historical, db) => {
+        const agent=historical.createAgent({name:"Inherited reader",provider:"codex"});
+        const issue=historical.createIssue({title:"Legacy return window"});
+        const parent=historical.getOrCreateDefaultIssueSession(issue.id);
+        historical.appendSessionEvent(parent.id,{kind:"delegation_report",authorType:"system",body:"Trailing legacy report"});
+        const store=new MultiremiStore(db);
+        expect(store.getConversationLogHead(parent.id)?.headSeq).toBe(1);
+        for(const inheritMode of ["snapshot","follow"] as const){
+          const child=store.createIssueSession(issue.id,{title:inheritMode,parentSessionId:parent.id,inheritMode});
+          const task=store.createTask({agentId:agent.id,issueId:issue.id,issueSessionId:child.id,prompt:"Read inheritance"});
+          expect(store.buildTaskSessionProjection(task.id)!.inheritedSessionProjection!.toSeq).toBe(1);
+          expect(store.getConversationLogEntry(parent.id,1)?.body_md).toBe("Trailing legacy report");
+          if(inheritMode==='follow')expect(store.getSessionInheritedContext(child.id)!.parent_max_seq).toBe(1);
         }
       });
-    }, 30_000);
+    },60_000);
     for (const operation of ["create", "update", "delete", "resolve", "unresolve"] as const) {
       it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: ${operation} comment emits every workspace event after its own COMMIT`, async () => {
         await withStore(backend, (store, db) => {
@@ -76,9 +77,10 @@ describe("MUL-427 merge rulings", () => {
           const issue = store.createIssue({ title: "Dispatch queue", workspaceId: "local" });
           store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: leader.id });
           for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
+          const parent=store.createTask({agentId:leader.id,issueId:issue.id,prompt:"Delegate"});store.cancelTask(parent.id);
           const source = dispatch === "delegation return" ? store.createTask({
             agentId: worker.id, issueId: issue.id, workspaceId: "local", prompt: "Delegated work",
-            delegationId: "dlg_comment_commit", delegatedByAgentId: leader.id,
+            delegationId: "dlg_comment_commit", delegatedByAgentId: leader.id, parentTaskId:parent.id, delegatedFromIssueSessionId:store.getOrCreateDefaultIssueSession(issue.id).id,
           }) : null;
           const emitted: Array<boolean | undefined> = [];
           const enqueued: Array<boolean | undefined> = [];
@@ -92,9 +94,16 @@ describe("MUL-427 merge rulings", () => {
               authorType: "agent", authorId: worker.id, taskId: source.id,
               body: `[@Leader](mention://agent/${leader.id}) Review the result`,
             }) : store.createIssueComment(issue.id, { body: "Please respond" });
-            const task = store.listTasksForIssue(issue.id).find((candidate) => candidate.triggerCommentId === comment.id)!;
+            const delivered=store.getMessage(comment.id)!;
+            const task=store.listTasksForIssue(issue.id).find(candidate=>candidate.agentId===leader.id&&candidate.status==="queued")!;
+            const turn = store.getTurn(task.turn_id!)!;
+            const trigger = store.getMessage(turn.trigger_message_id!)!;
+            expect(turn.wake_seq).toBe(trigger.seq);
+            expect(trigger.to_agent_id).toBe(leader.id);
+            if (source) expect(trigger.metadata.source_comment_id).toBe(comment.id);
+            else expect(trigger.id).toBe(delivered.id);
             expect(task.agentId).toBe(leader.id);
-            if (source) expect(task.parentTaskId).toBe(source.id);
+            if (source) expect(store.getMessage(comment.id)?.task_id).toBe(source.turn_id);
             expect(emitted.length).toBeGreaterThan(0);
             expect(emitted).toEqual(emitted.map(() => false));
             expect(enqueued).toEqual([false]);
@@ -113,9 +122,9 @@ describe("MUL-427 merge rulings", () => {
         const task = store.listTasksForIssue(issue.id).find((candidate) => candidate.triggerCommentId === comment.id)!;
         if (backend === "pg") {
           db.run("CREATE FUNCTION reject_comment_delete() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'delete rejected'; END; $$ LANGUAGE plpgsql");
-          db.run("CREATE TRIGGER reject_comment_delete BEFORE DELETE ON multiremi_issue_comments FOR EACH ROW EXECUTE FUNCTION reject_comment_delete()");
+          db.run("CREATE TRIGGER reject_comment_delete BEFORE UPDATE ON multiremi_conversation_log FOR EACH ROW EXECUTE FUNCTION reject_comment_delete()");
         } else {
-          db.exec("CREATE TRIGGER reject_comment_delete BEFORE DELETE ON multiremi_issue_comments BEGIN SELECT RAISE(ABORT, 'delete rejected'); END");
+          db.exec("CREATE TRIGGER reject_comment_delete BEFORE UPDATE ON multiremi_conversation_log BEGIN SELECT RAISE(ABORT, 'delete rejected'); END");
         }
         const emitted: string[] = [];
         const unsubscribers = [
@@ -162,17 +171,17 @@ describe("MUL-427 merge rulings", () => {
           // row's seq. `listSessionEvents` is projected from the log on this
           // branch, so the legacy event is read from its own table.
           const commentSeq = store.getConversationLogEntryById(comments[0]!.id)!.seq;
-          expect(db.query("SELECT session_id, seq FROM multiremi_session_events WHERE source_comment_id = ?").all(comments[0]!.id)
-            .map((row) => ({ sessionId: (row as { session_id: string }).session_id, seq: Number((row as { seq: number }).seq) })))
-            .toEqual([{ sessionId: session.id, seq: commentSeq }]);
+          expect(db.query("SELECT id FROM multiremi_session_events WHERE source_comment_id=?").all(comments[0]!.id)).toEqual([]);
+          expect(store.listSessionEvents(session.id).find(event=>event.id===comments[0]!.id)?.seq).toBe(commentSeq);
           expect(store.getConversationLogHead(session.id)?.headSeq).toBe(commentSeq);
           expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
             .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([comments[0]!.id]);
           expect(emitted).toEqual([
+            { type: "inbox:new", inTransaction:false },
             { type: "activity:created", inTransaction: false },
             { type: "comment:created", inTransaction: false },
           ]);
-          expect(db.query("SELECT id FROM multiremi_tasks").all()).toEqual([]);
+          expect(db.query("SELECT id FROM multiremi_turn_execution_records").all()).toEqual([]);
         } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
       });
     }, 30_000);
@@ -184,9 +193,9 @@ describe("MUL-427 merge rulings", () => {
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         if (backend === "pg") {
           db.run("CREATE FUNCTION reject_late_mention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'late mention rejected'; END; $$ LANGUAGE plpgsql");
-          db.run("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks FOR EACH ROW EXECUTE FUNCTION reject_late_mention()");
+          db.run("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_turn_attempts FOR EACH ROW EXECUTE FUNCTION reject_late_mention()");
         } else {
-          db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
+          db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_turn_attempts BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
         }
         const emitted: string[] = [];
         const unsubscribers = [
@@ -215,9 +224,9 @@ describe("MUL-427 merge rulings", () => {
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         if (backend === "pg") {
           db.run("CREATE FUNCTION reject_late_mention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'late mention rejected'; END; $$ LANGUAGE plpgsql");
-          db.run("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks FOR EACH ROW EXECUTE FUNCTION reject_late_mention()");
+          db.run("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_turn_attempts FOR EACH ROW EXECUTE FUNCTION reject_late_mention()");
         } else {
-          db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
+          db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_turn_attempts BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
         }
         const emitted: string[] = [];
         const unsubscribers = [
@@ -226,7 +235,7 @@ describe("MUL-427 merge rulings", () => {
           store.onTaskEvent((event) => emitted.push(event.type)),
         ];
         try {
-          expect(() => db.transaction(() => store.createIssueComment(issue.id, { body: `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push` }))())
+          expect(() => (store as unknown as {db:typeof db}).db.transaction(() => store.createIssueComment(issue.id, { body: `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push` }))())
             .toThrow("late mention rejected");
           expect(emitted).toEqual([]);
           expect(store.listIssueComments(issue.id)).toEqual([]);
@@ -243,20 +252,21 @@ describe("MUL-427 merge rulings", () => {
       await withStore(backend, (store, db) => {
         const issue = store.createIssue({ title: "Caller owns COMMIT", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
+        const author=store.createAgent({name:"Caller author",provider:"codex"});
         const queue = createCommitEventQueue();
         const emitted: Array<boolean | undefined> = [];
         const unsubscribe = store.onWorkspaceEvent(() => emitted.push(db.inTransaction));
         try {
-          db.transaction(() => {
-            (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, { authorType: "agent", body: "Deferred" }, {
+          (store as unknown as {db:typeof db}).db.transaction(() => {
+            (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, { authorType: "agent", authorId:author.id, body: "Deferred" }, {
               withinTransaction: true, deferAgentMentionDispatch: true, deferredEvents: queue,
             });
             expect(emitted).toEqual([]);
           })();
           expect(emitted).toEqual([]);
-          expect(queue.workspace.map((event) => event.type)).toEqual(["activity:created", "comment:created"]);
+          expect(queue.workspace.map((event) => event.type)).toEqual(["inbox:new", "activity:created", "comment:created"]);
           (store as unknown as { ctx: StoreContext }).ctx.emitCommitEvents(queue);
-          expect(emitted).toEqual([false, false]);
+          expect(emitted).toEqual([false, false,false]);
         } finally { unsubscribe(); }
       });
     }, 30_000);
@@ -265,22 +275,23 @@ describe("MUL-427 merge rulings", () => {
       await withStore(backend, (store, db) => {
         const issue = store.createIssue({ title: "Ordered caller queue", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
+        const author=store.createAgent({name:"Caller author",provider:"codex"});
         const queue = createCommitEventQueue();
         const emitted: string[] = [];
         const unsubscribe = store.onWorkspaceEvent(event => emitted.push(event.type));
         try {
-          db.transaction(() => {
+          (store as unknown as {db:typeof db}).db.transaction(() => {
             for (const body of ["First", "Second"]) {
-              (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, { authorType: "agent", body }, {
+              (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, { authorType: "agent", authorId:author.id, body }, {
                 withinTransaction: true, deferAgentMentionDispatch: true, deferredEvents: queue,
               });
             }
             expect(emitted).toEqual([]);
           })();
           expect(queue.workspace.map(event => event.type)).toEqual([
-            "activity:created", "comment:created", "activity:created", "comment:created",
+            "inbox:new", "activity:created", "comment:created", "inbox:new", "activity:created", "comment:created",
           ]);
-          expect(queue.workspace.map(event => event.workspaceId)).toEqual(Array(4).fill(issue.workspaceId));
+          expect(queue.workspace.map(event => event.workspaceId)).toEqual(Array(6).fill(issue.workspaceId));
           expect(emitted).toEqual([]);
           (store as unknown as { ctx: StoreContext }).ctx.emitCommitEvents(queue);
           expect(emitted).toEqual(queue.workspace.map(event => event.type));
@@ -292,6 +303,7 @@ describe("MUL-427 merge rulings", () => {
       await withStore(backend, (store, db) => {
         const issue = store.createIssue({ title: "Failed activity route", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
+        const author=store.createAgent({name:"Caller author",provider:"codex"});
         const context = (store as unknown as { ctx: StoreContext }).ctx;
         const originalWorkspaceId = context.issueWorkspaceId.bind(context);
         let lookups = 0;
@@ -323,11 +335,11 @@ describe("MUL-427 merge rulings", () => {
         let commentId = "";
         context.db.transaction(() => {
           commentId = (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, {
-            authorType: "agent", body: "Comment survives optional routing failure",
+            authorType: "agent", authorId:author.id, body: "Comment survives optional routing failure",
           }, { withinTransaction: true, deferAgentMentionDispatch: true, deferredEvents: queue }).id;
         })();
         expect(store.getIssueComment(commentId)?.body).toBe("Comment survives optional routing failure");
-        expect(queue.workspace.map(event => event.type)).toEqual(["comment:created"]);
+        expect(queue.workspace.map(event => event.type)).toEqual(["inbox:new","comment:created"]);
         expect(queue.workspace[0]?.workspaceId).toBe(issue.workspaceId);
       });
     }, 30_000);
@@ -470,12 +482,12 @@ describe("MUL-427 merge rulings", () => {
         // writes `final_entry_id: null` and must still go through.
         if (backend === "pg") {
           db.run(`CREATE FUNCTION reject_final_entry() RETURNS trigger AS $$ BEGIN
-            IF NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL THEN RAISE EXCEPTION 'final entry rejected'; END IF;
+            IF NEW.reply_message_id IS NOT NULL THEN RAISE EXCEPTION 'final entry rejected'; END IF;
             RETURN NEW; END; $$ LANGUAGE plpgsql`);
-          db.run("CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log FOR EACH ROW EXECUTE FUNCTION reject_final_entry()");
+          db.run("CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_turns FOR EACH ROW EXECUTE FUNCTION reject_final_entry()");
         } else {
-          db.exec(`CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log
-            WHEN NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL
+          db.exec(`CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_turns
+            WHEN NEW.reply_message_id IS NOT NULL
             BEGIN SELECT RAISE(ABORT, 'final entry rejected'); END`);
         }
         const emitted: string[] = [];
@@ -483,11 +495,11 @@ describe("MUL-427 merge rulings", () => {
         try {
           const rejected = completeRound(`[@Recipient](mention://agent/${teammate.id}) Rolled back answer`);
           expect(store.getTask(rejected.id)?.status).toBe("completed");
-          expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
-          expect(store.listConversationLogEntriesByTask(rejected.id).filter((entry) => entry.kind === "message")).toEqual([]);
+          expect(store.listIssueComments(issue.id).filter(comment=>comment.authorType==="agent").map((comment) => comment.id)).toEqual([reply.id]);
+          expect(store.listConversationLogEntriesByTask(rejected.id).filter((entry) => entry.kind === "message"&&store.getMessage(entry.id)?.sender_type==="agent")).toEqual([]);
           expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
           expect(store.listTasksForIssue(issue.id).filter(candidate => candidate.agentId === teammate.id)).toEqual([]);
-          expect(store.listConversationLogEntries(session.id).filter(entry => entry.metadata.envelope)).toEqual([]);
+          expect(store.listConversationLogEntries(session.id).filter(entry => store.getMessage(entry.id)?.sender_id===agent.id && store.getMessage(entry.id)?.to_agent_id && store.getMessage(entry.id)?.wake_applied === "now")).toEqual([]);
           expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
             .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
           expect(emitted).not.toContain("comment:created");

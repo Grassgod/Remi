@@ -525,6 +525,7 @@ export class IssueSessionsRepo {
     const projectWithinTransaction = () => {
       const task = this.ctx.tasks().getTask(taskId);
       if (!task?.issueSessionId) return null;
+      this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
       // Match bulk lifecycle lock ordering, including the parent row used by
       // event appends. Holding both locks covers MAX(seq), the event read and
       // recording the follow window without a side/parent lock inversion.
@@ -751,7 +752,6 @@ export class IssueSessionsRepo {
       throw err;
     }
     if(unscheduled){this.ctx.emitCommitEvents(deferredEvents);throw unscheduled;}
-    this.ctx.notifyTaskEnqueued(task);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
     return task;

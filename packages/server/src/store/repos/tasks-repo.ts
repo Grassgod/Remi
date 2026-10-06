@@ -1596,6 +1596,9 @@ export class TasksRepo {
 
   ensurePendingTurnWithinTransaction(input:EnsurePendingTurnInput):EnsurePendingTurnResult {
     if(!this.ctx.db.inTransaction)throw new Error('Pending turn requires a transaction');
+    const agent=this.ctx.agents().getAgent(input.lane.agentId);
+    if(!agent)throw new Error('Pending turn agent not found');
+    this.ctx.lockWorkspaceRuntimeLifecycle(agent.workspaceId);
     const sessionId=input.lane.kind==='issue'?input.lane.issueSessionId:input.lane.chatSessionId;
     const scope=input.lane.kind==='issue'?input.lane.executionScope:'';
     const row=input.wake.seq?this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE session_id=? AND seq=? AND kind='message'").get(sessionId,input.wake.seq):null;
@@ -4545,10 +4548,11 @@ ${placementAfter.sql}
     if(input.sourceChatMessageId && input.kind==='steer') {
       const message=this.ctx.inbox().getMessage(input.sourceChatMessageId);
       if(!task.chatSessionId || message?.session_id!==task.chatSessionId || message.deleted_at) throw new Error('Steer source belongs to another Chat');
+      const alreadyDelivered = message.to_agent_id === task.agentId && message.metadata.delivery_turn_id === turn.id;
       this.ctx.db.run(`UPDATE multiremi_conversation_log SET message_kind='request',to_type='agent',to_agent_id=?,to_member_id=NULL,
         wake_requested='now',wake_applied='now',metadata=?,updated_at=? WHERE id=?`,
         [task.agentId,JSON.stringify({...message.metadata,execution_scope:turn.execution_scope,steer_target_turn_id:turn.id}),nowIso(),message.id]);
-      this.publishTaskInputChanged(task.id);
+      if (!alreadyDelivered) this.publishTaskInputChanged(task.id);
       return this.getTaskSteerMessage(message.id)!;
     }
     if(input.kind==='force_answer'){
@@ -6534,7 +6538,7 @@ ${placementAfter.sql}
 
   private reRingUnreadIssueLane(task:MultiremiTask,_changes:ChildStatusChangeCollector,events:CommitEventQueue,_origin='turn_end'):void {
     const turn=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(task.id);
-    if(turn)reRingAfterTurnEnd(this.ctx,turn.turn_id,events);
+    if(turn)reRingAfterTurnEnd(this.ctx,turn.turn_id,events,_origin);
   }
 
   private postAgentReplyComment(task: MultiremiTask, output: string | null, commentId?: string): { id: string } | null {

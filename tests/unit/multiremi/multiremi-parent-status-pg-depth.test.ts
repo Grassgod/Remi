@@ -1,3 +1,4 @@
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -1208,7 +1209,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     // reports really do contend for the workspace lock.
     const worker = new Worker(new URL("./fixtures/postgres-child-ending-worker.ts", import.meta.url).href);
     const ready = waitForWorkerPhase(worker, "ready");
-    worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB) });
+    worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB), migrationReportDir: resolveMigrationReportDirectory() });
     await ready;
     const finished = waitForWorkerPhase(worker, "completed", 60_000);
     worker.postMessage({ type: "end", childIssueId: second.id, status: "done" });
@@ -1220,13 +1221,16 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     // #3/#9: both terminal reports interrupt the running Turn; its end rings one successor.
     expect(store.listTasksForIssue(parent.id).map(task=>task.id)).toEqual([running.id]);
-    const comments = store.listIssueComments(parent.id).filter(comment=>
-      ["blocked","done"].includes(String(store.getMessage(comment.id)?.metadata.child_status)));
+    const childIds = new Set([first.id, second.id]);
+    const comments = store.listIssueComments(parent.id).filter(comment =>
+      childIds.has(String((store.getMessage(comment.id)?.metadata.message_source as { issueId?: string } | undefined)?.issueId)));
     expect(comments).toHaveLength(2);
     expect(comments.map(comment => comment.body).join("\n")).toContain("is blocked");
     expect(comments.map(comment => comment.body).join("\n")).toContain("is done");
     store.completeTask(running.id,{output:"Interrupted round finished"});
     expect(store.listTasksForIssue(parent.id).filter(task=>task.status==="queued")).toHaveLength(1);
-    expect(comments.every(comment => store.getMessage(comment.id)!.message_kind)).toBe(true);
+    for (const comment of comments) expect(store.getMessage(comment.id)).toMatchObject({
+      message_kind: "report", to_agent_id: agent, metadata: { delivery_turn_id: running.turn_id },
+    });
   }, 90_000);
 });

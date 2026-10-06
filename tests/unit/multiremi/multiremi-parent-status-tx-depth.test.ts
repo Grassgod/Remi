@@ -158,9 +158,13 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       store.updateIssue(child.id, { status });
       expect(counter.maxTopLevel).toBe(1);
       expect(counter.maxNested).toBe(0);
-      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
+      expect(counter.taskInserts).toEqual([]);
       expect(counter.maxTopLevel + counter.maxNested).toBe(1);
-      expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
+      expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(0);
+      const reports=store.listIssueComments(parent.id).filter(comment=>comment.authorType==='system');
+      expect(reports).toHaveLength(1);
+      expect(store.getMessage(reports[0]!.id)?.wake_applied).toBe('now');
+      expect(store.listIssueActivity(parent.id).filter(entry=>entry.type==='message_delivered_running')).toHaveLength(1);
     });
   }
 
@@ -975,6 +979,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     const unsubscribe = store.onWorkspaceEvent((event) => {
       const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
       if (entry?.action) events.push(entry.action);
+      if(event.type==='inbox:new')events.push(event.type);
     });
     const counter = wrapStore(store);
     counter.reset();
@@ -989,7 +994,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // hops moved in_review -> in_progress, which is a derivation, not a child
     // terminal outcome, so they must NOT file a notification round.
     expect(events.filter((action) => action === "parent_status_derived")).toHaveLength(3);
-    expect(events.filter((action) => action === "child_done_parent_triggered")).toHaveLength(1);
+    expect(events.filter((action) => action === "inbox:new")).toHaveLength(3);
     for (const holder of [low, mid, top]) {
       expect(store.getIssue(holder.id)?.status).toBe("in_progress");
       expect(store.listIssueActivity(holder.id).filter((e) => e.type === "parent_status_derived"))
@@ -1015,7 +1020,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // Each level reports its own derivation; the round is queued once per level
     // that had a report to deliver.
     expect(events.filter((event) => event.action === "parent_status_derived")).toHaveLength(2);
-    expect(events.filter((event) => event.action === "child_done_parent_triggered")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "inbox:new")).toHaveLength(2);
     // One `issue:updated` realtime patch per derived level, plus the child's own
     // PATCH audit line.
     expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(2);
@@ -1251,10 +1256,10 @@ describe("MUL-400 S1 events never fire inside a transaction", () => {
     expect(events.length).toBeGreaterThan(0);
     expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
     // The pushes the S1 hook owes the UI are all present, post-commit.
-    expect(events.some((event) => event.type === "comment:created")).toBe(true);
+    expect(events.some((event) => event.type === "inbox:new")).toBe(true);
     expect(events.some((event) => event.type === "issue:updated")).toBe(true);
     // The audit activities the hook writes are also published post-commit.
-    expect(events.some((event) => event.action === "child_done_parent_triggered")).toBe(true);
+    expect(events.some((event) => event.type === "inbox:new")).toBe(true);
     expect(events.some((event) => event.action === "parent_status_derived")).toBe(true);
   });
 

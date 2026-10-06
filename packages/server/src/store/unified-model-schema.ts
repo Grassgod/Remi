@@ -40,6 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_multiremi_turns_issue ON multiremi_turns(issue_id
 CREATE INDEX IF NOT EXISTS idx_multiremi_turns_agent ON multiremi_turns(agent_id, status);
 `;
 
+export const UNIFIED_LANE_SWEEP_INDEX = `CREATE INDEX IF NOT EXISTS idx_multiremi_session_lanes_sweep_pending
+ ON multiremi_session_lanes(COALESCE(swept_at,''),session_id,reader_id,execution_scope)
+ WHERE reader_type='agent' AND status='active' AND wake_hint_seq>swept_to_seq;`;
+
 export const UNIFIED_LANES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS multiremi_session_lanes (
   session_id TEXT NOT NULL, reader_type TEXT NOT NULL DEFAULT 'agent' CHECK(reader_type IN ('agent','member')),
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS multiremi_session_lanes (
 );
 CREATE INDEX IF NOT EXISTS idx_multiremi_session_lanes_runtime ON multiremi_session_lanes(runtime_id, status);
 CREATE INDEX IF NOT EXISTS idx_multiremi_session_lanes_reader ON multiremi_session_lanes(reader_type, reader_id, updated_at);
+${UNIFIED_LANE_SWEEP_INDEX}
 `;
 
 export const UNIFIED_ATTEMPTS_SCHEMA = `

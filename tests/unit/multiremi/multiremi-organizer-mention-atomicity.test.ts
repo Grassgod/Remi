@@ -14,10 +14,13 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
       memberIds: [organizer.id] });
     const patrol = store.createIssue({ title: "Organizer patrol", assigneeType: "squad", assigneeId: squad.id });
     const auditSession = store.getOrCreateDefaultIssueSession(patrol.id);
-    const returnSession = store.createIssueSession(patrol.id, { title: "Leader return", inheritMode: "none" });
+    const returnIssue=store.createIssue({title:"Leader return",assigneeType:"agent",assigneeId:leader.id});
+    const returnSession=store.getOrCreateDefaultIssueSession(returnIssue.id);
+    const parent=store.createTask({agentId:leader.id,issueId:returnIssue.id,prompt:"Coordinate the organizer"});
+    store.cancelTask(parent.id);
     const supervisorTask = store.createTask({ agentId: organizer.id, issueId: patrol.id,
       issueSessionId: auditSession.id, prompt: "Inspect delegated tasks", delegationId: "dlg_organizer_atomicity",
-      delegatedByAgentId: leader.id, delegatedFromIssueSessionId: returnSession.id });
+      parentTaskId:parent.id, delegatedByAgentId: leader.id, delegatedFromIssueSessionId: returnSession.id });
     const worker = store.createAgent({ name: "Worker", provider: "codex" });
     const target = store.createIssue({ title: "Organizer target" });
     const targetTask = store.createTask({ agentId: worker.id, issueId: target.id, prompt: "Review target" });
@@ -27,10 +30,11 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
       supervisorAgentId: organizer.id, targetTaskId: targetTask.id, action: "force_answer",
       reason: `Review [@Squad leader](mention://agent/${leader.id})`, content: "Please wrap up" });
     const envelopes = () => store.listConversationLogEntries(returnSession.id).filter(entry =>
-      entry.metadata.envelope?.source.taskId === supervisorTask.id);
-    const queued = () => store.listTasksForIssue(patrol.id).filter(task =>
+      store.getMessage(entry.id)?.task_id === supervisorTask.turn_id);
+    const queued = () => store.listTasksForIssue(returnIssue.id).filter(task =>
       task.agentId === leader.id && task.status === "queued");
-    return { db, store, patrol, targetTask, supervisorTask, run, envelopes, queued };
+    const initialComments = store.listIssueComments(patrol.id);
+    return { db, store, patrol, targetTask, supervisorTask, run, envelopes, queued, initialComments };
   }
 
   it("rolls back audit comment, envelope and pending turn when the outer transaction fails", () => {
@@ -40,14 +44,14 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
     issues.notifyOrganizerAction = (...args: unknown[]) => {
       notify(...args);
       expect(f.db.inTransaction).toBe(true);
-      expect(f.store.listIssueComments(f.patrol.id)).toHaveLength(2);
+      expect(f.store.listIssueComments(f.patrol.id)).toHaveLength(f.initialComments.length + 1);
       expect(f.envelopes()).toHaveLength(1);
       expect(f.queued()).toHaveLength(1);
       throw new Error("audit comment write fault");
     };
     try { expect(f.run).toThrow("audit comment write fault"); }
     finally { issues.notifyOrganizerAction = notify; }
-    expect(f.store.listIssueComments(f.patrol.id)).toHaveLength(0);
+    expect(f.store.listIssueComments(f.patrol.id)).toEqual(f.initialComments);
     expect(f.envelopes()).toHaveLength(0);
     expect(f.queued()).toHaveLength(0);
     expect(f.store.getTask(f.targetTask.id)?.status).toBe("queued");
@@ -59,7 +63,7 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
     const publish = context.emitCommitEvents.bind(context);
     const enqueueTransactionStates: boolean[] = [];
     const unsubscribe = f.store.onTaskEnqueued(task => {
-      if (task.agentId === f.queued()[0]?.agentId) enqueueTransactionStates.push(Boolean(f.db.inTransaction));
+      if (task.id === f.queued()[0]?.id) enqueueTransactionStates.push(Boolean(f.db.inTransaction));
     });
     let depth = 0;
     let maxDepth = 0;
@@ -76,7 +80,7 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
       };
     }) as typeof f.db.transaction;
     f.db.run = (sql, params) => {
-      if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) {
+      if (/INSERT\s+INTO\s+multiremi_turn_attempts/i.test(sql)) {
         expect(f.db.inTransaction).toBe(true);
         expect(depth).toBe(1);
         taskWrites++;
@@ -96,10 +100,10 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
       unsubscribe();
     }
     expect(maxDepth).toBe(1);
-    expect(taskWrites).toBe(1);
+    expect(taskWrites).toBe(2);
     expect(enqueueTransactionStates).toEqual([false]);
     const comments = f.store.listIssueComments(f.patrol.id);
-    expect(comments).toHaveLength(2);
+    expect(comments).toHaveLength(f.initialComments.length + 1);
     const entries = f.envelopes();
     expect(entries).toHaveLength(1);
     const tasks = f.queued();

@@ -65,9 +65,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       return store.listTasksForIssue(f.targetIssueId).filter(task => task.agentId === f.agentId && task.status === "queued");
     }
     function envelopes(f: InboxFlowFixture) {
-      return db.query("SELECT id, seq, body_md, metadata FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq")
+      return db.query("SELECT id, seq, body_md, metadata, to_agent_id FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq")
         .all(f.issueSessionId).map(row => ({ ...row, metadata: JSON.parse(String(row.metadata)) }))
-        .filter(row => row.metadata.envelope);
+        .filter(row => row.to_agent_id === f.agentId);
     }
     function spawn(f: InboxFlowFixture, phase: string, ordinal = 0) {
       const file = join(directory, `fixture-${ordinal}.json`);
@@ -120,7 +120,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
               expect(wakeSeq).toBe(Number(log!.seq));
               expect(wakeSeq).toBeGreaterThan(f.seededWakeSeq!);
             } else expect(wakeSeq).toBe(f.seededWakeSeq!);
-            expect(inboxFlowStatus(store, f)).toBe(initialStatus);
+            expect(inboxFlowStatus(store, f)).toBe(committed ? "todo" : initialStatus);
             return;
           }
           const finalStatus = scenario === "e2" ? "done" : scenario === "e3" ? "blocked" : "answered";
@@ -136,9 +136,11 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             triggerInboxFlow(store, f);
             expect(queued(f).map(task => task.id)).toEqual([taskId]);
             expect(envelopes(f).map(row => row.id)).toEqual([entry.id]);
-            expect(() => store.createTask({ agentId: f.agentId, issueId: f.targetIssueId,
+            const duplicate = store.createTask({ agentId: f.agentId, issueId: f.targetIssueId,
               issueSessionId: f.issueSessionId, prompt: "Forced second platform turn", wakeSource: "forced_duplicate",
-               })).toThrow(/unique/i);
+               });
+            expect(duplicate.id).toBe(taskId);
+            expect(queued(f)).toHaveLength(1);
           }
         }, 30_000);
       }

@@ -58,14 +58,14 @@ export class InboxRepo {
         wake_requested:env.wake,body_md:env.body,dedupe_key:env.dedupeKey,
         reply_to_id:reply?.session_id===sessionId?reply.id:null,execution_scope:recipient.executionScope,
         metadata:{message_source:env.source,message_outcome:env.outcome,priority:envelopePriority(env),address_context:env.to},
-      },deferredEvents,env.to.role==='delegator'&&source?{
+      },deferredEvents,{issueId:recipient.issueId,...(env.to.role==='delegator'&&source?{
         delegationId:source.delegationId,delegatedByAgentId:recipient.agentId,delegatedFromIssueSessionId:source.delegatedFromIssueSessionId,
         priority:source.priority,parentTaskId:null,wakeSource:'delegation_return',
-      }:{});
+      }:{})});
       const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
       const task=turn?this.ctx.tasks().getTask(turn.current_attempt_id):null;
       const entry=this.ctx.conversationLog().getConversationLogEntryById(result.message.id)!;
-      deliveries.push({recipient,entry,deduplicated:!!before,task,action:!task?'none':task.status==='queued'?activeBefore?'coalesced':'created':'steered'});
+      deliveries.push({recipient,entry,deduplicated:!!before,task,action:before||!task?'none':task.status==='queued'?activeBefore?'coalesced':'created':'steered'});
     }
     return deliveries;
   }
@@ -124,9 +124,17 @@ export class InboxRepo {
         }
         const session = this.ctx.issueSessions().getIssueSession(sessionId);
         if (!session) throw new Error("Envelope delegation return session not found");
-        const parent=this.ctx.db.query(`SELECT p.* FROM multiremi_turns child
+        let parent=this.ctx.db.query(`SELECT p.* FROM multiremi_turns child
           JOIN multiremi_conversation_log request ON request.id=child.trigger_message_id
           JOIN multiremi_turns p ON p.id=request.task_id WHERE child.current_attempt_id=?`).get(source.id);
+        const seen=new Set<string>();
+        // A recovered turn is triggered by a downstream report. Walk the frozen
+        // source chain to the upstream lane, with a cycle bound for corrupt data.
+        while(parent && parent.agent_id!==source.delegatedByAgentId && !seen.has(parent.id) && seen.size<32){
+          seen.add(parent.id);
+          parent=this.ctx.db.query(`SELECT p.* FROM multiremi_conversation_log request
+            JOIN multiremi_turns p ON p.id=request.task_id WHERE request.id=?`).get(parent.trigger_message_id);
+        }
         const scope=parent?.agent_id===source.delegatedByAgentId&&parent.session_id===session.id?parent.execution_scope:'';
         return [this.issueRecipient(session.issueId, source.delegatedByAgentId, session.id, scope)];
       }

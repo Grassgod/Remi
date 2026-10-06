@@ -1,3 +1,4 @@
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
@@ -7,7 +8,7 @@ const worker=join(import.meta.dir,'fixtures/inbox-concurrency-worker.ts');
 pendingTurnBackendTests('MUL-506 PG process concurrency',(fixture,backend)=>{
   if(backend!=='PostgreSQL')return;
   async function concurrent(inputs:Record<string,unknown>[]){const dir=mkdtempSync(join(tmpdir(),'mul506-barrier-')),release=join(dir,'release');
-    const processes=inputs.map(input=>{const child=Bun.spawn([process.execPath,worker],{stdin:'pipe',stdout:'pipe',stderr:'pipe'});child.stdin.write(JSON.stringify({...input,release}));child.stdin.end();return child;});
+    const processes=inputs.map(input=>{const child=Bun.spawn([process.execPath,worker],{stdin:'pipe',stdout:'pipe',stderr:'pipe'});child.stdin.write(JSON.stringify({...input,release,migrationReportDir:resolveMigrationReportDirectory()}));child.stdin.end();return child;});
     try{
       const readers=processes.map(p=>p.stdout.getReader()),prefix:string[]=[];
       for(const reader of readers){const chunk=await reader.read();const text=new TextDecoder().decode(chunk.value);expect(text.trim()).toBe('ready');prefix.push('');}

@@ -131,7 +131,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
     const mention = /mention:\/\/(agent|squad)\/([^\s)]+)/.exec(input.body_md);
     const mentionedAgent = mention?.[1] === 'squad' ? ctx.squads().getSquad(mention[2]!)?.leaderId : mention?.[2];
     const actor = ctx.workspaces().getWorkspaceMember(input.sender.id!);
-    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.userId ?? input.sender.id! };
+    force = { source: mentionedAgent === recipientId ? 'mention' : 'comment', actorMemberId: actor?.id ?? input.sender.id! };
     createInput = { ...createInput, dependencyForce: force };
   }
   const sourceSession=source?ctx.issueSessions().getIssueSession(source.session_id):null;
@@ -259,7 +259,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   for(const id of resumedIssues)affected.add(id);
   for(const id of affected)if(id)deriveIssueStatusWithinTransaction(ctx,id,events);
   // Cross-conversation inbox caches need a workspace signal even without a log subscription.
-  ctx.emitWorkspaceEvent({type:'inbox:new',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
+  events.workspace.push({type:'inbox:new',workspaceId,actorType:'system',actorId:null,payload:{index_only:true}});
   return {message,wake_applied:policy.applied,wake_reason:policy.reason,...(turnId?{turn_id:turnId}:{})};
 }
 

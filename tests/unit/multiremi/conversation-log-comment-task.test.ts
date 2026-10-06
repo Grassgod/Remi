@@ -68,9 +68,11 @@ describe("MUL-427 ruling (e): comment task associations", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment clears the tombstone task and publishes the NULL patch`, async () => {
       await withStore(backend, (store) => {
         const issue = store.createIssue({ title: "Deleted task association", workspaceId: "local" });
-        const comment = store.createIssueComment(issue.id, { body: "Task-linked comment", taskId: "tsk_deleted" });
+        const agent = store.createAgent({ name: "Comment source", provider: "codex" });
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Comment source" });
+        const comment = store.createIssueComment(issue.id, { body: "Task-linked comment", taskId: task.id });
         const before = store.getConversationLogEntryById(comment.id)!;
-        expect(before.task_id).toBe("tsk_deleted");
+        expect(before.task_id).toBe(store.getTurnForAttempt(task.id)!.id);
         const patches: ConversationLogPatch[] = [];
         store.setConversationLogListener({ onEntry: (_sessionId, entry) => {
           if ("target_seq" in entry) patches.push(entry);

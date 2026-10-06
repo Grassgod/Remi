@@ -1,6 +1,11 @@
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -25,25 +30,35 @@ function fixture() {
     id: "rt_code_other", name: "Other", provider: "codex", workspaceId: "local", daemonId: "daemon_code_other",
   });
   store.getOrCreateSessionAgentLane(parent.id, agent.id);
-  db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+  db!.run("UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ? AND reader_id = ?",
     [runtime.id, parent.id, agent.id]);
   return { store, issue, parent, agent, runtime, other, repositoryUrl };
 }
 
 describe("side Session code snapshots", () => {
   it("migrates old Sessions with snapshots disabled and reruns without losing the pinned Runtime", () => {
-    const f = fixture();
-    db!.exec(`ALTER TABLE multiremi_issue_sessions DROP COLUMN with_code;
+    const legacyDb = openSqliteDatabase(":memory:");
+    bootstrapPreUnifiedSchema(legacyDb);
+    const historical = historicalWriters(legacyDb);
+    const issue = historical.createIssue({ title: "Historical code sessions" });
+    const parent = historical.getOrCreateDefaultIssueSession(issue.id);
+    legacyDb.exec(`ALTER TABLE multiremi_issue_sessions DROP COLUMN with_code;
       ALTER TABLE multiremi_issue_sessions DROP COLUMN code_runtime_id;`);
-    runMigrations(db!);
-    expect(f.store.getIssueSession(f.parent.id)).toMatchObject({
+    runMigrations(legacyDb);
+    const store = new MultiremiStore(legacyDb);
+    expect(store.getIssueSession(parent.id)).toMatchObject({
       withCode: false, with_code: false, codeRuntimeId: null, code_runtime_id: null,
     });
-    const side = f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true });
-    runMigrations(db!);
-    expect(f.store.getIssueSession(side.id)).toMatchObject({
-      withCode: true, with_code: true, codeRuntimeId: f.runtime.id, code_runtime_id: f.runtime.id,
+    const runtime = store.registerRuntime({ name: "Pinned", provider: "codex" });
+    const agent = store.createAgent({ name: "Pinned reader", provider: "codex" });
+    store.getOrCreateSessionAgentLane(parent.id, agent.id);
+    legacyDb.run("UPDATE multiremi_session_lanes SET runtime_id=? WHERE session_id=?", [runtime.id, parent.id]);
+    const side = store.createIssueSession(issue.id, { parentSessionId: parent.id, withCode: true });
+    runMigrations(legacyDb);
+    expect(store.getIssueSession(side.id)).toMatchObject({
+      withCode: true, with_code: true, codeRuntimeId: runtime.id, code_runtime_id: runtime.id,
     });
+    legacyDb.close();
   });
 
   it("defaults to no code or Runtime pin and keeps ordinary side tasks free of repository mounts", () => {
@@ -109,7 +124,7 @@ describe("side Session code snapshots", () => {
 
   it("rejects an unstarted parent clearly but permits a plain discussion", async () => {
     const f = fixture();
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = NULL WHERE session_id = ?", [f.parent.id]);
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = NULL WHERE session_id = ?", [f.parent.id]);
     expect(() => f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true }))
       .toThrow("with_code requires a parent session lane with a runtime");
     const app = createMultiremiApp({ store: f.store, authToken: "MASTER" });
@@ -125,7 +140,7 @@ describe("side Session code snapshots", () => {
   it("pins code tasks to the original parent machine even after the parent lane moves", () => {
     const f = fixture();
     const side = f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true });
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ?", [f.other.id, f.parent.id]);
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ?", [f.other.id, f.parent.id]);
     const task = f.store.createTask({
       agentId: f.agent.id, issueId: f.issue.id, issueSessionId: side.id, prompt: "Inspect code",
       runtimeId: f.other.id, holdsWorkspace: true,
@@ -142,9 +157,9 @@ describe("side Session code snapshots", () => {
     const f = fixture();
     const recentAgent = f.store.createAgent({ name: "Recent parent author", provider: "codex", workspaceId: "local" });
     f.store.getOrCreateSessionAgentLane(f.parent.id, recentAgent.id);
-    db!.run("UPDATE multiremi_session_agent_lanes SET updated_at = ? WHERE session_id = ? AND agent_id = ?",
+    db!.run("UPDATE multiremi_session_lanes SET updated_at = ? WHERE session_id = ? AND reader_id = ?",
       ["2026-01-01T00:00:00.000Z", f.parent.id, f.agent.id]);
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ?, updated_at = ? WHERE session_id = ? AND agent_id = ?",
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = ?, updated_at = ? WHERE session_id = ? AND reader_id = ?",
       [f.other.id, "2026-01-02T00:00:00.000Z", f.parent.id, recentAgent.id]);
     const side = f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true });
     expect(side.codeRuntimeId).toBe(f.other.id);
@@ -157,7 +172,7 @@ describe("side Session code snapshots", () => {
     const side = f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true });
     const task = f.store.createSessionTask(side.id, { agentId: f.agent.id, prompt: "Read code" });
     // Model a generic recovery path that re-pools a queued task.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE id = ?", [task.id]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL WHERE id = ?", [task.id]);
     expect(f.store.claimTask(f.other.id)).toBeNull();
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(task.id);
   });
@@ -167,7 +182,7 @@ describe("side Session code snapshots", () => {
     const side = f.store.createIssueSession(f.issue.id, { parentSessionId: f.parent.id, withCode: true });
     const task = f.store.createSessionTask(side.id, { agentId: f.agent.id, prompt: "Read code" });
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(task.id);
-    db!.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = 'wrong_machine_session',
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = 'wrong_machine_session',
       dispatched_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`, [f.other.id, task.id]);
     expect(f.store.claimTask(f.other.id)).toBeNull();
     expect(f.store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: f.runtime.id, sessionId: null });
@@ -202,10 +217,11 @@ describe("side Session code snapshots", () => {
     f.store.completeTask(previous.id, { output: "Read", sessionId: "provider_source", workDir: "/discussion/source" });
     const before = f.store.getSessionAgentLane(side.id, f.agent.id)!;
     expect(before.providerSessionId).toBe("provider_source");
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ? AND reader_id = ?",
       [f.other.id, side.id, f.agent.id]);
     const next = f.store.createSessionTask(side.id, { agentId: f.agent.id, prompt: "Read again" });
     expect(next).toMatchObject({ runtimeId: f.runtime.id, sessionId: null, workDir: null });
+    expect(f.store.getIssueSession(side.id)?.codeRuntimeId).toBe(f.runtime.id);
     expect(f.store.getSessionAgentLane(side.id, f.agent.id)!.generation).toBeGreaterThan(before.generation);
     expect(f.store.claimTask(f.other.id)).toBeNull();
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(next.id);
@@ -223,7 +239,7 @@ describe("side Session code snapshots", () => {
     });
     const retry = f.store.listTasksForIssue(f.issue.id).find((task) => task.parentTaskId === first.id)!;
     expect(retry).toMatchObject({
-      status: "queued", runtimeId: f.runtime.id, holdsWorkspace: false, sessionId: null, workDir: null,
+      status: "queued", runtimeId: null, holdsWorkspace: false, sessionId: null, workDir: null,
     });
     expect(f.store.claimTask(f.other.id)).toBeNull();
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(retry.id);

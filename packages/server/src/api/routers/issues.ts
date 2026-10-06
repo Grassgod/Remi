@@ -1607,7 +1607,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (rawSeq != null && (!Number.isSafeInteger(seq) || seq! < 0)) return c.json({ error: "invalid seq" }, 400);
     const entry = seq == null ? null : store.getConversationLogEntry(sessionId, seq);
     if (!entry || entry.visibility !== "shown" || entry.deleted_at || !conversationEntryVisibility(c, store)(entry)) return c.json({ error: "entry not found" }, 404);
-    const recipient = store.getMessage(entry.id)?.to_agent_id;
+    // The canonical log row already includes the recipient header.
+    const recipient = (entry as typeof entry & { to_agent_id: string | null }).to_agent_id;
     const delivered = recipient ? store.getSessionAgentMaxCursorSeq(sessionId, recipient) >= entry.seq || store.hasInboxReceiptCovering(sessionId, recipient, entry.seq) : null;
     return c.json({ ...messageResponse(entry), delivered });
   });

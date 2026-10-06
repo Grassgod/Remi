@@ -1,6 +1,9 @@
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiSessionEvent } from "@multiremi/contracts/types.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -17,24 +20,29 @@ function event(seq: number, authorType = "agent", authorId: string | null = "age
 
 describe("side Session snapshots", () => {
   it("upgrades old Session rows with defaults and can rerun the migration", () => {
-    const store = createStore();
-    const issue = store.createIssue({ title: "Legacy Sessions" });
+    const legacyDb = openSqliteDatabase(":memory:");
+    bootstrapPreUnifiedSchema(legacyDb);
+    const historical = historicalWriters(legacyDb);
+    const issue = historical.createIssue({ title: "Legacy Sessions" });
+    const store = historical;
     const main = store.getOrCreateDefaultIssueSession(issue.id);
-    db!.exec(`ALTER TABLE multiremi_issue_sessions DROP COLUMN parent_session_id;
+    legacyDb.exec(`ALTER TABLE multiremi_issue_sessions DROP COLUMN parent_session_id;
       ALTER TABLE multiremi_issue_sessions DROP COLUMN inherit_mode;
       ALTER TABLE multiremi_issue_sessions DROP COLUMN inherit_cutoff_seq;`);
-    runMigrations(db!);
-    runMigrations(db!);
+    runMigrations(legacyDb);
+    runMigrations(legacyDb);
+    const migrated = new MultiremiStore(legacyDb);
 
-    expect(db!.query("PRAGMA table_info(multiremi_issue_sessions)").all()).toEqual(expect.arrayContaining([
+    expect(legacyDb.query("PRAGMA table_info(multiremi_issue_sessions)").all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "parent_session_id", type: "TEXT" }),
       expect.objectContaining({ name: "inherit_mode", type: "TEXT", notnull: 1, dflt_value: "'none'" }),
       expect.objectContaining({ name: "inherit_cutoff_seq", type: "INTEGER" }),
     ]));
-    expect(store.getIssueSession(main.id)).toMatchObject({
+    expect(migrated.getIssueSession(main.id)).toMatchObject({
       parentSessionId: null, parent_session_id: null, inheritMode: "none", inherit_mode: "none",
       inheritCutoffSeq: null, inherit_cutoff_seq: null, inheritedEventCount: 0, holdsWorkspace: true,
     });
+    legacyDb.close();
   });
 
   it("freezes the cutoff and event count, implies discussion, and keeps inheritance immutable", () => {
@@ -206,6 +214,7 @@ describe("side Session snapshots", () => {
     expect(store.getTask(main.id)?.status).toBe("running");
     expect(store.getTask(discussion.id)?.status).toBe("running");
     expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.getTaskQueueBlocker(next.id)?.taskId).toBe(main.id);
+    expect(next.id).toBe(main.id);
+    expect(store.listTasksForIssue(issue.id).filter(task => task.agentId === agent.id)).toHaveLength(2);
   });
 });

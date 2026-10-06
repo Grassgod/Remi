@@ -4,7 +4,7 @@ import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attem
 import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
-import { UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
+import { UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
 import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
 import { foldDecisionRecords } from './inbox/decision-migration.js';
 import { createDecisionReadProjections } from "./inbox/decision-records.js";
@@ -84,7 +84,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if (tables.has("multiremi_feishu_bot_configs")) {
       addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
     }
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){

@@ -48,10 +48,12 @@ afterEach(() => {
 /** Every table these cases can write, so "no partial commit" is checkable. */
 const TRACKED_TABLES = [
   "multiremi_issues",
-  "multiremi_tasks",
+  "multiremi_turn_execution_records",
   "multiremi_issue_sessions",
   "multiremi_chat_sessions",
-  "multiremi_chat_messages",
+  "multiremi_conversation_log",
+  "multiremi_turns",
+  "multiremi_session_lanes",
   "multiremi_feishu_bot_chat_bindings",
   "multiremi_feishu_bot_deliveries",
   "multiremi_feishu_bot_senders",
@@ -477,7 +479,7 @@ describe("MUL-405 nested transaction rollback", () => {
 
         // The final write of the outer transaction, after the Issue, Session and
         // Task all exist.
-        injection.failStatement(/UPDATE multiremi_autopilot_runs\s+SET issue_id = \?, task_id = \?/i);
+        injection.failStatement(/UPDATE multiremi_autopilot_runs SET turn_id=\?/i);
         expect(() => store.runAutopilot(autopilot.id)).toThrow("injected statement failure");
         injection.disarm();
         expect(snapshot(backend.db())).toEqual(before);

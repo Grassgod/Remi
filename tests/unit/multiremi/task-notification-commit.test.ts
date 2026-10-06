@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { describe, expect, it } from "bun:test";
 import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { StoreContext } from "@multiremi/store/context.js";
@@ -27,7 +29,7 @@ describe("task notifications respect the caller's commit", () => {
         for (const status of statuses) {
           const before = received.length;
           ctx.db.transaction(() => {
-            ctx.db.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, task.id]);
+            runTurnExecutionMutation(ctx.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, task.id]);
             ctx.notifyTaskEvent(`task:${status}`, { ...task, status });
             expect(received).toHaveLength(before);
             expect(materialized).toHaveLength(before);
@@ -35,7 +37,7 @@ describe("task notifications respect the caller's commit", () => {
           expect(received.at(-1)).toBe(`task:${status}`);
           expect(materialized.at(-1)).toBe(status);
           expect(() => ctx.db.transaction(() => {
-            ctx.db.run("UPDATE multiremi_tasks SET status = 'queued' WHERE id = ?", [task.id]);
+            runTurnExecutionMutation(ctx.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'queued' WHERE id = ?", [task.id]);
             ctx.notifyTaskEvent("task:running", { ...task, status: "running" });
             throw new Error("rollback event");
           })()).toThrow("rollback event");
@@ -63,7 +65,7 @@ describe("task notifications respect the caller's commit", () => {
         };
         store.onTaskEvent(() => { received += 1; });
         expect(() => ctx.db.transaction(() => {
-          ctx.db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+          runTurnExecutionMutation(ctx.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [task.id]);
           ctx.notifyTaskEvent("task:completed", { ...task, status: "completed" });
           expect(attempts).toBe(0);
         })()).not.toThrow();
@@ -71,7 +73,7 @@ describe("task notifications respect the caller's commit", () => {
         expect(attempts).toBe(1);
         expect(received).toBe(1);
         // The connection remains usable after the optional SQL failure.
-        ctx.db.transaction(() => ctx.db.run("UPDATE multiremi_tasks SET status = 'failed' WHERE id = ?", [task.id]))();
+        ctx.db.transaction(() => runTurnExecutionMutation(ctx.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'failed' WHERE id = ?", [task.id]))();
         expect(store.getTask(task.id)?.status).toBe("failed");
       });
     }, 30_000);

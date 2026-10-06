@@ -3127,7 +3127,6 @@ export class IssuesRepo {
       prompt: current.title,
       parentTaskId,
     }, childStatusChanges, deferredEvents);
-    deferredEvents.enqueuedTasks.push(task);
     this.ctx.appendIssueActivity(current.id, {
       actorType,
       actorId,
@@ -3712,7 +3711,6 @@ export class IssuesRepo {
           parentTaskId,
           assignmentAuthorType: "system",
         }, nested, deferredEvents);
-        deferredEvents.enqueuedTasks.push(task);
         this.ctx.appendIssueActivity(dependent.id, {
           actorType: "system",
           actorId: SYSTEM_AUTHOR_ID,
@@ -5121,7 +5119,7 @@ export class IssuesRepo {
         prompt: assigneeCommentPrompt(comment),
         dependencyForce: {
           source: "comment",
-          actorMemberId: this.ctx.workspaces().getWorkspaceMember(comment.authorId ?? "")?.userId
+          actorMemberId: this.ctx.workspaces().getWorkspaceMember(comment.authorId ?? "")?.id
             ?? comment.authorId ?? "local",
           commentId: comment.id,
         },
@@ -5255,7 +5253,7 @@ export class IssuesRepo {
         this.ctx.conversationLog().updateWithinTransaction(comment.issueSessionId, seq, {
           fields: {
             body_md: "",
-            task_id: null,
+            // Keep the frozen source link for delegation ancestry after deletion.
             deleted_at: now,
             updated_at: now,
             metadata: { ...existing.metadata, deleted_body: comment.body },
@@ -6867,7 +6865,6 @@ export class IssuesRepo {
   ): MultiremiTask {
     if (!deferredEvents || !childStatusChanges) return this.ctx.tasks().createTask(input);
     const task = this.ctx.tasks().createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
-    deferredEvents.enqueuedTasks.push(task);
     return task;
   }
 

@@ -240,7 +240,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       // `configured=false` but the effective role is still `all`, and that is what
       // the fanout got: both registries, exactly main's behaviour.
       expect(spy.roles).toEqual(["all"]);
-      expect(fanoutDelivery("all")).toMatchObject({ browser: 1, daemon: 1 });
+      expect(fanoutDelivery("all")).toEqual({ browser: 2, daemon: 1, browserTypes: ["inbox:new", "task:queued"], daemonTypes: ["task:queued"] });
     } finally {
       server.stop(true);
       db.close();

@@ -76,7 +76,7 @@ describe("rich mention continuation", () => {
       .toMatchObject({ providerSessionId: "provider_one" });
   });
 
-  it("queues the continuation behind a teammate that is still working", () => {
+  it("delivers another mention to the teammate already working in that delegation", () => {
     const f = fixture();
     f.mention("First pass.");
     const [first] = f.delegated();
@@ -84,10 +84,11 @@ describe("rich mention continuation", () => {
     f.store.buildTaskSessionProjection(first!.id);
     f.store.startTask(first!.id);
 
-    f.mention("One more thing while you are in there.");
-    const [second] = f.delegated().slice(1);
-    expect(second?.delegationId).toBe(first!.delegationId);
-    expect(f.store.getTaskQueueBlocker(second!.id)?.taskId).toBe(first!.id);
+    const comment=f.mention("One more thing while you are in there.");
+    expect(f.delegated().map(task=>task.id)).toEqual([first!.id]);
+    expect(f.store.getTask(first!.id)?.status).toBe('running');
+    expect(f.store.getMessage(comment.id)).toMatchObject({to_agent_id:f.teammate.id,wake_applied:'now',task_id:f.main.turn_id});
+    expect(f.store.listIssueActivity(f.issue.id).filter(row=>row.type==='message_delivered_running')).toHaveLength(1);
     expect(f.store.claimTask(f.runtime.id)).toBeNull();
   });
 });

@@ -298,7 +298,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const conversation = loadConversation(c, store, turn.session_id);
       if (conversation instanceof Response) return conversation;
     }
-    if (task?.chatSessionId && !canAccessConversationTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    if (task && !canAccessConversationTask(c, store, task)) return c.json({ error: task.chatSessionId ? "forbidden" : "turn not found" }, task.chatSessionId ? 403 : 404);
     return turn;
   };
   app.get("/api/turns", c => {

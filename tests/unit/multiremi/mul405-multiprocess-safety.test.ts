@@ -17,7 +17,7 @@ import type { Database } from "bun:sqlite";
 import { advisoryLock, advisoryXactLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema, resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -187,7 +187,7 @@ describe("MUL-405 defensive unique index", () => {
 
   it("skips the index and warns instead of failing when duplicates already exist", () => {
     const db = freshDb();
-    runMigrations(db as unknown as SqlDatabase);
+    bootstrapPreUnifiedSchema(db as unknown as SqlDatabase);
     // Recreate the exact state a pre-MUL-405 duplicate race leaves behind: two
     // rows carrying the same allocated number and no index to stop them.
     db.exec("DROP INDEX idx_multiremi_issues_workspace_number");
@@ -200,7 +200,7 @@ describe("MUL-405 defensive unique index", () => {
       );
     }
 
-    const { lines } = captureStdout(() => runMigrations(db as unknown as SqlDatabase));
+    const { lines } = captureStdout(() => bootstrapPreUnifiedSchema(db as unknown as SqlDatabase));
 
     const indexes = db.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>;
     expect(indexes.map((row) => row.name)).not.toContain("idx_multiremi_issues_workspace_number");
@@ -216,7 +216,7 @@ describe("MUL-405 defensive unique index", () => {
 
   it("does not enforce uniqueness over the unallocated placeholder", () => {
     const db = freshDb();
-    runMigrations(db as unknown as SqlDatabase);
+    bootstrapPreUnifiedSchema(db as unknown as SqlDatabase);
     const now = new Date().toISOString();
     // `issue_number = 0` means "no number allocated yet" and is the column
     // default, so an out-of-band writer leaves N rows there without touching the
@@ -233,7 +233,7 @@ describe("MUL-405 defensive unique index", () => {
     const before = db.query("SELECT id FROM multiremi_issues ORDER BY id").all() as Array<{ id: string }>;
     expect(before.map((row) => row.id)).toEqual(["iss_x", "iss_y"]);
 
-    runMigrations(db as unknown as SqlDatabase);
+    bootstrapPreUnifiedSchema(db as unknown as SqlDatabase);
 
     const rows = db.query("SELECT id, issue_number FROM multiremi_issues ORDER BY id").all() as Array<{ id: string; issue_number: number }>;
     expect(rows.map((row) => row.issue_number)).toEqual([1, 2]);
@@ -241,7 +241,7 @@ describe("MUL-405 defensive unique index", () => {
 
   it("retries on the next startup after skipping", () => {
     const db = freshDb();
-    runMigrations(db as unknown as SqlDatabase);
+    bootstrapPreUnifiedSchema(db as unknown as SqlDatabase);
     db.exec("DROP INDEX idx_multiremi_issues_workspace_number");
     const now = new Date().toISOString();
     for (const id of ["iss_a", "iss_b"]) {
@@ -251,11 +251,11 @@ describe("MUL-405 defensive unique index", () => {
         [id, id, now, now],
       );
     }
-    captureStdout(() => runMigrations(db as unknown as SqlDatabase));
+    captureStdout(() => bootstrapPreUnifiedSchema(db as unknown as SqlDatabase));
     // Once the data is healed, the same startup path creates it. That is why the
     // skip is not recorded in `multiremi_schema_migrations`.
     db.run("DELETE FROM multiremi_issues WHERE id = 'iss_b'");
-    const { lines } = captureStdout(() => runMigrations(db as unknown as SqlDatabase));
+    const { lines } = captureStdout(() => bootstrapPreUnifiedSchema(db as unknown as SqlDatabase));
     expect(lines.filter((line) => line.event === "api_startup_warning")).toHaveLength(0);
     const indexes = db.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>;
     expect(indexes.map((row) => row.name)).toContain("idx_multiremi_issues_workspace_number");

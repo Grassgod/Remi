@@ -887,6 +887,7 @@ export class FeishuIngestRepo {
       if (!message || message.workspaceId !== input.workspaceId) {
         throw new Error(`Feishu message not found: ${messageId}`);
       }
+      this.lockWorkspace(input.workspaceId);
       const taskId = cleanOptionalString(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
       const inboxType = outcomeKind === "reply_drafted" ? "feishu_reply_draft" : "feishu_message_notification";
@@ -1002,6 +1003,7 @@ export class FeishuIngestRepo {
       if (!message || message.workspaceId !== input.workspaceId) {
         throw new Error(`Feishu message not found: ${messageId}`);
       }
+      this.lockWorkspace(input.workspaceId);
       const taskId = cleanOptionalString(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
       this.lockMessage(messageId);

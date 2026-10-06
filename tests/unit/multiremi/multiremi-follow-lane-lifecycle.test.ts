@@ -59,7 +59,7 @@ describe("follow lane Runtime lifecycle", () => {
         provider: null,
         executionFingerprint: null,
         workDir: null,
-        cursorSeq: 0,
+        cursorSeq: 1,
         parentCursorSeq: 0,
         generation: before.generation + 1,
       });

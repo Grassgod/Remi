@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { beforeEach, expect, it, spyOn } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
@@ -17,7 +19,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     bindFeishuTopicFixture(f.store, f.db, chat.id, issue.id);
     const runtime = f.store.registerRuntime({ name: "Relay test runtime", provider: "codex", maxConcurrency: 4 });
     const legacyRows = () => Number((f.db.query("SELECT COUNT(*) AS count FROM multiremi_agent_issue_update_state").get() as { count: number }).count);
-    const lane = () => f.store.getSessionAgentLane(session.id, agent.id, `relay:${chat.id}`);
+    const lane = () => f.store.getOrCreateSessionAgentLane(session.id, agent.id, `relay:${chat.id}`);
     const reports = () => f.store.listChatMessages(chat.id).filter(message => message.role === "system" && message.body.includes(issue.key));
     return { ...f, agent, issue, session, chat, runtime, lane, reports, legacyRows };
   }
@@ -27,7 +29,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(issueTask.id);
     f.store.startTask(issueTask.id);
     f.store.completeTask(issueTask.id, { output: "Issue result" });
-    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "platform_to_owner")!;
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
     return relay;
   }
@@ -45,7 +47,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
       expect(f.reports()[0]!.body).toContain(`状态 ${status}`);
       const entry = f.store.listConversationLogShown(f.chat.id).find(item => item.id === f.reports()[0]!.id)!;
       expect(entry.metadata.envelope).toMatchObject({ kind: "report", outcome: status, wake: "now" });
-      const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "relay")!;
+      const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "platform_to_owner")!;
       expect(relay).toBeDefined();
       expect(f.lane()?.cursorSeq).toBe(0);
       expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
@@ -60,23 +62,24 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
       expect(f.lane()?.cursorSeq).toBe(0);
       f.store.startTask(relay.id);
       f.store.completeTask(relay.id, { output: "Reported to Feishu" });
-      expect(f.lane()?.cursorSeq).toBe(log.to_seq);
+      expect(f.lane()?.cursorSeq).toBe(0);
+      expect(f.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_id=? AND execution_scope=?").get(f.session.id,f.agent.id,`relay:${f.chat.id}`)?.provider_cursor_seq).toBe(log.to_seq);
       expect(f.legacyRows()).toBe(before);
     });
   }
 
-  it("deduplicates a repeated round trigger and reads only the next interval", () => {
+  it("deduplicates a repeated round trigger and replays the unread interval until a range read", () => {
     const f = setup();
     const first = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "First round" });
     f.store.claimTask(f.runtime.id);
     f.store.startTask(first.id);
     f.store.completeTask(first.id, { output: "First result" });
-    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "platform_to_owner")!;
     f.store.claimTask(f.runtime.id);
     const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as { to_seq: number };
     f.store.startTask(relay.id);
     f.store.completeTask(relay.id, { output: "First summary" });
-    expect(f.lane()?.cursorSeq).toBe(firstLog.to_seq);
+    expect(f.lane()?.cursorSeq).toBe(0);
     const duplicate = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
       to: { role: "relay", issueId: f.issue.id }, kind: "report", outcome: "done", wake: "now",
       dedupeKey: `relay:${f.issue.id}:${first.id}`, body: "Repeated terminal hook", source: { issueId: f.issue.id, taskId: first.id },
@@ -93,18 +96,18 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
       from_seq: number; to_seq: number; content_jsonl: string;
     };
-    expect(nextLog.from_seq).toBe(firstLog.to_seq);
+    expect(nextLog.from_seq).toBe(0);
     expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
     expect(nextLog.content_jsonl).toContain("Second result");
-    expect(nextLog.content_jsonl).not.toContain("First result");
-    expect(JSON.parse(nextLog.content_jsonl.split("\n")[0]!).from_seq).toBe(firstLog.to_seq);
+    expect(nextLog.content_jsonl).toContain("First result");
+    expect(JSON.parse(nextLog.content_jsonl.split("\n")[0]!).from_seq).toBe(0);
   });
 
   it("keeps the relay cursor when claim log reading fails and replays the unread interval", () => {
     const f = setup();
     const relay = claimRelayAfterCompletedIssueRound(f);
     const toSeq = f.store.getBoundIssueLogToSeq(relay.id)!;
-    expect(toSeq).toBe(3);
+    expect(toSeq).toBe(4);
     const unreadSeqs = f.store.listConversationLogShown(f.session.id, { toSeq }).map(entry => entry.seq);
     const originalList = f.store.listConversationLogShown;
     f.store.listConversationLogShown = () => { throw new Error("injected relay log read failure"); };
@@ -143,8 +146,8 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     } finally {
       f.store.markBoundIssueLogDelivered = originalMark;
     }
-    expect(response!.bound_issue_log).toMatchObject({ from_seq: 0, to_seq: 3 });
-    const row = f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+    expect(response!.bound_issue_log).toMatchObject({ from_seq: 0, to_seq: 4 });
+    const row = f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_turn_execution_records WHERE id = ?")
       .get(relay.id) as { bound_issue_log_delivered_seq: number | null };
     expect(row.bound_issue_log_delivered_seq).toBeNull();
     f.store.startTask(relay.id);
@@ -155,14 +158,14 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
   it("reports a zero-row delivery marker update without advancing the relay cursor", () => {
     const f = setup();
     const relay = claimRelayAfterCompletedIssueRound(f);
-    expect(f.store.getBoundIssueLogToSeq(relay.id)).toBe(3);
-    expect(f.store.markBoundIssueLogDelivered(relay.id, 4)).toBe(false);
+    expect(f.store.getBoundIssueLogToSeq(relay.id)).toBe(4);
+    expect(f.store.markBoundIssueLogDelivered(relay.id, 5)).toBe(false);
     const originalMark = f.store.markBoundIssueLogDelivered;
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     f.store.markBoundIssueLogDelivered = (taskId, toSeq) => originalMark.call(f.store, taskId, toSeq + 1);
     try {
       expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log)
-        .toMatchObject({ from_seq: 0, to_seq: 3 });
+        .toMatchObject({ from_seq: 0, to_seq: 4 });
       expect(warnings.mock.calls.some(([message]) =>
         String(message).includes("WARN")
         && String(message).includes(`Failed to mark bound Issue log delivered for claimed task ${relay.id}`),
@@ -171,7 +174,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
       f.store.markBoundIssueLogDelivered = originalMark;
       warnings.mockRestore();
     }
-    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_turn_execution_records WHERE id = ?")
       .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: null });
     f.store.startTask(relay.id);
     f.store.completeTask(relay.id, { output: "No matching delivery window" });
@@ -184,13 +187,13 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
       expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log)
-        .toMatchObject({ from_seq: 0, to_seq: 3 });
+        .toMatchObject({ from_seq: 0, to_seq: 4 });
       expect(warnings.mock.calls).toHaveLength(0);
     } finally {
       warnings.mockRestore();
     }
-    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
-      .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: 3 });
+    expect(f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_turn_execution_records WHERE id = ?")
+      .get(relay.id)).toEqual({ bound_issue_log_delivered_seq: 4 });
   });
 
   it("replays the relay and pending-turn migrations twice without losing either column", () => {
@@ -198,7 +201,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     runMigrations(f.db);
     runMigrations(f.db);
     const task = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Migration check" });
-    expect(f.db.query("SELECT bound_issue_log_to_seq, bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+    expect(f.db.query("SELECT bound_issue_log_to_seq, bound_issue_log_delivered_seq FROM multiremi_turn_execution_records WHERE id = ?")
       .get(task.id)).toEqual({ bound_issue_log_to_seq: null, bound_issue_log_delivered_seq: null });
     for (const id of ["20260929_relay_issue_log_to_seq", "20260929_relay_issue_log_delivered_seq", "20260929_tasks_one_pending_turn"]) {
       const row = f.db.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
@@ -213,11 +216,11 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
       to_seq: number;
     };
-    const deliveredSeq = () => (f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+    const deliveredSeq = () => (f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_turn_execution_records WHERE id = ?")
       .get(relay.id) as { bound_issue_log_delivered_seq: number | null }).bound_issue_log_delivered_seq;
     expect(deliveredSeq()).toBe(firstLog.to_seq);
 
-    f.db.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", [
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", [
       new Date(Date.now() - 120_000).toISOString(), relay.id,
     ]);
     expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
@@ -256,7 +259,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     f.store.claimTask(f.runtime.id);
     f.store.startTask(first.id);
     f.store.completeTask(first.id, { output: "First result" });
-    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "platform_to_owner")!;
     f.store.claimTask(f.runtime.id);
     const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as { to_seq: number };
     f.store.startTask(relay.id);
@@ -291,7 +294,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const projected = lines.find((line) => line.type === "session_event" && line.seq === entry.seq);
     expect(projected).toMatchObject({
       body_folded: true,
-      expand: `remi session log get ${f.session.id} ${entry.seq}`,
+      expand: `remi message get ${entry.id}`,
     });
     expect(projected.body).toBeUndefined();
     expect(f.store.getConversationLogEntry(f.session.id, entry.seq)?.body_md).toBe(body);
@@ -309,7 +312,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     f.store.claimTask(f.runtime.id);
     f.store.startTask(task.id);
     f.store.completeTask(task.id, { output: "Done" });
-    const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "relay")!;
+    const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "platform_to_owner")!;
     f.store.claimTask(f.runtime.id);
     const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
       from_seq: number; to_seq: number; next_seq: number; has_more: boolean; content_jsonl: string;
@@ -321,7 +324,8 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(log.content_jsonl).not.toContain("Log item 109");
     f.store.startTask(relay.id);
     f.store.completeTask(relay.id, { output: "Window summary" });
-    expect(f.lane()?.cursorSeq).toBe(log.to_seq);
+    expect(f.lane()?.cursorSeq).toBe(0);
+      expect(f.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_id=? AND execution_scope=?").get(f.session.id,f.agent.id,`relay:${f.chat.id}`)?.provider_cursor_seq).toBe(log.to_seq);
   }, 30_000);
 
   it("hides system queue rows from user edits, priority, and removal", () => {
@@ -333,6 +337,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const user = f.store.sendChatMessage(chat.id, { content: "Private turn" });
     f.store.claimTask(runtime.id);
     f.store.startTask(user.task.id);
+    f.store.cancelTask(user.task.id);
     bindFeishuTopicFixture(f.store, f.db, chat.id, issue.id);
     const sent = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
       to: { role: "chat", chatSessionId: chat.id, agentId: agent.id }, kind: "report", wake: "now",

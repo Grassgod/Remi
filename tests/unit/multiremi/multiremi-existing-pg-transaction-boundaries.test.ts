@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-465: real PG rollback/readback coverage for caller-owned steer and Agent
  * role transactions. An explicit unreachable PG URL is a failure; otherwise
@@ -141,6 +143,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("rolls back Feishu Chat, steer and delivery writes after a later failure", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
+    const beforeHead = store.getConversationLogHead(first.chatSessionId)!.headSeq;
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
     const originalRun = db.run;
@@ -162,13 +165,13 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       unsubscribe();
     }
     expect(injected).toBe(true);
-    expect(await reader<{ body: string }[]>`SELECT body FROM multiremi_chat_messages WHERE chat_session_id = ${first.chatSessionId} ORDER BY sequence`)
+    expect(await reader<{ body: string }[]>`SELECT body_md AS body FROM multiremi_conversation_log WHERE session_id = ${first.chatSessionId} AND kind = 'message' ORDER BY seq`)
       .toEqual([{ body: "Initial message" }]);
     expect(await reader`SELECT id FROM multiremi_task_steer_messages WHERE task_id = ${first.taskId}`).toHaveLength(0);
     expect(await reader<{ external_message_id: string }[]>`SELECT external_message_id FROM multiremi_feishu_bot_deliveries WHERE workspace_id = ${workspaceId} ORDER BY external_message_id`)
       .toEqual([{ external_message_id: `om_mul465_first_${fixtureNumber}` }]);
-    expect(await reader<{ message_sequence: number }[]>`SELECT message_sequence FROM multiremi_chat_sessions WHERE id = ${first.chatSessionId}`)
-      .toEqual([{ message_sequence: 1 }]);
+    expect(await reader<{ head_seq: number }[]>`SELECT head_seq FROM multiremi_conversation_heads WHERE session_id = ${first.chatSessionId}`)
+      .toEqual([{ head_seq: beforeHead }]);
     expect(events).toEqual([]);
     expect(db.inTransaction).toBe(false);
     expect(maxDepth).toBe(1);
@@ -176,6 +179,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("commits a Feishu steer in one transaction and preserves message linkage", async () => {
     const { workspaceId, runtime, first, input } = feishuFixture();
+    expect(store.claimTask(runtime.id)?.id).toBe(first.taskId);
+    store.startTask(first.taskId);
     const inputEvents: Array<{ inTransaction: boolean; taskId: unknown }> = [];
     const unsubscribe = store.onWorkspaceEvent(event => {
       if (event.type === "daemon:task_input" && event.payload.task_id === first.taskId) {
@@ -188,9 +193,11 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         .toMatchObject({ taskId: first.taskId, steered: true, duplicate: false });
     } finally { unsubscribe(); }
     expect(inputEvents).toEqual([{ inTransaction: false, taskId: first.taskId }]);
-    const rows = await reader`SELECT s.content, c.body FROM multiremi_task_steer_messages s
-      JOIN multiremi_chat_messages c ON c.id = s.source_chat_message_id WHERE s.task_id = ${first.taskId}`;
-    expect(rows).toEqual([{ content: input.text, body: input.text }]);
+    const turnId = store.getTask(first.taskId)!.turn_id!;
+    const rows = await reader`SELECT body_md, to_agent_id, metadata::jsonb->>'delivery_turn_id' AS turn_id
+      FROM multiremi_conversation_log WHERE session_id = ${first.chatSessionId} AND body_md = ${input.text}`;
+    expect(rows).toEqual([{ body_md: input.text, to_agent_id: store.getTask(first.taskId)!.agentId, turn_id: turnId }]);
+    expect(await reader`SELECT id FROM multiremi_task_steer_messages WHERE task_id = ${first.taskId}`).toHaveLength(0);
     expect(maxDepth).toBe(1);
     expect(db.inTransaction).toBe(false);
   });
@@ -220,13 +227,13 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const previous = store.createSessionTask(session.id, { agentId: fixture.agent.id, prompt: "Previous round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [previous.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [previous.id]);
     store.completeTask(previous.id, { output: "Previous round result" });
     const chat = store.listChatSessions(fixture.workspaceId)
       .find(chat => store.getFeishuIssueIdForChatSession(chat.id) === issue.id)!;
     const wake = store.getPendingChatTask(chat.id)!;
     const leader = store.createSessionTask(session.id, { agentId: fixture.agent.id, prompt: "Current round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [leader.id]);
     return { ...fixture, issue, session, wake, leader };
   }
 
@@ -254,7 +261,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       unsubscribe();
     }
     expect(injected).toBe(true);
-    expect(await reader<{ status: string }[]>`SELECT status FROM multiremi_tasks WHERE id = ${leader.id}`)
+    expect(await reader<{ status: string }[]>`SELECT status FROM multiremi_turn_execution_records WHERE id = ${leader.id}`)
       .toEqual([{ status: "running" }]);
     expect(await reader`SELECT id FROM multiremi_task_steer_messages WHERE task_id = ${wake.id}`).toHaveLength(0);
     expect(await reader`SELECT id FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ${leader.id}`).toHaveLength(0);
@@ -276,7 +283,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }
     });
     const unsubscribeLog = store.subscribeConversationLog({ onEntry(sessionId, entry) {
-      if (sessionId === wake.chatSessionId && "author_type" in entry && entry.author_type === "system") {
+      if (sessionId === wake.chatSessionId && "kind" in entry && entry.kind === "message" && "author_type" in entry && entry.author_type === "system") {
         events.push({ type: "log:entry", inTransaction: db.inTransaction, actorId: null, payload: { entry } });
       }
     } });
@@ -379,28 +386,22 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
   }
 
   it("keeps workspace before session locking and wakes only after the steer transaction commits", () => {
-    const { workspaceId, agent } = freshAgent();
+    const { workspaceId, agent, runtime } = freshAgent();
     const issue = store.createIssue({ title: "Steer lock order", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Steer me" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
     const locks: string[] = [];
     const events: Array<{ type: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent(event => events.push({ type: event.type, inTransaction: db.inTransaction }));
     const originalRun = db.run;
     const originalQuery = db.query;
-    // What this probe protects, and why B1's allocator counts as "session":
-    // main's steer path took two locks on the *session row* — the barrier lock
-    // in `lockTaskIssueSessionsWithinWorkspaceLock` and the seq allocator
-    // (`UPDATE multiremi_issue_sessions SET updated_at = updated_at` followed by
-    // `MAX(seq)+1`), both after the workspace lock. B1 replaced the allocator
-    // with the conversation-head counter, so the second lock moved to
-    // `multiremi_conversation_heads`; it is the same session-domain lock in the
-    // same seat of the W-before-S order. Counting it keeps this assertion
-    // pinning order *and* count. D also locks the legacy Session event row
-    // before allocation, so each steer has barrier, event-row and head locks.
+    // Both canonical session serialization and seq allocation must follow W.
+    // Capture both attempts so rollback protects the same order as commit.
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") locks.push("workspace");
-      if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") locks.push("session");
+      if (/UPDATE multiremi_issue_sessions SET updated_at\s*=\s*updated_at/.test(sql)) locks.push("session");
       return originalRun.call(this, sql, ...params);
     };
     db.query = function query(sql) {
@@ -415,7 +416,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "New input" });
         expect(events).toEqual([]);
       })();
-      expect(events).toEqual([{ type: "daemon:task_input", inTransaction: false }]);
+      expect(events).toEqual([{ type: "daemon:task_input", inTransaction: false }, { type: "inbox:new", inTransaction: false }]);
       events.length = 0;
       expect(() => db.transaction(() => {
         store.createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: "Rolled back" });
@@ -428,10 +429,11 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       db.query = originalQuery;
       unsubscribe();
     }
-    expect(locks).toEqual(["workspace", "session", "session", "session", "workspace", "session", "session", "session"]);
+    expect(locks).toEqual(["workspace", "workspace", "session", "session", "workspace", "workspace", "session", "session"]);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
-    expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);
+    expect(store.listMessages(session.id).filter(message => message.body_md === "New input")).toHaveLength(1);
+    expect(store.listMessages(session.id).filter(message => message.body_md === "Rolled back")).toHaveLength(0);
     expect(store.listTaskSteerMessages(task.id).map(message => message.content)).toEqual(["New input"]);
   });
 
@@ -440,7 +442,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     const issue = store.createIssue({ title: "Terminal request", workspaceId });
     const makePending = () => {
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId, prompt: "Work" });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ?, status = 'running' WHERE id = ?", [runtime.id, task.id]);
+      runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, status = 'running' WHERE id = ?", [runtime.id, task.id]);
       const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
       return { task, request };
     };
@@ -496,7 +498,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") {
           locks.push({ lock: "workspace", inTransaction: db.inTransaction });
         }
-        if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") {
+        if (/UPDATE multiremi_issue_sessions SET updated_at\s*=\s*updated_at/.test(sql)) {
+          expect(locks.some(entry => entry.lock === "workspace")).toBe(true);
           locks.push({ lock: "session", inTransaction: db.inTransaction });
         }
         return originalRun.call(this, sql, ...params);
@@ -514,19 +517,28 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }
       expect(maxDepth).toBe(1);
       expect(db.inTransaction).toBe(false);
-      expect(locks.slice(0, 2).map(entry => entry.lock)).toEqual(["workspace", "session"]);
+      expect(locks[0]?.lock).toBe("workspace");
+      expect(locks.some(entry => entry.lock === "session")).toBe(true);
       expect(locks.every(entry => entry.inTransaction)).toBe(true);
       expect(result.message).toMatchObject({
         taskId: targetTask.id, kind: action, content: "Organizer input",
         authorType: "agent", authorId: supervisorAgent.id,
       });
-      expect(await reader<{ kind: string; content: string; author_type: string; author_id: string }[]>`SELECT kind, content, author_type, author_id FROM multiremi_task_steer_messages WHERE task_id = ${targetTask.id}`)
-        .toEqual([{ kind: action, content: "Organizer input", author_type: "agent", author_id: supervisorAgent.id }]);
+      const directives = await reader`SELECT message_kind, body_md, sender_type, sender_id, to_agent_id
+        FROM multiremi_conversation_log WHERE session_id = ${session.id}
+          AND metadata::jsonb->>'steer_target_turn_id' = ${targetTask.turn_id!}`;
+      if (action === "steer") expect(directives).toEqual([{ message_kind: "request", body_md: "Organizer input",
+        sender_type: "agent", sender_id: supervisorAgent.id, to_agent_id: targetTask.agentId }]);
+      else {
+        expect(directives).toHaveLength(0);
+        expect(store.getTurn(targetTask.turn_id!)!.wrap_up_requested_at).not.toBeNull();
+      }
+      expect(await reader`SELECT id FROM multiremi_task_steer_messages WHERE task_id = ${targetTask.id}`).toHaveLength(0);
       expect(await reader<{ action: string; target_task_id: string; report_issue_id: string }[]>`SELECT action, target_task_id, report_issue_id FROM multiremi_organizer_actions WHERE id = ${result.audit.id}`)
         .toEqual([{ action, target_task_id: targetTask.id, report_issue_id: patrol.id }]);
-      expect(await reader`SELECT id FROM multiremi_issue_comments WHERE id = ${result.comment.id}`).toHaveLength(1);
+      expect(await reader`SELECT id FROM multiremi_conversation_log WHERE id = ${result.comment.id}`).toHaveLength(1);
       expect(await reader`SELECT id FROM multiremi_session_events WHERE session_id = ${session.id} AND kind = 'task_steer'`)
-        .toHaveLength(1);
+        .toHaveLength(0);
       expect(events.filter(event => event.type === "comment:created")).toHaveLength(1);
       expect(events.every(event => !event.inTransaction)).toBe(true);
     });
@@ -563,7 +575,10 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(await reader`SELECT id FROM multiremi_session_events WHERE session_id = ${session.id} AND kind = 'task_steer'`)
       .toHaveLength(0);
     expect(await reader`SELECT id FROM multiremi_organizer_actions WHERE target_task_id = ${targetTask.id}`).toHaveLength(0);
-    expect(await reader`SELECT id FROM multiremi_issue_comments WHERE issue_id = ${patrol.id}`).toHaveLength(0);
+    expect(await reader`SELECT id FROM multiremi_conversation_log WHERE session_id = ${session.id}
+      AND body_md = 'Organizer input'`).toHaveLength(0);
+    expect(await reader`SELECT id FROM multiremi_conversation_log WHERE session_id = ${store.getOrCreateDefaultIssueSession(patrol.id).id}
+      AND kind = 'message' AND message_kind = 'reply'`).toHaveLength(0);
     expect(events).toEqual([]);
     expect(maxDepth).toBe(1);
     expect(db.inTransaction).toBe(false);
@@ -573,10 +588,10 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     it(`rejects ${status} tasks in the caller-owned steer transaction`, () => {
       const { agent } = freshAgent();
       const task = store.createTask({ agentId: agent.id, prompt: "Terminal steer rejection" });
-      db.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, task.id]);
+      runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, task.id]);
       expect(() => db.transaction(() => store.createTaskSteerMessageWithinTransaction({
         taskId: task.id, kind: "steer", content: "Too late",
-      }))()).toThrow(`Task is already ${status}`);
+      }))()).toThrow("Steer target is terminal");
       expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
     });
   }

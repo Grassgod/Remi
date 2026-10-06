@@ -8,6 +8,7 @@ import { TRIGGER_MESSAGE_INLINE_CHARS } from '@multiremi/contracts/session-input
 import { afterCommit } from '../db/postgres.js';
 import { appendPendingTurnAuditWithinTransaction } from '../pending-turns.js';
 import { notifyTurnChanged } from '../turn-execution-records.js';
+import { RE_RING_SWEEP_PAGE_SQL, reRingSweepEnabled } from '../re-ring-sweep.js';
 
 export function lockLane(ctx: StoreContext, sessionId: string, agentId: string, scope = ''): void {
   const at = nowIso();
@@ -70,7 +71,7 @@ export function ensurePendingTurn(ctx: StoreContext, message: UnifiedMessage, in
   return turn.turn_id;
 }
 
-export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: CommitEventQueue): string | undefined {
+export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: CommitEventQueue, origin='turn_end'): string | undefined {
   const turn=ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(turnId);
   if (!turn || !['completed','failed','cancelled'].includes(turn.status)) return;
   const agent=ctx.agents().getAgent(turn.agent_id);
@@ -88,12 +89,14 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
 
   const raw=ctx.db.query(`SELECT id FROM multiremi_conversation_log WHERE session_id=? AND kind='message'
     AND to_agent_id=? AND seq>? AND wake_applied='now' AND deleted_at IS NULL AND ${scopeSql}=?
-    ORDER BY seq LIMIT 1`).get(turn.session_id,turn.agent_id,cursor,turn.execution_scope);
+    ORDER BY seq DESC LIMIT 1`).get(turn.session_id,turn.agent_id,cursor,turn.execution_scope);
   if (!raw) return;
   const message=ctx.inbox().getMessage(raw.id)!;
   const successor=ensurePendingTurn(ctx,message,{session_id:turn.session_id,sender:{type:message.sender_type,id:message.sender_id},
     to:{type:'agent',ref:turn.agent_id},message_kind:message.message_kind,wake_requested:'now',body_md:message.body_md,
-    execution_scope:turn.execution_scope},events,{delegationId:turn.delegation_id,delegatedByAgentId:turn.delegated_by_agent_id,delegatedFromIssueSessionId:turn.delegated_from_issue_session_id});
+    execution_scope:turn.execution_scope},events,{delegationId:turn.delegation_id,delegatedByAgentId:turn.delegated_by_agent_id,delegatedFromIssueSessionId:turn.delegated_from_issue_session_id,priority:turn.priority});
+  if(successor)appendPendingTurnAuditWithinTransaction(ctx.db,{id:successor,issueId:turn.issue_id,workspaceId:turn.workspace_id},'re_ring',{
+    origin,action:'created',seq:message.seq,task_id:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(successor)!.current_attempt_id});
   if(successor)ctx.db.run(`UPDATE multiremi_turns SET delegation_return_turn_id=? WHERE delegation_return_turn_id=?
     AND id IN (SELECT task_id FROM multiremi_conversation_log WHERE session_id=? AND seq>? AND to_agent_id=? AND wake_applied='now' AND ${scopeSql}=?)`,
     [successor,turn.id,turn.session_id,cursor,turn.agent_id,turn.execution_scope]);
@@ -131,9 +134,8 @@ export function acknowledgeInput(ctx: StoreContext, turnId:string, fromSeq:numbe
 }
 
 export function sweepIdleLanes(ctx:StoreContext,events:CommitEventQueue,limit=50,now=Date.now(),entryLimit=500):import('../re-ring-sweep.js').ReRingSweepResult {
-  const lanes=ctx.db.query(`SELECT l.*,h.workspace_id FROM multiremi_session_lanes l JOIN multiremi_conversation_heads h ON h.session_id=l.session_id
-    WHERE l.reader_type='agent' AND l.status='active' AND l.wake_hint_seq>l.swept_to_seq
-    ORDER BY COALESCE(l.swept_at,''),l.session_id,l.reader_id,l.execution_scope LIMIT ?`).all(limit);
+  if(!reRingSweepEnabled())return {visited:0,eligible:0,pageFull:false,lanes:0,examined:0,rang:0,coalesced:0,errors:0};
+  const lanes=ctx.db.query(RE_RING_SWEEP_PAGE_SQL).all(limit);
   const result={visited:lanes.length,eligible:0,pageFull:lanes.length===limit,lanes:0,examined:0,rang:0,coalesced:0,errors:0};
   for(const initial of lanes){
     if(!initial.workspace_id)continue;ctx.lockWorkspaceRuntimeLifecycle(initial.workspace_id);lockLane(ctx,initial.session_id,initial.reader_id,initial.execution_scope);
@@ -149,9 +151,15 @@ export function sweepIdleLanes(ctx:StoreContext,events:CommitEventQueue,limit=50
       AND t.status IN ('completed','failed','cancelled')`).get(lane.session_id,lane.reader_id,lane.execution_scope);
     const from=Math.max(Number(lane.cursor_seq),Number(lane.swept_to_seq),Number(covered?.seq??0));
     const head=ctx.conversationLog().getConversationLogHead(lane.session_id)?.headSeq??0;
-    if(!agent||agent.archivedAt||session?.status==='archived'||chat?.status==='archived'){
+    if(!agent||agent.archivedAt||agent.workspaceId!==initial.workspace_id||session?.status==='archived'||chat?.status==='archived'||lane.execution_scope.startsWith('relay:')){
       ctx.db.run("UPDATE multiremi_session_lanes SET swept_to_seq=?,swept_at=? WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?",[head,new Date(now).toISOString(),lane.session_id,lane.reader_id,lane.execution_scope]);continue;}
-    const latest=ctx.db.query('SELECT ended_at,created_at FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? ORDER BY created_at DESC,id DESC LIMIT 1').get(lane.session_id,lane.reader_id,lane.execution_scope);
+    const latest=ctx.db.query('SELECT * FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? ORDER BY created_at DESC,id DESC LIMIT 1').get(lane.session_id,lane.reader_id,lane.execution_scope);
+    // Recovery reports can belong to a downstream sender. Preserve this lane's
+    // own upstream delegation rather than inheriting the return turn's recipient.
+    const lineage=lane.execution_scope?ctx.db.query(`SELECT * FROM multiremi_turns
+      WHERE session_id=? AND agent_id=? AND execution_scope=? AND delegated_by_agent_id<>agent_id
+      ORDER BY CASE WHEN current_attempt_id=? THEN 0 ELSE 1 END,created_at DESC,id DESC LIMIT 1`)
+      .get(lane.session_id,lane.reader_id,lane.execution_scope,lane.last_attempt_id):null;
     if(now-Date.parse(latest?.ended_at??latest?.created_at??lane.updated_at)<60_000)continue;
     result.eligible++;result.lanes++;
     const entries=ctx.db.query('SELECT id,seq,kind FROM multiremi_conversation_log WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?').all(lane.session_id,from,entryLimit);result.examined+=entries.length;
@@ -159,8 +167,9 @@ export function sweepIdleLanes(ctx:StoreContext,events:CommitEventQueue,limit=50
     try{
       const laneEvents=createCommitEventQueue();
       const rang=ctx.db.transaction(()=>{
-        const message=messages[0];
-        const turnId=message?ensurePendingTurn(ctx,message,{session_id:lane.session_id,sender:{type:message.sender_type,id:message.sender_id},to:{type:'agent',ref:lane.reader_id},body_md:message.body_md,message_kind:message.message_kind,wake_requested:'now',execution_scope:lane.execution_scope},laneEvents):undefined;
+        const message=messages.at(-1);
+        const turnId=message?ensurePendingTurn(ctx,message,{session_id:lane.session_id,sender:{type:message.sender_type,id:message.sender_id},to:{type:'agent',ref:lane.reader_id},body_md:message.body_md,message_kind:message.message_kind,wake_requested:'now',execution_scope:lane.execution_scope},laneEvents,{delegationId:lineage?.delegation_id,delegatedByAgentId:lineage?.delegated_by_agent_id,delegatedFromIssueSessionId:lineage?.delegated_from_issue_session_id,priority:lineage?.priority}):undefined;
+        if(turnId)appendPendingTurnAuditWithinTransaction(ctx.db,{id:turnId,issueId:session?.issueId??null,workspaceId:initial.workspace_id},'re_ring',{origin:'periodic_sweep',action:'created',seq:message!.seq,task_id:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(turnId)!.current_attempt_id});
         if(turnId&&session)deriveIssueStatusWithinTransaction(ctx,session.issueId,laneEvents);
         const to=entries.at(-1)?.seq??head;
         ctx.db.run("UPDATE multiremi_session_lanes SET swept_to_seq=?,swept_at=? WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?",[to,new Date(now).toISOString(),lane.session_id,lane.reader_id,lane.execution_scope]);
@@ -168,7 +177,9 @@ export function sweepIdleLanes(ctx:StoreContext,events:CommitEventQueue,limit=50
       })();
       if(rang)result.rang++;
       events.workspace.push(...laneEvents.workspace);events.enqueuedTasks.push(...laneEvents.enqueuedTasks);events.issueActivities.push(...laneEvents.issueActivities);
-    }catch{result.errors++;}
+    }catch{result.errors++;
+      appendPendingTurnAuditWithinTransaction(ctx.db,{id:latest?.id??lane.session_id,issueId:session?.issueId??null,workspaceId:initial.workspace_id},'pending_turn_skipped',{reason:'sweep_error',origin:'periodic_sweep'});
+    }
   }
   return result;
 }

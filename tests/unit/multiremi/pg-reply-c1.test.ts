@@ -1,3 +1,4 @@
+import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { Hono } from "hono";
@@ -322,12 +323,12 @@ describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
       const store = new MultiremiStore(db);
       const agent = store.createAgent({ name: "C1 queued", provider: "codex" });
       const autopilot = store.createAutopilot({ title: "C1 queued", assigneeId: agent.id, status: "active", executionMode: "run_only" });
-      const insert = db.prepare(`INSERT INTO multiremi_autopilot_runs
+      const insert = `INSERT INTO multiremi_autopilot_run_records
         (id, autopilot_id, source, status, triggered_at, created_at, schedule_batch_id, schedule_prompt, payload)
-        VALUES (?, ?, 'schedule', 'queued', ?, ?, 'c1_batch', ?, '{}')`);
+        VALUES (?, ?, 'schedule', 'queued', ?, ?, 'c1_batch', ?, '{}')`;
       db.transaction(() => {
-        for (let i = 0; i < 20; i++) insert.run(`c1_run_${i}`, autopilot.id,
-          "2026-09-28T00:00:00.000Z", "2026-09-28T00:00:00.000Z", "x".repeat(512 * 1024));
+        for (let i = 0; i < 20; i++) runAutopilotRunMutation(db!, insert, [`c1_run_${i}`, autopilot.id,
+          "2026-09-28T00:00:00.000Z", "2026-09-28T00:00:00.000Z", "x".repeat(512 * 1024)]);
       })();
       expect(() => store.advanceScheduledTargetRuns()).not.toThrow();
       const replies = log.mock.calls.map(([line]) => { try { return JSON.parse(String(line)); } catch { return null; } });

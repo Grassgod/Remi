@@ -37,7 +37,8 @@ describe("conversation log notifications after commit", () => {
   for (const backend of ["sqlite", "pg"] as const) {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: rollback discards a notification and a reused seq publishes only its committed row`, async () => {
       await withStore(backend, (store, db) => {
-        const sessionId = "ises_commit_rollback";
+        store.ensureLocalWorkspace();
+        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Commit rollback" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let rolledSeq = -1;
@@ -58,7 +59,8 @@ describe("conversation log notifications after commit", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: two appends and a patch publish in write order after commit`, async () => {
       await withStore(backend, (store, db) => {
-        const sessionId = "ises_commit_order";
+        store.ensureLocalWorkspace();
+        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Commit order" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let firstSeq = -1;
@@ -72,7 +74,8 @@ describe("conversation log notifications after commit", () => {
         })();
         if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
         expect(received).toHaveLength(3);
-        expect(received[0]).toMatchObject({ seq: firstSeq, body_md: "first" });
+        // Canonical sends publish the complete committed row after caller sidecars.
+        expect(received[0]).toMatchObject({ seq: firstSeq, body_md: "edited", revision: 2 });
         expect(received[1]).toMatchObject({ seq: secondSeq, body_md: "second" });
         expect(received[2]).toMatchObject({ target_seq: firstSeq, fields: { body_md: "edited" } });
       });
@@ -80,7 +83,8 @@ describe("conversation log notifications after commit", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: public append joins its caller and rolls back both row and notification`, async () => {
       await withStore(backend, (store, db) => {
-        const sessionId = "ises_public_append_rollback";
+        store.ensureLocalWorkspace();
+        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Public append rollback" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();

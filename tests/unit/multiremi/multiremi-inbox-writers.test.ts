@@ -1,362 +1,294 @@
-import { beforeEach, expect, it } from "bun:test";
-import type { Envelope } from "@multiremi/contracts/inbox.js";
-import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
-import { installPendingTurnTestConstraints, pendingTurnBackendTests } from "./pending-turn-test-backends.js";
-import type { EnsurePendingTurnInput, PendingTurnLane } from "@multiremi/store/repos/tasks-repo.js";
+import { expect, it } from 'bun:test';
+import type { Envelope } from '@multiremi/contracts/inbox.js';
+import type { SendMessageInput } from '@multiremi/contracts/unified-model.js';
+import { createCommitEventQueue, type StoreContext } from '@multiremi/store/context.js';
+import { sendMessageWithinTransaction } from '@multiremi/store/inbox/send-message.js';
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 
-pendingTurnBackendTests("transactional inbox writers", (fixture) => {
-  beforeEach(() => {
-    installPendingTurnTestConstraints(fixture());
-  });
+pendingTurnBackendTests('transactional inbox writers', fixture => {
   function setup() {
     const f = fixture();
-    const agent = f.store.createAgent({ name: "Inbox owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Inbox", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const agent = f.store.createAgent({ name: 'Inbox owner', provider: 'codex' });
+    const issue = f.store.createIssue({ title: 'Inbox', status: 'in_progress', assigneeType: 'agent', assigneeId: agent.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const chat = f.store.createChatSession({ agentId: agent.id });
-    const collector: import("@multiremi/store/repos/tasks-repo.js").ChildStatusChangeCollector = [];
+    const ctx = (f.store as unknown as { ctx: StoreContext }).ctx;
     const queue = createCommitEventQueue();
-    const env: Envelope = { to: { role: "agent", agentId: agent.id, issueSessionId: session.id },
-      kind: "report", outcome: "done", wake: "now", body: "A complete report", source: {} };
-    const send = (changes: Partial<Envelope> = {}) => f.transaction(() => f.store.sendEnvelopeWithinTransaction({ ...env, ...changes }, collector, queue));
-    const entry = () => send({ wake: "inbox_only" })[0]!.entry;
-    const issueLane: PendingTurnLane = { kind: "issue", agentId: agent.id, issueSessionId: session.id, executionScope: "" };
-    const chatLane: PendingTurnLane = { kind: "chat", agentId: agent.id, chatSessionId: chat.id, issueId: null };
-    const ensure = (changes: Partial<EnsurePendingTurnInput> = {}) => {
-      const lane = changes.lane ?? issueLane;
-      const wake = changes.wake ?? { reason: "test", seq: entry().seq };
-      return f.transaction(() => f.store.ensurePendingTurnWithinTransaction({
-        lane, wake, steerBody: "A complete steer report",
-        create: () => {
-          const task = (f.store as unknown as { ctx: StoreContext }).ctx.tasks().createTaskWithinWorkspaceLock({ agentId: agent.id,
-            issueSessionId: lane.kind === "issue" ? lane.issueSessionId : null,
-            issueId: lane.kind === "issue" ? issue.id : lane.issueId,
-            chatSessionId: lane.kind === "chat" ? lane.chatSessionId : null,
-            prompt: "Read the inbox", wakeSource: wake.reason,
-          }, collector, queue, undefined, lane.kind === "issue" ? lane.executionScope : "");
-          queue.enqueuedTasks.push(task);
-          return f.store.getTask(task.id)!;
-        }, ...changes,
-      }));
-    };
-    const queued = () => Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_tasks WHERE status = 'queued'").get().n);
-    return { ...f, agent, issue, session, chat, issueLane, chatLane, collector, queue, env, send, entry, ensure, queued };
+    const env: Envelope = { to: { role: 'agent', agentId: agent.id, issueSessionId: session.id },
+      kind: 'report', outcome: 'done', wake: 'now', body: 'A complete report', source: {} };
+    const send = (changes: Partial<Envelope> = {}) => f.transaction(() => f.store.sendEnvelopeWithinTransaction({ ...env, ...changes }, [], queue))[0]!;
+    const messageInput: SendMessageInput = { session_id: session.id, sender: { type: 'platform', id: null },
+      to: { type: 'agent', ref: agent.id }, message_kind: 'report', wake_requested: 'now', body_md: env.body };
+    const message = (changes: Partial<SendMessageInput> = {}) => f.transaction(() => sendMessageWithinTransaction(ctx, { ...messageInput, ...changes }, queue));
+    const queued = () => f.store.listTurns({ workspace_id: 'local' }).filter(turn => turn.status === 'pending');
+    const status = (id: string, value: string) => runTurnExecutionMutation(f.db, 'UPDATE multiremi_turn_execution_records SET status=? WHERE id=?', [value, id]);
+    const attempt = (id: string) => f.store.getTurn(id)!.current_attempt_id!;
+    const wakeSeq = (id: string) => f.store.getTurn(id)!.wake_seq;
+    return { ...f, agent, issue, session, chat, ctx, queue, env, send, message, messageInput, queued, status, attempt, wakeSeq };
   }
 
-  it("rejects both writers outside a transaction without a write", () => {
+  it('rejects both writers outside a transaction without a write', () => {
     const f = setup();
-    const pointer = f.entry();
-    expect(() => f.store.ensurePendingTurnWithinTransaction({ lane: f.issueLane, wake: { reason: "test", seq: pointer.seq },
-      create: () => { throw new Error("Unexpected create"); } })).toThrow("open transaction");
-    expect(() => f.store.sendEnvelopeWithinTransaction(f.env, [], f.queue)).toThrow("open transaction");
-    expect(f.queued()).toBe(0);
+    const before = f.store.getConversationLogHead(f.session.id);
+    expect(() => sendMessageWithinTransaction(f.ctx, f.messageInput, f.queue)).toThrow(/transaction/i);
+    expect(() => f.store.sendEnvelopeWithinTransaction(f.env, [], f.queue)).toThrow(/transaction/i);
+    expect(f.store.getConversationLogHead(f.session.id)).toEqual(before);
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("coalesces an existing queued turn, raises wake_seq monotonically and audits the merge", () => {
+  it('coalesces an existing pending turn, raises wake_seq monotonically and audits the merge', () => {
     const f = setup();
-    const first = f.ensure({ wake: { seq: 10, reason: "test" } });
-    const next = f.ensure({ wake: { seq: 20, reason: "later" } });
-    const older = f.ensure({ wake: { seq: 15, reason: "test" } });
-    expect(first.action).toBe("created");
-    expect(next.action).toBe("coalesced");
-    expect(older.task!.id).toBe(first.task!.id);
-    expect(f.queued()).toBe(1);
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(first.task!.id).wake_seq)).toBe(20);
-    const rows = f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_coalesced' ORDER BY created_at, id").all();
-    expect(rows.map(row => JSON.parse(row.data))).toContainEqual({ task_id: first.task!.id, seq: 20, reason: "later", commentId: null });
-    expect(rows).toHaveLength(2);
+    const first = f.message({ dedupe_key: 'merge-first' });
+    const next = f.message({ body_md: 'Later report' });
+    const duplicate = f.message({ dedupe_key: 'merge-first', body_md: 'Duplicate must not replace the original' });
+    expect(next.turn_id).toBe(first.turn_id);
+    expect(duplicate.turn_id).toBe(first.turn_id);
+    expect(f.queued()).toHaveLength(1);
+    expect(f.wakeSeq(first.turn_id!)).toBe(next.message.seq);
+    const merges = f.store.listIssueActivity(f.issue.id).filter(row => row.type === 'turn_merged');
+    expect(merges.map(row => row.data)).toEqual([{ message_id: next.message.id, seq: next.message.seq, reason: next.wake_reason, task_id: first.turn_id }]);
     expect(f.queue.enqueuedTasks).toHaveLength(1);
-    expect(first.task!.prompt).not.toContain(f.env.body);
-    expect(first.task!.wakeSource).toBe("test");
-    expect(f.store.getIssue(f.issue.id)!.status).toBe("in_progress");
+    expect(f.store.getTurn(first.turn_id!)!.trigger_message_id).toBe(first.message.id);
+    expect(f.store.getIssue(f.issue.id)!.status).toBe('in_progress');
   });
 
-  it("T4: next_turn rides queued Issue work and returns none for running or idle lanes", () => {
+  it('T4: next_turn rides pending Issue work and returns none for running or idle lanes', () => {
     const f = setup();
-    const wake = { mode: "next_turn" as const, seq: 20, reason: "test" };
-    expect(f.ensure({ wake })).toEqual({ task: null, action: "none" });
-    const first = f.ensure({ wake: { seq: 10, reason: "test" } });
-    expect(first.action).toBe("created");
-    expect(f.ensure({ wake }).action).toBe("coalesced");
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(first.task!.id).wake_seq)).toBe(20);
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.task!.id]);
-    expect(f.ensure({ wake })).toEqual({ task: null, action: "none" });
-    expect(f.queued()).toBe(0);
-    expect(f.ensure().action).toBe("created");
-    expect(f.queued()).toBe(1);
+    expect(f.message({ wake_requested: 'next_turn' }).turn_id).toBeUndefined();
+    const first = f.message();
+    const next = f.message({ wake_requested: 'next_turn' });
+    expect(next.turn_id).toBe(first.turn_id);
+    expect(f.wakeSeq(first.turn_id!)).toBe(next.message.seq);
+    f.status(f.attempt(first.turn_id!), 'running');
+    expect(f.message({ wake_requested: 'next_turn' }).turn_id).toBeUndefined();
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("T4: next_turn coalesces queued work even while another turn is running", () => {
+  it('T4: now during running work delivers into that turn without a second pending round', () => {
     const f = setup();
-    const running = f.ensure().task!;
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
-    const queued = f.ensure({ wake: { seq: 10, reason: "test" } }).task!;
-    const result = f.ensure({ wake: { mode: "next_turn", seq: 30, reason: "notice" },
-      create: () => { throw new Error("Queued work must be coalesced"); } });
-    expect(result.action).toBe("coalesced");
-    expect(result.task!.id).toBe(queued.id);
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(queued.id).wake_seq)).toBe(30);
-    expect(f.queued()).toBe(1);
-    expect(f.store.getTask(running.id)!.status).toBe("running");
-    const audit = f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_coalesced' AND issue_id = ?")
-      .all(f.issue.id).map(row => JSON.parse(row.data));
-    expect(audit).toContainEqual({ task_id: queued.id, seq: 30, reason: "notice", commentId: null });
+    const first = f.message();
+    f.status(f.attempt(first.turn_id!), 'running');
+    const next = f.message();
+    expect(next.turn_id).toBe(first.turn_id);
+    expect(f.queued()).toHaveLength(0);
+    expect(f.store.getTurn(first.turn_id!)!.status).toBe('running');
+    expect(f.store.listIssueActivity(f.issue.id).filter(row => row.type === 'message_delivered_running').map(row => row.data))
+      .toEqual([{ message_id: next.message.id, seq: next.message.seq, reason: next.wake_reason, task_id: first.turn_id }]);
   });
 
-  it("keeps execution scopes independent and coalesces Chat-only turns", () => {
+  it('keeps execution scopes independent and coalesces Chat-only turns', () => {
     const f = setup();
-    const main = f.ensure();
-    const alphaLane: PendingTurnLane = { kind: "issue", agentId: f.agent.id, issueSessionId: f.session.id, executionScope: "alpha" };
-    const betaLane: PendingTurnLane = { ...alphaLane, executionScope: "beta" };
-    const alpha = f.ensure({ lane: alphaLane });
-    const beta = f.ensure({ lane: betaLane });
-    expect(alpha.task!.execution_scope).toBe("alpha");
-    expect(main.task!.id).not.toBe(alpha.task!.id);
-    expect(alpha.task!.id).not.toBe(beta.task!.id);
-    expect(f.ensure({ lane: alphaLane }).task!.id).toBe(alpha.task!.id);
-    const chat = f.ensure({ lane: f.chatLane });
-    expect(f.ensure({ lane: f.chatLane }).task!.id).toBe(chat.task!.id);
-    expect(f.queued()).toBe(4);
-    expect(Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_system_events WHERE event = 'pending_turn_coalesced' AND resource_id = ? AND status = 'processed'").get(chat.task!.id).n)).toBe(1);
+    const main = f.message();
+    const alpha = f.message({ execution_scope: 'alpha' });
+    const beta = f.message({ execution_scope: 'beta' });
+    expect(new Set([main.turn_id, alpha.turn_id, beta.turn_id]).size).toBe(3);
+    expect(f.message({ execution_scope: 'alpha' }).turn_id).toBe(alpha.turn_id);
+    const chat = f.message({ session_id: f.chat.id });
+    expect(f.message({ session_id: f.chat.id }).turn_id).toBe(chat.turn_id);
+    expect(f.queued()).toHaveLength(4);
+    expect(f.store.getTurn(chat.turn_id!)!.session_id).toBe(f.chat.id);
   });
 
-  it("writes Issue system comments with contract metadata and returns duplicates without allocating seq", () => {
+  it('writes Issue report headers and returns duplicates without allocating seq', () => {
     const f = setup();
-    const changes = { dedupeKey: "report:1", replyTo: "decision:1", grantRef: "reserved", outcome: "failed" as const };
-    const first = f.send(changes)[0]!;
-    const before = f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.session.id);
-    const duplicate = f.send({ ...changes, body: "Must not replace the original" })[0]!;
+    const first = f.send({ dedupeKey: 'report:1', outcome: 'failed' });
+    const before = f.store.getConversationLogHead(f.session.id);
+    const duplicate = f.send({ dedupeKey: 'report:1', outcome: 'failed', body: 'Must not replace the original' });
     expect(duplicate.deduplicated).toBe(true);
     expect(duplicate.entry).toEqual(first.entry);
-    expect(f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.session.id)).toEqual(before);
-    expect(first.entry.kind).toBe("system");
-    expect(first.entry.author_type).toBe("system");
-    const { body, ...expected } = f.env;
-    expect(first.entry.metadata.envelope).toEqual({ ...expected, ...changes, priority: 2 });
-    expect(Object.hasOwn(first.entry.metadata.envelope!, "body")).toBe(false);
-    expect(f.store.getIssueComment(first.entry.id)!.type).toBe("system");
-    expect(f.queued()).toBe(1);
+    expect(f.store.getConversationLogHead(f.session.id)).toEqual(before);
+    expect(f.store.getMessage(first.entry.id)).toMatchObject({ sender_type: 'platform', to_agent_id: f.agent.id,
+      message_kind: 'report', wake_requested: 'now', wake_applied: 'now', body_md: f.env.body,
+      metadata: { message_outcome: 'failed', priority: 2 } });
+    expect(Object.hasOwn(JSON.parse(String(f.db.query('SELECT metadata FROM multiremi_conversation_log WHERE id=?').get(first.entry.id)!.metadata)), 'envelope')).toBe(false);
+    expect(f.store.getIssueComment(first.entry.id)!.type).toBe('system');
+    expect(f.queued()).toHaveLength(1);
   });
 
-  it("T4: rides the earliest human or continuation queued row without changing its prompt", () => {
+  it('T4: merges human input and continuation input into the same pending work', () => {
     const f = setup();
-    const first = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: "Human request" });
-    const later = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: "Later request" });
-    f.db.run("UPDATE multiremi_tasks SET created_at = '2026-09-28T00:00:00.000Z' WHERE id = ?", [first.id]);
-    const result = f.ensure({ wake: { reason: "child_status", seq: 40, commentId: "cmt_trigger" } });
-    expect(result.action).toBe("coalesced");
-    expect(result.task!.id).toBe(first.id);
-    expect(result.task!.wakeSource).toBeNull();
-    expect(result.task!.prompt).toBe("Human request");
-    expect(f.queued()).toBe(2);
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id IN (?, ?)", [first.id, later.id]);
-    const continued = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: "Continuation", continuedFromTaskId: first.id });
-    expect(f.ensure().task!.id).toBe(continued.id);
+    const first = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: 'Human request' });
+    const later = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: 'Later request' });
+    expect(later.id).toBe(first.id);
+    const report = f.send();
+    expect(report.task!.id).toBe(first.id);
+    expect(f.store.getTurnForAttempt(first.id)!.trigger_message_id).toBe(f.store.getTurnForAttempt(later.id)!.trigger_message_id);
+    expect(f.queued()).toHaveLength(1);
+    f.status(first.id, 'completed');
+    const continued = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: 'Continuation', continuedFromTaskId: first.id });
+    expect(continued.id).not.toBe(first.id);
+    expect(f.send().task!.id).toBe(continued.id);
   });
 
-  it("T4: creates after a queued-row CAS loses to a claim and validates the callback lane", () => {
+  it('T4: serializes delivery after a claim and rejects a foreign recipient before writing', () => {
     const f = setup();
-    const first = f.ensure().task!;
-    const original = f.db.run.bind(f.db);
-    let intercepted = false;
-    f.db.run = (sql, params) => {
-      if (!intercepted && sql.includes("wake_seq = CASE") && sql.includes("status = 'queued'")) {
-        intercepted = true;
-        original("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.id]);
-        return { changes: 0, lastInsertRowid: 0 };
-      }
-      return original(sql, params);
-    };
-    try {
-      const result = f.ensure();
-      expect(result.action).toBe("created");
-      expect(result.task!.id).not.toBe(first.id);
-    } finally { f.db.run = original; }
-    expect(f.queued()).toBe(1);
-    f.db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE status = 'queued'");
-    const before = Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_tasks").get().n);
-    expect(() => f.ensure({ create: () => f.store.createTaskWithinTransaction({
-      agentId: f.agent.id, chatSessionId: f.chat.id, prompt: "Wrong lane",
-    }, [], f.queue) })).toThrow("outside its queued lane");
-    expect(Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_tasks").get().n)).toBe(before);
+    const first = f.message();
+    f.status(f.attempt(first.turn_id!), 'running');
+    expect(f.message().turn_id).toBe(first.turn_id);
+    const otherWorkspace = f.store.createWorkspace({ name: 'Other' });
+    const other = f.store.createAgent({ name: 'Foreign', provider: 'codex', workspaceId: otherWorkspace.id });
+    const before = f.store.getConversationLogHead(f.session.id);
+    expect(() => f.message({ to: { type: 'agent', ref: other.id } })).toThrow(/workspace/i);
+    expect(f.store.getConversationLogHead(f.session.id)).toEqual(before);
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("T5: creates, coalesces, and steers the Chat pending task in the caller transaction", () => {
+  it('T5: creates, coalesces and delivers Chat input in the caller transaction', () => {
     const f = setup();
-    const first = f.ensure({ lane: f.chatLane });
-    expect(first.action).toBe("created");
-    expect(f.ensure({ lane: f.chatLane }).action).toBe("coalesced");
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.task!.id]);
-    const result = f.ensure({ lane: f.chatLane, steerBody: "Deliver the new report" });
-    expect(result.action).toBe("steered");
-    expect(result.task!.id).toBe(first.task!.id);
-    expect(f.store.listTaskSteerMessages(first.task!.id).map(row => ({ kind: row.kind, content: row.content, authorType: row.authorType })))
-      .toEqual([{ kind: "steer", content: "Deliver the new report", authorType: "system" }]);
+    const first = f.message({ session_id: f.chat.id });
+    expect(f.message({ session_id: f.chat.id }).turn_id).toBe(first.turn_id);
+    f.status(f.attempt(first.turn_id!), 'running');
+    const next = f.message({ session_id: f.chat.id, body_md: 'Deliver the new report' });
+    expect(next.turn_id).toBe(first.turn_id);
+    expect(f.store.listMessages(f.chat.id).filter(row => row.body_md === 'Deliver the new report')).toHaveLength(1);
+    const before = f.store.getConversationLogHead(f.chat.id);
     expect(() => f.transaction(() => {
-      f.store.ensurePendingTurnWithinTransaction({ lane: f.chatLane, wake: { reason: "relay", seq: null },
-        steerBody: "Rolled back steer", create: () => { throw new Error("Unexpected create"); } });
-      throw new Error("abort steer");
-    })).toThrow("abort steer");
-    expect(f.store.listTaskSteerMessages(first.task!.id)).toHaveLength(1);
-    expect(f.queued()).toBe(0);
+      f.message({ session_id: f.chat.id, body_md: 'Rolled back input' });
+      throw new Error('abort input');
+    })).toThrow('abort input');
+    expect(f.store.getConversationLogHead(f.chat.id)).toEqual(before);
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("T5: checks transport identity before coalescing into a user's pending Chat task", () => {
+  it('T5: keeps transport contexts in separate conversation lanes', () => {
     const f = setup();
-    const privateTask = f.store.sendChatMessage(f.chat.id, { content: "Private conversation" }).task;
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [privateTask.id]);
-    f.store.sendChatMessage(f.chat.id, { content: "Private queued message" });
-    f.db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
-      (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, issue_id, created_at, updated_at)
-      VALUES ('transport_changed', ?, 'test', ?, 'transport_changed', ?, ?, ?, ?)`,
-    [f.agent.workspaceId, f.agent.id, f.chat.id, f.issue.id, "2026-09-29T00:00:00.000Z", "2026-09-29T00:00:00.000Z"]);
-    const lane: PendingTurnLane = { kind: "chat", chatSessionId: f.chat.id, agentId: f.agent.id, issueId: f.issue.id };
-    const result = f.ensure({ lane, wake: { reason: "relay", seq: null } });
-    expect(result.action).toBe("created");
-    expect(result.task!.issueId).toBe(f.issue.id);
-    expect(result.task!.wakeSource).toBe("relay");
-    expect(result.task!.id).not.toBe(privateTask.id);
-    expect(f.store.listTaskSteerMessages(privateTask.id)).toEqual([]);
-    expect(f.store.getTask(privateTask.id)!.prompt).toBe(privateTask.prompt);
+    const privateTask = f.store.sendChatMessage(f.chat.id, { content: 'Private conversation' }).task;
+    f.status(privateTask.id, 'running');
+    const boundChat = f.store.createChatSession({ agentId: f.agent.id });
+    const result = f.message({ session_id: boundChat.id });
+    expect(f.attempt(result.turn_id!)).not.toBe(privateTask.id);
+    expect(f.store.getTurnForAttempt(privateTask.id)!.session_id).toBe(f.chat.id);
+    expect(f.store.getTurn(result.turn_id!)!.session_id).toBe(boundChat.id);
+    expect(f.store.listMessages(f.chat.id).map(row => row.body_md)).toEqual(['Private conversation']);
   });
 
-  it("T5: next_turn on Chat rides or steers existing work and never creates an idle turn", () => {
+  it('T5: next_turn on Chat joins pending work and never creates an idle or running turn', () => {
     const f = setup();
-    const wake = { mode: "next_turn" as const, reason: "relay", seq: null };
-    expect(f.ensure({ lane: f.chatLane, wake })).toEqual({ task: null, action: "none" });
-    const first = f.ensure({ lane: f.chatLane }).task!;
-    expect(f.ensure({ lane: f.chatLane, wake }).action).toBe("coalesced");
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.id]);
-    expect(f.ensure({ lane: f.chatLane, wake }).action).toBe("steered");
-    expect(f.store.listTaskSteerMessages(first.id)).toHaveLength(1);
+    expect(f.message({ session_id: f.chat.id, wake_requested: 'next_turn' }).turn_id).toBeUndefined();
+    const first = f.message({ session_id: f.chat.id });
+    expect(f.message({ session_id: f.chat.id, wake_requested: 'next_turn' }).turn_id).toBe(first.turn_id);
+    f.status(f.attempt(first.turn_id!), 'running');
+    expect(f.message({ session_id: f.chat.id, wake_requested: 'next_turn' }).turn_id).toBeUndefined();
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("writes Chat system messages on the same log axis with metadata and no duplicate seq", () => {
+  it('writes Chat report messages on the same log axis without duplicate seq', () => {
     const f = setup();
-    const changes: Partial<Envelope> = { to: { role: "chat", agentId: f.agent.id, chatSessionId: f.chat.id }, dedupeKey: "chat:1" };
-    const first = f.send(changes)[0]!;
-    const before = f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.chat.id);
-    expect(f.send(changes)[0]!.entry).toEqual(first.entry);
-    expect(f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.chat.id)).toEqual(before);
-    const message = f.store.getChatMessage(first.entry.id)!;
-    expect(message.role).toBe("system");
-    expect(Number(f.db.query("SELECT sequence FROM multiremi_chat_messages WHERE id = ?").get(message.id).sequence)).toBe(first.entry.seq);
-    expect(first.entry.author_type).toBe("system");
-    expect(first.entry.metadata.envelope!.to).toEqual(changes.to!);
-    expect(first.entry.metadata.envelope!.priority).toBe(3);
-    expect(f.queued()).toBe(1);
+    const changes: Partial<Envelope> = { to: { role: 'chat', agentId: f.agent.id, chatSessionId: f.chat.id }, dedupeKey: 'chat:1' };
+    const first = f.send(changes);
+    const before = f.store.getConversationLogHead(f.chat.id);
+    expect(f.send(changes).entry).toEqual(first.entry);
+    expect(f.store.getConversationLogHead(f.chat.id)).toEqual(before);
+    expect(f.store.getChatMessage(first.entry.id)).toMatchObject({ role: 'system', body: f.env.body });
+    expect(f.store.getMessage(first.entry.id)).toMatchObject({ seq: first.entry.seq, sender_type: 'platform',
+      to_agent_id: f.agent.id, message_kind: 'report', metadata: { priority: 3 } });
+    expect(f.queued()).toHaveLength(1);
   });
 
-  it("preserves Markdown whitespace in Chat envelopes and publishes as system only after commit", () => {
+  it('preserves Markdown whitespace and publishes only after commit', () => {
     const f = setup();
-    const events: Array<{ type: string; actorType?: string }> = [];
-    const unsubscribe = f.store.onWorkspaceEvent(event => events.push(event));
-    const body = "  indented Markdown\n\nlast line\n";
+    const events: string[] = [];
+    const unsubscribe = f.store.onWorkspaceEvent(event => events.push(event.type));
+    const body = '  indented Markdown\n\nlast line\n';
     try {
       const delivery = f.transaction(() => {
         const result = f.store.sendEnvelopeWithinTransaction({ ...f.env, body,
-          to: { role: "chat", agentId: f.agent.id, chatSessionId: f.chat.id }, wake: "inbox_only" }, [], f.queue)[0]!;
+          to: { role: 'chat', agentId: f.agent.id, chatSessionId: f.chat.id }, wake: 'inbox_only' }, [], f.queue)[0]!;
         expect(events).toEqual([]);
         return result;
       });
       expect(delivery.entry.body_md).toBe(body);
       expect(f.store.getChatMessage(delivery.entry.id)!.body).toBe(body);
-      expect(events).toMatchObject([{ type: "chat:message", actorType: "system" }]);
+      expect(events).toEqual(['inbox:new']);
     } finally { unsubscribe(); }
   });
 
-  it("inbox_only writes both session kinds without creating turns", () => {
+  it('inbox_only writes both session kinds without creating turns', () => {
     const f = setup();
-    const issue = f.send({ wake: "inbox_only" })[0]!;
-    const chat = f.send({ wake: "inbox_only", to: { role: "chat", agentId: f.agent.id, chatSessionId: f.chat.id } })[0]!;
+    const issue = f.send({ wake: 'inbox_only' });
+    const chat = f.send({ wake: 'inbox_only', to: { role: 'chat', agentId: f.agent.id, chatSessionId: f.chat.id } });
     expect(issue.task).toBeNull();
     expect(chat.task).toBeNull();
-    expect(issue.entry.metadata.envelope!.priority).toBe(4);
-    expect(chat.entry.metadata.envelope!.priority).toBe(4);
-    expect(f.queued()).toBe(0);
+    expect(issue.entry.metadata.priority).toBe(4);
+    expect(chat.entry.metadata.priority).toBe(4);
+    expect(f.queued()).toHaveLength(0);
   });
 
-  it("points a coalesced recovery turn at the arriving envelope without copying its body", () => {
+  it('keeps the original trigger while merging an arriving recovery report', () => {
     const f = setup();
-    const recovery = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, issueSessionId: f.session.id,
-      wakeSource: "re_ring", prompt: `读收件箱\n\n${f.session.id}: (0, 1000000]` });
-    f.db.run("UPDATE multiremi_tasks SET wake_seq = 1000000 WHERE id = ?", [recovery.id]);
-    const delivery = f.send({ source: { taskId: "source_report" } })[0]!;
-    expect(delivery.action).toBe("coalesced");
-    expect(delivery.task!.id).toBe(recovery.id);
-    expect(delivery.entry.metadata.envelope!.source.taskId).toBe("source_report");
+    const recovery = f.message({ body_md: 'Original recovery input' });
+    const delivery = f.send();
+    expect(delivery.action).toBe('coalesced');
+    expect(delivery.task!.id).toBe(f.attempt(recovery.turn_id!));
+    expect(f.store.getTurn(recovery.turn_id!)!.trigger_message_id).toBe(recovery.message.id);
     expect(delivery.entry.body_md).toBe(f.env.body);
-    expect(delivery.task!.prompt).toBe(`读收件箱\n\n${f.session.id}:${delivery.entry.seq} (${delivery.entry.id})`);
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(recovery.id).wake_seq)).toBe(1000000);
-    expect(f.queued()).toBe(1);
+    expect(f.wakeSeq(recovery.turn_id!)).toBe(delivery.entry.seq);
+    expect(f.store.getTurnInput(recovery.turn_id!)!.messages.map(row => row.body_md)).toContain('Original recovery input');
+    expect(f.queued()).toHaveLength(1);
   });
 
-  it("uses sessionId in dedupe keys and resolves Issue owners and parent owners", () => {
+  it('uses sessionId in dedupe keys and resolves Issue owners and parent owners', () => {
     const f = setup();
-    const child = f.store.createIssue({ title: "Child", parentIssueId: f.issue.id });
-    const side = f.store.createIssueSession(f.issue.id, { title: "Side", inheritMode: "none" });
-    const owner = f.send({ to: { role: "issue_owner", issueId: f.issue.id }, dedupeKey: "same", wake: "inbox_only" })[0]!;
-    const parent = f.send({ to: { role: "parent_owner", childIssueId: child.id }, dedupeKey: "same", wake: "inbox_only" })[0]!;
+    const child = f.store.createIssue({ title: 'Child', parentIssueId: f.issue.id });
+    const side = f.store.createIssueSession(f.issue.id, { title: 'Side', inheritMode: 'none' });
+    const owner = f.send({ to: { role: 'issue_owner', issueId: f.issue.id }, dedupeKey: 'same', wake: 'inbox_only' });
+    const parent = f.send({ to: { role: 'parent_owner', childIssueId: child.id }, dedupeKey: 'same', wake: 'inbox_only' });
     expect(parent.entry.id).toBe(owner.entry.id);
-    const other = f.send({ to: { role: "agent", agentId: f.agent.id, issueSessionId: side.id }, dedupeKey: "same", wake: "inbox_only" })[0]!;
-    expect(other.entry.id).not.toBe(owner.entry.id);
+    expect(f.send({ to: { role: 'agent', agentId: f.agent.id, issueSessionId: side.id }, dedupeKey: 'same', wake: 'inbox_only' }).entry.id).not.toBe(owner.entry.id);
   });
 
-  it("rolls back envelopes, pending turns and notifications with the outer transaction", () => {
+  it('rolls back messages, pending turns and notifications with the outer transaction', () => {
     const f = setup();
-    const before = f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.session.id);
-    const chatBefore = f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.chat.id);
+    const before = f.store.getConversationLogHead(f.session.id);
+    const chatBefore = f.store.getConversationLogHead(f.chat.id);
     const events: string[] = [];
     const unsubscribe = f.store.onWorkspaceEvent(event => events.push(event.type));
     try {
       expect(() => f.transaction(() => {
-        f.store.sendEnvelopeWithinTransaction({ ...f.env, dedupeKey: "rollback" }, f.collector, f.queue);
-        f.store.sendEnvelopeWithinTransaction({ ...f.env, dedupeKey: "rollback",
-          to: { role: "chat", agentId: f.agent.id, chatSessionId: f.chat.id } }, f.collector, f.queue);
-        (f.store as unknown as { ctx: StoreContext }).ctx.emitCommitEvents(f.queue);
+        f.send();
+        f.send({ to: { role: 'chat', agentId: f.agent.id, chatSessionId: f.chat.id } });
+        expect(f.queued()).toHaveLength(2);
         expect(events).toEqual([]);
-        throw new Error("abort");
-      })).toThrow("abort");
+        throw new Error('abort');
+      })).toThrow('abort');
       expect(events).toEqual([]);
     } finally { unsubscribe(); }
-    expect(f.queued()).toBe(0);
-    expect(f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.session.id)).toEqual(before);
-    expect(f.db.query("SELECT head_seq, log_version FROM multiremi_conversation_heads WHERE session_id = ?").get(f.chat.id)).toEqual(chatBefore);
-    expect(Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_conversation_log WHERE session_id = ? AND kind = 'system'").get(f.session.id).n)).toBe(0);
+    expect(f.queued()).toHaveLength(0);
+    expect(f.store.getConversationLogHead(f.session.id)).toEqual(before);
+    expect(f.store.getConversationLogHead(f.chat.id)).toEqual(chatBefore);
   });
 
-  it("addresses delegation reports to the delegator's originating Issue session", () => {
+  it('addresses delegation reports to the originating Issue session', () => {
     const f = setup();
-    const worker = f.store.createAgent({ name: "Delegate", provider: "codex" });
-    const parent = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, issueSessionId: f.session.id, prompt: "Original round" });
-    const child = f.store.createIssue({ title: "Delegated issue", parentIssueId: f.issue.id });
-    const source = f.store.createTask({ agentId: worker.id, issueId: child.id, prompt: "Delegated round", parentTaskId: parent.id,
-      delegationId: "return_address", delegatedByAgentId: f.agent.id, delegatedFromIssueSessionId: f.session.id });
-    const delivery = f.send({ to: { role: "delegator", delegationId: "return_address" }, source: { taskId: source.id } })[0]!;
+    const worker = f.store.createAgent({ name: 'Delegate', provider: 'codex' });
+    const parent = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: 'Original round' });
+    const child = f.store.createIssue({ title: 'Delegated issue', parentIssueId: f.issue.id });
+    const source = f.store.createTask({ agentId: worker.id, issueId: child.id, prompt: 'Delegated round', parentTaskId: parent.id,
+      delegationId: 'return_address', delegatedByAgentId: f.agent.id, delegatedFromIssueSessionId: f.session.id });
+    const delivery = f.send({ to: { role: 'delegator', delegationId: 'return_address' }, source: { taskId: source.id } });
     expect(delivery.recipient.issueSessionId).toBe(f.session.id);
     expect(delivery.recipient.agentId).toBe(f.agent.id);
     expect(delivery.task!.id).toBe(parent.id);
-    expect(delivery.action).toBe("coalesced");
+    expect(delivery.action).toBe('coalesced');
   });
 
-  it("fans relay addresses out as Chat-lane system messages with relay wakes", () => {
+  it('fans relay addresses out as independent Chat messages', () => {
     const f = setup();
     const secondChat = f.store.createChatSession({ agentId: f.agent.id });
     for (const [i, chat] of [f.chat, secondChat].entries()) {
       f.db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
-        (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, issue_id, created_at, updated_at)
-        VALUES (?, ?, 'relay_test', ?, ?, ?, ?, ?, ?)`,
-      [`relay_${i}`, f.agent.workspaceId, f.agent.id, `relay_${i}`, chat.id, f.issue.id,
-        "2026-09-29T00:00:00.000Z", "2026-09-29T00:00:00.000Z"]);
+        (id,workspace_id,app_id,agent_id,external_session_key,chat_session_id,issue_id,created_at,updated_at)
+        VALUES(?,?,'relay_test',?,?,?,?,?,?)`, [`relay_${i}`, f.agent.workspaceId, f.agent.id, `relay_${i}`, chat.id, f.issue.id,
+        '2026-09-29T00:00:00.000Z', '2026-09-29T00:00:00.000Z']);
     }
-    const deliveries = f.send({ to: { role: "relay", issueId: f.issue.id }, dedupeKey: "fanout" });
+    const deliveries = f.transaction(() => f.store.sendEnvelopeWithinTransaction({ ...f.env, to: { role: 'relay', issueId: f.issue.id }, dedupeKey: 'fanout' }, [], f.queue));
     expect(deliveries).toHaveLength(2);
     expect(deliveries[0]!.entry.id).not.toBe(deliveries[1]!.entry.id);
     expect(deliveries.map(row => row.recipient.chatSessionId).sort()).toEqual([f.chat.id, secondChat.id].sort());
-    expect(deliveries.map(row => row.task!.wakeSource)).toEqual(["relay", "relay"]);
-    expect(deliveries.map(row => row.action)).toEqual(["created", "created"]);
+    expect(deliveries.map(row => row.action)).toEqual(['created', 'created']);
     expect(deliveries.map(row => row.task!.issueSessionId)).toEqual([null, null]);
-    expect(f.queued()).toBe(2);
-    expect(f.send({ to: { role: "relay", issueId: f.issue.id }, dedupeKey: "fanout" }).map(row => row.deduplicated)).toEqual([true, true]);
+    expect(f.queued()).toHaveLength(2);
+    expect(f.transaction(() => f.store.sendEnvelopeWithinTransaction({ ...f.env, to: { role: 'relay', issueId: f.issue.id }, dedupeKey: 'fanout' }, [], f.queue)).map(row => row.deduplicated)).toEqual([true, true]);
   });
 });
