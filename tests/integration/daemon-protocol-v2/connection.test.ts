@@ -253,7 +253,7 @@ describe("daemon protocol v2 real connection", () => {
       "accepted run and closed summary scope to replay");
       expect(providerCalls).toBe(0);
       expect(summaryEndpoint.requests()).toBe(0);
-      expect(h.db.query("SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ n: 0 });
+      expect(h.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ n: 0 });
     } finally { releasePreparation(); prepare.mockRestore(); summaryEndpoint.close(); }
   });
 

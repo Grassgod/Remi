@@ -6,6 +6,7 @@ import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotsp
 import { seedFirstScreenHotspotsFixture } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
 import { firstScreenTaskUsage, seedFirstScreenTaskUsage } from "../../fixtures/multiremi/first-screen-task-usage-fixture.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 
 const databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 afterEach(async () => { for (const database of databases.splice(0)) await database.dispose(); });
@@ -40,6 +41,9 @@ async function fixture() {
   const seed = seedFirstScreenHotspotsFixture(store, { sessions: 100, agents: 3, inboxRows: 0, issues: 0,
     taskPromptBytes: 2048, skillBodyBytes: 4096, run: (sql, params) => db.run(sql, params) });
   return { db, store, seed, queries, usageReads,
+    mutateExecution(sql: string, params: unknown[] = []) {
+      runTurnExecutionMutation((store as unknown as { db: SqlDatabase }).db, sql, ...params);
+    },
     reset() { bytes = 0; queries.length = 0; usageReads.length = 0; }, bytes: () => bytes };
 }
 
@@ -71,17 +75,24 @@ test("snapshot filters Chat before hydration and preserves complete public rows 
   expect(mismatch.filter((row) => row.chatSessionId)).toEqual([]);
   f.db.run("UPDATE multiremi_chat_sessions SET creator_id = NULL WHERE id = ?", [task.chatSessionId]);
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: "local" }).some((row) => row.id === task.id)).toBe(true);
-  f.db.run("UPDATE multiremi_tasks SET chat_session_id = 'missing' WHERE id = ?", [task.id]);
+  f.db.run("UPDATE multiremi_turns SET session_id = 'chat_missing' WHERE current_attempt_id = ?", [task.id]);
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: null }).some((row) => row.id === task.id)).toBe(false);
-  f.db.run("UPDATE multiremi_tasks SET chat_session_id = '' WHERE id = ?", [task.id]);
+  f.db.run("UPDATE multiremi_turns SET session_id = 'auto_orphan_local' WHERE current_attempt_id = ?", [task.id]);
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).some((row) => row.id === task.id)).toBe(true);
   // Invisible payloads, private profiles and obsolete usage JSON cannot increase bridge bytes.
   f.reset();
   const baseline = f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).map(taskPublicResponse);
   const baselineBytes = f.bytes();
-  f.db.run("UPDATE multiremi_tasks SET prompt = ?, result = ?, codex_profile = ? WHERE chat_session_id IN (SELECT id FROM multiremi_chat_sessions WHERE creator_id = ?)",
-    ["p".repeat(16_384), "r".repeat(16_384), JSON.stringify({ large: "x".repeat(16_384) }), f.seed.readerUserId]);
-  f.db.run("UPDATE multiremi_tasks SET usage = ?", [JSON.stringify([{ provider: "claude", model: "legacy-decoy",
+  for (const task of all.filter(row => row.chatSessionId && f.store.getChatSession(row.chatSessionId)?.creatorId === f.seed.readerUserId)) {
+    const turn = f.store.getTurnForAttempt(task.id)!;
+    const reply = f.store.sendMessage({ session_id: turn.session_id, source_turn_id: turn.id,
+      sender: { type: "agent", id: task.agentId }, to: { type: "none" }, message_kind: "reply",
+      wake_requested: "inbox_only", body_md: "r".repeat(16_384), visibility: "hidden" });
+    f.db.run("UPDATE multiremi_turns SET reply_message_id = ? WHERE id = ?", [reply.message.id, turn.id]);
+  }
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET prompt = ?, codex_profile = ? WHERE chat_session_id IN (SELECT id FROM multiremi_chat_sessions WHERE creator_id = ?)",
+    ["p".repeat(16_384), JSON.stringify({ large: "x".repeat(16_384) }), f.seed.readerUserId]);
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET usage = ? WHERE 1 = 1", [JSON.stringify([{ provider: "claude", model: "legacy-decoy",
     inputTokens: 999_999, outputTokens: 0, padding: "x".repeat(65_536) }])]);
   f.reset();
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId }).map(taskPublicResponse)).toEqual(baseline);
@@ -89,7 +100,7 @@ test("snapshot filters Chat before hydration and preserves complete public rows 
   f.reset();
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: "no-chat-access" })).toHaveLength(2);
   expect(f.bytes()).toBeLessThan(10_000);
-  f.db.run("UPDATE multiremi_tasks SET status = 'cancelled' WHERE chat_session_id IS NULL OR chat_session_id = ''");
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET status = 'cancelled' WHERE chat_session_id IS NULL");
   f.reset();
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: "no-chat-access" })).toEqual([]);
   expect(f.bytes()).toBeLessThan(100);
@@ -100,13 +111,13 @@ test("invisible latest outcome does not promote older visible outcome; missing c
   const visible = f.store.createTask({ agentId: f.seed.primaryAgentId, prompt: "older outcome" });
   const hidden = f.store.listWorkspaceAgentTaskSnapshot("local").find((row) =>
     row.agentId === f.seed.primaryAgentId && row.chatSessionId === f.seed.sessionIds[0])!;
-  f.db.run("UPDATE multiremi_tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
     ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", visible.id]);
-  f.db.run("UPDATE multiremi_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?",
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?",
     ["2026-02-01T00:00:00.000Z", "2026-02-01T00:00:00.000Z", hidden.id]);
   const snapshot = f.store.listWorkspaceAgentTaskSnapshot("local", { userId: f.seed.ownerUserId });
   expect(snapshot.some((task) => task.id === visible.id || task.id === hidden.id)).toBe(false);
-  f.db.run("UPDATE multiremi_tasks SET chat_session_id = 'cht_missing' WHERE id = ?", [visible.id]);
+  f.db.run("UPDATE multiremi_turns SET session_id = 'chat_missing' WHERE current_attempt_id = ?", [visible.id]);
   expect(f.store.listWorkspaceAgentTaskSnapshot("local", { userId: null }).some((task) => task.id === visible.id)).toBe(false);
 }, 20000);
 
@@ -134,14 +145,23 @@ test("both snapshot routes return the same creator-scoped public contract", asyn
     { taskId: ownTask.id, agentId: "missing", workspaceId: "local" },
   ]) {
     const credential = await f.store.createAccessToken({ name: "task snapshot fixture", type: "task", userId: f.seed.ownerUserId, ...binding });
-    const response = await app.request("/api/agent-task-snapshot", { headers: {
-      Authorization: `Bearer ${credential.token}`, "X-Workspace-ID": "local",
-    } });
-    expect(response.status).toBe(200);
-    const tasks = await response.json() as Array<{ id: string }>;
-    expect(tasks.map((task) => task.id)).toEqual(binding.taskId === ownTask.id && binding.agentId === ownTask.agentId ? [ownTask.id] : []);
+    const validBinding = binding.taskId === ownTask.id && binding.agentId === ownTask.agentId;
+    for (const path of ["/api/agent-task-snapshot", "/api/multiremi/agent-task-snapshot"]) {
+      const response = await app.request(path, { headers: {
+        Authorization: `Bearer ${credential.token}`, "X-Workspace-ID": "local",
+      } });
+      // Unified credentials authenticate only the exact current attempt binding.
+      expect(response.status).toBe(validBinding ? 200 : 401);
+      const body = await response.json();
+      if (!validBinding) expect(body).toEqual({ error: "unauthorized" });
+      else {
+        const tasks = (Array.isArray(body) ? body : body.tasks) as Array<{ id: string }>;
+        expect(tasks.map((task) => task.id)).toEqual([ownTask.id]);
+        if (path.startsWith("/api/multiremi")) expect(body.total).toBe(1);
+      }
+    }
   }
-  f.db.run("UPDATE multiremi_tasks SET status = 'cancelled'");
+  f.mutateExecution("UPDATE multiremi_turn_execution_records SET status = 'cancelled' WHERE 1 = 1");
   const emptyCredential = await f.store.createAccessToken({ name: "empty snapshot fixture", type: "pat", userId: f.seed.readerUserId, workspaceId: "local" });
   for (const path of ["/api/agent-task-snapshot", "/api/multiremi/agent-task-snapshot"]) {
     const response = await app.request(path, { headers: {

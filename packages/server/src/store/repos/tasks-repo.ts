@@ -740,7 +740,7 @@ export interface TaskSnapshotAccess {
 // profiles/delegation state are deliberately absent; public prompt/result remain
 // and public usage comes from the canonical batched projection.
 const SNAPSHOT_PUBLIC_COLUMNS = [
-  "result", "id", "task_kind", "agent_id", "runtime_id",
+  "result", "id", "turn_id", "task_kind", "agent_id", "runtime_id",
   "runtime_workspace_id", "provider", "plugin_snapshot", "execution_fingerprint", "execution_model",
   "execution_thinking_level", "fallback_switched", "switch_reason", "next_retry_at", "issue_id",
   "issue_session_id", "issue_session_generation", "holds_workspace", "chat_session_id", "trigger_comment_id",

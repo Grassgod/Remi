@@ -103,7 +103,15 @@ pendingTurnBackendTests('MUL-506 mixed pending status QA', (fixture, backend) =>
 });
 pendingTurnBackendTests('MUL-506 dependency audit QA', (fixture, backend) => {
     function setup() { const f = fixture(), a = f.store.createAgent({ name: 'QA dependency owner', provider: 'codex' }), prerequisite = f.store.createIssue({ title: 'Unfinished prerequisite', status: 'in_progress' }), issue = f.store.createIssue({ title: 'Waiting work', status: 'backlog', blockedBy: [prerequisite.id], assigneeType: 'agent', assigneeId: a.id }); return { ...f, a, issue, prerequisite }; }
-    it('a member force comment keeps one dependency override audit', () => { const f = setup(); f.store.createIssueComment(f.issue.id, { body: 'Start despite prerequisite', authorType: 'member', authorId: 'mem_local_local' }); const audit = f.store.listIssueActivity(f.issue.id).filter(e => e.type === 'dependency_force_started'); expect(audit).toHaveLength(1); expect(audit[0]).toMatchObject({ actorType: 'member', actorId: 'mem_local_local', body: 'comment' }); expect(audit[0]!.data).toMatchObject({ source: 'comment', previous_status: 'backlog', unmet_prerequisites: [{ issue_id: f.prerequisite.id }], comment_id: expect.any(String), task_id: expect.any(String) }); });
+    it('a member force comment keeps one dependency override audit with the user actor', () => {
+        const f = setup(), member = f.store.getWorkspaceMember('mem_local_local')!;
+        expect(member.userId).toBe('local');
+        f.store.createIssueComment(f.issue.id, { body: 'Start despite prerequisite', authorType: 'member', authorId: member.id });
+        const audit = f.store.listIssueActivity(f.issue.id).filter(e => e.type === 'dependency_force_started');
+        expect(audit).toHaveLength(1);
+        expect(audit[0]).toMatchObject({ actorType: 'member', actorId: member.userId, body: 'comment' });
+        expect(audit[0]!.data).toMatchObject({ source: 'comment', previous_status: 'backlog', unmet_prerequisites: [{ issue_id: f.prerequisite.id }], comment_id: expect.any(String), task_id: expect.any(String) });
+    });
     it('the dependency gate kill switch still allows a platform request', () => { const f = setup(), prior = process.env.MULTIREMI_DEPENDENCY_GATE; process.env.MULTIREMI_DEPENDENCY_GATE = '0'; try {
         const result = f.store.sendMessage({ session_id: f.store.getOrCreateDefaultIssueSession(f.issue.id).id, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: f.a.id }, message_kind: 'request', wake_requested: 'now', body_md: 'gate disabled' });
         expect(result.wake_applied).toBe('now');

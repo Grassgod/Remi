@@ -7,11 +7,12 @@ import { join } from "node:path";
 let db: PostgresSyncDatabase | undefined;
 let store: MultiremiStore | undefined;
 let stateDir: string | undefined;
-self.onmessage = (event: MessageEvent<{ type: "init" | "claim" | "close"; databaseUrl?: string; supportsKinds?: boolean }>) => {
+self.onmessage = (event: MessageEvent<{ type: "init" | "claim" | "close"; databaseUrl?: string; migrationReportDir?: string; supportsKinds?: boolean }>) => {
   try {
     if (event.data.type === "init") {
       stateDir = mkdtempSync(join(tmpdir(), "feishu-kind-claim-state-"));
       process.env.MULTIREMI_STATE_DIR = stateDir;
+      process.env.MULTIREMI_MIGRATION_REPORT_DIR = event.data.migrationReportDir;
       db = new PostgresSyncDatabase(event.data.databaseUrl!);
       store = new MultiremiStore(db);
       self.postMessage({ phase: "ready" });

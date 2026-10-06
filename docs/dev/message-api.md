@@ -92,7 +92,7 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 
 input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 接受带 organizer:supervisor scope 的当前 supervisor task 凭证，也接受同工作区组长或父单负责人对组员轮的控制；旁支会话不能重试，其他跨 agent 操作返回 403。retry 沿用 organizer 的 report_only/act 设置、巡查评论和审计，提交后发布事件；返回同一 turn、新 attempt，以及 organizer_action/comment_id。cold=false 保留 provider 缓存，cold=true 清缓存。cancel/wrap-up 同样允许这些相关控制者。retry 不新增轮、不改变 Issue；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留；runtime/all 角色提供此入口，ui 角色继续返回 421。
 
-AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/api/agents/:id/tasks`（含 native 对应端点）同批返回 `turn_id`。该字段直接来自 execution read projection 的 canonical turn 映射，不额外逐条查询。全局任务日志使用 `/api/turns/:turn_id/trace?attempt_id=:id`，历史 attempt 也保留所属 turn_id，不可把两类 ID 互换。
+AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/api/agents/:id/tasks`（含 native 对应端点）同批返回 `turn_id`。快照的精简列清单也包含该字段，直接来自 execution read projection 的 canonical turn 映射，不额外逐条查询。全局任务日志使用 `/api/turns/:turn_id/trace?attempt_id=:id`，历史 attempt 也保留所属 turn_id，不可把两类 ID 互换。旧 `/api/issues/:id/active-task` 已退役并返回 410；Issue 的轮列表使用 `GET /api/turns?issue_id=:id` 或 `remi turn list --issue <issue>`。
 
 `autopilot run-now` 仍使用既有 trigger API/CLI，写入 auto_* 对话的 request，并复用 Store 创建执行轮；Issue 执行模式在实际 Issue 会话执行，auto_* request 带关联 turn/session，供历史展示。
 

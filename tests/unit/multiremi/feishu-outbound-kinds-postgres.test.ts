@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import type { MultiremiFeishuBotOutboundDelivery } from "@multiremi/contracts/types.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
 
@@ -62,7 +63,8 @@ describe.skipIf(!adminUrl)("C5 delivery on real PostgreSQL", () => {
     const delivered = new Set<string>([old.id, capable.id]);
     const legacyTasks = new Set<string>([firstTask]);
     try {
-      for (const worker of workers) await exchange(worker, { type: "init", databaseUrl });
+      for (const worker of workers) await exchange(worker, { type: "init", databaseUrl,
+        migrationReportDir: resolveMigrationReportDirectory() });
       for (let round = 0; round < 16; round++) {
         const claims = await Promise.all(workers.map((worker, index) => exchange<{ row: MultiremiFeishuBotOutboundDelivery | null }>(worker,
           { type: "claim", supportsKinds: index === 1 })));
