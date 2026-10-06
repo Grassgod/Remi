@@ -1259,6 +1259,10 @@ export class MultiremiDaemon {
     return this.client.answerFeishuIssueDecision(decisionId, input);
   }
 
+  getFeishuDecisionMessage(messageId: string) {
+    return this.client.getFeishuDecisionMessage(messageId);
+  }
+
   getMessageHumanRequest(requestId: string): Promise<MultiremiTaskHumanRequest | null> {
     return this.client.getMessageHumanRequest(requestId);
   }

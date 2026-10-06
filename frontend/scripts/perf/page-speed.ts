@@ -79,8 +79,6 @@ import {
 } from "./lib/selectors";
 import {
   rankDeepLinkCandidates,
-  selectsByIssue,
-  unreadIdsInRow,
   type DeepLinkCandidate,
   type InboxCandidateInput,
 } from "./lib/deeplink-target";
@@ -100,7 +98,6 @@ import {
   usageLines,
   type Options,
 } from "./lib/options";
-import type { InboxItem } from "../../packages/core/types/inbox";
 import {
   buildCompare,
   buildHtml,
@@ -120,24 +117,11 @@ const RECORDER_GLOBAL = "__mul383Recorder";
 const WARM_ENTRY_TIMEOUT_MS = 15_000;
 /** After the click, the app still has to route and mount the target page. */
 const WARM_NAV_TIMEOUT_MS = 10_000;
-/**
- * Bound on the click -> `?issue=` commit, as a correctness check on the click.
- *
- * The commit is asynchronous and, while the guard fulfils the auto mark-read, it
- * can take seconds: measured on 209 at ~5 s when the mark-read was aborted, and
- * ~181 ms when it was fulfilled (MUL-384 `cmt_cxrxocj4vp3q`). Ten seconds covers a
- * long timeline starving the transition; it never feeds into `readyMs`.
- */
+/** Bound on committing the selected message URL; separate from readyMs. */
 const URL_COMMIT_TIMEOUT_MS = 10_000;
 
-/**
- * Inbox notification types that render `AutopilotRunReport` instead of an issue
- * timeline, so a deep link into them would not exercise the timeline path.
- */
-const AUTOPILOT_INBOX_TYPES = ["autopilot_run", "autopilot_run_report", "autopilot"];
-
 const READING_RULE =
-  "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
+  "详情/深链：anchor（agent-stream 优先，否则最新一条评论；消息深链为 target-message）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
 
 // ── Scenario model ───────────────────────────────────────────────────────────
 
@@ -156,13 +140,13 @@ interface Scenario {
   /** Inbox row index, resolved by the deep-link probe. */
   inboxRowIndex: number | null;
   inboxItemId: string | null;
-  /** Issue id the warm deep link must land on, asserted through `?issue=`. */
-  expectIssueId: string | null;
+  /** Message id the warm deep link must land on, asserted through `?item=`. */
+  expectMessageId: string | null;
   /** Reported identifier of that issue, checked against the clicked row's text. */
   expectIdentifier: string | null;
   /**
    * Unread notification ids in the deep-link target's rendered row. This is the
-   * auto mark-read effect's working set, so it bounds the stub self-check; empty
+   * explicit cursor-read state, so it bounds the stub self-check; empty
    * for every non-deep-link scenario.
    */
   inboxUnreadIds: string[];
@@ -219,14 +203,9 @@ function workspaceUrl(baseUrl: string, slug: string, path: string): string {
 
 // ── Probing: deep-link target and running issue ──────────────────────────────
 
-interface InboxPageItem {
+interface InboxPageItem extends InboxCandidateInput {
   id?: string;
-  issue_id?: string | null;
-  type?: string;
-  read?: boolean;
-  archived?: boolean;
   created_at?: string;
-  details?: { comment_id?: string | null; issue_session_id?: string | null } | null;
 }
 
 /**
@@ -242,12 +221,7 @@ interface InboxPageItem {
  * how old the newest mention happens to be into `readyMs`, and a row whose page
  * number changes between runs cannot be compared (MUL-384 `cmt_lkj0gsgtkfey`).
  *
- * The selected key is an *issue*, not a notification id: `inboxItemSelectionKind`
- * sends every notification carrying an `issue_id` to `?issue=<issueId>&session=`,
- * which resolves to that issue's newest notification in the loaded list. Only
- * ledger rows (autopilot runs, organizer actions) select by `?item=`, and those
- * render `AutopilotRunReport` instead of an issue timeline, so they are not
- * eligible here anyway.
+ * Selection is one canonical message ID (`?item=`); it does not mark read.
  *
  * `--inbox-item` remains an explicit override and must be inside the probe window.
  */
@@ -267,13 +241,13 @@ async function probeDeepLinkTarget(options: {
     for (let page = 0; page < probePages; page++) {
       const query = new URLSearchParams({ limit: String(INBOX_PROBE_PAGE_SIZE) });
       if (cursor) query.set("cursor", cursor);
-      const res = await fetch(`${baseUrl}/api/inbox/page?${query.toString()}`, { headers });
+      const res = await fetch(`${baseUrl}/api/inbox?${query.toString()}`, { headers });
       if (!res.ok) break;
-      const body = (await res.json()) as { items?: InboxPageItem[]; next_cursor?: string | null; has_more?: boolean };
+      const body = (await res.json()) as { items?: InboxPageItem[]; next_cursor?: string | null; };
       const items = Array.isArray(body.items) ? body.items : [];
       pages.push({ items, hasCursor: page > 0 });
       cursor = typeof body.next_cursor === "string" ? body.next_cursor : null;
-      if (!cursor || body.has_more === false) break;
+      if (!cursor) break;
     }
   } catch {
     // Reported as "no eligible item" below.
@@ -311,35 +285,7 @@ async function probeDeepLinkTarget(options: {
   return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
 }
 
-/**
- * True when the real first page already carries a newer notification for the
- * target's issue.
- *
- * `?issue=` selects that issue's *newest* notification, so a newer one on page one
- * would be selected instead of the probed item: the measured landing point would
- * differ from the reported target. Reported as a skip rather than measured as
- * something else.
- */
-function isTargetSuperseded(firstPage: InboxPageItem[], targetIssueId: string, targetCreatedAt: string): boolean {
-  return firstPage.some(
-    (item) =>
-      item.issue_id === targetIssueId
-      // A ledger row selects by `?item=`, so it never competes for the `?issue=`
-      // selection and cannot supersede the target.
-      && selectsByIssue(item as InboxCandidateInput)
-      && typeof item.created_at === "string"
-      && item.created_at > targetCreatedAt,
-  );
-}
-
-/**
- * Attaches the click-time facts to a ranked candidate: the DOM row the page will
- * actually render it in, and the unread ids that a click will auto-mark-read.
- *
- * The row comes from the page's own grouping functions, and the unread ids are the
- * auto mark-read effect's working set — both are needed before the click, one to
- * find the row and one to bound the stub self-check.
- */
+/** Finds the canonical message's row in the prepared first page. */
 function finishDeepLinkTarget(
   candidate: DeepLinkCandidate,
   firstPage: InboxPageItem[],
@@ -348,12 +294,6 @@ function finishDeepLinkTarget(
   const raw = allItems[candidate.apiIndex] as (InboxPageItem & { __page?: number }) | undefined;
   if (!raw) return { target: null, skipped: "no-eligible-inbox-item" };
   const apiPage = typeof raw.__page === "number" ? raw.__page : 1;
-  const createdAt = typeof raw.created_at === "string" ? raw.created_at : "";
-  // A newer notification for the same issue on the real first page would win the
-  // `?issue=` selection, so the measured landing point would not be this target.
-  if (createdAt && isTargetSuperseded(firstPage, candidate.issueId, createdAt)) {
-    return { target: null, skipped: "inbox-target-superseded" };
-  }
   // The row index and the unread set are computed on the page the browser will
   // actually receive: the real first page with the target injected. Anything else
   // would describe a list the measured round never renders.
@@ -363,14 +303,14 @@ function finishDeepLinkTarget(
     { hasCursor: false },
   );
   const preparedItems = (prepared as { items: InboxPageItem[] }).items;
-  const rowIndex = inboxDomRowIndex(preparedItems as unknown as InboxItem[], candidate.inboxItemId);
+  const rowIndex = inboxDomRowIndex(preparedItems, candidate.inboxItemId);
   if (rowIndex === null) return { target: null, skipped: "no-eligible-inbox-item-in-dom" };
   return {
     target: {
       ...candidate,
-      issueIdentifier: candidate.issueId,
+      issueIdentifier: candidate.inboxItemId,
       rowIndex,
-      unreadIdsInRow: unreadIdsInRow(preparedItems as unknown as InboxCandidateInput[], candidate.issueId),
+      unreadIdsInRow: [],
       raw,
       apiPage,
     },
@@ -470,13 +410,19 @@ async function resolveIdentifiers(
  * some older serializers. Reading one name silently matched nothing and reported
  * `0 running task(s)` for a task that was running, so accept both.
  */
-interface TaskListRow {
-  issueId?: string | null;
-  issue_id?: string | null;
-}
-
-function taskIssueId(task: TaskListRow): string | null {
-  return task.issueId ?? task.issue_id ?? null;
+interface TaskListRow { issue_id?: string | null }
+function taskIssueId(turn: TaskListRow): string | null { return turn.issue_id ?? null; }
+async function loadRunningTurns(baseUrl: string, token: string): Promise<TaskListRow[]> {
+  const turns: TaskListRow[] = [];
+  let cursor: string | null = null;
+  do {
+    const query = new URLSearchParams({ status: "running", limit: "200" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await fetchJson<{ turns: TaskListRow[]; next_cursor: string | null }>(`${baseUrl}/api/turns?${query}`, { Authorization: `Bearer ${token}` });
+    if (!Array.isArray(page.turns)) throw new Error("Invalid turn page");
+    turns.push(...page.turns); cursor = page.next_cursor;
+  } while (cursor);
+  return turns;
 }
 
 /**
@@ -489,12 +435,9 @@ function taskIssueId(task: TaskListRow): string | null {
  * users, instead of two list requests.
  */
 async function loadRunningIssueIds(baseUrl: string, token: string): Promise<Set<string>> {
-  const body = await fetchJson<{ tasks?: Array<TaskListRow> }>(
-    `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
-    { Authorization: `Bearer ${token}` },
-  ).catch(() => null);
+  const turns = await loadRunningTurns(baseUrl, token).catch(() => []);
   const ids = new Set<string>();
-  for (const task of body?.tasks ?? []) {
+  for (const task of turns) {
     const issueId = taskIssueId(task);
     if (issueId) ids.add(issueId);
   }
@@ -508,27 +451,19 @@ async function probeRunningIssue(options: {
   excludedIssueIds: Set<string>;
 }): Promise<RunningIssue | null> {
   const { baseUrl, token, explicitIssueId, excludedIssueIds } = options;
-  const headers = { Authorization: `Bearer ${token}` };
-
   if (explicitIssueId) {
     if (excludedIssueIds.has(explicitIssueId)) return null;
     // The explicit target is trusted even when the task list has not caught up:
     // a caller pinning `--issue-running` is asserting the issue is live, and a
     // zero count here would otherwise silently drop the scenario.
-    const tasks = await fetchJson<{ tasks?: Array<TaskListRow> }>(
-      `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
-      headers,
-    ).catch(() => null);
-    const count = (tasks?.tasks ?? []).filter((task) => taskIssueId(task) === explicitIssueId).length;
+    const turns = await loadRunningTurns(baseUrl, token).catch(() => []);
+    const count = turns.filter(turn => taskIssueId(turn) === explicitIssueId).length;
     return { issueId: explicitIssueId, identifier: explicitIssueId, taskCount: count };
   }
 
-  const body = await fetchJson<{ tasks?: Array<TaskListRow> }>(
-    `${baseUrl}/api/multiremi/tasks?status=running&limit=200`,
-    headers,
-  ).catch(() => null);
+  const turns = await loadRunningTurns(baseUrl, token).catch(() => []);
   const counts = new Map<string, number>();
-  for (const task of body?.tasks ?? []) {
+  for (const task of turns) {
     const issueId = taskIssueId(task);
     if (!issueId) continue;
     if (excludedIssueIds.has(issueId)) continue;
@@ -816,8 +751,7 @@ async function measureRound(options: {
   // `2 x` the row's unread ids means the response rewrite did not take effect and
   // the page is still looping. Abandon the round rather than measure inside the
   // failure loop (MUL-384 `cmt_5857w2m9uiyi`).
-  const unreadIds = scenario.inboxUnreadIds ?? [];
-  if (stubLoopNotTerminated(measurement.stubbedWrites, unreadIds.length)) {
+  if ((scenario.inboxItemId !== null && measurement.stubbedWrites > 0) || stubLoopNotTerminated(measurement.stubbedWrites, collectors.stubbedReadRequests.size)) {
     measurement.error = "stub-loop-not-terminated";
     await page.close();
     return {
@@ -976,7 +910,7 @@ async function clickWarmTarget(
   entrySettled: boolean | null;
 }> {
   const selectors: string[] = [];
-  if (scenario.shape === "issue-detail" && scenario.inboxItemId !== null) {
+  if (scenario.inboxItemId !== null) {
     selectors.push(inboxRowSelector("contract"), inboxRowSelector("legacy"));
   } else if (scenario.clickIssueId) {
     selectors.push(issueRowSelector("contract", scenario.clickIssueId), issueRowSelector("legacy", scenario.clickIssueId));
@@ -1059,19 +993,16 @@ async function clickWarmTarget(
     throw new Error(`warm target not found for ${scenario.key}${lastError ? `: ${lastError.split("\n")[0]}` : ""}`);
   }
 
-  // The click only counts once the app has selected the intended issue. The URL
-  // commit is asynchronous (`replace` runs inside `startTransition`) and, while the
-  // guard is fulfilling the auto mark-read, it can take seconds; 10 s is the agreed
-  // bound. This is a correctness check on the click, never part of `readyMs`.
-  if (scenario.expectIssueId === null) {
+  // Wait for the selected message URL independently of the readyMs measurement.
+  if (scenario.expectMessageId === null) {
     return { urlCommitMs: null, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
   }
   const startedAt = Date.now();
-  const issueParam = await waitForUrlIssue(page, scenario.expectIssueId, URL_COMMIT_TIMEOUT_MS);
+  const messageParam = await waitForUrlMessage(page, scenario.expectMessageId, URL_COMMIT_TIMEOUT_MS);
   const urlCommitMs = Date.now() - startedAt;
-  if (issueParam !== scenario.expectIssueId) {
+  if (messageParam !== scenario.expectMessageId) {
     throw new Error(
-      `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
+      `deeplink warm: url item=${messageParam ?? "(none)"} expected ${scenario.expectMessageId}`,
     );
   }
   return { urlCommitMs, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
@@ -1109,14 +1040,14 @@ async function resolveWarmRowIndex(
     ? injectInboxTarget({ items: fresh }, scenario.inboxTarget, { hasCursor: false })
     : { items: fresh };
   const preparedItems = (prepared as { items: Array<Record<string, unknown>> }).items;
-  const index = inboxDomRowIndex(preparedItems as unknown as InboxItem[], scenario.inboxItemId);
+  const index = inboxDomRowIndex(preparedItems, scenario.inboxItemId);
   if (index === null || index >= count) return null;
   return index;
 }
 
 /** One page of inbox rows, read straight from the API. */
 async function fetchInboxPageItems(baseUrl: string, token: string): Promise<Array<Record<string, unknown>>> {
-  const res = await fetch(`${baseUrl}/api/inbox/page?limit=50`, {
+  const res = await fetch(`${baseUrl}/api/inbox?limit=50`, {
     headers: { Authorization: `Bearer ${token}` },
   }).catch(() => null);
   if (!res || !res.ok) return [];
@@ -1125,23 +1056,23 @@ async function fetchInboxPageItems(baseUrl: string, token: string): Promise<Arra
   return items.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
 }
 
-/** `?issue=` currently in the URL, or null when the parameter is absent. */
-async function selectedIssueInUrl(page: Page): Promise<string | null> {
+/** `?item=` currently in the URL, or null when the parameter is absent. */
+async function selectedMessageInUrl(page: Page): Promise<string | null> {
   const url = page.url();
-  const match = /[?&]issue=([^&]+)/.exec(url);
+  const match = /[?&]item=([^&]+)/.exec(url);
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
 /**
- * Waits for the URL's `issue` parameter to become `expected`, and returns
+ * Waits for the URL's `item` parameter to become `expected`, and returns
  * whatever it holds when the wait gives up (so the caller can report the actual
  * value). The inbox commits its selection inside `startTransition`, so the URL
  * updates a tick after the click rather than synchronously.
  */
-async function waitForUrlIssue(page: Page, expected: string, timeoutMs = 3_000): Promise<string | null> {
+async function waitForUrlMessage(page: Page, expected: string, timeoutMs = 3_000): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const current = await selectedIssueInUrl(page);
+    const current = await selectedMessageInUrl(page);
     if (current === expected || Date.now() >= deadline) return current;
     await page.waitForTimeout(100);
   }
@@ -1268,7 +1199,7 @@ function buildScenarios(options: {
         sidebarPath: null,
         inboxRowIndex: null,
         inboxItemId: null,
-        expectIssueId: null,
+        expectMessageId: null,
         expectIdentifier: null,
         inboxUnreadIds: [],
         inboxTarget: null,
@@ -1281,14 +1212,7 @@ function buildScenarios(options: {
 
   const deepLink = options.deepLink;
   {
-    // `?issue=` is the form every notification carrying an issue resolves to:
-    // `inboxItemSelectionKind` keeps `?item=` for ledger rows only, and those
-    // render a report rather than a timeline. See `probeDeepLinkTarget`.
-    const path = deepLink
-      ? `/inbox?issue=${encodeURIComponent(deepLink.issueId)}${
-        deepLink.sessionId ? `&session=${encodeURIComponent(deepLink.sessionId)}` : ""
-      }`
-      : "/inbox";
+    const path = deepLink ? `/inbox?item=${encodeURIComponent(deepLink.inboxItemId)}` : "/inbox";
     // `none` when the probe produced no target: the old ternary folded that case
     // into `pinned`, so a skipped row claimed a pinned target it never had
     // (MUL-384 `cmt_sr7dl2nrdyq7`).
@@ -1299,9 +1223,9 @@ function buildScenarios(options: {
         : "none";
     for (const mode of ["cold", "warm"] as const) {
       scenarios.push({
-        key: "deeplink",
+        key: "deeplink-message",
         mode,
-        shape: "issue-detail" as PageShape,
+        shape: "inbox" as PageShape,
         path,
         targetCommentId: deepLink?.commentId ?? null,
         entry: "inbox" as WarmEntry,
@@ -1309,13 +1233,13 @@ function buildScenarios(options: {
         sidebarPath: null,
         inboxRowIndex: deepLink?.rowIndex ?? null,
         inboxItemId: deepLink?.inboxItemId ?? null,
-        expectIssueId: deepLink?.issueId ?? null,
-        expectIdentifier: deepLink?.issueIdentifier ?? null,
+        expectMessageId: deepLink?.inboxItemId ?? null,
+        expectIdentifier: null,
         inboxUnreadIds: deepLink?.unreadIdsInRow ?? [],
         inboxTarget: (deepLink?.raw as Record<string, unknown> | undefined) ?? null,
         target: {
           identifier: deepLink
-            ? `${deepLink.issueId}${deepLink.issueHasRunningTask ? "（running）" : ""}`
+            ? deepLink.inboxItemId
             : options.pinnedInboxItem ?? "(auto)",
         },
         targetSelection,
@@ -1340,7 +1264,7 @@ function buildScenarios(options: {
         sidebarPath: mode === "warm" ? page.path : null,
         inboxRowIndex: null,
         inboxItemId: null,
-        expectIssueId: null,
+        expectMessageId: null,
         expectIdentifier: null,
         inboxUnreadIds: [],
         inboxTarget: null,
@@ -1374,14 +1298,11 @@ async function warmupScenarios(options: {
     profiles: profilesFor({ modes: ["legacy"], shape: "issue-detail", targetCommentId: null }),
   });
   const page = await context.newPage();
-  // Warmup visits the measured routes, which includes the deep-link `?issue=` URL.
-  // That URL auto-marks its target read, so without the guard here the warmup would
-  // change the fixture state the measured rounds then read. Attach the same guard the
-  // rounds use; the warmup's own counters are discarded.
+  // Warmup uses the same browser write guard as measured rounds.
   attachCollectors(page, 0, "warmup", []);
   // Warm the entry pages once: both the issues list and the inbox are the
   // starting point of every warm round.
-  const entries = new Set<string>();
+  const entries = new Set<WarmEntry>();
   for (const scenario of scenarios) entries.add(scenario.entry);
   try {
     for (const entry of entries) {
@@ -1510,7 +1431,6 @@ async function main(): Promise<void> {
 
     const identifierIds = new Set<string>();
     if (running) identifierIds.add(running.issueId);
-    if (deepLinkProbe.target) identifierIds.add(deepLinkProbe.target.issueId);
     const identifiers = await resolveIdentifiers(opts.baseUrl, token, [...identifierIds]);
     const label = (issueId: string): string => identifiers.get(issueId) ?? issueId;
 
@@ -1542,7 +1462,7 @@ async function main(): Promise<void> {
     }
     if (deepLinkProbe.target) {
       process.stdout.write(
-        `  deeplink: ${deepLinkProbe.target.inboxItemId} apiIndex=${deepLinkProbe.target.apiIndex} domRow=${deepLinkProbe.target.rowIndex} issue=${deepLinkProbe.target.issueId} comment=${deepLinkProbe.target.commentId}${deepLinkProbe.target.sessionId ? " (session scoped)" : ""}\n`,
+        `  deeplink: ${deepLinkProbe.target.inboxItemId} apiIndex=${deepLinkProbe.target.apiIndex} domRow=${deepLinkProbe.target.rowIndex} message=${deepLinkProbe.target.commentId}${deepLinkProbe.target.sessionId ? " (session scoped)" : ""}\n`,
       );
     } else {
       process.stdout.write(`  deeplink: skipped (${deepLinkProbe.skipped ?? "unknown"})\n`);
@@ -1636,7 +1556,7 @@ async function main(): Promise<void> {
         selectorMode: mode,
         skipped: entryFailure !== null,
         skipReason: entryFailure
-          ? (scenario.expectIssueId !== null ? "warm-target-url-mismatch" : "warm-target-not-in-list")
+          ? (scenario.expectMessageId !== null ? "warm-target-url-mismatch" : "warm-target-not-in-list")
           : null,
         ...(scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {}),
         ...(fixtureByScenario.has(scenario.key)
@@ -1809,20 +1729,16 @@ function deepLinkScenarioFields(
   /** 1-based API page the probe read the target from. */
   inboxApiPage?: number | null;
 } {
-  if (scenario.key !== "deeplink") return {};
+  if (scenario.key !== "deeplink-message") return {};
   if (!target) return scenario.targetSelection ? { targetSelection: scenario.targetSelection } : {};
   return {
     targetSelection: scenario.targetSelection ?? undefined,
     inboxItemId: target.inboxItemId,
-    issueHasRunningTask: target.issueHasRunningTask,
     inboxApiIndex: target.apiIndex,
     inboxDomRowIndex: target.rowIndex,
-    // The probe prefers an unread target, because selecting one is the path a user
-    // almost always takes and it therefore exercises the auto mark-read. Reporting
-    // `targetRead` makes the choice visible, and `targetGroupHasUnread` says whether
-    // a mark-read was expected at all (the stub self-check's denominator).
-    targetRead: target.read,
-    targetGroupHasUnread: target.groupHasUnread,
+    // Selecting a message leaves its read cursor unchanged.
+    targetRead: false,
+    targetGroupHasUnread: false,
     inboxApiPage: target.apiPage,
   };
 }

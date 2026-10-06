@@ -92,7 +92,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
   const traceActive = ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
-  const events = useTaskTrace(task.id, traceActive, traceActive);
+  const events = useTaskTrace(task.id, traceActive, traceActive, task.turn_id);
   const items = useMemo(
     () => buildTraceTimeline(events),
     [events],

@@ -62,7 +62,8 @@ describe("Issue SSR missing-comment fallback", () => {
       if (path.endsWith("/log/locate")) return locate(path.split("/")[3]!);
       if (path.endsWith("/log")) return Response.json(window(url.searchParams.get("anchor") === "0" ? [row("head", 0)] : undefined));
       if (path.endsWith("/sessions")) return Response.json(sessions);
-      if (path.endsWith("/members") || path.endsWith("/task-runs")) return Response.json([]);
+      if (path.endsWith("/members")) return Response.json([]);
+      if (path.endsWith("/turns")) return Response.json({ turns: [], next_cursor: null });
       if (path.endsWith("/children")) return Response.json({ issues: [] });
       return Response.json(issue);
     });

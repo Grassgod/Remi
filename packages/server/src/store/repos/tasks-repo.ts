@@ -696,6 +696,7 @@ export interface TriggerCommentRecoveryLane {
 
 export interface RedispatchTaskResult {
   cancelled: MultiremiTask;
+  cancellationPerformed: boolean;
   replacement: MultiremiTask;
 }
 
@@ -4949,7 +4950,10 @@ ${placementAfter.sql}
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
     const issueBeforeReplacement = current.issueId ? this.ctx.issues().getIssue(current.issueId) : null;
-    const terminal = current.status=== "failed" ? {task:current} : this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges, deferredEvents);
+    const cancellationPerformed = current.status !== "failed" && current.status !== "cancelled";
+    const terminal = cancellationPerformed
+      ? this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges, deferredEvents)
+      : { task: current };
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(current.chatSessionId) !== current.issueId;
@@ -4972,11 +4976,11 @@ ${placementAfter.sql}
         [replacement.id, nowIso(), replacement.chatSessionId],
       );
     }
-    return { cancelled: terminal.task, replacement };
+    return { cancelled: terminal.task, cancellationPerformed, replacement };
   }
 
   notifyRedispatchedTask(result: RedispatchTaskResult): void {
-    if(result.cancelled.status=== "cancelled") this.ctx.notifyTaskEvent("task:cancelled", result.cancelled);
+    if (result.cancellationPerformed) this.ctx.notifyTaskEvent("task:cancelled", result.cancelled);
     this.ctx.notifyTaskEnqueued(result.replacement);
   }
 

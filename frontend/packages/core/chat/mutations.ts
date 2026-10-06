@@ -112,40 +112,16 @@ export function useUpdateChatQueuedTask() {
   const wsId = useWorkspaceId();
   return useMutation({
     onMutate: () => ({ wsId }),
-    mutationFn: ({ sessionId, taskId, content }: { sessionId: string; taskId: string; content: string }) =>
-      api.editQueuedChatMessage(sessionId, taskId, content),
-    onSettled: (_data, _error, { sessionId }, context) => refreshChatQueue(qc, context?.wsId ?? wsId, sessionId),
+    mutationFn: ({ messageId, content }: { sessionId: string; messageId: string; content: string }) => api.editMessage(messageId, content),
+    onSettled: (_data, _error, { sessionId }, context) => { const origin = context?.wsId ?? wsId; refreshChatQueue(qc, origin, sessionId); void qc.invalidateQueries({ queryKey: ["chat-unread", origin, sessionId] }); },
   });
 }
-
 export function useRemoveChatQueuedTask() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
     onMutate: () => ({ wsId }),
-    mutationFn: ({ sessionId, taskId }: { sessionId: string; taskId: string }) =>
-      api.removeQueuedChatMessage(sessionId, taskId),
-    onSettled: (_data, _error, { sessionId }, context) => refreshChatQueue(qc, context?.wsId ?? wsId, sessionId),
-  });
-}
-
-export function useClearChatQueue() {
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
-  return useMutation({
-    onMutate: () => ({ wsId }),
-    mutationFn: (sessionId: string) => api.clearChatQueue(sessionId),
-    onSettled: (_data, _error, sessionId, context) => refreshChatQueue(qc, context?.wsId ?? wsId, sessionId),
-  });
-}
-
-export function usePrioritizeChatQueuedTask() {
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
-  return useMutation({
-    onMutate: () => ({ wsId }),
-    mutationFn: ({ sessionId, taskId }: { sessionId: string; taskId: string }) =>
-      api.prioritizeQueuedChatMessage(sessionId, taskId),
-    onSettled: (_data, _error, { sessionId }, context) => refreshChatQueue(qc, context?.wsId ?? wsId, sessionId),
+    mutationFn: ({ messageId }: { sessionId: string; messageId: string }) => api.deleteMessage(messageId),
+    onSettled: (_data, _error, { sessionId }, context) => { const origin = context?.wsId ?? wsId; refreshChatQueue(qc, origin, sessionId); void qc.invalidateQueries({ queryKey: ["chat-unread", origin, sessionId] }); },
   });
 }

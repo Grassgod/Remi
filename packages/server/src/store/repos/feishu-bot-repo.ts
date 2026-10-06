@@ -1821,7 +1821,7 @@ export class FeishuBotRepo {
         String(row.chat_id),
         cleanOptionalString(row.thread_id),
         messageId,
-        encodeDecisionCardBody({ card }),
+        encodeDecisionCardBody({ card, message_id: decision.id }),
         now,
         now,
         now,
@@ -2168,7 +2168,7 @@ export class FeishuBotRepo {
         messageId,
         // Written through the shared encoder: the host decodes the same shape,
         // which is what stops a terminal patch from landing as an empty card.
-        encodeDecisionCardBody({ card }),
+        encodeDecisionCardBody({ card, message_id: request.id }),
         nowIsoValue,
         nowIsoValue,
         nowIsoValue,

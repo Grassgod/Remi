@@ -60,9 +60,20 @@ export interface PendingChatTaskCandidate {
   sessionWorkspaceId: string;
 }
 
+// Chat is private to its creator. Resolve the user to the workspace member lane,
+// exactly as inbox/read does; the legacy unread_since is no longer a read cursor.
+const CHAT_UNREAD_FROM = `FROM multiremi_conversation_log m
+  JOIN multiremi_workspace_members member ON member.id = m.to_member_id
+    AND member.workspace_id = chat.workspace_id AND member.user_id = chat.creator_id
+    AND member.archived_at IS NULL
+  LEFT JOIN multiremi_session_lanes lane ON lane.session_id = m.session_id
+    AND lane.reader_type = 'member' AND lane.reader_id = member.id AND lane.execution_scope = ''
+  WHERE m.session_id = chat.id AND m.kind = 'message' AND m.visibility = 'shown'
+    AND m.deleted_at IS NULL AND m.seq > COALESCE(lane.cursor_seq, 0)`;
+
 const CHAT_SESSION_SELECT = `SELECT chat.*,
-  (SELECT COUNT(*) FROM multiremi_chat_message_records m WHERE m.chat_session_id = chat.id
-    AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count,
+  (SELECT COUNT(*) ${CHAT_UNREAD_FROM}) AS unread_count,
+  (SELECT MIN(m.created_at) ${CHAT_UNREAD_FROM}) AS reader_unread_since,
   (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_message_records m WHERE m.chat_session_id = chat.id
     ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_content,
   (SELECT m.role FROM multiremi_chat_message_records m WHERE m.chat_session_id = chat.id
@@ -250,7 +261,8 @@ export class ChatRepo {
   markChatSessionRead(id: string): void {
     const session = this.getChatSession(id);
     if (!session) throw new Error(`Chat session not found: ${id}`);
-    this.ctx.db.run("UPDATE multiremi_chat_sessions SET unread_since = NULL WHERE id = ?", [id]);
+    const member = this.ctx.workspaces().findWorkspaceMemberForUser(session.creatorId, session.workspaceId);
+    if (member) this.ctx.inbox().readMessageInbox(member.id, id);
     this.ctx.emitChatEvent(session, "chat:session_read", {});
   }
 
@@ -782,8 +794,8 @@ function toChatSession(row: Row): MultiremiChatSession {
     sessionProvider: nullableString(row.session_provider),
     sessionExecutionFingerprint: nullableString(row.session_execution_fingerprint),
     latestTaskId: nullableString(row.latest_task_id),
-    unreadSince: nullableString(row.unread_since),
-    hasUnread: Boolean(row.unread_since),
+    unreadSince: nullableString(row.reader_unread_since),
+    hasUnread: Number(row.unread_count ?? 0) > 0,
     pinned: Number(row.pinned ?? 0) === 1,
     unreadCount: Number(row.unread_count ?? 0),
     lastMessage: row.last_message_created_at == null ? null : {

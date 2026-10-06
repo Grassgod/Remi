@@ -1,51 +1,20 @@
-import type { InboxItem, InboxPage, InboxSummary } from "../../types";
+import type { z } from "zod";
 import type { HttpClient } from "../http";
+import { parseStrictResponse } from "../schema";
+import { MessageInboxSchema, ReadInboxSchema, ReadAllInboxSchema } from "../schemas/messages";
 
 export class InboxEndpoints {
   constructor(readonly http: HttpClient) {}
-
-  // Inbox
-  async listInbox(): Promise<InboxItem[]> {
-    return this.http.fetch("/api/inbox");
-  }
-
-  async listInboxPage(options: { limit?: number; cursor?: string | null } = {}): Promise<InboxPage> {
+  async listInboxPage(options: { workspace_id?: string; limit?: number; cursor?: string | null } = {}) {
     const params = new URLSearchParams();
-    if (options.limit) params.set("limit", String(options.limit));
-    if (options.cursor) params.set("cursor", options.cursor);
-    const query = params.size > 0 ? `?${params.toString()}` : "";
-    return this.http.fetch(`/api/inbox/page${query}`);
+    for (const [key, value] of Object.entries(options)) if (value != null) params.set(key, String(value));
+    const path = `/api/inbox${params.size ? `?${params}` : ""}`;
+    return parseStrictResponse<z.infer<typeof MessageInboxSchema>>(await this.http.fetch<unknown>(path), MessageInboxSchema, { endpoint: path });
   }
-
-  async getInboxSummary(timezoneOffset = new Date().getTimezoneOffset()): Promise<InboxSummary> {
-    return this.http.fetch(`/api/inbox/summary?timezone_offset=${timezoneOffset}`);
+  async markInboxRead(input: { session_id: string; to_seq?: number }) {
+    return parseStrictResponse<z.infer<typeof ReadInboxSchema>>(await this.http.fetch<unknown>("/api/inbox/read", { method: "POST", body: JSON.stringify(input) }), ReadInboxSchema, { endpoint: "POST /api/inbox/read" });
   }
-
-  async markInboxRead(id: string): Promise<InboxItem> {
-    return this.http.fetch(`/api/inbox/${id}/read`, { method: "POST" });
-  }
-
-  async archiveInbox(id: string): Promise<InboxItem> {
-    return this.http.fetch(`/api/inbox/${id}/archive`, { method: "POST" });
-  }
-
-  async getUnreadInboxCount(): Promise<{ count: number }> {
-    return this.http.fetch("/api/inbox/unread-count");
-  }
-
-  async markAllInboxRead(): Promise<{ count: number }> {
-    return this.http.fetch("/api/inbox/mark-all-read", { method: "POST" });
-  }
-
-  async archiveAllInbox(): Promise<{ count: number }> {
-    return this.http.fetch("/api/inbox/archive-all", { method: "POST" });
-  }
-
-  async archiveAllReadInbox(): Promise<{ count: number }> {
-    return this.http.fetch("/api/inbox/archive-all-read", { method: "POST" });
-  }
-
-  async archiveCompletedInbox(): Promise<{ count: number }> {
-    return this.http.fetch("/api/inbox/archive-completed", { method: "POST" });
+  async markAllInboxRead() {
+    return parseStrictResponse<z.infer<typeof ReadAllInboxSchema>>(await this.http.fetch<unknown>("/api/inbox/read", { method: "POST", body: JSON.stringify({ all: true }) }), ReadAllInboxSchema, { endpoint: "POST /api/inbox/read" });
   }
 }

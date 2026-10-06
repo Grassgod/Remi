@@ -2,13 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { MultiremiIssueDecisionEntry, MultiremiIssueDecisionList } from "@multiremi/core/types";
+import { messageFixture } from "../../test/messages";
+import enMessages from "../../locales/en/messages.json";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 
 const mockApi = vi.hoisted(() => ({
-  listIssueDecisions: vi.fn(),
-  answerIssueDecision: vi.fn(),
+  listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", async (importOriginal) => ({
@@ -74,149 +74,34 @@ describe("IssueDecisionBanner", () => {
   });
 });
 
-const baseEntry: MultiremiIssueDecisionEntry = {
-  id: "decision-1",
-  bucket: "waiting_on_human",
-  type: "decision",
-  kind: "merge",
-  title: "Merge after QA?",
-  body: "Choose whether this change can merge.",
-  status: "escalated",
-  issueId: "issue-1",
-  sourceIssueId: "child-1",
-  sourceTaskId: "task-1",
-  options: ["Wait", "Merge"],
-  answer: null,
-  history: [],
-  createdAt: "2026-09-28T00:00:00.000Z",
-  updatedAt: "2026-09-28T00:00:00.000Z",
-};
-
-const decisionList: MultiremiIssueDecisionList = {
-  waiting_on_human: [baseEntry, {
-    ...baseEntry,
-    id: "request-1",
-    type: "human_request",
-    kind: "question",
-    title: "Choose a window",
-    body: "Choose a window",
-    options: null,
-    history: undefined,
-    payload: {
-      message: "Choose a window",
-      questions: [{
-        fieldKey: "window",
-        question: {
-          question: "When should this run?",
-          options: [{ label: "Tonight" }, { label: "Tomorrow" }],
-          multiSelect: false,
-        },
-      }],
-    },
-  }],
-  owner_and_answered: {
-    pending: [{ ...baseEntry, id: "decision-2", bucket: "pending_owner", title: "Owner pending" }],
-    answered: [{
-      ...baseEntry,
-      id: "decision-3",
-      bucket: "answered",
-      title: "Owner answered",
-      status: "answered",
-      answer: {
-        answererType: "agent",
-        answererId: "agent-1",
-        answer: "Merge",
-        reason: "Checks passed",
-        overturn: "Reopen if CI regresses",
-        answeredAt: "2026-09-28T01:00:00.000Z",
-      },
-      history: [{
-        answererType: "agent",
-        answererId: "agent-1",
-        answer: "Merge",
-        reason: "Checks passed",
-        overturn: "Reopen if CI regresses",
-        answeredAt: "2026-09-28T01:00:00.000Z",
-      }],
-    }],
-  },
-  count: 2,
-};
-
-function renderPanel(canAnswer: boolean) {
-  mockApi.listIssueDecisions.mockResolvedValue(decisionList);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat } }}>
-        <IssueDecisionPanel
-          issueId="issue-1"
-          pendingCount={2}
-          canAnswer={canAnswer}
-          getActorName={(_type, id) => id === "agent-1" ? "Owner Agent" : id}
-        />
-      </I18nProvider>
-    </QueryClientProvider>,
-  );
+const decision = messageFixture({ message_kind: "decision", body_md: "Merge after QA?", options: [{ label: "Merge", value: "approve" }] });
+function mountPanel() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  mockApi.listIssueSessions.mockResolvedValue([{ id: "sess_1" }]);
+  mockApi.listMessages.mockResolvedValue({ messages: [decision], next_cursor: null });
+  return render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, messages: enMessages } }}>
+    <IssueDecisionPanel issueId="issue-1" pendingCount={1} canAnswer getActorName={(_type, id) => id} />
+  </I18nProvider></QueryClientProvider>);
 }
-
-describe("IssueDecisionPanel", () => {
-  it("shows owner decisions and history without answer controls to an agent", async () => {
-    renderPanel(false);
-    fireEvent.click(screen.getByRole("button", { name: "Waiting for your decision · 2" }));
-
-    expect(await screen.findByText("Owner decisions")).toBeInTheDocument();
-    expect(screen.getByText("Owner Agent")).toBeInTheDocument();
-    expect(screen.getByText("Reopen if CI regresses")).toBeInTheDocument();
-    expect(screen.getByText("Tonight")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Tonight" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Change answer" })).not.toBeInTheDocument();
+describe("decision message replies", () => {
+  it("loads decisions only on opening and posts the option value with reply_to_id", async () => {
+    mockApi.listMessages.mockClear(); mockApi.sendMessage.mockResolvedValue({ message: {} }); mountPanel();
+    expect(mockApi.listMessages).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Waiting for your decision/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await screen.findByRole("button", { name: "Resolved" });
+    expect(mockApi.sendMessage).toHaveBeenCalledWith("sess_1", expect.objectContaining({
+      message_kind: "reply", reply_to_id: "msg_1", metadata: { selected_options: ["approve"] },
+    }));
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
   });
-
-  it("offers answer and re-answer controls to a member", async () => {
-    renderPanel(true);
-    fireEvent.click(screen.getByRole("button", { name: "Waiting for your decision · 2" }));
-
-    expect(await screen.findByRole("button", { name: "Change answer" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Answer" })).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Tonight" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tonight" })).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
-    const waitOption = screen.getAllByRole("button", { name: "Wait" })[0]!;
-    expect(waitOption).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(waitOption);
-    expect(waitOption).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("ignores a malformed human-request payload without crashing the overlay", async () => {
-    mockApi.listIssueDecisions.mockResolvedValue({
-      ...decisionList,
-      waiting_on_human: [{
-        ...baseEntry,
-        id: "request-broken",
-        type: "human_request",
-        kind: "permission",
-        payload: { options: "not-an-array" },
-      }],
-      count: 1,
-    });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={client}>
-        <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat } }}>
-          <IssueDecisionPanel
-            issueId="issue-1"
-            pendingCount={1}
-            canAnswer
-            getActorName={(_type, id) => id}
-          />
-        </I18nProvider>
-      </QueryClientProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Waiting for your decision · 1" }));
-    expect(await screen.findByText("Owner decisions")).toBeInTheDocument();
-    expect(screen.queryByText("request-broken")).not.toBeInTheDocument();
+  it("shows a duplicate-answer conflict without marking the reply successful", async () => {
+    mockApi.sendMessage.mockRejectedValue(new Error("Decision is settled")); mountPanel();
+    fireEvent.click(screen.getByRole("button", { name: /Waiting for your decision/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Decision is settled");
+    expect(screen.getByRole("button", { name: "Merge" })).toHaveAttribute("aria-pressed", "true");
   });
 });

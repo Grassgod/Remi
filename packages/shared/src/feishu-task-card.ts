@@ -186,6 +186,8 @@ export interface TaskInteractionCardOptions {
  * shape change is a compile error on the writing side.
  */
 export interface DecisionCardBody {
+  /** Unified decision message; distinct from the Feishu transport target. Required for patches. */
+  message_id?: string;
   /** The rendered card for `decision_card` and the terminal card for a patch. */
   card: Record<string, unknown>;
   /** Plain-text twin used when a card cannot be delivered at all. */
@@ -234,6 +236,7 @@ export function decodeDecisionCardBody(raw: string): DecisionCardBody | null {
     if (Object.keys(card).length === 0) return null;
     return {
       card: card as Record<string, unknown>,
+      ...(typeof parsed.message_id === "string" && parsed.message_id.trim() ? { message_id: parsed.message_id } : {}),
       ...(typeof parsed.fallback_text === "string" ? { fallback_text: parsed.fallback_text } : {}),
     };
   } catch {

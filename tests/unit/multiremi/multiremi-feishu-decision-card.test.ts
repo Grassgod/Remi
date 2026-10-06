@@ -2051,13 +2051,11 @@ describe("Feishu decision card heartbeat delivery", () => {
 /** The two daemon calls the click handler makes, backed by the test store. */
 function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
   return {
-    getFeishuBotHumanRequest: async (taskId: string, requestId: string) => {
+    getFeishuDecisionMessage: async (messageId: string) => ({ message: store.getMessage(messageId)! }),
+    getMessageHumanRequest: async (requestId: string) => store.getTaskHumanRequest(requestId),
+    respondFeishuBotHumanRequest: async (requestId: string, response: Record<string, unknown>) => {
       const request = store.getTaskHumanRequest(requestId);
-      return request && request.taskId === taskId ? request : null;
-    },
-    respondFeishuBotHumanRequest: async (taskId: string, requestId: string, response: Record<string, unknown>) => {
-      const request = store.getTaskHumanRequest(requestId);
-      if (!request || request.taskId !== taskId) throw new Error("request not found");
+      if (!request) throw new Error("request not found");
       const settled = store.respondTaskHumanRequest(requestId, { response, respondedBy: "feishu" });
       if (!settled) throw new Error("request is no longer pending");
       return settled;

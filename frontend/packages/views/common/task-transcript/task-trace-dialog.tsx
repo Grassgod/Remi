@@ -43,7 +43,7 @@ export function TaskTraceDialog({
     try {
       let cursor = afterSeq;
       for (;;) {
-        const page = await api.getTaskTrace(task.id, cursor);
+        const page = await api.getTaskTrace(task.id, cursor, 500, task.turn_id);
         if (!mounted.current) return;
         setResult(page);
         setEvents((current) => mergeEvents(current, page.events));

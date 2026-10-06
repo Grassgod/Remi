@@ -63,7 +63,7 @@ export function conversationEntryDecision(
 ): ConversationVisibilityEntry | null | undefined {
   if (depth > 4) return null;
   if (entry.metadata.decision_record?.source_issue_id || entry.metadata.source_issue_id) return entry;
-  if (!entry.metadata.human_response && !Number.isSafeInteger(entry.metadata.target_seq)
+  if (!entry.metadata.human_response && !entry.metadata.decision_answer && !Number.isSafeInteger(entry.metadata.target_seq)
     && typeof entry.metadata.message_id !== "string") return undefined;
   const replyId = entry.reply_to_id ?? entry.parent_id
     ?? (typeof entry.metadata.message_id === "string" ? entry.metadata.message_id : null);
@@ -107,8 +107,12 @@ export function conversationEntrySource(
 
 export function loadConversation(c: Context, store: MultiremiStore, id: string) {
   const session = store.getIssueSession(id);
-  if (session) return denyCurrentUserWorkspaceAccess(c, store, session.workspaceId)
-    ?? { id, workspaceId: session.workspaceId, issueId: session.issueId, chatId: null };
+  if (session) {
+    const issue = store.getIssue(session.issueId);
+    if (!issue) return c.json({ error: "conversation not found" }, 404);
+    return denyCurrentUserWorkspaceAccess(c, store, session.workspaceId)
+      ?? { id, workspaceId: session.workspaceId, issueId: session.issueId, chatId: null };
+  }
   if (id.startsWith("auto_orphan_inbox_")) {
     const workspaceId = id.slice("auto_orphan_inbox_".length);
     if (!store.getWorkspace(workspaceId) || !store.getConversationLogHead(id)) return c.json({ error: "conversation not found" }, 404);

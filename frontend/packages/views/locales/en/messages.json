@@ -1,0 +1,72 @@
+{
+  "recipient": "To {{name}}",
+  "no_recipient": "Conversation",
+  "roles": {
+    "leader": "Leader",
+    "parent_owner": "Parent owner",
+    "delegator": "Delegator",
+    "issue_owner": "Issue owner",
+    "relay": "Relay"
+  },
+  "kinds": {
+    "request": "Request",
+    "reply": "Reply",
+    "report": "Report",
+    "decision": "Decision",
+    "status": "Status",
+    "final": "Final"
+  },
+  "wakes": {
+    "now": "Wake now",
+    "next_turn": "Next turn",
+    "inbox_only": "Inbox only"
+  },
+  "read_to_here": "Read through #{{seq}}",
+  "read_cursor": "Read through #{{seq}}",
+  "load_failed": "Could not load messages",
+  "attempts": "Attempts",
+  "retry": "Retry turn",
+  "retry_cold": "Retry with a new session",
+  "retry_failed": "Could not retry this turn",
+  "queue": "Unread messages",
+  "decision_reply": "Reply",
+  "resolved": "Resolved",
+  "wake_reasons": {
+    "human_sender": "Requested by a person",
+    "platform_to_owner": "Platform message to the owner",
+    "agent_dispatch": "Agent dispatch",
+    "member_to_delegator": "Reply to the delegator",
+    "to_leader": "Message to the leader",
+    "to_parent_owner": "Message to the parent owner",
+    "agent_pair_not_privileged": "This agent pair waits for the next turn",
+    "pair_round_trip_limit": "Agent exchange limit reached",
+    "self": "Messages to self do not wake an agent",
+    "recipient_unavailable": "Recipient unavailable",
+    "no_recipient": "No recipient to wake",
+    "requested_next_turn": "Requested for the next turn",
+    "requested_inbox_only": "Requested for the inbox only",
+    "migration": "Imported message",
+    "dependencies_unmet": "Waiting for dependencies",
+    "source_side_session": "Source conversation only",
+    "no_issue_target": "No issue execution target"
+  },
+  "statuses": {
+    "pending": "Pending",
+    "offered": "Offered",
+    "accepted": "Accepted",
+    "running": "Running",
+    "waiting_local_directory": "Waiting for local directory",
+    "awaiting_human": "Awaiting reply",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "lost": "Lost"
+  },
+  "current_attempt": "Current attempt",
+  "attempt_logs": "View attempt logs",
+  "no_attempts": "No attempts",
+  "load_more": "Load more",
+  "retry_load": "Reload",
+  "consumed_draft": "This message has been read or removed. Your draft is kept here so you can copy it.",
+  "consumed_message": "This message has already been read by the agent. It can no longer be edited or deleted."
+}

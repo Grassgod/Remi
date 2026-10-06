@@ -19,6 +19,7 @@ import { useResolvedThreads } from "../hooks/use-resolved-threads";
 import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
+import { MessageHeader } from "../../common/message-header";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -61,8 +62,8 @@ interface IssueActivitySectionProps {
 export function logRowToComment(row: SessionLogRow): TimelineEntry {
   return {
     type: "comment", id: row.id, issue_session_id: row.session_id,
-    actor_type: row.author_type, actor_id: row.author_id ?? "", task_id: row.task_id,
-    content: row.body_md, parent_id: row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
+    actor_type: row.sender_type ?? row.author_type, actor_id: row.sender_id ?? row.author_id ?? "", task_id: row.task_id,
+    content: row.body_md, parent_id: row.reply_to_id ?? row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
     resolved_at: row.resolved_at, resolved_by_id: row.resolved_by_id,
     resolved_by_type: row.resolved_by_type === "member" || row.resolved_by_type === "agent" || row.resolved_by_type === "system" ? row.resolved_by_type : null,
     reactions: ReactionSchema.array().safeParse(row.metadata.reactions).data ?? [],
@@ -183,6 +184,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   const update = useUpdateComment(issueId, sessionId);
   const remove = useDeleteComment(issueId, sessionId);
   const resolve = useResolveComment(issueId, sessionId);
+  const currentMemberId = members.find(member => member.user_id === currentUserId)?.id ?? currentUserId;
   const reaction = useToggleCommentReaction(issueId, sessionId);
   const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
   useEffect(() => {
@@ -274,16 +276,16 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       if (row.kind !== "message" || isSystemDetail(row)) {
         if (row.metadata.type === "workspace_move_cleared") return <div data-log-kind={row.kind} className="py-2 text-xs text-muted-foreground" role="status">
           {formatActivity({ type: "activity", id: row.id, action: "workspace_move_cleared", details: row.metadata,
-            actor_type: row.author_type, actor_id: row.author_id ?? "", created_at: row.created_at }, t)}
+            actor_type: row.sender_type ?? row.author_type, actor_id: row.sender_id ?? row.author_id ?? "", created_at: row.created_at }, t)}
         </div>;
         return <IssueLogEventRow row={row} getActorName={getActorName} taskAgents={taskAgents}
           results={resultsById} onShowKeyResults={onShowKeyResults} onOpenTask={setPromptRow} />;
       }
       const comment = logRowToComment(row);
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
-      const parent = snapshot.entries.find(e => e.id === row.parent_id);
+      const parent = snapshot.entries.find(e => e.id === (row.reply_to_id ?? row.parent_id));
       const parentRow = parent ? SessionLogEntrySchema.parse(parent) : null;
-      return <CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentUserId}
+      return <div><MessageHeader message={row} getActorName={getActorName} /><CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentMemberId}
         canModerate={canModerateComments} onStartReply={setReplyTo}
         assignmentRef={responseTurns.has(row.id) ? { title: eventSummary(responseTurns.get(row.id)!.body_md), onOpen: () => setPromptRow(responseTurns.get(row.id)!) } : undefined}
         parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}
@@ -293,7 +295,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         onDelete={id => run(() => remove.mutateAsync(id))}
         onResolveToggle={(id, value) => { resolved.clear(id); void run(() => resolve.mutateAsync({ commentId: id, resolved: value })); }}
         onCollapseResolved={row.resolved_at ? () => resolved.toggle(row.id, false) : undefined}
-        onToggleReaction={(id, emoji) => run(() => reaction.mutateAsync({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentUserId) }))} />;
+        onToggleReaction={(id, emoji) => run(() => reaction.mutateAsync({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentMemberId) }))} /></div>;
     }}
     footer={<>
       {activeCommentId && <div className="flex h-8 items-center gap-4 text-xs">

@@ -1,8 +1,16 @@
 /** @vitest-environment jsdom */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { act, renderHook as testingRenderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionLogEntrySchema, type IssueLogBootstrap } from "../api/schemas/session-log";
 
+const renderHook: typeof testingRenderHook = (callback, options) => {
+  const client = new QueryClient();
+  return testingRenderHook(callback, {
+    wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>, ...options,
+  });
+};
 const socket = vi.hoisted(() => ({ subscribeStream: vi.fn(), onReconnect: vi.fn(() => () => {}) }));
 const socketContext = vi.hoisted(() => ({ current: null as null | typeof socket }));
 vi.mock("../realtime", () => ({ useWS: () => socketContext.current }));
@@ -79,6 +87,31 @@ describe("useIssueLog visibility lifecycle", () => {
     await waitFor(() => expect(hook.result.current.snapshot.entries.some(entry => entry.seq === 2)).toBe(true));
     expect(handles[1]!.unsubscribe).not.toHaveBeenCalled();
     hook.unmount();
+  });
+
+  it("batches log frames into cursor, message and turn surface invalidations", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    let onFrames: (frames: unknown[]) => void = () => {};
+    socket.subscribeStream.mockImplementation((_stream, _id, handlers) => {
+      onFrames = handlers.onFrames;
+      return { unsubscribe: vi.fn() };
+    });
+    const hook = renderHook(() => useIssueLog("s", initial), {
+      wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledOnce());
+    await act(async () => {
+      onFrames([{ seq: 2, kind: "entry", payload: row(2) }]);
+      onFrames([{ seq: 3, kind: "entry", payload: row(3) }]);
+    });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["inbox", "w"] }));
+    expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === "inbox")).toHaveLength(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-unread", "w", "s"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["message-detail", "w"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["turns", "w"] });
+    hook.unmount();
+    client.clear();
   });
 
   it("keeps the subscription when only the WS context object changes", async () => {

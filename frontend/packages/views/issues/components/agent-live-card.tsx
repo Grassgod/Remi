@@ -287,7 +287,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
           />
         ))}
         {humanRequestTasks.map((task) => (
-          <HumanRequestDock key={task.id} taskId={task.id} />
+          <HumanRequestDock key={task.id} taskId={task.id} sessionId={task.issue_session_id} turnId={task.turn_id} />
         ))}
       </div>
       <TerminateTaskConfirmDialog
@@ -325,7 +325,7 @@ function AgentLiveRow({ task, agentName, onRequestCancel, cancelling }: AgentLiv
   const { t } = useT("issues");
   const [elapsed, setElapsed] = useState("");
   const traceActive = ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
-  const events = useTaskTrace(task.id, traceActive, traceActive);
+  const events = useTaskTrace(task.id, traceActive, traceActive, task.turn_id);
   const items = buildTraceTimeline(events);
 
   const isQueued = task.status === "queued";

@@ -33,7 +33,7 @@ export function useActorName(
   );
 
   const getMemberName = useCallback((userId: string) => {
-    const m = members.find((m) => m.user_id === userId);
+    const m = members.find((m) => m.id === userId || m.user_id === userId);
     return m?.name ?? "Unknown";
   }, [members]);
 
@@ -66,7 +66,7 @@ export function useActorName(
   }, [getActorName]);
 
   const getActorAvatarUrl = useCallback((type: string, id: string): string | null => {
-    if (type === "member") return resolvePublicFileUrl(members.find((m) => m.user_id === id)?.avatar_url);
+    if (type === "member") return resolvePublicFileUrl(members.find((m) => m.id === id || m.user_id === id)?.avatar_url);
     if (type === "agent") return resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url);
     if (type === "squad") return resolvePublicFileUrl(squads.find((s) => s.id === id)?.avatar_url);
     return null;

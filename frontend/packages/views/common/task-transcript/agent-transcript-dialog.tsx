@@ -121,7 +121,7 @@ export function AgentTranscriptDialog({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const promptQuery = useQuery({
     queryKey: ["task-prompt", task.id],
-    queryFn: () => api.getTaskPrompt(task.id),
+    queryFn: () => api.getTurnInput(task.turn_id ?? task.id),
     enabled: open && activeView === "prompt",
     retry: false,
     staleTime: Infinity,
@@ -670,14 +670,8 @@ export function AgentTranscriptDialog({
               </div>
             ) : promptQuery.data ? (
               <>
-                <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
-                  <span className="rounded border bg-muted/50 px-2 py-0.5 font-medium uppercase text-foreground">
-                    {promptQuery.data.mode}
-                  </span>
-                  <span>{new Date(promptQuery.data.assembled_at).toLocaleString()}</span>
-                  <span className="ml-auto max-w-56 truncate font-mono" title={promptQuery.data.sha256}>
-                    {t(($) => $.transcript.prompt_hash, { hash: promptQuery.data.sha256.slice(0, 12) })}
-                  </span>
+                <div className="shrink-0 border-b px-4 py-2 text-xs text-muted-foreground">
+                  ({promptQuery.data.from_seq}, {promptQuery.data.to_seq}]
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4">
                   <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">

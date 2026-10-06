@@ -18,6 +18,26 @@ export interface DaemonTurnScope {runtimeId:string;daemonId:string;workspaceId:s
 export type DaemonTurnRpc='turn.input'|'turn.decision'|'turn.decision.get'|'turn.decision.expire';
 export interface DaemonTurnInput {turn_id:string;attempt_id:string;input_from_seq:number;input_to_seq:number;input_messages:UnifiedMessage[]}
 export interface DaemonTurnCompletePayload {turn_id:string;attempt_id:string;input_to_seq:number;reply:{body_md:string;message_kind:'reply'|'final'};session_id?:string|null;work_dir?:string|null}
+
+// Only explicit Store refusals are permanent. Database/write failures must reach
+// the protocol session, which returns server_error/retryable:true to the outbox.
+const invalidTurnReports=new Set([
+  'invalid_report','recipient_unavailable','Turn not found',
+  'Input acknowledgement must be contiguous and bounded by the log head',
+  'Message conversation not found','Source turn not found',
+  'Source turn does not belong to the sender workspace',
+  'Message sender belongs to another workspace','Message recipient belongs to another workspace',
+]);
+function turnRejectionCode(error:unknown,attemptId:string,runtimeId:string):'stale_attempt'|'input_gap'|'invalid_report'|null {
+  if(!(error instanceof Error))return null;
+  if(error.message==='stale_attempt'||error.message==='input_gap')return error.message;
+  if(invalidTurnReports.has(error.message)
+    ||error.message===`Task not found or terminal: ${attemptId}`
+    ||error.message===`Runtime not found: ${runtimeId}`
+    ||error.message===`Chat task destination no longer matches its Issue: ${attemptId}`)return 'invalid_report';
+  return null;
+}
+
 export class DaemonTurnBridge {
   constructor(private ctx:StoreContext){}
   private transaction<T>(fn:(events:CommitEventQueue)=>T):T {const events=createCommitEventQueue();const result=this.ctx.db.transaction(()=>fn(events))();afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));return result;}
@@ -129,7 +149,11 @@ export class DaemonTurnBridge {
       const current=getMessage(this.ctx,message.id)!;
       const reply=this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE reply_to_id=? AND message_kind='reply' AND deleted_at IS NULL ORDER BY seq LIMIT 1").get(message.id);
       return {ok:true,message:current,reply:reply?getMessage(this.ctx,reply.id):null,status:current.resolved_at?'resolved':'pending'};
-    });}catch(error){const code=error instanceof Error?error.message:'invalid_report';return {ok:false,code:code==='stale_attempt'?'stale_attempt':code==='input_gap'?'input_gap':'invalid_report',retryable:false};}
+    });}catch(error){
+      const code=turnRejectionCode(error,String(payload.attempt_id),scope.runtimeId);
+      if(code===null)throw error;
+      return {ok:false,code,retryable:false};
+    }
   }
   complete(input:{payload:DaemonTurnCompletePayload;completionFields:DaemonTaskCompletionFields|null;traceEventCount?:number},scope:DaemonTurnScope):Record<string,unknown> {
     const p=input.payload;
@@ -146,8 +170,12 @@ export class DaemonTurnBridge {
       // A second completion can pass the initial check while the first is committing.
       // Recheck the binding under the same locks before returning its committed result.
       try{const replay=this.transaction(()=>{const turn=this.authorized(p.turn_id,p.attempt_id,scope,true);
-        return turn.status==='completed'?{ok:true,turn_id:turn.id,reply_message_id:turn.reply_message_id}:null;});if(replay)return replay;}catch{}
-      return {ok:false,code:error instanceof Error&&error.message==='stale_attempt'?'stale_attempt':'invalid_report',retryable:false};
+        return turn.status==='completed'?{ok:true,turn_id:turn.id,reply_message_id:turn.reply_message_id}:null;});if(replay)return replay;}catch(replayError){
+        if(turnRejectionCode(replayError,p.attempt_id,scope.runtimeId)===null)throw replayError;
+      }
+      const code=turnRejectionCode(error,p.attempt_id,scope.runtimeId);
+      if(code===null)throw error;
+      return {ok:false,code:code==='stale_attempt'?'stale_attempt':'invalid_report',retryable:false};
     }
   }
 }

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,7 +142,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }
 
     function taskIds(issueId: string): string[] {
-      return (db.query("SELECT id FROM multiremi_tasks WHERE issue_id = ? ORDER BY id").all(issueId) as Array<{ id: string }>)
+      return (db.query("SELECT id FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY id").all(issueId) as Array<{ id: string }>)
         .map((row) => row.id);
     }
 
@@ -154,7 +155,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         WHERE a.workspace_id <> b.workspace_id OR d.workspace_id <> a.workspace_id`).all()).toEqual([]);
       // An active task is an edge too: its workspace writes to its Issue. Finished
       // tasks stay behind as history once the Issue may move.
-      expect(db.query(`SELECT t.id FROM multiremi_tasks t JOIN multiremi_issues i ON i.id = t.issue_id
+      expect(db.query(`SELECT t.id FROM multiremi_turn_execution_records t JOIN multiremi_issues i ON i.id = t.issue_id
         WHERE t.workspace_id <> i.workspace_id AND t.status NOT IN ('completed', 'failed', 'cancelled')`).all()).toEqual([]);
     }
 
@@ -251,11 +252,11 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       expect(body.relations.tasks).toEqual([{ id: task!.id, status: "queued" }]);
       expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
       // A task in another workspace is counted, never listed.
-      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [f.target, task!.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [f.target, task!.id]);
       const hidden = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
       expect(hidden.relations.tasks).toEqual([]);
       expect(hidden.relations.hidden).toBe(1);
-      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [f.source, task!.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [f.source, task!.id]);
       // Unassigning cancels the task with the same predicate the guard reads.
       store.assignIssue(f.child.id, {});
       store.updateIssue(f.child.id, { workspaceId: f.target });
@@ -397,8 +398,11 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     if (backend !== "PostgreSQL") return;
 
+    // Include the preload's temporary paths so peers reopen the same migration reports.
+    const workerEnv = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+
     function spawn(input: Omit<RelationLockInput, "databaseUrl">) {
-      const worker = new Worker(new URL("./fixtures/postgres-relation-lock-worker.ts", import.meta.url).href);
+      const worker = new Worker(new URL("./fixtures/postgres-relation-lock-worker.ts", import.meta.url).href, { env: workerEnv });
       const ready = input.gate ? phase(worker, "ready") : Promise.resolve(null);
       const locked = phase(worker, "locked");
       const finished = Promise.all([phase(worker, "done"), phase(worker, "closed")]).then(([done]) => done);
@@ -527,7 +531,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     async function race(inputs: Array<Omit<RelationLockInput, "databaseUrl" | "mode" | "barrierPath">>) {
       const directory = mkdtempSync(join(tmpdir(), "mul476-relation-"));
       const barrierPath = join(directory, "go");
-      const workers = inputs.map(() => new Worker(new URL("./fixtures/postgres-relation-lock-worker.ts", import.meta.url).href));
+      const workers = inputs.map(() => new Worker(new URL("./fixtures/postgres-relation-lock-worker.ts", import.meta.url).href, { env: workerEnv }));
       try {
         const ready = workers.map((worker) => phase(worker, "ready"));
         const done = workers.map((worker) => Promise.all([phase(worker, "done"), phase(worker, "closed")]));

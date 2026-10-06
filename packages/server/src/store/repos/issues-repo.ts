@@ -2817,9 +2817,8 @@ export class IssuesRepo {
       ],
     );
     if (moving) {
-      // Canonical conversations follow the Issue's authority when it moves.
-      this.ctx.db.run("UPDATE multiremi_issue_sessions SET workspace_id=? WHERE issue_id=?",[nextWorkspaceId,id]);
-      this.ctx.db.run("UPDATE multiremi_conversation_heads SET workspace_id=? WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[nextWorkspaceId,id]);
+      // B4: existing Sessions and their history retain their workspace.
+      // Role redirects validate the final workspace in sendMessageWithinTransaction.
       const foreignLabels = this.listLabelsForExistingIssue(id).filter(label => label.workspaceId !== nextWorkspaceId);
       for (const label of foreignLabels) {
         this.ctx.db.run("DELETE FROM multiremi_issue_to_labels WHERE issue_id = ? AND label_id = ?", [id, label.id]);

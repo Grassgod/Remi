@@ -16,6 +16,7 @@ import type members from "../locales/en/members.json";
 import type myIssues from "../locales/en/my-issues.json";
 import type workbench from "../locales/en/workbench.json";
 import type search from "../locales/en/search.json";
+import type messages from "../locales/en/messages.json";
 import type inbox from "../locales/en/inbox.json";
 import type workspace from "../locales/en/workspace.json";
 import type projects from "../locales/en/projects.json";
@@ -60,6 +61,7 @@ declare global {
     workbench: typeof workbench;
     search: typeof search;
     inbox: typeof inbox;
+    messages: typeof messages;
     workspace: typeof workspace;
     projects: typeof projects;
     repositories: typeof repositories;

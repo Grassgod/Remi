@@ -90,7 +90,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       hub.shutdown();
       await pool.close();
     }
-    return { store, db, agent, session, recipient, member, owner, hub, question, start, request, connect, close };
+    return { store, db, agent, issue, session, recipient, member, owner, hub, question, start, request, connect, close };
   }
   function noCredentials(value: unknown) {
     if (Array.isArray(value)) { value.forEach(noCredentials); return; }
@@ -108,6 +108,36 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     expect(text).not.toContain("Private updated body");
     noCredentials(frames);
   }
+
+  for (const moved of ["source", "target"] as const) it(`retained replay hides decisions, replies and edit markers after the ${moved} Issue moves workspace`, async () => {
+    const f = await scaffold(true);
+    try {
+      const source = f.store.createIssue({ title: "Decision source", parentIssueId: f.issue.id });
+      const decision = f.store.createIssueDecision(source.id, {
+        kind: "production_change", title: "PRIVATE decision", body: "PRIVATE body", options: ["yes", "no"],
+      }, { type: "member", id: "mem_local_local", taskId: null });
+      f.store.answerIssueDecision(decision.issueId, decision.id, { answer: "yes", reason: "" },
+        { type: "member", id: "mem_local_local", taskId: null });
+      const original = f.store.getConversationLogEntryById(decision.id)!;
+      const reply = f.store.listMessages(f.session.id, { limit: 1000 }).find(message => message.reply_to_id === decision.id)!;
+      const marker = f.store.appendConversationLog({ sessionId: f.session.id, kind: "message_edited", authorType: "system",
+        metadata: { target_seq: original.seq, previous_body: "PRIVATE body" } });
+      f.start();
+      const member = await f.connect(f.member.token);
+      await member.subscribe(); await member.through(marker.seq);
+      expect(member.frames().some(frame => frame.payload.id === decision.id)).toBe(true);
+      expect(member.frames().some(frame => frame.payload.id === reply.id)).toBe(true);
+      const foreign = f.store.createWorkspace({ name: "Foreign", slug: "ws-decision-foreign" });
+      f.db.run("UPDATE multiremi_issues SET workspace_id=? WHERE id=?", [foreign.id, moved === "source" ? source.id : f.issue.id]);
+      member.events.length = 0;
+      await member.subscribe(original.seq); await member.through(marker.seq);
+      for (const row of [original, reply, marker]) expect(member.frames().find(frame => frame.seq === row.seq)?.payload).toEqual({
+        session_id: f.session.id, seq: row.seq, revision: row.revision, visibility: "hidden",
+      });
+      expect(JSON.stringify(member.frames())).not.toContain("PRIVATE");
+      expect(member.frames().some(frame => frame.payload.id === reply.id)).toBe(false);
+    } finally { await f.close(); }
+  });
 
   async function readReply(f: Awaited<ReturnType<typeof scaffold>>, id: string, auth: string, visible: boolean) {
     const path = `/api/sessions/${f.session.id}`;

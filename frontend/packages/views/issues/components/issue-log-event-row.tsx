@@ -1,5 +1,6 @@
 "use client";
 
+import { TurnControls } from "../../common/turn-controls";
 import { ArrowRight, Diamond } from "lucide-react";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionResult } from "@multiremi/core/types";
@@ -94,5 +95,6 @@ export function IssueLogEventRow({ row, onOpenTask, getActorName, taskAgents, re
   return <div data-log-kind={row.kind} data-system-detail={system || undefined}>
     {action ? <button type="button" className={`${lineClass} hover:text-foreground`} onClick={action}>{content}</button>
       : <div className={lineClass} role="status">{content}</div>}
+    {row.kind === "turn" && <TurnControls turnId={typeof row.metadata.turn_id === "string" ? row.metadata.turn_id : row.id} />}
   </div>;
 }

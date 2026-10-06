@@ -8,6 +8,7 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import { api } from "../api";
+import type { Message } from "../api/schemas/messages";
 import type {
   GroupedIssuesResponse,
   Issue,
@@ -526,17 +527,31 @@ export function myIssueAssigneeGroupsOptions(
   });
 }
 
+/** Read every decision message in the issue's conversations when the panel opens. */
+export function issueDecisionsOptions(wsId: string, issueId: string) {
+  return queryOptions({
+    queryKey: issueKeys.decisions(wsId, issueId),
+    queryFn: async () => {
+      const sessions = await api.listIssueSessions(issueId);
+      const lists = await Promise.all(sessions.map(async session => {
+        const messages: Message[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await api.listMessages(session.id, { message_kind: "decision", cursor, limit: 100 });
+          messages.push(...page.messages);
+          cursor = page.next_cursor ?? undefined;
+        } while (cursor);
+        return messages;
+      }));
+      return lists.flat().sort((a, b) => b.created_at.localeCompare(a.created_at));
+    },
+  });
+}
+
 export function issueDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.detail(wsId, id),
     queryFn: () => api.getIssue(id),
-  });
-}
-
-export function issueDecisionsOptions(wsId: string, id: string) {
-  return queryOptions({
-    queryKey: issueKeys.decisions(wsId, id),
-    queryFn: () => api.listIssueDecisions(id),
   });
 }
 

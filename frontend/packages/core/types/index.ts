@@ -156,7 +156,7 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
-export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse, ChatQueuedTask, CreateChatSessionInput, UpdateChatSessionInput, PrioritizeChatQueuedTaskResponse } from "./chat";
+export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse, CreateChatSessionInput, UpdateChatSessionInput } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
   Project,

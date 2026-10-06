@@ -1,21 +1,14 @@
+import { MessagesEndpoints } from "./messages";
+import { turnToTask } from "../turn-task";
 import type {
   AgentActivityBucket,
   AgentRunCount,
   AgentTask,
   IssueUsageSummary,
-  TaskPromptArtifact,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseStrictResponse, parseWithFallback } from "../schema";
-import {
-  EMPTY_TASK_STEER_LIST,
-  TaskSteerListResponseSchema,
-  TaskSteerResponseSchema,
-  TaskTraceReadSchema,
-  type TaskTraceRead,
-  type TaskSteerListResponse,
-  type TaskSteerResponse,
-} from "../schemas/tasks";
+import { parseStrictResponse } from "../schema";
+import { TaskTraceReadSchema, type TaskTraceRead } from "../schemas/tasks";
 
 export class TasksEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -47,60 +40,22 @@ export class TasksEndpoints {
   }
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {
-    return this.http.fetch(`/api/issues/${issueId}/active-task`);
+    return { tasks: (await this.listTasksByIssue(issueId)).filter(task => ["queued", "running", "awaiting_human"].includes(task.status)) };
   }
 
-  async getTaskTrace(taskId: string, afterSeq = 0, limit = 500): Promise<TaskTraceRead> {
+  async getTaskTrace(taskId: string, afterSeq = 0, limit = 500, turnId?: string): Promise<TaskTraceRead> {
     const query = new URLSearchParams({ after_seq: String(afterSeq), limit: String(limit) });
-    const raw = await this.http.fetch<unknown>(`/api/tasks/${encodeURIComponent(taskId)}/trace?${query}`);
-    return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/tasks/:id/trace" });
-  }
-
-  async getTaskPrompt(taskId: string): Promise<TaskPromptArtifact> {
-    return this.http.fetch(`/api/tasks/${taskId}/prompt`);
-  }
-
-  async listTaskHumanRequests(taskId: string): Promise<unknown> {
-    return this.http.fetch(`/api/tasks/${taskId}/human-requests`);
-  }
-
-  async respondTaskHumanRequest(taskId: string, requestId: string, response: Record<string, unknown>): Promise<unknown> {
-    return this.http.fetch(`/api/tasks/${taskId}/human-requests/${requestId}/respond`, {
-      method: "POST",
-      body: JSON.stringify({ response }),
-    });
-  }
-
-  async steerTask(
-    taskId: string,
-    input: { content?: string; force_answer?: boolean },
-  ): Promise<TaskSteerResponse> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/tasks/${encodeURIComponent(taskId)}/steer`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
-    return parseStrictResponse(raw, TaskSteerResponseSchema, {
-      endpoint: "POST /api/tasks/:id/steer",
-    });
-  }
-
-  async listTaskSteers(taskId: string): Promise<TaskSteerListResponse> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/tasks/${encodeURIComponent(taskId)}/steer`,
-    );
-    return parseWithFallback(
-      raw,
-      TaskSteerListResponseSchema,
-      EMPTY_TASK_STEER_LIST,
-      { endpoint: "GET /api/tasks/:id/steer" },
-    );
+    if (turnId) query.set("attempt_id", taskId);
+    const raw = await this.http.fetch<unknown>(`/api/turns/${encodeURIComponent(turnId ?? taskId)}/trace?${query}`);
+    return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/turns/:id/trace" });
   }
 
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {
-    return this.http.fetch(`/api/issues/${issueId}/task-runs`);
+    const messages = new MessagesEndpoints(this.http);
+    const tasks: AgentTask[] = [];
+    let cursor: string | undefined;
+    do { const page = await messages.listTurns({ issue: issueId, cursor, limit: 100 }); tasks.push(...page.turns.map(turn => turnToTask(turn))); cursor = page.next_cursor ?? undefined; } while (cursor);
+    return tasks;
   }
 
   async getIssueUsage(issueId: string): Promise<IssueUsageSummary> {
@@ -108,15 +63,15 @@ export class TasksEndpoints {
   }
 
   async cancelTask(issueId: string, taskId: string): Promise<AgentTask> {
-    return this.http.fetch(`/api/issues/${issueId}/tasks/${taskId}/cancel`, {
-      method: "POST",
-    });
+    const task = (await this.listTasksByIssue(issueId)).find(task => task.id === taskId || task.turn_id === taskId);
+    if (!task?.turn_id) throw new Error("Turn not found");
+    return turnToTask((await new MessagesEndpoints(this.http).controlTurn(task.turn_id, "cancel")).turn);
   }
 
   async rerunIssue(issueId: string, taskId?: string): Promise<AgentTask> {
-    return this.http.fetch(`/api/issues/${issueId}/rerun`, {
-      method: "POST",
-      body: JSON.stringify(taskId ? { task_id: taskId } : {}),
-    });
+    const tasks = await this.listTasksByIssue(issueId);
+    const task = taskId ? tasks.find(task => task.id === taskId || task.turn_id === taskId) : tasks[0];
+    if (!task?.turn_id) throw new Error("Turn not found");
+    return turnToTask((await new MessagesEndpoints(this.http).retryTurn(task.turn_id)).turn);
   }
 }

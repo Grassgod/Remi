@@ -5,13 +5,13 @@ import { I18nProvider } from "@multiremi/core/i18n/react";
 import enChat from "../../locales/en/chat.json";
 import { HumanRequestDock } from "./human-request-dock";
 
-const { listTaskHumanRequests, respondTaskHumanRequest } = vi.hoisted(() => ({
-  listTaskHumanRequests: vi.fn(),
-  respondTaskHumanRequest: vi.fn(async () => ({})),
+const { listMessages, sendMessage } = vi.hoisted(() => ({
+  listMessages: vi.fn(),
+  sendMessage: vi.fn(async () => ({})),
 }));
 
 vi.mock("@multiremi/core/api", () => ({
-  api: { listTaskHumanRequests, respondTaskHumanRequest },
+  api: { listMessages, sendMessage },
 }));
 
 const TEST_RESOURCES = { en: { chat: enChat } };
@@ -60,7 +60,12 @@ const QUESTION_REQUEST = {
 };
 
 function renderDock(requests: unknown[]) {
-  listTaskHumanRequests.mockResolvedValue({ requests });
+  listMessages.mockResolvedValue({ messages: requests.map(value => {
+    const request = value as typeof PERMISSION_REQUEST;
+    return { id: request.id, task_id: "turn_1", created_at: request.createdAt,
+      resolved_at: request.status === "pending" ? null : request.createdAt,
+      metadata: { human_request: request } };
+  }), next_cursor: null });
   mountDock();
 }
 
@@ -69,21 +74,21 @@ function mountDock() {
   render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <HumanRequestDock taskId="tsk_1" />
+        <HumanRequestDock taskId="tsk_1" sessionId="session_1" turnId="turn_1" />
       </I18nProvider>
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
-  listTaskHumanRequests.mockReset();
-  respondTaskHumanRequest.mockClear();
+  listMessages.mockReset();
+  sendMessage.mockClear();
 });
 
 describe("HumanRequestDock", () => {
   it("renders nothing when there are no pending requests", async () => {
     renderDock([{ ...PERMISSION_REQUEST, status: "responded", response: { option_id: "opt-allow" } }]);
-    await waitFor(() => expect(listTaskHumanRequests).toHaveBeenCalled());
+    await waitFor(() => expect(listMessages).toHaveBeenCalled());
     expect(screen.queryByText("Permission required")).toBeNull();
   });
 
@@ -94,7 +99,7 @@ describe("HumanRequestDock", () => {
 
     fireEvent.click(screen.getByText("Allow once"));
     await waitFor(() =>
-      expect(respondTaskHumanRequest).toHaveBeenCalledWith("tsk_1", "hrq_perm", { option_id: "opt-allow" }),
+      expect(sendMessage).toHaveBeenCalledWith("session_1", { body_md: "opt-allow", message_kind: "reply", reply_to_id: "hrq_perm", response: { option_id: "opt-allow" } }),
     );
   });
 
@@ -110,9 +115,7 @@ describe("HumanRequestDock", () => {
 
     fireEvent.click(submit);
     await waitFor(() =>
-      expect(respondTaskHumanRequest).toHaveBeenCalledWith("tsk_1", "hrq_q", {
-        answers: { "Which environment should I deploy to?": "staging" },
-      }),
+      expect(sendMessage).toHaveBeenCalledWith("session_1", { body_md: "staging", message_kind: "reply", reply_to_id: "hrq_q", response: { answers: { "Which environment should I deploy to?": "staging" } } }),
     );
   });
 
@@ -180,7 +183,7 @@ describe("HumanRequestDock", () => {
   });
 
   it("shows a retry action when the request cannot be loaded", async () => {
-    listTaskHumanRequests.mockRejectedValueOnce(new Error("forbidden"));
+    listMessages.mockRejectedValueOnce(new Error("forbidden"));
     mountDock();
 
     expect(await screen.findByText("Could not load this request.")).toBeTruthy();
@@ -188,7 +191,7 @@ describe("HumanRequestDock", () => {
   });
 
   it("keeps the request actionable and shows feedback after a response failure", async () => {
-    respondTaskHumanRequest.mockRejectedValueOnce(new Error("network down"));
+    sendMessage.mockRejectedValueOnce(new Error("network down"));
     renderDock([PERMISSION_REQUEST]);
     await screen.findByText("Permission required");
 

@@ -29,18 +29,6 @@ export interface UpdateChatSessionInput {
   pinned?: boolean;
 }
 
-export interface ChatQueuedTask {
-  task_id: string;
-  content: string;
-  attachment_ids: string[];
-  created_at: string;
-}
-
-export interface PrioritizeChatQueuedTaskResponse {
-  task_id: string;
-  active_task_id: string | null;
-}
-
 export interface PendingChatTaskItem {
   task_id: string;
   status: string;
@@ -52,6 +40,7 @@ export interface PendingChatTasksResponse {
 }
 
 export interface ChatMessage {
+  turn_id?: string;
   id: string;
   chat_session_id: string;
   role: "user" | "assistant";
@@ -98,6 +87,7 @@ export interface ChatMessagesPage {
 }
 
 export interface SendChatMessageResponse {
+  turn_id?: string;
   message_id: string;
   task_id: string;
   supports_queue: true;
@@ -112,7 +102,7 @@ export interface SendChatMessageResponse {
 }
 
 /**
- * Response from GET /api/chat/sessions/{id}/pending-task.
+ * View model derived from active turns.
  * Head fields are absent when the session has no in-flight task.
  *
  * `created_at` is the server-authoritative anchor for the chat StatusPill's
@@ -121,6 +111,7 @@ export interface SendChatMessageResponse {
  * so the timer survives refresh / reopen without "resetting to 0s".
  */
 export interface ChatPendingTask {
+  turn_id?: string;
   task_id?: string;
   status?: string;
   created_at?: string;
@@ -130,6 +121,4 @@ export interface ChatPendingTask {
   progress_summary?: string | null;
   /** Absent only in the short-lived optimistic cache seed. */
   supports_queue?: true;
-  /** Follow-up messages only; the current head is represented by task_id. */
-  queued_tasks?: ChatQueuedTask[];
 }
