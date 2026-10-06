@@ -1,5 +1,5 @@
 import { ensureTurnListIndexes } from './turn-list-indexes.js';
-import { Database } from 'bun:sqlite';
+import { openSqliteDatabase } from './db/sqlite.js';
 import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attempt-counters.js';
 import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
@@ -100,7 +100,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
   // startup cannot inspect a half-migrated schema. SQLite releases it on exit.
   const filename = (db as SqlDatabase & { filename?: string }).filename;
   if (resolveSqlDialect(db, options.dialect) !== 'sqlite' || !filename || filename === ':memory:') return migrate();
-  const lock = new Database(`${filename}.migration-lock`, { create: true });
+  const lock = openSqliteDatabase(`${filename}.migration-lock`, { create: true });
   try {
     lock.exec('PRAGMA busy_timeout=30000; BEGIN IMMEDIATE');
     migrate();
