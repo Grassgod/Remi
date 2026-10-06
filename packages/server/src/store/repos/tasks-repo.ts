@@ -4025,7 +4025,8 @@ ${routing.sql}
       FROM multiremi_turn_execution_records t WHERE t.workspace_id = ?
       AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND ${REPOOLABLE_QUEUED_TASK_SQL}
       AND (EXISTS (SELECT 1 FROM multiremi_conversation_log m
-          JOIN multiremi_chat_sessions message_session ON message_session.id = m.session_id WHERE m.task_id = t.id
+          JOIN multiremi_chat_sessions message_session ON message_session.id = m.session_id
+          JOIN multiremi_turns message_turn ON message_turn.id = t.turn_id WHERE m.id = message_turn.trigger_message_id
           AND m.kind = 'message' AND m.sender_type = 'member' AND m.deleted_at IS NULL)
         OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
           WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id
