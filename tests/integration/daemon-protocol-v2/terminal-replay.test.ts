@@ -39,9 +39,15 @@ describe("v2 terminal replay after ACK loss", () => {
         },
       });
       fixtures.push(h);
-      const completeTask = h.store.completeTask.bind(h.store);
+      const completeTask = h.store.completeTaskFromDaemon.bind(h.store);
+      let completionEffects = 0;
       const failTask = spyOn(h.store, "failTask");
-      const complete = spyOn(h.store, "completeTask").mockImplementation((id, input) => completeTask(id, input));
+      const complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+        const before = h.store.getTask(id)?.status;
+        const result = completeTask(id, input, authority);
+        if (id === taskId && before !== "completed" && result.status === "completed") completionEffects++;
+        return result;
+      });
       const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans");
       try {
         await h.startDaemon();
@@ -64,7 +70,7 @@ describe("v2 terminal replay after ACK loss", () => {
           "terminal replay ACK and outbox drain", 5_000);
         expect(outbox(h).taskIdsWithPendingTerminal(runtimeId)).not.toContain(taskId);
         expect(h.store.getTask(taskId)).toMatchObject({ status: "completed", result: "fixture", runtimeId });
-        expect(complete.mock.calls.filter(([id]) => id === taskId)).toHaveLength(1);
+        expect(completionEffects).toBe(1);
         expect(roundCards.filter(id => id === taskId)).toHaveLength(1);
         expect(h.effectiveLedger.filter(entry => entry.type === "task.complete" && entry.partition === taskId)).toHaveLength(1);
         expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === taskId))

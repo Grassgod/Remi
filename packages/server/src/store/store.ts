@@ -3590,10 +3590,10 @@ runMigrations(this.db);
     return new UsageAccountingRepo(this.ctx).closePrice(workspaceId, id, effectiveTo);
   }
 
-  reportTaskUsageSnapshot(taskId: string, snapshot: TaskUsageSnapshot): MultiremiTask {
-    const changed = writeUsageSnapshot(this.ctx.db, taskId, snapshot);
+  reportTaskUsageSnapshot(taskId: string, snapshot: TaskUsageSnapshot, authority?: Parameters<TasksRepo["writeTaskUsageSnapshotFromDaemon"]>[2]): MultiremiTask {
+    const changed = authority ? this.tasks.writeTaskUsageSnapshotFromDaemon(taskId, snapshot, authority) : writeUsageSnapshot(this.ctx.db, taskId, snapshot);
     const task = this.getTask(taskId)!;
-    if (changed) this.ctx.notifyTaskEvent("task:usage", task);
+    if (changed) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:usage", task));
     return task;
   }
 
@@ -5727,12 +5727,26 @@ runMigrations(this.db);
 
   releaseTaskOfferLease(taskId: string): void { this.tasks.releaseTaskOfferLease(taskId); }
 
-  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
-    return this.tasks.requeueTaskOffer(taskId, runtimeId);
+  requeueTaskOffer(taskId: string, runtimeId: string, outcome: "unknown" | "rejected" = "unknown"): boolean {
+    return this.tasks.requeueTaskOffer(taskId, runtimeId, outcome);
   }
 
   startTask(taskId: string, usageRunId?: string, expectedRuntimeId?: string): MultiremiTask {
     return this.tasks.startTask(taskId, usageRunId, expectedRuntimeId);
+  }
+
+  startTaskFromDaemon(taskId: string, authority: Parameters<TasksRepo["startTaskFromDaemon"]>[1], usageRunId?: string): "started" | "replayed" {
+    return this.tasks.startTaskFromDaemon(taskId, authority, usageRunId);
+  }
+
+  completeTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["completeTask"]>[1],
+    authority: Parameters<TasksRepo["completeTaskFromDaemon"]>[2]): MultiremiTask {
+    return this.tasks.completeTaskFromDaemon(taskId, input, authority);
+  }
+
+  failTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["failTask"]>[1],
+    authority: Parameters<TasksRepo["failTaskFromDaemon"]>[2]): MultiremiTask {
+    return this.tasks.failTaskFromDaemon(taskId, input, authority);
   }
 
   renewTaskDispatchLease(taskId: string): MultiremiTask {

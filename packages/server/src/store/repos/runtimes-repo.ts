@@ -855,7 +855,7 @@ export class RuntimesRepo {
           const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
           if (targetId !== runtimeId) {
             this.ctx.db.run(
-              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
               [targetId, now, String(row.id)],
             );
           }
@@ -863,7 +863,7 @@ export class RuntimesRepo {
         continue;
       }
       this.ctx.db.run(
-        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
       );
     }
@@ -1186,7 +1186,10 @@ export class RuntimesRepo {
         [newRuntimeId, newRuntimeId, now, oldRuntimeId],
       ).changes;
       const tasks = this.ctx.db.run(
-        "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        `UPDATE multiremi_tasks SET runtime_id = ?,
+          offered_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN offered_at ELSE NULL END,
+          accepted_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN accepted_at ELSE NULL END,
+          updated_at = ? WHERE runtime_id = ?`,
         [newRuntimeId, now, oldRuntimeId],
       ).changes;
       // Move the chat-session affinity metadata too, or the follow-up would

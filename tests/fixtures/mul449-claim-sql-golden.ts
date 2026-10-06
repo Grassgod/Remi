@@ -1,7 +1,9 @@
-// Byte-exact claim SELECT captured on a258b970. The MUL-449 refactor only moves
-// these predicates into shared fragments; any textual difference is a bug.
+// Byte-exact claim statement: MUL-449 preserves the captured SELECT predicates;
+// report recovery also preserves offer authority only when the Runtime matches.
 export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
-       SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
+       SET offered_at = CASE WHEN runtime_id = ? THEN offered_at ELSE NULL END,
+           accepted_at = CASE WHEN runtime_id = ? THEN accepted_at ELSE NULL END,
+           status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
          SELECT t.id
          FROM multiremi_tasks t

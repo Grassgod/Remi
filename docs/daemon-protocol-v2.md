@@ -250,7 +250,7 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 | 404 task not found | `task_not_found` |
 | 401 / 403 / 410 | `authority_revoked` |
 | 其他确定性 4xx | `invalid_report` |
-| `start` 的 400「已离开 dispatched」（原本就是成功） | `start_replayed` |
+| `start` 对已经运行、等待人工或已终态任务的幂等重放 | `start_replayed` |
 | 409 `steer_pending` | `steer_pending` |
 
 close code。协议**只显式列出四个终态码**，其余一律默认重连：
@@ -408,7 +408,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 | 帧 | 幂等键 | 重复到达时 |
 |---|---|---|
-| `task.start` | task id + `usage_run_id` | 接受时原子固化 run 与认证 Runtime；重放成功仅确认历史收到，`execution_authorized` 决定是否仍可启动 provider |
+| `task.start` | task id + 可选 `usage_run_id` | 同 Runtime 的真实 sent offer 可以从网络回队恢复并原子绑定 run；已有 run 或已运行/等待人工/终态返回 `start_replayed`，`execution_authorized` 决定现代 daemon 是否可启动 provider |
 | `task.progress` | task id | 覆盖写；终态的 `final:true` 尾帧相同内容即 ok，不重复写 |
 | `task.session_pin` / `task.workspace` | task id | 覆盖写；终态的 workspace 尾帧相同内容即 ok，不重复写 |
 | `task.usage` | task id + run id + unit id/revision | 规范化标量单位幂等更新；旧客户端 provider/model 上报仅在入口转换，统计统一读新表 |
@@ -419,6 +419,15 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | `runtime.archive_sessions` | request id | 状态机 pending→sent→acked→completed/failed 只能前进 |
 | `runtime.archive_sessions_result` | request id | 已终态即 ok；重复结果被幂等吸收 |
 | `trace.append` | `(task_id, trace_seq)` | Hub 丢弃 `≤ head` |
+
+任务状态回报在工作区生命周期锁内复核 task / Runtime / workspace / daemon 归属和成员权限。
+`task.start`、`task.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前任务已经处于允许吸收重放的状态。
+任务曾实际发送给当前 Runtime、因未收到接单确认而重新入队时，保留的 `offered_at` 允许该 Runtime 的
+可靠 start 或终态回报恢复原执行；不需要等待下一次 offer，所以升级 drain 暂停派发时也能收口。
+只有 Runtime 偏好、尚未真正发送过 offer 的 queued 任务没有这项恢复资格；缺少证据或状态暂不允许时
+返回 `server_error` 且 `retryable:true`，outbox 保留记录。Runtime、工作区、Daemon 归属或成员权限已变更时
+返回 `authority_revoked`，不覆盖新归属。已取消、失败或完成的任务吸收终态重放，不再次创建评论、轮次结果、
+委派回叫或重试任务。恢复的开始时间使用服务器确认时间，不伪造此前未记录的实际开工时刻。
 
 ## 3. 推送派活
 
@@ -444,12 +453,20 @@ daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随�
 `res{ok:false, code}`，code 取 `capacity` / `claims_paused` / `draining` /
 `binary_skill_files_unsupported`。
 
-reject、30 s 未应答、或连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
+reject、30 s 未应答、或未确认 offer 的连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
 （内存态）。仅 `capacity` 拒绝可提前结束冷却：daemon 释放本地任务槽位后立即补发已有的
 `hb` 帧；服务端发现 `active_task_count` 变化且当前冷却原因为 `capacity` 时清理计时器并 kick。
 该补发使用常规 hb 负载（含 drain ACK 与运行时状态），同时重置正常 15 s 心跳计时；丢帧仍由
 30 s 冷却兜底。`claims_paused`、`draining`、超时和断线均保持 30 s，不用 `runtime.ready`
 作为槽位释放信号。`CLAIM_RESPONSE_RECOVERY_MS`（90 s）的重领逻辑保留为最终兜底。
+
+接收结果不明的网络回队清除本次 `accepted_at`，但保留实际发送成功时记录的 `offered_at`；明确拒收则清除
+offer/accept 证据，恢复普通可编辑的排队任务。迟到的可靠执行回报因此能够
+证明自己属于已经派发的任务；初次排队只有 Runtime 绑定不等于已派发。新的 offer 仍覆盖这两个时间字段。
+已有发送证据的网络回队任务保留原输入，不能通过排队编辑覆盖它。Issue 的新信封留在收件箱，旧任务终态后
+通过 re-ring 创建新 task ID；Chat 的新系统信封走已有 steer 与完成屏障。尚未发送的普通排队任务仍可编辑和合并。
+工作位置、引擎/所有者、Runtime 归属改变或行政重新入池时清除旧 offer/accept 证据；已冻结
+任务按现有规则取消的路径仍保持取消，不通过迟到回报恢复。客户端对重复 task ID 的 offer 继续只确认、不重跑。
 
 ### 3.2 并发上限、租约与断线
 
@@ -472,6 +489,9 @@ daemon 断线期间：queued 留在队列；dispatched 未 accept 的按 §3.1 �
 - `created → offered`：只统计 offer 触发时该 runtime 有空位的任务；
 - `offered → accepted`：**纯唤醒分量，这是验收口径的 p95**；
 - `accepted → started`。
+
+断线恢复时 `offered_at` 可以早于回队和重连，`accepted_at` 可能为空；这是真实发送与确认事实，
+不能把缺失接单确认补造为新的发送时间。派发延迟统计仅使用实际具备对应时间字段的样本。
 
 另加 `tests/manual/measure-dispatch-latency.ts`：真实 daemon + API + SQLite，在空闲 runtime 上注入
 200 个 no-op 任务，输出三段 p50/p95，前后各跑一次。

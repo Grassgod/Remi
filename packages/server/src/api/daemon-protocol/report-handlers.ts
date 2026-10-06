@@ -2,7 +2,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { UsageValidationError, validateUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { normalizeTaskUsageEntries, parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
-import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { TaskDaemonReportError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
   ReportRuntimeUpdateInput, ReportRuntimeCommandInput, ReportRuntimeModelListInput,
   ReportRuntimeLocalSkillListInput, ReportRuntimeLocalSkillImportInput, ReportRuntimeDirectoryScanInput,
@@ -108,6 +108,7 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
   if (!task) reject("task_not_found");
   if (!task.runtimeId || (runtimeId && runtimeId !== task.runtimeId)) reject("authority_revoked");
   authorizeReportRuntime(store, session, task.runtimeId);
+  if ((store.getRuntimeLite(task.runtimeId)?.workspaceId ?? "local") !== task.workspaceId) reject("authority_revoked");
   return task;
 }
 
@@ -121,6 +122,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const taskId = string(p.task_id);
         if (!taskId) reject();
         let task;
+        let reportingRuntimeId: string | null = null;
         if ((frame.type === "task.usage" && p.usageSnapshot !== undefined) || (frame.type === "task.start" && p.usage_run_id !== undefined)) {
           let runId: string;
           if (frame.type === "task.usage") {
@@ -132,27 +134,29 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           }
           const owner = store.getTaskUsageRunRuntime(taskId, runId);
           if (owner) {
+            reportingRuntimeId = owner;
             if (frame.rt && frame.rt !== owner) reject("authority_revoked");
             authorizeReportRuntime(store, session, owner);
             task = store.getTask(taskId);
             if (!task) reject("task_not_found");
           } else task = authorizeReportTask(store, session, taskId, frame.rt);
         } else task = authorizeReportTask(store, session, taskId, frame.rt);
+        const authority = { runtimeId: reportingRuntimeId ?? task.runtimeId!, workspaceId: task.workspaceId,
+          daemonId: session.daemonId, userId: session.ownerAccessToken?.userId };
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
         const traceEventCount = isCompletion ? completionTraceEventCount(p.trace, taskId) : undefined;
         switch (frame.type) {
-          case "task.start":
-            if (p.usage_run_id !== undefined) {
-              if (typeof p.usage_run_id !== "string" || !p.usage_run_id.trim() || p.usage_run_id.length > 256) reject();
-              const existingOwner = store.getTaskUsageRunRuntime(taskId, p.usage_run_id);
-              if (existingOwner) return { ok: true, code: "start_replayed", execution_authorized: store.isTaskUsageExecutionAuthorized(taskId, p.usage_run_id, existingOwner) };
-            }
-            if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed", ...(p.usage_run_id !== undefined ? { execution_authorized: false } : {}) };
-            try { store.startTask(taskId, typeof p.usage_run_id === "string" ? p.usage_run_id : undefined, task.runtimeId!); }
+          case "task.start": {
+            const runId = typeof p.usage_run_id === "string" ? p.usage_run_id : undefined;
+            let outcome: "started" | "replayed";
+            try { outcome = store.startTaskFromDaemon(taskId, authority, runId); }
             catch (error) { if (error instanceof UsageValidationError) reject("authority_revoked"); throw error; }
-            if (typeof p.usage_run_id === "string") return { ok: true, execution_authorized: store.isTaskUsageExecutionAuthorized(taskId, p.usage_run_id, task.runtimeId!) };
+            const permission = runId ? { execution_authorized: store.isTaskUsageExecutionAuthorized(taskId, runId, authority.runtimeId) } : {};
+            if (outcome === "replayed") return { ok: true, code: "start_replayed", ...permission };
+            if (runId) return { ok: true, ...permission };
             break;
+          }
           case "task.prompt":
             if (!["bootstrap", "delta"].includes(string(p.mode)) || typeof p.prompt !== "string" || typeof p.sha256 !== "string") reject();
             try { store.recordTaskPrompt(taskId, { mode: p.mode as "bootstrap" | "delta", prompt: p.prompt, sha256: p.sha256 }); }
@@ -175,7 +179,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           }
           case "task.usage": {
             if (p.usageSnapshot !== undefined) {
-              try { store.reportTaskUsageSnapshot(taskId, validateUsageSnapshot(p.usageSnapshot)); }
+              try { store.reportTaskUsageSnapshot(taskId, validateUsageSnapshot(p.usageSnapshot), authority); }
               catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
               break;
             }
@@ -211,21 +215,17 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             break;
           }
           case "task.complete":
-            if (task.status === "running") {
-              try { store.completeTask(taskId, { output: string(p.output), traceEventCount, branchName: nullable(p.pr_url),
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), completionFields: fields }); }
-              catch (error) {
-                if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
-                throw error;
-              }
+            try { store.completeTaskFromDaemon(taskId, { output: string(p.output), traceEventCount, branchName: nullable(p.pr_url),
+              sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), completionFields: fields }, authority); }
+            catch (error) {
+              if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
+              throw error;
             }
             break;
           case "task.fail":
-            if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
-              store.failTask(taskId, {
-                error: string(p.error) || "Task failed", traceEventCount,
-                sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason), completionFields: fields });
-            }
+            store.failTaskFromDaemon(taskId, {
+              error: string(p.error) || "Task failed", traceEventCount,
+              sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason), completionFields: fields }, authority);
             break;
           default: reject();
         }
@@ -344,6 +344,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
       }
       return { ok: true };
     } catch (error) {
+      if (error instanceof TaskDaemonReportError) return { ok: false, code: error.code, retryable: error.retryable };
       if (error instanceof ReportRejection) return { ok: false, code: error.code, retryable: false };
       throw error;
     }

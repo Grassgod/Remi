@@ -4111,11 +4111,11 @@
           "switch_reason": null,
           "nextRetryAt": null,
           "next_retry_at": null,
-          "issueId": "iss_snapshot",
-          "issueSessionId": "ises_cdyoy133keds",
-          "issue_session_id": "ises_cdyoy133keds",
-          "issueSessionGeneration": 1,
-          "issue_session_generation": 1,
+          "issueId": null,
+          "issueSessionId": null,
+          "issue_session_id": null,
+          "issueSessionGeneration": null,
+          "issue_session_generation": null,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
@@ -4135,8 +4135,8 @@
           "parentTaskId": null,
           "continuedFromTaskId": null,
           "continued_from_task_id": null,
-          "assignmentEventId": "sevt_3gq3rlr8o45b",
-          "assignment_event_id": "sevt_3gq3rlr8o45b",
+          "assignmentEventId": null,
+          "assignment_event_id": null,
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -4194,9 +4194,31 @@
       "key": "daemon-task-lifecycle#001 POST /api/daemon/tasks/:taskId/wait-local-directory",
       "route": "POST /api/daemon/tasks/:taskId/wait-local-directory",
       "path": "/api/daemon/tasks/tsk_ibk9if0740q3/wait-local-directory",
-      "status": 400,
+      "status": 200,
       "body": {
-        "error": "mark task waiting_local_directory: no rows in result set"
+        "id": "tsk_ibk9if0740q3",
+        "agent_id": "agt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "issue_id": "",
+        "holds_workspace": true,
+        "workspace_id": "local",
+        "status": "waiting_local_directory",
+        "priority": 0,
+        "dispatched_at": "<timestamp>",
+        "started_at": null,
+        "completed_at": null,
+        "result": null,
+        "error": null,
+        "attempt": 1,
+        "max_attempts": 3,
+        "created_at": "<timestamp>",
+        "kind": "quick_create",
+        "wait_reason": "missing repo",
+        "progress_summary": "Waiting for local directory: missing repo",
+        "plugin_snapshot": [],
+        "codex_profile": null,
+        "claude_profile": null,
+        "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
       }
     },
     {
@@ -4215,11 +4237,11 @@
     {
       "key": "daemon-task-lifecycle#003 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_ibk9if0740q3/human-requests/hrq_jez2ujdp6d5n/respond",
+      "path": "/api/multiremi/tasks/tsk_ibk9if0740q3/human-requests/hrq_zsxpe4iu5err/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_jez2ujdp6d5n",
+          "id": "hrq_zsxpe4iu5err",
           "taskId": "tsk_ibk9if0740q3",
           "kind": "permission",
           "payload": {
@@ -4237,11 +4259,11 @@
     {
       "key": "daemon-task-lifecycle#004 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_ibk9if0740q3/human-requests/hrq_l30ikvaows9d/respond",
+      "path": "/api/tasks/tsk_ibk9if0740q3/human-requests/hrq_3gdnj5pggzmd/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_l30ikvaows9d",
+          "id": "hrq_3gdnj5pggzmd",
           "taskId": "tsk_ibk9if0740q3",
           "kind": "permission",
           "payload": {
