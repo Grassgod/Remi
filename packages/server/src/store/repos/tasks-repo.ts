@@ -1685,7 +1685,9 @@ export class TasksRepo {
     if(type==='member')senderId=this.ctx.workspaces().getWorkspaceMemberByRef(senderId??'local',input.workspaceId??'local')?.id??senderId;
     const result=sendMessageWithinTransaction(this.ctx,{id:existing?.id,session_id:sessionId,sender:{type,id:senderId},
       source_turn_id:existing?.task_id??sourceTurn?.turn_id??null,to:{type:'agent',ref:input.agentId},message_kind:'request',wake_requested:'now',
-      body_md:existing?.body_md??input.prompt,execution_scope:scope??existing?.metadata.execution_scope as string|undefined,
+      body_md:existing?.body_md??input.prompt,execution_scope:scope??existing?.metadata.execution_scope as string|undefined
+        ??taskExecutionScope({delegationId:input.delegationId??input.delegation_id,
+          delegatedByAgentId:input.delegatedByAgentId??input.delegated_by_agent_id,agentId:input.agentId}),
     },events,{...input,parentTaskId:null});
     const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
     if(!turn)throw Object.assign(new Error(`Message stored without scheduling: ${result.wake_reason}`),{message_result:result});
