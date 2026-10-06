@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
+import { actualUnit } from "@acp/usage-collector.js";
 import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonOptions, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -144,12 +145,14 @@ function apiProxy(
 
 function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof apiProxy> {
   return apiProxy(serverPort, (request, url) => {
-    if (request.method === "POST" && url.pathname.startsWith("/api/daemon/tasks/")) {
+    if (request.method === "POST" && url.pathname.startsWith("/api/daemon/tasks/") && !url.pathname.endsWith("/start")) {
       return new Response("report API unavailable", { status: 503 });
     }
     return null;
   }, (frame, direction, socket) => {
-    if (direction === "up" && frame.t.startsWith("task.") && typeof frame.seq === "number") {
+    // Execution must have an acknowledged run before the provider consumes.
+    // The fixture models a reporting outage after that acceptance.
+    if (direction === "up" && frame.t.startsWith("task.") && frame.t !== "task.start" && typeof frame.seq === "number") {
       socket.send(JSON.stringify({ v: 2, t: "res", re: String(frame.seq), ts: Date.now(),
         p: { ok: false, code: "server_error", message: "injected report outage", retryable: true } }));
       return false;
@@ -411,7 +414,11 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "done" });
       expect(statusReads).toBe(0);
       const persisted = persistedOutbox(daemon);
-      expect(persisted.stats()).toMatchObject({ pending: 1, pendingTerminal: 1, pendingTasks: 1 });
+      expect(persisted.stats()).toMatchObject({ pendingTerminal: 1, pendingTasks: 1 });
+      const rows = (persisted as any).db.query("SELECT kind FROM outbox_events ORDER BY id").all() as { kind: string }[];
+      expect(rows[0]?.kind).toBe("complete");
+      expect(rows.slice(1).every(row => row.kind === "usage")).toBe(true);
+      expect(rows.slice(1).length).toBeGreaterThan(0);
       await persisted.close();
     } finally {
       daemon.stop();
@@ -506,21 +513,24 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     }
   }, 20_000);
 
-  it("purges queued reports and releases active execution when the server cancels a task", async () => {
+  it("purges operational reports while retaining observed usage and releases execution after server cancellation", async () => {
     const { store, root } = testBed("multiremi-outbox-cancel-");
     const agent = store.createAgent({ name: "Cancelled Outbox Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait to be cancelled" });
     const daemonToken = await store.createAccessToken({ name: "cancel daemon", type: "daemon", workspaceId: "local" });
     const server = newServer({ store, scheduler: null, authToken: "root-cancel-secret", hostname: "127.0.0.1", port: 0 });
 
-    // Keep task status reads and claims available while every task report is
-    // rejected transiently, creating the historical backlog from the incident.
+    // Accept start, then reject subsequent reports to create a durable backlog.
     const proxy = taskReportOutageProxy(server.port);
 
     const providerStarted = gate();
     const providerFactory: MultiremiDaemonProviderFactory = () => ({
       async *sendStream(_message, options) {
         providerStarted.release();
+        yield { sessionUpdate: "usage_update", used: 12, size: 200000, _meta: { remiUsageUnits: [actualUnit({
+          unitId: "cancelled-request", provider: "claude", model: "opus", scope: "request", source: "provider_request",
+          inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12,
+        })] } } as any;
         await new Promise<void>((resolve) => {
           if (options?.signal?.aborted) resolve();
           else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
@@ -549,6 +559,8 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     const daemonRun = daemon.start();
     try {
       await providerStarted.yielded;
+      await until(() => (daemon as any).outbox?.db.query("SELECT id FROM outbox_events WHERE kind='usage'").get() != null,
+        5_000, "observed request durable before cancellation");
       expect((daemon as unknown as { activeTaskCount: number }).activeTaskCount).toBe(1);
       expect(daemon.outboxStats()?.pendingNonTerminal).toBeGreaterThan(0);
 
@@ -561,7 +573,13 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       await daemonRun;
       expect(store.getTask(task.id)?.status).toBe("cancelled");
       const persisted = persistedOutbox(daemon);
-      expect(persisted.stats()).toMatchObject({ pending: 0, pendingTasks: 0 });
+      expect(persisted.stats()).toMatchObject({ pendingTerminal: 0, pendingTasks: 1 });
+      const rows = (persisted as any).db.query("SELECT kind,payload FROM outbox_events ORDER BY id").all() as { kind: string; payload: string }[];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every(row => row.kind === "usage")).toBe(true);
+      expect(rows.flatMap(row => JSON.parse(row.payload).usageSnapshot.units)).toContainEqual(expect.objectContaining({
+        unitId: "cancelled-request", inputTokens: 10, outputTokens: 2,
+      }));
       await persisted.close();
     } finally {
       daemon.stop();

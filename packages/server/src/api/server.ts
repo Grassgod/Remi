@@ -49,6 +49,7 @@ import { registerRuntimeWorkspaceRoutes } from "./routers/runtime-workspaces.js"
 import { RuntimeWorkspaceError } from "@multiremi/store/repos/runtime-workspaces-repo.js";
 import { registerDaemonRetirementRoutes } from "./routers/daemon-retirement.js";
 import { registerDashboardRoutes } from "./routers/dashboard.js";
+import { registerUsageAccountingRoutes } from "./routers/usage-accounting.js";
 import { registerProjectRoutes } from "./routers/projects.js";
 import { registerKnowledgeRoutes } from "./routers/knowledge.js";
 import { registerSquadRoutes } from "./routers/squads.js";
@@ -950,6 +951,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerPlatformRoutes(app, deps);
 
   registerDashboardRoutes(app, deps);
+  registerUsageAccountingRoutes(app, deps);
 
   registerKnowledgeRoutes(app, deps);
 
@@ -1043,6 +1045,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
   const store = options.store ?? new MultiremiStore();
+  store.ensureUsageAccountingStartup();
   // The Hub fill and stream auth share this pool; only the server-created one is ours to close.
   const readPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
     ? null

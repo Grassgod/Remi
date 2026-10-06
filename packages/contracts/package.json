@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./trace": "./src/trace.ts",
+    "./usage-accounting": "./src/usage-accounting.ts",
     "./daemon-protocol": "./src/daemon-protocol.ts",
     "./inbox": "./src/inbox.ts",
     "./attachments": "./src/attachments.ts",

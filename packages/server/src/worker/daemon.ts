@@ -49,7 +49,10 @@ import {
   type MultiremiRelayWire,
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
-import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
+import { createEventMapper, responseToUsageUnits } from "./acp-event-mapper.js";
+import { TaskUsageLedger } from "./task-usage-ledger.js";
+import { extractBaseUrl } from "@multiremi/relay/fragment.js";
+import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { LastAssistantMessage } from "./last-assistant-message.js";
 import {
   DaemonProtocolClient,
@@ -75,7 +78,6 @@ import {
   materializeTaskSteerAttachments,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
   DEFAULT_STEER_POLL_MS,
-  mergeTaskUsageEntries,
   TaskSteerFeed,
 } from "./steer.js";
 import {
@@ -229,7 +231,6 @@ import type {
   MultiremiSshMeshHeartbeatAck,
   RegisterRuntimeInput,
   ResolvedBotMenuConfig,
-  TaskUsageEntry,
   FeishuBotTaskSnapshot,
   FeishuBotCancelResult,
   SubmitFeishuBotMessageInput,
@@ -540,7 +541,7 @@ interface RunSummary {
   output: string;
   sessionId: string | null;
   workDir: string | null;
-  usage: TaskUsageEntry[];
+  usageSnapshot: TaskUsageSnapshot;
   failureReason?: TaskFailureReasonValue;
   /** True when the run loop already finalized the task server-side (progress,
    *  usage and completeTask) — done inside runAgent so a steer racing
@@ -1158,7 +1159,13 @@ export class MultiremiDaemon {
         this.onceOfferTimer = null;
         const run = this.handleTask(task).catch(error => {
           log.error(`task ${task.id} crashed outside handleTask (${error instanceof Error ? error.name : typeof error})`);
-        }).finally(() => { if (this.options.once) this.stop(); });
+        }).finally(async () => {
+          if (!this.options.once) return;
+          // A once execution has no next task to keep the connection alive.
+          // Drain detached helper calls before stop() aborts report delivery.
+          await Promise.allSettled([...this.inflight].filter(pending => pending !== run));
+          this.stop();
+        });
         this.inflight.add(run);
         void run.finally(() => this.inflight.delete(run));
       },
@@ -1474,7 +1481,9 @@ export class MultiremiDaemon {
       await Promise.allSettled([...this.runtimeModelListRequests.values()]);
       // Running tasks depend on the repo-checkout server, so let any in-flight
       // tasks drain before waiting for the GC lease they may currently hold.
-      await Promise.allSettled([...this.inflight]);
+      // Task finalization can register a detached progress-summary call while
+      // the main execution is draining. Keep its accepted usage run alive.
+      while (this.inflight.size) await Promise.allSettled([...this.inflight]);
       this.subjectArchiveQueue?.stop();
       await this.subjectArchiveQueue?.drain();
       this.subjectArchiveQueue = null;
@@ -3133,10 +3142,10 @@ export class MultiremiDaemon {
     return this.outbox;
   }
 
-  private async awaitTaskReportDrain(taskId: string): Promise<MultiremiOutboxDrainResult> {
+  private async awaitTaskReportDrain(taskId: string, executionSignal?: AbortSignal): Promise<MultiremiOutboxDrainResult> {
     const outbox = this.outbox;
     const drainAbort = new AbortController();
-    const shutdownSignal = this.outboxAbort?.signal;
+    const shutdownSignal = executionSignal ? AbortSignal.any([executionSignal, ...(this.outboxAbort ? [this.outboxAbort.signal] : [])]) : this.outboxAbort?.signal;
     const onShutdown = () => drainAbort.abort();
     if (shutdownSignal?.aborted) drainAbort.abort();
     else shutdownSignal?.addEventListener("abort", onShutdown, { once: true });
@@ -3261,6 +3270,9 @@ export class MultiremiDaemon {
       }, timeoutMs)
       : null;
     let summary: RunSummary | null = null;
+    const usageRunId = randomUUID();
+    let observedUsage: TaskUsageSnapshot | null = null;
+    const observedUsageUnits = new Map<string, TaskUsageUnit>();
     let resolvedWorkDir: ResolvedTaskWorkDir | null = null;
     let pluginRuntimeBase: string | null = null;
     let pluginRuntime: PreparedAgentPluginRuntime | undefined;
@@ -3276,6 +3288,13 @@ export class MultiremiDaemon {
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
+    let usageLedger: TaskUsageLedger | undefined;
+    const checkpointUsage = (usage: TaskUsageSnapshot | null) => {
+      if (!usage) return;
+      observedUsage = { ...usage, units: [] };
+      for (const unit of usage.units) if ((observedUsageUnits.get(unit.unitId)?.revision ?? -1) < unit.revision) observedUsageUnits.set(unit.unitId, unit);
+      this.enqueueTaskReport(task.id, "usage", { usageSnapshot: usage });
+    };
     let activeExecutionReleased = false;
     const awaitFinalReportDrain = async () => {
       if (!activeExecutionReleased) {
@@ -3442,24 +3461,46 @@ export class MultiremiDaemon {
       }
       if (!providerHome) throw new Error(`Task ${task.id} has no isolated provider home`);
       taskPrivateTmp = await prepareTaskPrivateTempDirectory(providerHome, task.id);
-      this.enqueueTaskReport(task.id, "start", {});
+      // Bind the run to the authenticated runtime before any provider can
+      // consume tokens. A durable but unacknowledged start is not permission
+      // to execute while the task may have been reassigned.
+      const startReply = await this.ensureOutbox().enqueueAndWait(task.id, "start", {
+        usage_run_id: usageRunId, runtime_id: this.options.runtimeId,
+      }, this.options.taskDrainTimeoutMs, abort.signal);
+      if (startReply.execution_authorized !== true) throw new Error("Task execution start does not authorize this run to execute");
+      abort.signal.throwIfAborted();
       if (codexCatalogError) {
         this.enqueueTaskReport(task.id, "progress", {
           summary: `能力加载失败，已回退 Codex 内置目录：${codexCatalogError}`,
         });
       }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
-      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
+      const usageConnection = task.codexProfile || task.claudeProfile
+        ? `runtime:${this.options.runtimeId}:profile:${task.agent?.provider}`
+        : relay?.auth_token ? `workspace:${task.workspaceId}:relay:${task.agent?.provider}` : null;
+      usageLedger = new TaskUsageLedger(usageConnection, usageRunId);
+      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment, usageLedger, checkpointUsage);
       summary = await this.runAgent(
         task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
         progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
         relay?.one_million_models ?? [],
+        task.codexProfile || task.claudeProfile
+          ? `runtime:${this.options.runtimeId}:profile:${task.agent?.provider}`
+          : relay?.auth_token ? `workspace:${task.workspaceId}:relay:${task.agent?.provider}` : null,
+        (usage) => {
+          observedUsage = { ...usage, units: [] };
+          for (const unit of usage.units) {
+            if ((observedUsageUnits.get(unit.unitId)?.revision ?? -1) < unit.revision) observedUsageUnits.set(unit.unitId, unit);
+          }
+        },
+        usageRunId,
+        usageLedger,
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
           ?? classifyPoisonedOutput(summary.output)
           ?? TaskFailureReason.AgentFallbackMessage;
-        if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
+        this.enqueueTaskReport(task.id, "usage", { usageSnapshot: summary.usageSnapshot });
         this.enqueueTaskReport(task.id, "fail", {
           error: redactTaskError(summary.output),
           sessionId: summary.sessionId,
@@ -3467,7 +3508,7 @@ export class MultiremiDaemon {
           failureReason,
         });
         log.warn(`Failed task ${task.id} with unusable output: ${failureReason}`);
-        this.finalizeTaskProgress(progressSummarizer, "failed", failureReason);
+        this.finalizeTaskProgress(progressSummarizer, "failed", failureReason, task.id);
         await awaitFinalReportDrain();
         return;
       }
@@ -3475,14 +3516,21 @@ export class MultiremiDaemon {
       // barrier) already happened synchronously inside runAgent, while the
       // provider session was still open — only the summarizer wrap-up and the
       // outbox drain remain.
-      this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
+      this.finalizeTaskProgress(progressSummarizer, "completed", summary.output, task.id);
       await awaitFinalReportDrain();
     } catch (err) {
       const error = redactTaskError(timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err));
       if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
-        if (serverTerminalStatus === "cancelled") this.outbox?.purgeTask(task.id);
+        if (serverTerminalStatus === "cancelled") {
+          this.outbox?.purgeTask(task.id, { keepUsage: true });
+          // Cancellation drops execution reports, but actual consumption must
+          // survive the purge and remain durable while the API is unavailable.
+          const usageSnapshot = observedUsage as TaskUsageSnapshot | null;
+          if (usageSnapshot) this.enqueueTaskReport(task.id, "usage", { usageSnapshot: { ...usageSnapshot, units: [...observedUsageUnits.values()] } });
+          await awaitFinalReportDrain();
+        }
         log.info(`Task ${task.id} is already ${serverTerminalStatus} on the server; stopped local execution`);
-        this.finalizeTaskProgress(progressSummarizer, serverTerminalStatus);
+        this.finalizeTaskProgress(progressSummarizer, serverTerminalStatus, undefined, task.id);
         return;
       }
       const failureReason = err instanceof LocalDirectoryError
@@ -3498,9 +3546,10 @@ export class MultiremiDaemon {
         failureReason,
       });
       log.error(`Failed task ${task.id}: ${error}`);
-      this.finalizeTaskProgress(progressSummarizer, "failed", error);
+      this.finalizeTaskProgress(progressSummarizer, "failed", error, task.id);
       await awaitFinalReportDrain();
     } finally {
+      if (usageLedger) checkpointUsage(usageLedger.finish());
       await cleanupTaskPrivateTempDirectory(
         taskPrivateTmp,
         () => this.assertWorkspaceRootOwner(),
@@ -4085,6 +4134,8 @@ export class MultiremiDaemon {
     task: MultiremiTaskWithAgent,
     providerEnv?: Record<string, string>,
     relayFragment?: string,
+    usageLedger?: TaskUsageLedger,
+    checkpointUsage?: (snapshot: TaskUsageSnapshot | null) => void,
   ): Promise<TaskProgressSummarizer | null> {
     if (task.codexProfile || task.claudeProfile) {
       // A custom provider key is scoped to its connection. The optional
@@ -4116,12 +4167,30 @@ export class MultiremiDaemon {
         log.info(`Progress summaries unavailable for task ${task.id}: no usable model credential`);
         return null;
       }
+      const closeUsageScope = usageLedger?.deferCompletion();
+      const relayEngine = task.agent?.provider === "claude" || task.agent?.provider === "codex" ? task.agent.provider : null;
+      const relayBaseUrl = relayEngine && relayFragment !== undefined ? extractBaseUrl(relayEngine, relayFragment) : null;
+      const processCredentials = resolveSummarizerCredentials(undefined);
+      const summaryConnection = (provider: string): string | null => {
+        if (provider === "openai" && process.env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim() && config.openAi?.baseUrl) {
+          return `runtime:${this.options.runtimeId}:progress-summary:openai`;
+        }
+        const baseUrl = provider === "openai" ? config.openAi?.baseUrl : credentials?.baseUrl;
+        if (relayEngine && relayBaseUrl && baseUrl === relayBaseUrl && providerEnv) return `workspace:${task.workspaceId}:relay:${relayEngine}`;
+        if (provider === "claude" && processCredentials && credentials?.baseUrl === processCredentials.baseUrl
+          && credentials.apiKey === processCredentials.apiKey && credentials.authToken === processCredentials.authToken) {
+          return `runtime:${this.options.runtimeId}:progress-summary:claude`;
+        }
+        return null;
+      };
       return new TaskProgressSummarizer({
         config,
         credentials: credentials ?? undefined,
         providerEnv,
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",
+        onUsage: units => { if (usageLedger) checkpointUsage?.(usageLedger.observe(units.map(unit => ({ ...unit, connectionId: summaryConnection(unit.provider) })))); },
+        onClosed: () => checkpointUsage?.(closeUsageScope?.() ?? null),
         report: async (result, { final }) => {
           // An in-flight periodic summary can finish after the terminal report was queued.
           if (!final && (this.traceStore().head(task.id)?.closed
@@ -4140,10 +4209,18 @@ export class MultiremiDaemon {
     summarizer: TaskProgressSummarizer | null,
     outcome: ProgressRunOutcome,
     detail?: string,
+    taskId?: string,
   ): void {
-    summarizer?.finalize(outcome, detail).catch((err) => {
+    if (!summarizer) return;
+    const finalization = summarizer.finalize(outcome, detail).then(async () => {
+      // Finalize enqueues late usage and its completion marker. Keep transport
+      // alive until those durable records drain (or the bounded wait expires).
+      if (taskId) await this.awaitTaskReportDrain(taskId);
+    }).catch((err) => {
       log.warn(`Final progress summary failed: ${err instanceof Error ? err.message : String(err)}`);
     });
+    this.inflight.add(finalization);
+    void finalization.finally(() => this.inflight.delete(finalization));
   }
 
   private async runAgent(
@@ -4156,6 +4233,10 @@ export class MultiremiDaemon {
     progressSummarizer?: TaskProgressSummarizer | null,
     privateTmpDirectory?: string,
     claudeOneMillionModels: readonly string[] = [],
+    connectionId: string | null = null,
+    onUsage?: (usage: TaskUsageSnapshot) => void,
+    usageRunId?: string,
+    usageLedger?: TaskUsageLedger,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4273,7 +4354,13 @@ export class MultiremiDaemon {
     };
     const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextExternalSeq);
     let finalSessionId: string | null = task.sessionId;
-    let usage: TaskUsageEntry[] = [];
+    const ledger = usageLedger ?? new TaskUsageLedger(connectionId, usageRunId);
+    const checkpointUsage = (snapshot: TaskUsageSnapshot | null) => {
+      if (!snapshot) return;
+      onUsage?.(snapshot);
+      this.enqueueTaskReport(task.id, "usage", { usageSnapshot: snapshot });
+    };
+    let turnIndex = 0;
     const toMessages = createEventMapper(createAdapter(config.agentType));
     messageBatcher = new TaskMessageBatcher({
       emit: (messages) => {
@@ -4355,6 +4442,7 @@ export class MultiremiDaemon {
       };
 
       while (true) {
+        turnIndex++;
         const turnAbort = new AbortController();
         const onTaskAbort = () => turnAbort.abort();
         signal.addEventListener("abort", onTaskAbort, { once: true });
@@ -4373,6 +4461,10 @@ export class MultiremiDaemon {
         try {
           resetElicitationContextOffset();
           for await (const event of session.run(prompt)) {
+            const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
+            if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
+              ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
+            }))));
             const emitted = toMessages(event);
             for (const message of emitted) {
               if (provider.typedSessionFailures === false && message.type === "text" && message.content
@@ -4401,7 +4493,7 @@ export class MultiremiDaemon {
           messageBatcher.push([{ type: "execution", meta: { provider: config.agentType, model: last.model, modelName: null } }]);
         }
         finalSessionId = last?.sessionId ?? finalSessionId;
-        usage = mergeTaskUsageEntries(usage, responseToUsage(agent.provider, last, config.model));
+        checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}`)));
         // Resume by provider session id if the follow-up turn needs a fresh
         // ACP process (e.g. the previous one died between turns).
         if (finalSessionId) config.sessionId = finalSessionId;
@@ -4413,7 +4505,7 @@ export class MultiremiDaemon {
           const failureReason = classifyLegacyProviderFailure(error);
           if (failureReason) {
             await this.client.pinTaskSession(task.id, finalSessionId, workDir);
-            return { output: error, sessionId: finalSessionId, workDir, usage, completed: false, failureReason };
+            return { output: error, sessionId: finalSessionId, workDir, usageSnapshot: ledger.finish(), completed: false, failureReason };
           }
         }
         if (forceAnswerExpired) {
@@ -4446,7 +4538,7 @@ export class MultiremiDaemon {
             output: "Agent returned empty output after compaction.",
             sessionId: finalSessionId,
             workDir,
-            usage,
+            usageSnapshot: ledger.finish(),
             completed: false,
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
@@ -4454,12 +4546,14 @@ export class MultiremiDaemon {
         const candidate = output.result(last?.text);
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
-          return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
+          return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.finish(), completed: false };
         }
         await this.client.pinTaskSession(task.id, finalSessionId, workDir);
         // The single pump preserves this partition's order through completion.
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
-        await this.client.reportTaskUsage(task.id, usage);
+        const finalUsage = ledger.finish();
+        onUsage?.(finalUsage);
+        await this.client.reportTaskUsageSnapshot(task.id, finalUsage);
         try {
           await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         } catch (err) {
@@ -4483,9 +4577,10 @@ export class MultiremiDaemon {
           await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         }
         log.info(`Completed task ${task.id}`);
-        return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: true };
+        return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.snapshot, completed: true };
       }
     } finally {
+      checkpointUsage(ledger.finish());
       messageBatcher?.close();
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, codeWorkDir, preparedWorkspace.repos).catch((err) => {

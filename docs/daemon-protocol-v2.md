@@ -408,10 +408,10 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 | 帧 | 幂等键 | 重复到达时 |
 |---|---|---|
-| `task.start` | task id | 已运行、等待人工或已终态时 `start_replayed`；网络回队且保留同 Runtime 的真实 offer 证据时恢复运行态，不能把所有 queued 当作成功 |
+| `task.start` | task id + 可选 `usage_run_id` | 同 Runtime 的真实 sent offer 可以从网络回队恢复并原子绑定 run；已有 run 或已运行/等待人工/终态返回 `start_replayed`，`execution_authorized` 决定现代 daemon 是否可启动 provider |
 | `task.progress` | task id | 覆盖写；终态的 `final:true` 尾帧相同内容即 ok，不重复写 |
 | `task.session_pin` / `task.workspace` | task id | 覆盖写；终态的 workspace 尾帧相同内容即 ok，不重复写 |
-| `task.usage` | task id + provider + model | 合并 |
+| `task.usage` | task id + run id + unit id/revision | 规范化标量单位幂等更新；旧客户端 provider/model 上报仅在入口转换，统计统一读新表 |
 | `task.complete` / `task.fail` | task id | 已终态即 ok |
 | `runtime.*_result` | request id | 状态机 pending→running→completed/failed 只能前进 |
 | `feishu.outbound_result` | delivery id + claim_token | 租约已不是当前的即 ok（不写库，记 warn），应答带 `lease_lost:true`，在等结果的发送方据此停止；相同终态和没有推进的 streaming 检查点也吸收，不带 `lease_lost`。`prepared` 成功应答带 `mention_open_id`（open_id 或 null） |
@@ -448,7 +448,7 @@ Chat 恢复、Issue workspace 归属/清理、维护 drain 释放都在写入后
 泵每次跑现有 `store.claimTask(runtimeId)`：选任务、置 `dispatched`、**只 hydrate 选中的任务**
 （MUL-389 的原样保留），把今天 claim 响应的内容（含 `auth_token`）作为 `task.offer` 载荷推出。
 
-daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随后照常发 `task.start`
+daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随后发送携带稳定 `usage_run_id` 的 `task.start`，收到 `execution_authorized:true` ACK 才进入 provider；超时、取消、永久拒绝或 false ACK 不执行模型
 （start 仍是独立可靠帧，因为 workspace 准备可能先进入 `wait_local_directory`）；否则
 `res{ok:false, code}`，code 取 `capacity` / `claims_paused` / `draining` /
 `binary_skill_files_unsupported`。

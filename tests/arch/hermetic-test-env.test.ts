@@ -15,6 +15,7 @@ import {
   isScrubbedEnvKey,
 } from "../setup/hermetic-env-policy.js";
 import { DEFAULT_DB_REPLY_MAX_BYTES } from "@multiremi/observability/request-metrics.js";
+import { loadConfig } from "@shared/config.js";
 
 /**
  * The backend suite must not read this repo's configuration out of the host shell.
@@ -93,6 +94,13 @@ describe("hermetic test environment", () => {
     for (const directory of [".remi", ".multiremi"]) {
       expect(root!.startsWith(join(homedir(), directory))).toBe(false);
     }
+  });
+
+  test("CLI plugin discovery uses the test root without reading installed host plugins", () => {
+    const directory = join(process.env.MULTIREMI_TEST_RUN_ROOT!, "plugins");
+    expect(process.env.REMI_PLUGINS_DIR).toBe(directory);
+    expect(loadConfig().plugins.dir).toBe(directory);
+    expect(directory).not.toBe(join(homedir(), ".remi", "plugins"));
   });
 
   test("the scrub list covers the auth-relevant variables", () => {

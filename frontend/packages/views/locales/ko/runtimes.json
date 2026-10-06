@@ -461,7 +461,7 @@
     "col_owner": "소유자",
     "col_agents": "에이전트",
     "col_workload": "작업량",
-    "col_cost": "비용 · 7일",
+    "col_cost": "확인된 소계 · 7일",
     "col_cli": "CLI",
     "col_agent": "Agent",
     "col_acp": "ACP",

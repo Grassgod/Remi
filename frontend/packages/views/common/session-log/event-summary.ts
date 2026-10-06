@@ -5,7 +5,7 @@ export const INTERNAL_ID_PREFIXES = [
   "act", "ane", "apb", "apl", "aps", "apv", "agt", "att", "aut", "batch", "chat", "clog", "cmt_env", "cmt", "crn", "cses",
   "dcs", "dec", "dep", "dlg", "dws", "evt", "fba", "fbo", "fbr", "fbs", "fcb", "fdb", "fhrp", "flease", "foc", "fop_claim", "fop", "fout", "frp", "fsrc",
   "hrq", "inb", "inv", "ises", "iss", "kout", "krun", "ksrc", "ksub", "lbl", "mconn", "mem", "mlease", "mout", "msg", "msrc",
-  "nch", "ndl", "orga", "paud", "pdoc", "pdrev", "pin", "pop", "prj", "prov", "rck", "repo", "res", "rt", "run", "rwbatch", "rwdoc",
+  "nch", "ndl", "orga", "paud", "pdoc", "pdrev", "pin", "pop", "price", "prj", "prov", "rck", "repo", "res", "rt", "run", "rwbatch", "rwdoc",
   "rwjob", "rwlease", "rwrev", "rws", "rxn", "sar", "sce", "scm", "scr", "scv", "sdl", "sev", "sevt", "sfx", "sil", "skf", "skl",
   "spart", "sqd", "sqm", "srb", "sres", "sshinvalidate", "sshprobe", "sshrekey", "steer", "sub", "trg", "tsk", "usr", "whd", "ws",
 ] as const;

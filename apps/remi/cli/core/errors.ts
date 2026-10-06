@@ -68,6 +68,21 @@ export class CliError extends Error {
 const SECRET_KEY = /(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i;
 const SECRET_ASSIGNMENT = /\b(authorization|token|password|secret|api[-_]?key|credential|cookie)\s*[:=]\s*([^\s,;]+)/gi;
 
+// Explicit accounting fields, never a general exemption for keys containing "token".
+const USAGE_COUNTER_FIELDS = new Set([
+  "actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens",
+  "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens", "unpriced_tokens",
+  "context_peak_tokens", "task_attributed_tokens",
+  "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens",
+  "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens",
+  "actualUnsplitTokens", "reportedTotalTokens", "contextTokens", "contextWindow",
+]);
+
+export function isPublicUsageStatistic(key: string, value: unknown): boolean {
+  if (key === "token_ratio") return value === null || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1);
+  return USAGE_COUNTER_FIELDS.has(key) && (value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0));
+}
+
 export function sanitizeCliMessage(value: string): string {
   return value
     .replace(/\bBearer\s+\S+/gi, "Bearer ***")
@@ -82,7 +97,7 @@ export function sanitizeCliDetails(value: unknown, seen = new WeakSet<object>())
   if (Array.isArray(value)) return value.map((entry) => sanitizeCliDetails(entry, seen));
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    output[key] = SECRET_KEY.test(key) ? "***" : sanitizeCliDetails(entry, seen);
+    output[key] = SECRET_KEY.test(key) && !isPublicUsageStatistic(key, entry) ? "***" : sanitizeCliDetails(entry, seen);
   }
   return output;
 }

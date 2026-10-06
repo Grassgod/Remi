@@ -1,80 +1,126 @@
 {
   "title": "Usage",
-  "subtitle": "Token spend and agent activity across this workspace.",
+  "subtitle": "Actual consumption, context diagnostics and versioned costs.",
   "filter": {
-    "project_label": "Project",
+    "project": "Project",
     "all_projects": "All projects",
-    "period_label": "Period"
-  },
-  "kpi": {
-    "cost_label": "Cost · {{days}}D",
-    "tokens_label": "Tokens · {{days}}D",
-    "tokens_hint": "Input {{input}} · Output {{output}} · Cache read {{cacheRead}} · Cache write {{cacheWrite}}",
-    "run_time_label": "Run time · {{days}}D",
-    "run_time_hint": "Across {{tasks}} tasks",
-    "tasks_label": "Tasks · {{days}}D",
-    "tasks_hint": "{{failed}} failed",
-    "unavailable_hint": "Failed to load — value unavailable, not zero",
-    "not_collected": "{{tasks}} tasks ran, but no token usage was recorded",
-    "no_tasks": "No tasks in this window",
-    "cost_unpriced": "No pricing for the models used — cost unavailable",
-    "cost_total_only": "Only total tokens were recorded — cost unavailable",
-    "total_only_notice": "{{tokens}} tokens recorded by older runtimes have totals only, without input/output splits, and are excluded from cost totals. Newer runs record the split, so this figure will not grow."
-  },
-  "dim": {
-    "label": "Dimension",
+    "runtime": "Runtime",
+    "all_runtimes": "All runtimes",
+    "period": "Period",
+    "all_history": "All history",
+    "dimension": "Dimension",
     "daily": "Daily",
     "weekly": "Weekly"
   },
-  "daily": {
-    "title_cost": "Daily cost",
-    "title_tokens": "Daily tokens",
-    "title_time": "Daily run time",
-    "title_tasks": "Daily tasks",
-    "metric_cost": "Cost",
-    "metric_tokens": "Tokens",
-    "metric_time": "Time",
-    "metric_tasks": "Tasks",
-    "no_data": "No usage in this window.",
-    "no_tasks": "No tasks in this window.",
-    "load_failed": "This series failed to load — values are unavailable, not zero.",
-    "not_collected": "Tasks ran in this window, but no token usage was recorded.",
-    "cost_unpriced": "Tokens recorded, but the models used have no pricing — cost can't be derived.",
-    "cost_total_only": "Only total tokens were recorded, without input/output splits — cost can't be derived.",
-    "total_only_legend": "Total only"
+  "summary": {
+    "time_hint": "Request records follow reported or observed timestamps. Legacy aggregates without request timestamps use task attribution dates. Terminal status and run time follow completion, failure or cancellation time; active and queued counts are current snapshots.",
+    "historical_date_hint": "Includes legacy aggregates assigned to task dates; their consumption cannot be split by request day.",
+    "identity_conflict_hint": "Some provider requests have conflicting task or run attribution. They are counted once; conflicting observations remain in audit evidence.",
+    "actual": "Recorded actual tokens",
+    "known_cost": "Known cost subtotal",
+    "coverage": "Token pricing coverage",
+    "unknown": "Tasks with unknown usage",
+    "context": "Peak context",
+    "context_hint": "Context occupancy is diagnostic and is excluded from actual token consumption.",
+    "tasks": "Distinct tasks",
+    "run_time": "Run time",
+    "partial": "Some usage or pricing is unknown. These figures are known subtotals.",
+    "complete": "Usage and pricing are complete.",
+    "reference_cost": "Published reference estimate",
+    "reference_hint": "Applicability is unverified; excluded from known subtotal and pricing coverage.",
+    "sdk_estimate": "SDK reported estimate"
   },
-  "weekly": {
-    "title_cost": "Weekly cost",
-    "title_tokens": "Weekly tokens",
-    "title_time": "Weekly run time",
-    "title_tasks": "Weekly tasks",
-    "partial_label": "{{range}} (partial · {{covered}} / 7 days)"
+  "statuses": {
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "active": "Active",
+    "queued": "Queued"
   },
-  "leaderboard": {
-    "title": "Leaderboard",
-    "caption": "{{count}} agents",
-    "header_agent": "Agent",
-    "header_tokens": "Tokens",
-    "header_cost": "Cost",
-    "header_time": "Time",
-    "header_tasks": "Tasks",
-    "no_data": "No agent activity in this window.",
-    "load_failed": "Leaderboard data failed to load — values are unavailable, not zero.",
-    "total_only_tooltip": "{{tokens}} has totals only, without input/output splits, and is excluded from cost."
+  "views": {
+    "daily": "By date",
+    "agents": "By agent",
+    "models": "By model",
+    "runtimes": "By runtime",
+    "counts_hint": "Tasks are distinct within each group. Tasks spanning dates or models can appear in multiple groups; use the summary for total tasks."
   },
-  "empty": {
-    "title": "No usage yet",
-    "body": "Once agents start running tasks here, their token spend and run time will appear in this view.",
-    "zero_hint": "No tasks ran in the selected window, so these zeros are real measurements."
+  "table": {
+    "group": "Group",
+    "total": "Actual total",
+    "input": "Input",
+    "output": "Output",
+    "cache_read": "Cache read",
+    "cache_write": "Cache write",
+    "unsplit": "Actual unsplit",
+    "context": "Peak context",
+    "cost": "Known cost subtotal",
+    "coverage": "Token coverage",
+    "unknown": "Unknown tasks",
+    "tasks": "Tasks",
+    "statuses": "Status counts"
   },
-  "duration": {
-    "less_than_minute": "<1m",
-    "zero": "0m"
+  "trend": {
+    "title": "Consumption trend",
+    "tokens": "Actual tokens",
+    "cost": "Known cost",
+    "unknown": "No measured usage is available for this series.",
+    "subtotal_hint": "Costs are shown separately by currency and exclude unpriced consumption."
+  },
+  "price": {
+    "requested": "Requested model",
+    "reported_model": "Provider reported model",
+    "session_model": "Session acknowledged request",
+    "configured_model": "Configured request model",
+    "requested_model": "Requested model (actual model not reported)",
+    "requested_alias": "Use this requested model as an explicit configured pricing alias",
+    "open": "Manage prices",
+    "title": "Versioned model prices",
+    "description": "Prices apply to the exact provider, model and connection. Add a version with an effective start; previous versions remain in history.",
+    "model": "Model",
+    "provider": "Call engine",
+    "connection": "Connection",
+    "unknown_model": "Unknown actual model",
+    "unallocated_cost": "Unallocated charge across models",
+    "allocation_unknown": "Token coverage is known; the charge cannot be allocated to each model",
+    "currency": "Currency",
+    "effective_from": "Effective from (ISO timestamp)",
+    "version": "Version",
+    "source": "Price source",
+    "configured": "Configured",
+    "published": "Published reference",
+    "provider_reported": "Provider reported amount",
+    "mixed": "Mixed sources",
+    "unknown": "Unknown",
+    "rates": "Rates per million tokens. Empty means unknown; 0 means a confirmed free rate.",
+    "save": "Save version",
+    "cancel": "Cancel",
+    "invalid": "Enter a model, a valid timestamp and nonnegative rates. Leave unknown rates empty.",
+    "save_error": "Could not save this price version. Your draft has been preserved.",
+    "history": "Price history",
+    "source_url": "Published source URL",
+    "progress_summary": "Progress summary"
   },
   "error": {
     "title": "Usage data unavailable",
-    "body": "Usage data failed to load. This does not mean usage is zero — retry to reload.",
-    "partial": "Some usage series failed to load — affected values show “—” instead of 0.",
+    "body": "Usage could not be loaded. An unavailable measurement is not zero.",
     "retry": "Retry"
+  },
+  "empty": {
+    "title": "No usage yet",
+    "body": "No tasks or recorded consumption exist in this window."
+  },
+  "common": {
+    "scope_live": "Live execution record",
+    "scope_task_record": "Recorded task owner (historical)",
+    "scope_trace_owner": "Saved trace owner",
+    "scope_archive": "Archive manifest owner",
+    "scope_unknown": "Execution owner unknown",
+    "scope_mixed": "Mixed ownership evidence",
+    "export_csv": "Export CSV",
+    "unknown": "Unknown",
+    "no_runtime": "Unknown / unassigned Runtime",
+    "updated": "Updated",
+    "price_revision": "Price revision",
+    "refresh": "Refresh"
   }
 }

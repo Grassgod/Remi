@@ -68,13 +68,21 @@ describe("Antigravity native provider", () => {
     const { provider } = fixture("tool");
     const types = [];
     for await (const event of provider.sendStream("Run a tool")) types.push(event.sessionUpdate);
-    expect(types).toEqual(["tool_call", "tool_call_update", "agent_message_chunk", "agent_message_chunk"]);
+    expect(types).toEqual(["tool_call", "tool_call_update", "agent_message_chunk", "agent_message_chunk", "usage_update"]);
   }, 15_000);
   it.each(["wrong-session", "legacy-wrong-session"])("rejects a different resumed conversation in %s", async mode => {
     await expect(fixture(mode).provider.send("Next", { sessionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" })).rejects.toThrow("Stale provider session");
   }, 15_000);
   it.each(["missing-result", "result-error", "invalid-json", "legacy-error", "legacy-timeout", "legacy-empty"])("fails closed for %s instead of recording empty success", async mode => {
     await expect(fixture(mode).provider.send("Hello")).rejects.toThrow();
+  }, 15_000);
+  it("persists terminal result usage before a native provider failure", async () => {
+    const { provider } = fixture("result-error");
+    await expect(provider.send("Hello")).rejects.toThrow("model request failed");
+    expect(provider.getLastResponse()?.metadata?.usageUnits).toEqual([
+      expect.objectContaining({ provider: "antigravity", model: null, actualUnsplitTokens: 120,
+        accuracy: "unknown", evidenceRef: "antigravity_result_ambiguous_cache_semantics" }),
+    ]);
   }, 15_000);
   it("preserves legacy text and leaves unreported usage unknown", async () => {
     const response = await fixture("legacy-text").provider.send("Hello");
