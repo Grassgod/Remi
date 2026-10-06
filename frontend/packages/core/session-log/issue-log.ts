@@ -8,6 +8,7 @@ import { SessionLogEntrySchema } from "../api/schemas/session-log";
 import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub";
 import { createSafeId } from "../utils";
 import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts/issue-activity";
+import { subscribeFromWindow } from "../replica/engine";
 
 /** A bounded presentation window over C7; persisted coverage may be sparse. */
 export class IssueLogReplica extends ReplicaView {
@@ -21,6 +22,9 @@ export class IssueLogReplica extends ReplicaView {
   private targetCommentId: string | null = null;
   private knownWindows: Array<{ range: HubSeqRange; entries: SessionLogRow[] }> = [];
   private frameQueue: Promise<void> = Promise.resolve();
+  private windowRead: Promise<void> | null = null;
+  private generation = 0;
+  private logVersion: number | null = null;
 
   constructor(readonly sessionId: string, initial?: IssueLogBootstrap, private readonly preferCached = false,
     private readonly withActivity = false) {
@@ -33,6 +37,11 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   accept(window: SessionLogWindow, head: SessionLogRow | null = this.headRow): void {
+    if (this.logVersion !== null && this.logVersion !== window.log_version) {
+      this.generation += 1;
+      this.knownWindows = [];
+    }
+    this.logVersion = window.log_version;
     this.window = window;
     this.headRow = head;
     this.from = window.entries.find(e => e.seq > 0)?.seq ?? 0;
@@ -50,8 +59,8 @@ export class IssueLogReplica extends ReplicaView {
     return this.headRow ? [this.headRow, ...rows.slice(-299)] : rows.slice(-300);
   }
 
-  async loadTail(): Promise<void> {
-    await this.readTail();
+  loadTail(): Promise<void> {
+    return this.windowRead = this.readTail();
   }
 
   /** Activities are presentation data; they never enter C7 or its seq coverage. */
@@ -84,7 +93,11 @@ export class IssueLogReplica extends ReplicaView {
       || this.getSnapshot(this.sessionId).entries.some(entry => entry.id === commentId));
   }
 
-  async loadAround(commentId: string, preserveWindow = false): Promise<void> {
+  loadAround(commentId: string, preserveWindow = false): Promise<void> {
+    return this.windowRead = this.readAround(commentId, preserveWindow);
+  }
+
+  private async readAround(commentId: string, preserveWindow = false): Promise<void> {
     const previous = preserveWindow && this.withActivity ? this.window : null;
     this.targetCommentId = commentId;
     this.missingCommentId = null;
@@ -195,7 +208,13 @@ export class IssueLogReplica extends ReplicaView {
 
   async connect(options: Pick<BrowserReplicaOptions, "userId" | "workspaceId" | "subscribe" | "unsubscribe" | "env">): Promise<() => void> {
     this.disconnected = false;
-    const browser = await openBrowserReplica({ ...options, tabId: createSafeId(), readRange: (id, range) => this.readRange(id, range) });
+    // CSR starts its read in the preceding effect; SSR already accepted the seed.
+    // Subscribe only after that read, while preserving the replica's resume cursor.
+    await this.windowRead;
+    if (this.disconnected) return () => {};
+    const browser = await openBrowserReplica({ ...options,
+      subscribe: (id, fromSeq) => options.subscribe(id, subscribeFromWindow(fromSeq, id === this.sessionId ? this.window?.head_seq : null)),
+      tabId: createSafeId(), readRange: (id, range) => this.readRange(id, range) });
     if (this.disconnected) { browser.dispose(); return () => {}; }
     this.browser = browser;
     const update = () => {
@@ -239,23 +258,66 @@ export class IssueLogReplica extends ReplicaView {
   frames(...args: Parameters<BrowserReplica["frames"]>): void { this.browser?.frames(...args); }
   /** Read-side metadata is authoritative for attachments and reactions. */
   hydratedFrames(sessionId: string, frames: readonly HubFrame[]): Promise<void> {
+    const generation = this.generation;
     const job = this.frameQueue.then(async () => {
-      const hydrated = await Promise.all(frames.map(async frame => {
+      if (this.disconnected || generation !== this.generation) return;
+      if (sessionId !== this.sessionId) throw new Error("Log frame belongs to another session");
+      const missing: HubFrame[] = [];
+      const entries = new Map<number, SessionLogRow>();
+      for (const frame of frames) {
+        if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") continue;
+        const payload = frame.payload as Record<string, unknown>;
+        if (payload.kind !== "message" && payload.kind !== "turn") continue;
+        if (payload.session_id !== undefined && payload.session_id !== sessionId) throw new Error("Log payload belongs to another session");
+        if (payload.seq !== undefined && payload.seq !== frame.seq) throw new Error("Log payload has an inconsistent sequence");
+        const candidates = [...(this.window?.log_version === this.logVersion ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)];
+        const candidate = candidates.map(rows => rows.find(row => row.seq === frame.seq)).find(Boolean);
+        if (candidate && candidate.id === payload.id && candidate.session_id === sessionId && candidate.kind === payload.kind
+          && candidate.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, candidate);
+        else missing.push(frame);
+      }
+      // One range for all misses within one API window, instead of N single-row reads.
+      const seqs = [...new Set(missing.map(frame => frame.seq))].sort((a, b) => a - b);
+      for (let index = 0; index < seqs.length;) {
+        const first = seqs[index]!;
+        let end = index + 1;
+        while (end < seqs.length && seqs[end]! - first < 100) end += 1;
+        const last = seqs[end - 1]!;
+        const window = await api.getSessionLog(sessionId, { anchor: first - 1, after: last - first + 1 });
+        if (this.disconnected || generation !== this.generation) return;
+        if (this.logVersion !== null && window.log_version !== this.logVersion) throw new Error("Log version changed during hydration");
+        this.logVersion ??= window.log_version;
+        for (const frame of missing.filter(frame => frame.seq >= first && frame.seq <= last)) {
+          const payload = frame.payload as Record<string, unknown>;
+          const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq && row.id === payload.id);
+          if (!row || row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
+          entries.set(frame.seq, row);
+        }
+        this.knownWindows.push({ range: { from: first, to: last }, entries: window.entries });
+        this.knownWindows = this.knownWindows.slice(-32);
+        index = end;
+      }
+      const hydrated = frames.map(frame => {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") return frame;
         const payload = frame.payload as Record<string, unknown>;
         if (payload.kind !== "message" && payload.kind !== "turn") return frame;
-        const window = await api.getSessionLog(sessionId, { anchor: frame.seq, before: 1, after: 0 });
-        const entry = window.entries.find(row => row.seq === frame.seq && row.id === payload.id);
-        if (!entry) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
-        return { ...frame, payload: entry };
-      }));
-      if (!this.disconnected) this.frames(sessionId, hydrated);
+        return { ...frame, payload: entries.get(frame.seq)! };
+      });
+      if (!this.disconnected && generation === this.generation) this.frames(sessionId, hydrated);
     });
     this.frameQueue = job.catch(() => {});
     return job;
   }
-  ack(...args: Parameters<BrowserReplica["ack"]>): void { this.browser?.ack(...args); }
-  disconnect(): void { this.disconnected = true; this.browser?.dispose(); this.browser = null; }
+  ack(...args: Parameters<BrowserReplica["ack"]>): void {
+    const [sessionId, ack] = args;
+    if (sessionId === this.sessionId && this.logVersion !== null && typeof ack.log_version === "number" && ack.log_version !== this.logVersion) {
+      this.generation += 1;
+      this.knownWindows = [];
+      this.logVersion = ack.log_version;
+    }
+    this.browser?.ack(...args);
+  }
+  disconnect(): void { this.generation += 1; this.disconnected = true; this.browser?.dispose(); this.browser = null; }
 
   override readRowHeight(sessionId: string, seq: number, key: string): number | null {
     return this.browser?.port.readRowHeight(sessionId, seq, key) ?? super.readRowHeight(sessionId, seq, key);
@@ -267,12 +329,13 @@ export class IssueLogReplica extends ReplicaView {
 
   private async persist(window: SessionLogWindow): Promise<void> {
     const browser = this.browser;
-    if (!browser || !window.entries.length) return;
+    const generation = this.generation;
+    if (!browser || !window.entries.length || window.log_version !== this.logVersion) return;
     if (this.headRow) {
       this.knownWindows.push({ range: { from: 0, to: 0 }, entries: [this.headRow] });
       await browser.loadWindow(this.sessionId, { from: 0, to: 0 });
     }
-    if (this.disconnected) return;
+    if (this.disconnected || generation !== this.generation) return;
     await browser.loadWindow(this.sessionId, { from: window.entries[0]!.seq, to: window.entries.at(-1)!.seq });
   }
 

@@ -19,6 +19,11 @@ import { coversSeq } from "./ranges";
 import { META_SCHEMA_VERSION, META_USER_ID, META_WORKSPACE_ID, REPLICA_SCHEMA_VERSION } from "./schema";
 import type { ReplicaStorage } from "./storage";
 
+/** Both cursors name the next inclusive seq; a read window's head is exclusive. */
+export function subscribeFromWindow(localFromSeq: number, windowHead?: number | null): number {
+  return Math.max(localFromSeq, (windowHead ?? -1) + 1);
+}
+
 /** What one session's stream writes into the engine, and where the page reads it. */
 export type ReplicaSessionView = SessionReplicaSnapshot & {
   /** Ascending rows the replica holds. Sparse windows are legal. */
@@ -73,7 +78,7 @@ export class ReplicaEngine {
    * behind by a different user must not serve one row, so a mismatch clears
    * everything before anything is read.
    */
-  openSession(input: { sessionId: string; userId: string; workspaceId: string }): {
+  openSession(input: { sessionId: string; userId: string; workspaceId: string; windowHead?: number }): {
     fromSeq: number;
     state: ReplicaState;
     cleared: ReplicaClearEvent | null;
@@ -98,7 +103,7 @@ export class ReplicaEngine {
 
     this.knownSessions.add(input.sessionId);
     const state = this.storage.readState(input.sessionId);
-    return { fromSeq: subscribeFromSeq(state), state, cleared };
+    return { fromSeq: subscribeFromWindow(subscribeFromSeq(state), input.windowHead), state, cleared };
   }
 
   /** Drop one session's rows (a `log_version` change, step 2). */

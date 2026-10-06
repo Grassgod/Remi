@@ -102,6 +102,7 @@ interface Options {
   apiPort: number | null;
   webPort: number | null;
   keep: boolean;
+  ssrCookie: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -115,6 +116,7 @@ function parseArgs(argv: string[]): Options {
     apiPort: null,
     webPort: null,
     keep: false,
+    ssrCookie: true,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -133,6 +135,8 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--api-port") options.apiPort = Number(next());
     else if (arg === "--web-port") options.webPort = Number(next());
     else if (arg === "--keep") options.keep = true;
+    else if (arg === "--ssr-cookie") options.ssrCookie = true;
+    else if (arg === "--no-ssr-cookie") options.ssrCookie = false;
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write([
         "usage: bun run tests/integration/zero-jump-check.ts [options]",
@@ -145,6 +149,7 @@ function parseArgs(argv: string[]): Options {
         "  --api-port <n>     pin the API port (default: a free one)",
         "  --web-port <n>     pin the web port (default: a free one)",
         "  --keep             leave the servers up (for manual follow-up)",
+        "  --no-ssr-cookie    verify CSR without document/RSC auth cookies (default SSR cookie on)",
       ].join("\n") + "\n");
       process.exit(0);
     } else {
@@ -213,6 +218,10 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
   ];
   const scenarios: Scenario[] = [
     ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
+    ...(options.only.includes("detail-locate") ? detail("detail-locate", fixture.longIssueId, {
+      path: `/issues/${encodeURIComponent(fixture.longIssueId)}?comment=${encodeURIComponent(fixture.deepLinkCommentId)}&session=${encodeURIComponent(fixture.deepLinkCommentSessionId)}`,
+      targetCommentId: fixture.deepLinkCommentId,
+    }).filter(scenario => scenario.mode === "cold") : []),
     ...detail("detail-short", fixture.shortIssueId),
     ...detail("detail-long", fixture.longIssueId),
     ...detail("detail-running", fixture.runningIssueId),
@@ -258,6 +267,9 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
 
 /** Per-round outcome: the structural facts, before the allowlist is consulted. */
 interface RoundResult {
+  logSingleRowReads: number;
+  logRequests: Array<{ query: string; startMs: number; responseEndMs: number }>;
+  ssrSeed: boolean;
   key: string;
   mode: string;
   round: number;
@@ -355,12 +367,13 @@ async function blockForeignRequests(page: Page, allowedOrigins: string[]): Promi
   await page.route("**/*", async (route) => {
     const url = route.request().url();
     if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const allowed = allowedOrigins.some((origin) => url.startsWith(origin));
     if (allowed) {
-      await route.continue();
+      // Let the API collectors and the SSR/CSR document handler run too.
+      await route.fallback();
       return;
     }
     // The plan's guard: an external font/script/image would make the measured
@@ -417,6 +430,7 @@ async function runRound(input: {
   slug: string;
   scenario: Scenario;
   round: number;
+  ssrCookie: boolean;
 }): Promise<RoundResult> {
   const { browser, token, webOrigin, apiOrigin, slug, scenario, round } = input;
   // The scenario's own profile: a deep link's terminal element is the target
@@ -431,6 +445,9 @@ async function runRound(input: {
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
+    logSingleRowReads: 0,
+    logRequests: [],
+    ssrSeed: false,
     key: scenario.key,
     mode: scenario.mode,
     round,
@@ -456,7 +473,21 @@ async function runRound(input: {
     error: null,
   };
 
-  const context: BrowserContext = await mktContext(browser, token, [], webOrigin);
+  const context: BrowserContext = await mktContext(browser, token, [], webOrigin, input.ssrCookie);
+  if (!input.ssrCookie) await context.route("**/*", async route => {
+    const request = route.request();
+    if (request.isNavigationRequest() || new URL(request.url()).searchParams.has("_rsc")) {
+      const headers = { ...request.headers() };
+      headers.cookie = (headers.cookie ?? "").split(";").filter(part => !part.trim().startsWith("multimira_auth=")).join(";");
+      // Use a reader without a browser cookie jar: Cookie cannot be overridden
+      // by Chromium's continue(), and context-owned fetches may restore it.
+      const response = await fetch(request.url(), { headers, redirect: "manual" });
+      const responseHeaders = new Headers(response.headers);
+      for (const name of ["content-length", "content-encoding", "transfer-encoding"]) responseHeaders.delete(name);
+      await route.fulfill({ status: response.status, headers: Object.fromEntries(responseHeaders), body: Buffer.from(await response.arrayBuffer()) });
+    } else await route.continue();
+  });
+  await context.addInitScript(() => performance.setResourceTimingBufferSize(10_000));
   await context.setDefaultTimeout(ROUND_TIMEOUT_MS);
   await installRecorderOnContext(context, { profiles: [profile] });
   if (scenario.sidebarWidth !== null) {
@@ -470,6 +501,13 @@ async function runRound(input: {
   }
 
   const page = await context.newPage();
+  const seedReads: Promise<void>[] = [];
+  page.on("response", response => {
+    if (new URL(response.url()).pathname === new URL(targetUrl).pathname
+      && (response.request().isNavigationRequest() || new URL(response.url()).searchParams.has("_rsc"))) {
+      seedReads.push(response.text().then(body => { if (/head_ises_[A-Za-z0-9_]+/.test(body)) result.ssrSeed = true; }).catch(() => {}));
+    }
+  });
   await page.emulateMedia({ reducedMotion: "reduce" });
   // The inbox row has to be on the browser's first page for the warm click to
   // find it and for the cold deep link to open the notification rather than fall
@@ -512,6 +550,20 @@ async function runRound(input: {
 
   const summary = await readRecorderSummary(page).catch(() => null);
   const buffer: PerfRecorderBuffer | null = await readRecorder(page).catch(() => null);
+  await Promise.all(seedReads);
+  result.ssrSeed ||= await page.locator('[data-perf-scroll="issue-detail"][data-ssr-initial]').count() > 0;
+  result.logRequests = await page.evaluate(() => (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+    .filter(entry => /\/sessions\/[^/]+\/log\?/.test(entry.name))
+    .map(entry => {
+      const url = new URL(entry.name), query = new URLSearchParams();
+      for (const key of ["anchor", "before", "after"]) { const value = url.searchParams.get(key); if (value !== null && /^\d+$/.test(value)) query.set(key, value); }
+      return { query: query.toString(), startMs: entry.startTime, responseEndMs: entry.responseEnd };
+    }));
+  result.logSingleRowReads = result.logRequests.filter(request => {
+    const query = new URLSearchParams(request.query);
+    return query.get("before") === "1" && query.get("after") === "0";
+  }).length;
+  if (result.logSingleRowReads) result.error = `${result.error ? result.error + "; " : ""}single-row log rereads: ${result.logSingleRowReads}`;
   await page.route("**/api/**", (route) => route.abort()).catch(() => {});
   result.blockedWrites = collectors.blockedWrites.reduce((sum, write) => sum + write.attempts, 0);
   result.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
@@ -682,7 +734,7 @@ async function main(): Promise<void> {
   const web = Bun.spawn({
     cmd: ["bun", "x", "next", "start", "--port", String(webPort)],
     cwd: WEB_APP_DIR,
-    env: { ...process.env, PORT: String(webPort) },
+    env: { ...process.env, PORT: String(webPort), REMOTE_API_URL: `http://127.0.0.1:${apiPort}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -712,6 +764,7 @@ async function main(): Promise<void> {
         slug: fixture.workspaceSlug,
         scenario,
         round,
+        ssrCookie: options.ssrCookie,
       });
       rounds.push(result);
       const violations = violationsForRound(result);
@@ -742,6 +795,7 @@ async function main(): Promise<void> {
     finishedAt: new Date().toISOString(),
     commit: currentCommit(),
     fixture: fixture.counts,
+    ssrCookie: options.ssrCookie,
     rounds,
     rows: grouped.map((row) => ({
       ...row,
