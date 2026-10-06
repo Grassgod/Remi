@@ -44,10 +44,12 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       const sent = new Set<string>();
       const arrived = new Set<string>();
       const completed = new Map<string, number>();
-      const realComplete = h.store.completeTask.bind(h.store);
-      const complete = spyOn(h.store, "completeTask").mockImplementation((id, input) => {
-        completed.set(id, (completed.get(id) ?? 0) + 1);
-        return realComplete(id, input);
+      const realComplete = h.store.completeTaskFromDaemon.bind(h.store);
+      const complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+        const before = h.store.getTask(id)?.status;
+        const result = realComplete(id, input, authority);
+        if (before !== "completed" && result.status === "completed") completed.set(id, (completed.get(id) ?? 0) + 1);
+        return result;
       });
       const progress = spyOn(h.store, "reportProgress");
       const usageReport = spyOn(h.store, "reportTaskUsage");
@@ -215,10 +217,11 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     const agent = h.store.createAgent({ name: "Live steer", provider: "claude" });
     const t = h.store.createTask({ agentId: agent.id, prompt: "answer" });
     let terminalEffects = 0;
-    const complete = h.store.completeTask.bind(h.store);
-    const spy = spyOn(h.store, "completeTask").mockImplementation((id, input) => {
-      const result = complete(id, input);
-      if (id === t.id) terminalEffects++;
+    const complete = h.store.completeTaskFromDaemon.bind(h.store);
+    const spy = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+      const before = h.store.getTask(id)?.status;
+      const result = complete(id, input, authority);
+      if (id === t.id && before !== "completed" && result.status === "completed") terminalEffects++;
       return result;
     });
     try {

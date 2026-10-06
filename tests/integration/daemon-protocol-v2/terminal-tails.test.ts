@@ -81,10 +81,12 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
       if (id === taskId && options?.allowTerminal) progressEffects++;
       return realProgress(id, summary, step, total, options);
     });
-    const realComplete = h.store.completeTask.bind(h.store);
-    complete = spyOn(h.store, "completeTask").mockImplementation((id, input) => {
-      if (id === taskId) completeEffects++;
-      return realComplete(id, input);
+    const realComplete = h.store.completeTaskFromDaemon.bind(h.store);
+    complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+      const before = h!.store.getTask(id)?.status;
+      const result = realComplete(id, input, authority);
+      if (id === taskId && before !== "completed" && result.status === "completed") completeEffects++;
+      return result;
     });
     await h.startDaemon();
     for (let index = 0; index < 2; index++) {

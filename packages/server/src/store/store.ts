@@ -5677,12 +5677,26 @@ runMigrations(this.db);
 
   releaseTaskOfferLease(taskId: string): void { this.tasks.releaseTaskOfferLease(taskId); }
 
-  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
-    return this.tasks.requeueTaskOffer(taskId, runtimeId);
+  requeueTaskOffer(taskId: string, runtimeId: string, outcome: "unknown" | "rejected" = "unknown"): boolean {
+    return this.tasks.requeueTaskOffer(taskId, runtimeId, outcome);
   }
 
   startTask(taskId: string): MultiremiTask {
     return this.tasks.startTask(taskId);
+  }
+
+  startTaskFromDaemon(taskId: string, authority: Parameters<TasksRepo["startTaskFromDaemon"]>[1]): "started" | "replayed" {
+    return this.tasks.startTaskFromDaemon(taskId, authority);
+  }
+
+  completeTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["completeTask"]>[1],
+    authority: Parameters<TasksRepo["completeTaskFromDaemon"]>[2]): MultiremiTask {
+    return this.tasks.completeTaskFromDaemon(taskId, input, authority);
+  }
+
+  failTaskFromDaemon(taskId: string, input: Parameters<TasksRepo["failTask"]>[1],
+    authority: Parameters<TasksRepo["failTaskFromDaemon"]>[2]): MultiremiTask {
+    return this.tasks.failTaskFromDaemon(taskId, input, authority);
   }
 
   renewTaskDispatchLease(taskId: string): MultiremiTask {
