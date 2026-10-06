@@ -17,6 +17,32 @@ afterEach(async () => {
   for (const h of fixtures.splice(0)) await h.dispose();
 });
 
+function localProgressSummary() {
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    requests++;
+    return Response.json({ model: "shutdown-summary-model", usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+      choices: [{ message: { content: '{"summary":"provider drained","step":3,"total":3}' } }] });
+  } });
+  const settings = {
+    MULTIREMI_PROGRESS_SUMMARY_DISABLED: "0",
+    MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: `http://127.0.0.1:${server.port}`,
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "shutdown-summary-model",
+    MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "local-fixture-key",
+    MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "1000",
+    MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "45000",
+  };
+  const previous = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]]));
+  Object.assign(process.env, settings);
+  return { requests: () => requests, close() {
+    server.stop(true);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  } };
+}
+
 describe("daemon protocol v2 real connection", () => {
   it("handshakes all provider lanes on one socket and continuously heartbeats without HTTP heartbeats", async () => {
     const heartbeat = spyOn(MultiremiDaemonClient.prototype, "heartbeatRuntime");
@@ -99,6 +125,184 @@ describe("daemon protocol v2 real connection", () => {
     expect(error).toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
     expect(error).toMatchObject({ method: "GET", timeoutMs: 50,
       path: "/api/daemon/tasks/tsk_unreachable/human-requests/hrq_unreachable" });
+  });
+
+  it("stops within 1s while execution start is unacknowledged without calling the provider", async () => {
+    let waitingForStart = false;
+    let providerCalls = 0;
+    const h = await fixture({
+      beforeSend: frame => {
+        if (frame.t === "task.start") { waitingForStart = true; return false; }
+      },
+      providerFactory: () => ({
+        async *sendStream() { providerCalls++; }, getLastResponse: () => null,
+      }),
+    });
+    await h.startDaemon();
+    const runtimeId = h.store.listRuntimes()[0]!.id;
+    const agent = h.store.createAgent({ name: "unacknowledged start", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Never enter the provider" });
+    await waitFor(() => waitingForStart, "execution start to await ACK");
+    expect(h.store.getTask(task.id)?.status).toBe("dispatched");
+    expect(providerCalls).toBe(0);
+    let stopped = false;
+    const stopping = h.stopDaemon().then(() => { stopped = true; });
+    await waitFor(() => stopped, "shutdown to cancel unacknowledged start", 1_000);
+    await stopping;
+    expect(providerCalls).toBe(0);
+    expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
+  });
+
+  it("keeps a committed start durable when its ACK is lost and shutdown cancels the waiter", async () => {
+    let providerCalls = 0;
+    let lostAck = false;
+    let runId = "";
+    const replies: Array<ReturnType<typeof spyOn>> = [];
+    const h = await fixture({
+      beforeSend(frame, _socket, harness) {
+        if (frame.t !== "task.start") return;
+        runId = frame.p.usage_run_id;
+        const session = harness.sessions.at(-1)!;
+        const real = session.sendReply.bind(session);
+        replies.push(spyOn(session, "sendReply").mockImplementation((re, payload) => {
+          if (re === String(frame.seq) && (payload as { ok?: unknown }).ok === true) {
+            lostAck = true;
+            return false;
+          }
+          return real(re, payload);
+        }));
+      },
+      providerFactory: () => ({ async *sendStream() { providerCalls++; }, getLastResponse: () => null }),
+    });
+    try {
+      await h.startDaemon();
+      const runtimeId = h.store.listRuntimes()[0]!.id;
+      const agent = h.store.createAgent({ name: "lost committed start ACK", provider: "claude", runtimeId });
+      const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Await committed authority" });
+      await waitFor(() => lostAck, "server start commit before lost ACK");
+      expect(h.store.getTask(task.id)?.status).toBe("running");
+      expect(h.db.query("SELECT runtime_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(task.id, runId))
+        .toEqual({ runtime_id: runtimeId });
+      let stopped = false;
+      const stopping = h.stopDaemon().then(() => { stopped = true; });
+      await waitFor(() => stopped, "shutdown of a committed start without ACK", 1_000);
+      await stopping;
+      expect(providerCalls).toBe(0);
+      const persisted = openSqliteDatabase((h.daemon as unknown as { outboxPath: string }).outboxPath);
+      try {
+        const start = persisted.query("SELECT status,payload FROM outbox_events WHERE task_id=? AND kind='start'").get(task.id) as { status: string; payload: string };
+        expect(start.status).toBe("pending");
+        expect(JSON.parse(start.payload).usage_run_id).toBe(runId);
+      } finally { persisted.close(); }
+      expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
+    } finally { for (const reply of replies) reply.mockRestore(); }
+  });
+
+  it("does not enter the provider when shutdown occurs during preparation after the start ACK", async () => {
+    const summaryEndpoint = localProgressSummary();
+    let providerCalls = 0;
+    let preparing = false;
+    let releasePreparation!: () => void;
+    const released = new Promise<void>(resolve => { releasePreparation = resolve; });
+    const h = await fixture({ providerFactory: () => ({
+      async *sendStream() { providerCalls++; }, getLastResponse: () => null,
+    }) });
+    // Hold an actual awaited workspace preparation boundary, then run its
+    // original implementation: authorization and workspace work stay real.
+    const daemon = h.daemon as any;
+    const realPrepare = daemon.prepareTaskWorkspace.bind(daemon);
+    const prepare = spyOn(daemon, "prepareTaskWorkspace").mockImplementation(async (...args: any[]) => {
+      preparing = true;
+      await released;
+      return realPrepare(...args);
+    });
+    try {
+      await h.startDaemon();
+      const runtimeId = h.store.listRuntimes()[0]!.id;
+      const agent = h.store.createAgent({ name: "stop during authorized preparation", provider: "claude", runtimeId });
+      const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Stop before provider entry", maxAttempts: 1 });
+      await waitFor(() => preparing, "post-ACK workspace preparation");
+      expect(h.store.getTask(task.id)?.status).toBe("running");
+      expect(h.db.query("SELECT active_run_id FROM multiremi_usage_task_scopes WHERE task_id=?").get(task.id))
+        .toMatchObject({ active_run_id: expect.any(String) });
+      let stopped = false;
+      const stopping = h.stopDaemon().then(() => { stopped = true; });
+      releasePreparation();
+      await waitFor(() => stopped, "shutdown after held preparation resumes", 1_000);
+      await stopping;
+      expect(providerCalls).toBe(0);
+      expect(summaryEndpoint.requests()).toBe(0);
+      const persisted = openSqliteDatabase((h.daemon as unknown as { outboxPath: string }).outboxPath);
+      try {
+        const pending = persisted.query("SELECT kind,payload FROM outbox_events WHERE task_id=? ORDER BY seq").all(task.id) as Array<{ kind: string; payload: string }>;
+        expect(pending.some(row => row.kind === "fail")).toBe(true);
+        const usage = pending.filter(row => row.kind === "usage").map(row => JSON.parse(row.payload).usageSnapshot);
+        expect(usage.at(-1)).toMatchObject({ complete: true, units: [] });
+      } finally { persisted.close(); }
+      expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
+      prepare.mockRestore();
+      await h.recreateDaemon();
+      await waitFor(() => h.store.getTask(task.id)?.status === "failed"
+        && (h.db.query("SELECT complete FROM multiremi_usage_runs WHERE task_id=?").get(task.id) as { complete: number })?.complete === 1,
+      "accepted run and closed summary scope to replay");
+      expect(providerCalls).toBe(0);
+      expect(summaryEndpoint.requests()).toBe(0);
+      expect(h.db.query("SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toEqual({ n: 0 });
+    } finally { releasePreparation(); prepare.mockRestore(); summaryEndpoint.close(); }
+  });
+
+  it("drains an already-started provider on shutdown without aborting its execution", async () => {
+    const summaryEndpoint = localProgressSummary();
+    let providerCalls = 0;
+    let executionSignal: AbortSignal | undefined;
+    let releaseProvider!: () => void;
+    const released = new Promise<void>(resolve => { releaseProvider = resolve; });
+    const h = await fixture({
+      providerFactory: () => ({
+        async *sendStream(_message, options) {
+          providerCalls++;
+          executionSignal = options?.signal;
+          await released;
+          yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "finished" }] } as any;
+        },
+        getLastResponse: () => ({ text: "finished", sessionId: "drained-session", usage: [], toolCalls: [] } as any),
+      }),
+    });
+    await h.startDaemon();
+    const runtimeId = h.store.listRuntimes()[0]!.id;
+    const agent = h.store.createAgent({ name: "graceful provider drain", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "Finish after shutdown begins", maxAttempts: 1 });
+    try {
+      await waitFor(() => providerCalls === 1, "authorized provider execution");
+      expect(executionSignal).toBeDefined();
+      let stopped = false;
+      const stopping = h.stopDaemon().then(() => { stopped = true; });
+      await Bun.sleep(0);
+      expect(stopped).toBe(false);
+      expect(executionSignal!.aborted).toBe(false);
+      releaseProvider();
+      await waitFor(() => stopped, "provider completion and graceful shutdown", 1_000);
+      await stopping;
+      expect(providerCalls).toBe(1);
+      expect(executionSignal!.aborted).toBe(false);
+      expect(summaryEndpoint.requests()).toBe(1);
+      const persisted = openSqliteDatabase((h.daemon as unknown as { outboxPath: string }).outboxPath);
+      try {
+        const pending = persisted.query("SELECT payload FROM outbox_events WHERE task_id=? AND kind='usage' ORDER BY seq").all(task.id) as Array<{ payload: string }>;
+        const usage = pending.map(row => JSON.parse(row.payload).usageSnapshot);
+        expect(usage.some(snapshot => snapshot.complete === false)).toBe(true);
+        expect(usage.at(-1).complete).toBe(true);
+        expect(usage.flatMap(snapshot => snapshot.units).find(unit => unit.purpose === "progress_summary" && unit.model === "shutdown-summary-model"))
+          .toMatchObject({ model: "shutdown-summary-model", inputTokens: 6, outputTokens: 4 });
+      } finally { persisted.close(); }
+      expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
+      await h.recreateDaemon();
+      await waitFor(() => (h.db.query("SELECT complete FROM multiremi_usage_runs WHERE task_id=?").get(task.id) as { complete: number })?.complete === 1,
+        "late helper usage and its completion to replay");
+      expect(h.store.getUsageReport({ workspaceId: "local", days: null }).by_model
+        .find(row => row.purpose === "progress_summary" && row.model === "shutdown-summary-model")?.actual_total_tokens).toBe(10);
+      expect(summaryEndpoint.requests()).toBe(1);
+    } finally { releaseProvider(); summaryEndpoint.close(); }
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
