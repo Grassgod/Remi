@@ -67,7 +67,7 @@ describe("MUL-427: log-backed wakeups and projections", () => {
         expect(store.getMessage(a.message.id)?.to_agent_id).toBe(agent.id);
         expect(store.getMessage(b.message.id)?.to_agent_id).toBe(agent.id);
         expect(store.getTurn(a.turn_id!)?.wake_seq).toBe(b.message.seq);
-        expect(db.query('SELECT COUNT(*) AS n FROM multiremi_chat_messages').get()?.n).toBe(0);
+        expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_chat_messages').get()?.n)).toBe(0);
       });
     },60_000);
   }

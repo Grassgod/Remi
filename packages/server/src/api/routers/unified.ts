@@ -298,7 +298,13 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const conversation = loadConversation(c, store, turn.session_id);
       if (conversation instanceof Response) return conversation;
     }
-    if (task && !canAccessConversationTask(c, store, task)) return c.json({ error: task.chatSessionId ? "forbidden" : "turn not found" }, task.chatSessionId ? 403 : 404);
+    if (task?.chatSessionId && !canAccessConversationTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
+    // Ordinary Issue turn metadata stays readable. A private decision's turn
+    // follows the decision's visibility, including its pending question state.
+    if (turn.waiting_on_message_id) {
+      const decision = store.getMessage(turn.waiting_on_message_id);
+      if (!decision || !conversationEntryVisibility(c, store)(decision)) return c.json({ error: "turn not found" }, 404);
+    }
     return turn;
   };
   app.get("/api/turns", c => {

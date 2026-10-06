@@ -200,6 +200,8 @@ pendingTurnBackendTests('transactional inbox writers', fixture => {
       });
       expect(delivery.entry.body_md).toBe(body);
       expect(f.store.getChatMessage(delivery.entry.id)!.body).toBe(body);
+      expect(events).toEqual([]);
+      f.ctx.emitCommitEvents(f.queue);
       expect(events).toEqual(['inbox:new']);
     } finally { unsubscribe(); }
   });

@@ -29,8 +29,8 @@ describe('Canonical shared conversation bundle',()=>{
         expect(events.some(e=>e.body==='Shared final reply')).toBe(true);
         expect(events.filter(e=>e.kind==='turn')).toHaveLength(1);
         expect(events.some(e=>e.kind==='message_deleted')).toBe(true);
-        expect(db.query('SELECT COUNT(*) AS n FROM multiremi_session_events').get()?.n).toBe(0);
-        expect(db.query('SELECT COUNT(*) AS n FROM multiremi_issue_comments').get()?.n).toBe(0);
+        expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_session_events').get()?.n)).toBe(0);
+        expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_issue_comments').get()?.n)).toBe(0);
       });
     },60_000);
   }

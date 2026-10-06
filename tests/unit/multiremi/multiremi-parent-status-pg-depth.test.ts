@@ -1230,7 +1230,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     store.completeTask(running.id,{output:"Interrupted round finished"});
     expect(store.listTasksForIssue(parent.id).filter(task=>task.status==="queued")).toHaveLength(1);
     for (const comment of comments) expect(store.getMessage(comment.id)).toMatchObject({
-      message_kind: "report", to_agent_id: agent, metadata: { delivery_turn_id: running.turn_id },
+      message_kind: "status", to_agent_id: agent, metadata: { delivery_turn_id: running.turn_id },
     });
   }, 90_000);
 });

@@ -32,7 +32,7 @@ describe('Canonical mention and delegation inputs',()=>{
           expect(store.listConversationLogEntries(session.id)).toEqual(before);
           expect(store.listTasksForIssue(issue.id).map(task=>task.id)).toEqual([parent.id]);
           expect(queued).toEqual([]);
-          expect(db.query('SELECT COUNT(*) AS n FROM multiremi_session_events').get()?.n).toBe(0);
+          expect(Number(db.query('SELECT COUNT(*) AS n FROM multiremi_session_events').get()?.n)).toBe(0);
           if(db instanceof PostgresSyncDatabase)expect(db.maxTransactionDepth).toBe(1);
         }finally{unsubscribe();}
       });
