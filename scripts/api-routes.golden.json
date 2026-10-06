@@ -19155,7 +19155,7 @@
             "protocol": {
               "version": 1,
               "state": "rejected",
-              "min_version": "999.0.0-unreleased-mul507",
+              "min_version": "0.2.87",
               "last_error": null
             },
             "executionGroupIds": [
@@ -19216,7 +19216,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "999.0.0-unreleased-mul507",
+            "min_version": "0.2.87",
             "last_error": null
           },
           "executionGroupIds": [
@@ -20125,7 +20125,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "999.0.0-unreleased-mul507",
+            "min_version": "0.2.87",
             "last_error": null
           },
           "owner_id": "local",
@@ -20187,7 +20187,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "999.0.0-unreleased-mul507",
+            "min_version": "0.2.87",
             "last_error": null
           },
           "executionGroupIds": [
@@ -24593,7 +24593,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "999.0.0-unreleased-mul507",
+            "min_version": "0.2.87",
             "last_error": null
           },
           "executionGroupIds": [
@@ -24653,7 +24653,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "999.0.0-unreleased-mul507",
+            "min_version": "0.2.87",
             "last_error": null
           },
           "executionGroupIds": [
@@ -24689,7 +24689,7 @@
         "protocol": {
           "version": 1,
           "state": "rejected",
-          "min_version": "999.0.0-unreleased-mul507",
+          "min_version": "0.2.87",
           "last_error": null
         },
         "owner_id": "local",
