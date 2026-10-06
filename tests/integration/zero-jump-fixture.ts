@@ -145,8 +145,11 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       body: `F398 comment ${index + 1}.`,
     });
   }
-  const f398Agent = store.createAgent({ id: "agt_zerojump_f398", name: "F398 unbound agent", provider: "codex" });
   for (let index = 0; index < FIXTURE.f398QueuedTasks; index += 1) {
+    // A single agent/session lane coalesces requests into one pending turn.
+    const f398Agent = store.createAgent({
+      id: `agt_zerojump_f398_${index}`, name: `F398 unbound agent ${index + 1}`, provider: "codex",
+    });
     store.createTask({ id: `tsk_zerojump_f398_${index}`, agentId: f398Agent.id, issueId: f398Issue.id,
       prompt: `F398 dispatch ${index + 1}\n\n${f398Description}` });
   }
