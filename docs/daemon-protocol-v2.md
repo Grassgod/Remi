@@ -201,6 +201,7 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 `task.offer` 不再携带 `id`/`prompt`，而是 `turn_id`、`attempt_id`、`input_from_seq`、
 `input_to_seq` 和区间 `(input_from_seq, input_to_seq]` 的 `input_messages`。
+统一 offer 的消息正文由 Current Request 渲染一次；同 ID 不再重复渲染为 Chat Message 或旧 Session projection 的 Triggering Message。
 trace、usage、附件、Session Archive 与 outbox 分区仍以 attempt id（原 `tsk_` id）关联。
 `turn.message` 携带同一对 ID、投影消息正文和该消息关联的 `attachments`；附件由当前 attempt
 凭证下载到其工作目录，再注入 provider。`turn.wrap_up` 携带同一对 ID 与 `requested_at`，
@@ -380,6 +381,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 decision 的答复通过 `turn.message` 投递，携带 `reply_to_id`。daemon 按 decision 消息 ID
 匹配等待中的 question 或 permission 回调，再调用一次 `turn.decision.get` 读取原始完整 reply，
 不解析提示词投影中的 unread_range 前缀或折叠正文。选项 value 和 answers 对象按原问题字段转换。
+ACP 表单的 `fieldKey` 与问题文本都可用作 answers 键；卡片的 JSON option value 按问题字段和选项 label 校验，重复选项、未知字段及冲突答案拒绝，不产生答复。
 连续输入确认时推进游标；同一答复不重复注入。若投影范围还有未读取的普通消息或折叠正文，
 范围读取提示继续进入输入队列，读完并消费前不能越过确认屏障。断线重连由 S2 的消息快照重推。
 daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答复一起按 seq 排序确认，
@@ -467,8 +469,10 @@ reject、30 s 未应答、或未确认 offer 的连接断开 → 服务端把任
 接收结果不明的网络回队清除本次 `accepted_at`，但保留实际发送成功时记录的 `offered_at`；明确拒收则清除
 offer/accept 证据，恢复普通可编辑的排队任务。迟到的可靠执行回报因此能够
 证明自己属于已经派发的任务；初次排队只有 Runtime 绑定不等于已派发。新的 offer 仍覆盖这两个时间字段。
-已有发送证据的网络回队任务保留原输入，不能通过排队编辑覆盖它。Issue 的新信封留在收件箱，旧任务终态后
-通过 re-ring 创建新 task ID；Chat 的新系统信封走已有 steer 与完成屏障。尚未发送的普通排队任务仍可编辑和合并。
+已有发送证据的网络回队 attempt 保留原输入，不能通过排队编辑覆盖它。当前 runtime/daemon 仍拥有该 attempt 时，
+允许 `turn.input` 确认已送达的消息，即使 start 写入丢失；没有发送证据的 pending attempt 仍拒绝。
+Issue 和 Chat 的新 now 消息续接同一轮，恢复 start 后通过 `turn.message` 下发并受完成屏障保护；
+尚未下发的未读消息在终态后补铃。尚未发送的普通 pending 轮仍可编辑消息和合并。
 工作位置、引擎/所有者、Runtime 归属改变或行政重新入池时清除旧 offer/accept 证据；已冻结
 任务按现有规则取消的路径仍保持取消，不通过迟到回报恢复。客户端对重复 task ID 的 offer 继续只确认、不重跑。
 
