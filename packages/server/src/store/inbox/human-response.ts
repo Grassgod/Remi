@@ -15,7 +15,7 @@ export function normalizeHumanResponse(request: MultiremiTaskHumanRequest, respo
   }
   const questions = request.payload.questions;
   if (!Array.isArray(questions) || !questions.length) invalid();
-  // ACP elicitation carries {field, question:{question, options}}, while
+  // ACP elicitation carries {fieldKey, question:{question, options}}, while
   // AskUserQuestion's direct payload carries the question object itself.
   const questionRows = (questions as unknown[]).map(row => {
     if (!row || typeof row !== 'object') return invalid();
@@ -23,20 +23,43 @@ export function normalizeHumanResponse(request: MultiremiTaskHumanRequest, respo
     const value = typeof record.question === 'object' && record.question !== null
       ? record.question as Record<string, unknown> : record;
     if (typeof value.question !== 'string' || !value.question.trim()) return invalid();
-    return value as { question: string; options?: Array<{ label?: string }> };
+    return { ...value, fieldKey: typeof record.fieldKey === 'string' ? record.fieldKey : undefined } as
+      { question: string; fieldKey?: string; options?: Array<{ label?: string }> };
   });
   let answers = response.answers;
-  if (answers === undefined && questionRows.length === 1 && Array.isArray(selected) && selected.length === 1) {
-    const question = questionRows[0]!;
-    if (!question.options?.some(o => o.label === selected[0])) invalid();
-    answers = { [question.question]: selected[0] };
+  if (answers === undefined && Array.isArray(selected) && selected.length) {
+    const values: Record<string, string> = {};
+    for (const option of selected) {
+      let question = questionRows.length === 1 ? questionRows[0] : undefined;
+      let answer = option;
+      try {
+        const value: unknown = JSON.parse(option);
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          const choice = value as Record<string, unknown>;
+          question = questionRows.find(q => q.fieldKey === choice.question || q.question === choice.question);
+          if (typeof choice.answer !== 'string') return invalid();
+          answer = choice.answer;
+        }
+      } catch (error) { if (error instanceof IssueDecisionError) throw error; }
+      if (!question || !question.options?.some(o => o.label === answer) || question.question in values) return invalid();
+      values[question.question] = answer;
+    }
+    answers = values;
   }
   if (answers === undefined && questionRows.length === 1 && selected === undefined && typeof response.answer === 'string' && response.answer.trim()) {
     answers = { [questionRows[0]!.question]: response.answer };
   }
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) invalid();
   const values = answers as Record<string, unknown>;
-  const keys = questionRows.map(q => q.question);
-  if (Object.keys(values).some(k => !keys.includes(k)) || keys.some(k => typeof values[k] !== 'string' || !(values[k] as string).trim())) invalid();
-  return { ...response, answers: values };
+  const keys = questionRows.flatMap(q => [q.question, ...(q.fieldKey ? [q.fieldKey] : [])]);
+  if (Object.keys(values).some(k => !keys.includes(k))) invalid();
+  const normalized: Record<string, string> = {};
+  for (const question of questionRows) {
+    const byText = values[question.question], byField = question.fieldKey ? values[question.fieldKey] : undefined;
+    if (byText !== undefined && byField !== undefined && byText !== byField) invalid();
+    const answer = byText ?? byField;
+    if (typeof answer !== 'string' || !answer.trim()) return invalid();
+    normalized[question.question] = answer;
+  }
+  return { ...response, answers: normalized };
 }

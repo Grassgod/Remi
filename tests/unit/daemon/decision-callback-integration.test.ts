@@ -71,12 +71,13 @@ async function setup({ store }: PendingTurnTestFixture) {
   daemon.attachHumanInputHandlers(provider, attempt, new AbortController().signal, () => 1);
   client.startLane(lane);
   await until(() => client.connectionState() === "connected");
-  expect((await inbox.rpc("turn.input", { ...inbox.turnInput(attempt.id), message_ids: offer.input_messages.map(m => m.id) })).ok).toBe(true);
+  await inbox.consumeTaskSteerMessages(attempt.id, offer.input_messages.map(m => m.id));
+  expect(store.getTurn(offer.turn_id)?.input_to_seq).toBe(offer.input_to_seq);
   const { token } = await store.createTaskAccessToken(attempt, "local");
   return { store, rt, agent, issue, session, attempt, offer, send, frames, inbox, feed, permission, question,
     serverUrl: `http://127.0.0.1:${server.port}`,
     async readRange(from: number, to: number) {
-      const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/log/entry?from=${from}&to=${to}`,
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/messages?from=${from}&to=${to}`,
         { headers: { Authorization: `Bearer ${token}` } });
       expect(response.status).toBe(200);
       const page = await response.json() as { entries: Array<{ id: string; body_md: string }>; next_cursor: string | null };
@@ -105,7 +106,16 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       expect(decision.metadata.options).toEqual(permissionParams.options);
       expect(h.store.getTaskHumanRequest(decision.id)).toMatchObject({ kind: "permission",
         payload: { options: permissionParams.options, tool_call: permissionParams.toolCall } });
-      const answer = h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: optionId });
+      if (optionId === "unknown") {
+        expect(() => h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" },
+          body_md: optionId, response: { option_id: optionId } })).toThrow("invalid human response");
+        expect(h.store.getTaskHumanRequest(decision.id)?.status).toBe("pending");
+        await h.inbox.rpc("turn.decision.expire", { ...h.inbox.turnInput(h.attempt.id), message_id: decision.id, status: "cancelled" });
+        expect(await result).toEqual({ outcome: "cancelled" });
+        return;
+      }
+      const answer = h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" },
+        body_md: optionId, response: { option_id: optionId } });
       expect(await result).toEqual(optionId === "unknown" ? { outcome: "cancelled" } : { outcome: "selected", optionId });
       expect(h.inbox.pendingTaskSteerMessages(h.attempt.id)).toEqual([]);
       await h.inbox.consumeTaskSteerMessages(h.attempt.id, []);
@@ -113,7 +123,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     } finally { await h.close(); }
   }, 120_000);
 
-  for (const kind of ["text", "option", "multi_text_keys", "multi_field_keys", "long_text", "unread_context", "invalid_multi"] as const) {
+  for (const kind of ["text", "option", "multi_text_keys", "multi_field_keys", "multi_options", "multi_conflict", "multi_duplicate", "long_text", "unread_context", "invalid_multi"] as const) {
     it(`elicitation restores ${kind} and preserves unread input`, async () => {
       const h = await setup(fixture());
       try {
@@ -129,10 +139,24 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
         const body = kind === "option" ? decision.options![0]!.value
           : kind === "multi_text_keys" ? JSON.stringify({ answers: { "Where?": "Paris", "When?": "Now" } })
           : kind === "multi_field_keys" ? JSON.stringify({ answers: { answer: "Paris", second: "Now" } })
+          : kind === "multi_conflict" ? JSON.stringify({ answers: { answer: "Paris", "Where?": "Tokyo", second: "Now" } })
+          : kind === "multi_options" ? JSON.stringify({ selected_options: decision.options!.filter(option =>
+            ["Paris", "Now"].includes(JSON.parse(option.value).answer)).map(option => option.value) })
+          : kind === "multi_duplicate" ? JSON.stringify({ selected_options: [decision.options![0]!.value, decision.options![0]!.value] })
           : kind === "invalid_multi" ? JSON.stringify({ answers: { unknown: "invalid" } })
           : kind === "long_text" ? "Paris".repeat(2000) : "Paris";
-        const answer = h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: body });
-        expect(await result).toEqual(kind === "invalid_multi" ? { action: "cancel" } : { action: "accept",
+        const response = kind === "option" ? { selected_options: [body] }
+          : multi ? JSON.parse(body) : { answer: body };
+        if (kind === "invalid_multi" || kind === "multi_conflict" || kind === "multi_duplicate") {
+          expect(() => h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" },
+            body_md: body, response })).toThrow("invalid human response");
+          expect(h.store.getTaskHumanRequest(decision.id)?.status).toBe("pending");
+          await h.inbox.rpc("turn.decision.expire", { ...h.inbox.turnInput(h.attempt.id), message_id: decision.id, status: "cancelled" });
+          expect(await result).toEqual({ action: "cancel" });
+          return;
+        }
+        const answer = h.store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: body, response });
+        expect(await result).toEqual({ action: "accept",
           content: multi ? { answer: "Paris", second: "Now" } : { answer: kind === "long_text" ? body : "Paris" } });
         const projection = h.frames.find(f => f.t === "turn.message" && f.p.message.id === answer.message.id)?.p.message;
         expect(projection.body_md).toStartWith('{"type":"unread_range"');
@@ -149,7 +173,10 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           await expect(h.inbox.consumeTaskSteerMessages(h.attempt.id, hints.map(m => m.id))).rejects.toMatchObject({ code: "input_gap" });
           const range = await h.readRange(h.offer.input_to_seq, answer.message.seq);
           if (ordinary) expect(range.find(m => m.id === ordinary.message.id)?.body_md).toBe(ordinary.message.body_md);
-          expect(range.find(m => m.id === answer.message.id)?.body_md).toBe(body);
+          const readAnswer = range.find(m => m.id === answer.message.id)!;
+          expect(JSON.parse(readAnswer.body_md)).toEqual(kind === "long_text" || !multi
+            ? { ...response, answers: { "Where?": kind === "long_text" ? body : "Paris" } }
+            : { ...response, answers: { "Where?": "Paris", "When?": "Now" } });
           await h.inbox.consumeTaskSteerMessages(h.attempt.id, hints.map(m => m.id));
         } else {
           expect(h.inbox.pendingTaskSteerMessages(h.attempt.id)).toEqual([]);
@@ -175,7 +202,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           const decision = await h.decision();
           const ordinary = h.send("Still-unread ordinary context", "next_turn");
           answerSeq = h.store.answerMessageDecision(decision.id,
-            { sender: { type: "member", id: "mem_local_local" }, body_md: "allow" }).message.seq;
+            { sender: { type: "member", id: "mem_local_local" }, body_md: "allow", response: { option_id: "allow" } }).message.seq;
           expect(await result).toEqual({ outcome: "selected", optionId: "allow" });
           expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(h.offer.input_to_seq);
           expect(h.store.getMessage(ordinary.message.id)?.body_md).toBe("Still-unread ordinary context");
@@ -188,7 +215,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           if (scenario !== "unread") {
             const range = await h.readRange(h.offer.input_to_seq, answerSeq);
             expect(range.some(m => m.body_md === "Still-unread ordinary context")).toBe(true);
-            expect(range.some(m => m.body_md === "allow")).toBe(true);
+            expect(range.some(m => JSON.parse(m.body_md.startsWith("{") ? m.body_md : "null")?.option_id === "allow")).toBe(true);
           }
           if (scenario === "late_interrupt") {
             const late = h.send("Second directive during provider execution");
@@ -212,7 +239,8 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     };
     const daemon = new MultiremiDaemon({ serverUrl: h.serverUrl, token: "callback-fixture", runtimeId: h.rt,
       provider: "claude", daemonId: "daemon_decision_callback", workspaceId: "local", approvalMode: "ask",
-      workspacesRoot: workDir, gcEnabled: false, sshMeshManager: disabledSshMeshRuntime(), providerFactory: () => provider });
+      workspacesRoot: workDir, outboxPath: join(workDir, "outbox.db"), gcEnabled: false,
+      sshMeshManager: disabledSshMeshRuntime(), providerFactory: () => provider });
     const state = daemon as any;
     const downloader = new MultiremiDaemonClient(h.serverUrl, "callback-fixture");
     const drain = bindReportFrames(downloader, h.store, { runtimeId: h.rt });
