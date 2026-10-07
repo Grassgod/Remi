@@ -6220,7 +6220,27 @@ ${placementAfter.sql}
       );
     }
     const delegationReturns: MultiremiTask[] = [];
-    let roundPushTasks: MultiremiTask[] = [];
+    const roundPushTasks: MultiremiTask[] = [];
+    const reportIssueRound = (issue: MultiremiIssue) => {
+      const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
+      const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
+      const outcome = status === "completed" ? "done" : status;
+      const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
+      const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
+        + (reason ? `，原因 ${reason}` : "");
+      const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
+        to: { role: "relay", issueId: issue.id }, kind: "report", outcome,
+        wake: "now", dedupeKey: `relay:${issue.id}:${task.id}`,
+        body: envelopeBody, source: { issueId: issue.id, taskId: task.id },
+      }, childStatusChanges, deferredEvents);
+      roundPushTasks.push(...this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
+        issue,
+        leaderTask: task,
+        envelopeDeliveries: deliveries,
+        childStatusChanges,
+        deferredEvents,
+      }));
+    };
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
     if (status === "completed" && task.chatSessionId) this.promoteRelayIssueLogCursorWithinTransaction(task);
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
@@ -6418,24 +6438,23 @@ ${placementAfter.sql}
       }
       if (issue?.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
       if (issue && this.shouldReportIssueRound(task, status, issue)) {
-        const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
-        const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
-        const outcome = status === "completed" ? "done" : status;
-        const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
-        const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
-          + (reason ? `，原因 ${reason}` : "");
-        const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
-          to: { role: "relay", issueId: issue.id }, kind: "report", outcome,
-          wake: "now", dedupeKey: `relay:${issue.id}:${task.id}`,
-          body: envelopeBody, source: { issueId: issue.id, taskId: task.id },
-        }, childStatusChanges, deferredEvents);
-        roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
-          issue,
-          leaderTask: task,
-          envelopeDeliveries: deliveries,
-          childStatusChanges,
-          deferredEvents,
-        });
+        reportIssueRound(issue);
+      }
+    }
+
+    // Standalone/scheduled work can report on Issues without being bound to
+    // them. Ring those topics in this terminal transaction too. Chat replies
+    // must never ring their own relay (or another topic) back into a loop.
+    if (!task.chatSessionId) {
+      const commentedIssues = this.ctx.db.query(
+        `SELECT DISTINCT issue_id FROM multiremi_issue_comments
+         WHERE task_id = ? AND issue_id <> ?`,
+      ).all(task.id, task.issueId ?? "") as { issue_id: string }[];
+      for (const row of commentedIssues) {
+        const issue = this.ctx.issues().getIssue(row.issue_id);
+        if (issue && issue.workspaceId === task.workspaceId && !this.hasActiveTaskForIssue(issue.id)) {
+          reportIssueRound(issue);
+        }
       }
     }
 
