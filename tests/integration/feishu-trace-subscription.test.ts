@@ -11,6 +11,7 @@ import { nativeHarness } from "../unit/connectors/feishu-native-harness.js";
 
 it("presents continuous CoT through a real local daemon/API disconnect and resumes at checkpoint + 1", async () => {
   const activeTaskIds: string[] = [];
+  let initialReadyDelayed = false;
   const h = await DaemonProtocolHarness.create({
     onReady: daemon => { (daemon as any).claimsPaused = true; },
     beforeSend(frame, socket) {
@@ -18,7 +19,11 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
         for (const runtime of frame.p.runtimes) runtime.active_task_ids = [...activeTaskIds];
       } else if (frame.t === "runtime.ready") frame.p.active_task_ids = [...activeTaskIds];
       else return;
-      socket.native.send(JSON.stringify(frame));
+      if (frame.t === "runtime.ready" && !initialReadyDelayed) {
+        initialReadyDelayed = true;
+        // Exercise the real startup race even when the local runner is fast.
+        setTimeout(() => { if (!socket.closed) socket.native.send(JSON.stringify(frame)); }, 100);
+      } else socket.native.send(JSON.stringify(frame));
       return false;
     },
   });
@@ -34,6 +39,9 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       return realFetch(input, init);
     }, { preconnect: realFetch.preconnect });
     await h.startDaemon();
+    // Socket connection precedes the server's initial runtime.ready handler.
+    // Let its empty active-task snapshot settle before manually claiming a task.
+    await waitFor(() => h.ledger.some(entry => entry.type === "runtime.ready"), "initial server runtime readiness");
     const runtimeId = (h.daemon as any).options.runtimeId as string;
     const agent = h.store.createAgent({ name: "MUL-447 local fixture", provider: "claude" });
     const task = h.store.createTask({ agentId: agent.id, prompt: "Synthetic CoT subscription fixture" });
@@ -44,6 +52,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     const transport = (h.daemon as any).ensureTrace() as DaemonTraceTransport;
     transport.append(task.id, runtimeId, [{ type: "thinking", content: "consumed 1" }, { type: "thinking", content: "consumed 2" }]);
     await waitFor(() => daemonTraceService(h.layer).sink.head(task.id) === 2, "checkpoint prefix");
+    expect(h.store.getTask(task.id)?.status).toBe("running");
     const checkpoint = { version: "native_cot_v1" as const, startedAt: Date.now(), throughSeq: 2, interactions: {},
       cot: { status: "active" as const, presentation: "semantic_v1" as const, cotId: "cot_existing", messageId: "om_existing", runStarted: true } };
     const received: TraceEvent[] = [];
