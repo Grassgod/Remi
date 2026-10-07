@@ -81,13 +81,13 @@ describe("daemon protocol v2 client", () => {
     expect(b.probes()).toBe(1);
   });
 
-  it("logs CLI versions on a payload-release rejection without claiming work", async () => {
-    const b = bed({ cliVersion: "0.2.85" });
+  it.each(["0.2.85", "0.2.86", "0.2.87"])("logs CLI %s on a payload-release rejection without claiming work", async cliVersion => {
+    const b = bed({ cliVersion });
     b.sockets[0]!.emit("open");
     b.sockets[0]!.frame({ t: "reject", p: { code: "daemon_cli_upgrade_required", min_protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION } });
     b.sockets[0]!.emit("close", { code: 4426 });
     expect(b.client.connectionState()).toBe("upgrade_wait");
-    expect(b.logs).toContain(`daemon protocol rejected by server (min ${DAEMON_MIN_CLI_VERSION}, self 0.2.85); waiting for pending_update, no tasks will be claimed`);
+    expect(b.logs).toContain(`daemon protocol rejected by server (min ${DAEMON_MIN_CLI_VERSION}, self ${cliVersion}); waiting for pending_update, no tasks will be claimed`);
     expect(b.client.allowsClaims()).toBe(false);
   });
   it("admits one trace event through the 4 MiB ceiling while preserving ordinary frame limits", () => {

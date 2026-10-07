@@ -53,11 +53,12 @@ export const DAEMON_PROTOCOL_MIN = 2;
 /**
  * Lowest CLI version the server accepts on the v2 socket.
  *
- * Provisional MUL-493 integration version for PPE. Before merging main, the
- * release owner must align this with the approved first unified-model release,
- * package.json and the prepared dependency snapshot. This does not publish it.
+ * First unified-model release: v0.2.88. Released v0.2.87 and earlier daemons
+ * use the old payload protocol and must upgrade. Before publishing, the release
+ * owner must verify the v0.2.88 tag, package.json, prepared dependency snapshot
+ * and target main SHA. The version gate does not mean the fleet has upgraded.
  */
-export const DAEMON_MIN_CLI_VERSION = "0.2.87";
+export const DAEMON_MIN_CLI_VERSION = "0.2.88";
 
 // ── Frames ──────────────────────────────────────────────────────────────────
 

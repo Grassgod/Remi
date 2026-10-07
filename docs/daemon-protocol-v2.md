@@ -946,10 +946,10 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 
 ### 7.4b `DAEMON_MIN_CLI_VERSION` 与载荷发布版本
 
-当前 `DAEMON_MIN_CLI_VERSION` 为集成候选暂定号 `0.2.87`。
-package 版本与依赖快照同步为该候选号，PPE 新 daemon 不需要伪造 label 即可接入；
-`0.2.85`、`0.2.86` 的旧 daemon 被拒绝。这次修改不打 tag、不发布。
-合 main 前，发布负责人按实际发版核对并同步正式版号、依赖快照、tag 和目标 main SHA；
+当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `0.2.88`。
+package 版本与依赖快照同步为 `0.2.88`，PPE 新 daemon 不需要伪造 label 即可接入；
+已发布的 `0.2.87` 使用旧协议，与 `0.2.85`、`0.2.86` 一并被拒绝。这次修改不打 tag、不发布。
+发布前，发布负责人核对 `v0.2.88` tag、package 版本、依赖快照、Release 资产和目标 main SHA；
 操作见[统一模型切换清单](deploy/unified-model-cutover.md)。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
