@@ -7,6 +7,7 @@ import {
 // A manual preparation may have written the old marker while old servers were
 // still writing JSON. Only a startup pass can establish this cutover marker.
 export { USAGE_STARTUP_CUTOVER_MARKER } from "./usage-accounting.js";
+export const DEFAULT_USAGE_MIGRATION_TIMEOUT_MS = 300_000;
 export interface UsageStartupMigrationOptions {
   batchSize?: number;
   timeoutMs?: number;
@@ -19,7 +20,7 @@ function ready(db: SqlDatabase): boolean {
 
 function startupMigration(db: SqlDatabase, options: UsageStartupMigrationOptions) {
   const batchSize = options.batchSize ?? Number(process.env.MULTIREMI_USAGE_MIGRATION_BATCH_SIZE ?? 500);
-  const timeoutMs = options.timeoutMs ?? Number(process.env.MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS ?? 300_000);
+  const timeoutMs = options.timeoutMs ?? Number(process.env.MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS ?? DEFAULT_USAGE_MIGRATION_TIMEOUT_MS);
   if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 5000) throw new Error("Usage migration batch size must be 1..5000");
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("Usage migration timeout must be a positive integer");
   if (db.inTransaction) throw new Error("Usage startup migration must run outside a transaction/schema migration lock");
