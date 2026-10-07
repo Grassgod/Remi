@@ -24,6 +24,8 @@ function drivers(timeoutMs?: number) {
   const commands: string[] = [];
   const runner: CommandRunner = { async run(command, args) {
     commands.push([command, ...args].join(" "));
+    // Isolate URL deadline/rollback behavior from the API startup budget tests.
+    if (args.includes("config")) return { exitCode: 0, stdout: '{"services":{"web":{}}}', stderr: "" };
     return { exitCode: 0, stdout: "", stderr: "" };
   } };
   return {

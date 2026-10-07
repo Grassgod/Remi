@@ -29,19 +29,71 @@ Compose/systemd updater readiness uses a 360000 ms wall-clock deadline, controll
 by `MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS` in the **host updater environment**.
 Requests allow at most 5000 ms and probes sleep at most 2500 ms; both are capped
 by the remaining deadline. API, Web and configured extra readiness URLs are
-checked in parallel. Persistent failures still trigger local rollback. Keep
-this deadline above the API migration budget plus schema/process startup time,
-including when increasing `MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS`.
+checked in parallel. Persistent failures after the container switch still trigger
+local rollback.
 
-**Before the first usage-accounting update, install and restart the host updater
-with this deadline implementation.** Updating only the API image does not change
-an already-running older updater: its fixed 24-probe window can roll back while
-migration is still running. Setting the new variable on that older code alone
-does not extend its window. On an isolated restored copy with 11320 task rows,
+Compose has its own startup window. For each enabled core service `api` or
+`api-runtime`, keep these three times aligned (all comparisons use milliseconds):
+
+```text
+required = MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS + 60000 startup margin
+healthcheck.start_period >= required
+MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS >= healthcheck.start_period
+MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS >= required
+defaults: 300000 + 60000 <= 360000 (360s) <= 360000
+```
+
+Both deployment templates use `start_period: 360s`, with the existing 10 s
+interval, 5 s probe timeout and 12 retries. During that start period Docker does
+not count failed probes toward unhealthy status; `web`'s
+`depends_on: api: condition: service_healthy` waits for API readiness. The
+additional retry window after the start period is not part of the migration
+budget. These templates do not require Docker's newer `start_interval` option.
+
+Every Compose `update` first renders `docker compose config --format json` and
+checks the effective migration budget, including values merged from the API
+`env_file`. The updater rejects all inconsistent budgets before changing the
+image env file, pulling images or switching containers, and does not roll back
+that rejected attempt. Absent/disabled Docker healthchecks skip the start-period
+comparisons, but the updater deadline must still cover `required`. Only API
+services present in both the updater core list and the rendered config are
+checked. `rollback`, `restart` and `check_updates` skip this preflight.
+
+**Upgrade the host Compose file first, then install and restart the new host
+updater, then update API/Web.** Host Compose files are not replaced by a platform
+release. Add the start period to both API healthchecks in the host copy of
+`compose.application.yml` or `compose.platform.yml` first. An older updater can
+use this configuration. Reversing this order causes the new updater to reject
+updates against the old file; this is a safe failure that leaves containers and
+image env files untouched. Updating only the API image also does not replace an
+older updater's fixed 24-probe readiness window; setting the new timeout variable
+on that older implementation does not extend it.
+
+For a large dataset, prepare the scalar migration with the **new API image** and
+the installation's normal database environment before requesting the update:
+
+```bash
+bun run scripts/migrate-usage-accounting.ts --execute
+```
+
+This preparation commits task checkpoints but does not establish startup
+readiness; the new API still rechecks changed sources on startup. On host 209,
+preparing the remaining 5,090 tasks took 77 s on 2026-10-07. If increasing
+`MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS`, increase both API healthcheck start periods
+and `MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS` in the host `updater.env` together.
+
+On an isolated restored copy with 11320 task rows,
 Bun 1.3.14/PostgreSQL 17.11 measured schema setup at 8.343 s and scalar migration
 at 138.350 s (2026-10-06), exceeding the old roughly 60 s connection-refused
-window. This is clone evidence, not production throughput. No production
-migration duration has been measured.
+window. This separate clone measurement is not production throughput.
+
+The `Platform Compose startup` GitHub Actions workflow runs
+`scripts/check-compose-startup.ts` with real Docker: both API roles delay
+`/readyz` for 150 s, using the application's template healthcheck unchanged.
+The update-style `up -d --no-deps api web api-runtime` must succeed after more
+than 120 s; a fresh control project with only `start_period` removed must fail
+with `is unhealthy`. It runs only for deployment Docker files, updater code or
+that script, and can also be dispatched manually.
 
 PostgreSQL uses a dedicated usage migration advisory mutex for schema/checkpoints
 and each bounded batch. It does not hold the global schema lock while migrating

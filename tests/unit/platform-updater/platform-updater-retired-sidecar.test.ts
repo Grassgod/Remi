@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { MultiremiPlatformOperation, MultiremiPlatformServiceId } from "@multiremi/contracts";
 import { DockerComposeDriver } from "@remi-platform/updater/compose-driver.js";
 import type { CommandRunner } from "@remi-platform/updater/types.js";
+import { validComposeConfigResult } from "../../fixtures/platform-updater/compose-config.js";
 
 const DIGEST = `ghcr.io/grassgod/remi-api@sha256:${"a".repeat(64)}`;
 const WEB_DIGEST = `ghcr.io/grassgod/remi-web@sha256:${"b".repeat(64)}`;
@@ -82,6 +83,7 @@ function driverBed(options: { leftover: boolean; psRows?: Record<string, unknown
     async run(command, args) {
       commands.push([command, ...args]);
       const line = args.join(" ");
+      if (args.includes("config")) return validComposeConfigResult;
       if (line.startsWith("ps -aq --filter")) {
         return { exitCode: 0, stdout: options.leftover ? `${LEFTOVER_ID}\n` : "\n", stderr: "" };
       }

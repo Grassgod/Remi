@@ -17,6 +17,7 @@ import {
 } from "@remi-platform/updater/drain.js";
 import { PlatformDrainLostError, type PlatformDrainRenewResponse, type PlatformUpdaterClient } from "@remi-platform/updater/client.js";
 import type { CommandRunner } from "@remi-platform/updater/types.js";
+import { validComposeConfigResult } from "../../fixtures/platform-updater/compose-config.js";
 
 let tempDirs: string[] = [];
 afterEach(() => {
@@ -239,6 +240,7 @@ describe("DockerComposeDriver drain gating", () => {
     const runner: CommandRunner = {
       async run(command, args) {
         commands.push([command, ...args]);
+        if (args.includes("config")) return validComposeConfigResult;
         if (args.includes("up")) {
           switches += 1;
           if (options.failFirstSwitch && switches === 1) {
