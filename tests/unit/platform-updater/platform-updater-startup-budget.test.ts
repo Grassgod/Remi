@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,8 @@ describe("Compose startup budget validation", () => {
     expect(() => validate(service(), { healthTimeoutMs: 300_000 })).toThrow("must be >= healthcheck.start_period=360000ms");
     expect(() => validate(service({ ...enabledHealth, start_period: "361s" }))).toThrow("must be >= healthcheck.start_period=361000ms");
     expect(() => validate(service({ ...enabledHealth, start_period: "359.999s" }))).toThrow("must be >= 360000ms");
+    expect(() => validate(service({ ...enabledHealth, start_period: "480s" }), { healthTimeoutMs: 479_999 })).toThrow("must be >= healthcheck.start_period=480000ms");
+    expect(() => validate(service({ ...enabledHealth, start_period: "480s" }), { healthTimeoutMs: 480_000 })).not.toThrow();
   });
 
   it("checks only API services present in both the core list and the rendered config", () => {
@@ -154,6 +156,7 @@ describe("Compose driver startup preflight", () => {
         expect(message).toContain(expected);
         expect(message).not.toContain("ENV_FILE_SECRET_SENTINEL");
         expect(bed.commands).toHaveLength(1);
+        expect(bed.commands[0]!.slice(0, 6)).toEqual(["docker", "compose", "--env-file", bed.envFile, "-f", join(bed.root, "compose.application.yml")]);
         expect(bed.commands[0]!.slice(-4)).toEqual([join(bed.root, "compose.application.yml"), "config", "--format", "json"]);
         expect(readFileSync(bed.envFile).equals(bed.originalEnv)).toBe(true);
         expect(readFileSync(join(bed.root, "current-release.json"), "utf8")).toBe(bed.current);
@@ -162,6 +165,32 @@ describe("Compose driver startup preflight", () => {
         expect(drains).toBe(0);
       } finally { bed.stop(); }
     }
+  });
+
+  it("keeps all sensitive sentinels out of errors, reports and captured logs", async () => {
+    const sentinels = ["ENV_TOKEN_SENTINEL", "INVALID_BUDGET_SENTINEL", "INVALID_DURATION_SENTINEL", "STDOUT_SENTINEL", "STDERR_SENTINEL", "JSON_SENTINEL"];
+    const logs: unknown[][] = [];
+    const spies = (["log", "warn", "error"] as const).map(method => spyOn(console, method).mockImplementation((...args) => { logs.push(args); }));
+    const results = [
+      { exitCode: 0, stdout: JSON.stringify({ services: {
+        api: { healthcheck: { start_period: sentinels[2] }, environment: { API_TOKEN: sentinels[0], MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS: sentinels[1] } },
+      } }), stderr: "" },
+      { exitCode: 2, stdout: sentinels[3]!, stderr: sentinels[4]! },
+      { exitCode: 0, stdout: `{"token":"${sentinels[5]}"`, stderr: "" },
+    ];
+    try {
+      for (const result of results) {
+        const bed = driverBed(result);
+        try {
+          let message = "";
+          try { await bed.driver.execute(operation(), bed.report); } catch (error) { message = (error as Error).message; }
+          expect(message).not.toBe("");
+          const output = JSON.stringify({ message, reports: bed.reports, logs });
+          for (const sentinel of sentinels) expect(output).not.toContain(sentinel);
+          expect(bed.reports).toEqual([]);
+        } finally { bed.stop(); }
+      }
+    } finally { for (const spy of spies) spy.mockRestore(); }
   });
 
   it("renders config first and proceeds through a normal update when valid", async () => {

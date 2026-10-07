@@ -1,0 +1,40 @@
+name: Platform Compose startup
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/docker/**'
+      - 'packages/platform-updater/**'
+      - 'scripts/check-compose-startup.ts'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/docker/**'
+      - 'packages/platform-updater/**'
+      - 'scripts/check-compose-startup.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies from the public registry
+        run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
+      - name: Verify updater regression and deployment contracts
+        run: bun test tests/unit/platform-updater tests/arch/deploy-compose.test.ts
+      - name: Typecheck
+        run: bunx tsc --noEmit
+      - name: Reproduce delayed API readiness with real Docker
+        run: bun run scripts/check-compose-startup.ts
