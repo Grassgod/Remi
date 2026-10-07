@@ -948,10 +948,11 @@ export async function sendDecisionLane(
     });
   }
   const degrade = async (reason: FeishuDecisionDegradeReason, openId: string | null) => {
+    const body = envelope?.fallback_text?.trim() || delivery.body;
     const sent = await handle.sendProactiveThreadReply({
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
-      body: envelope?.fallback_text?.trim() || delivery.body,
+      body: reason === "send_failed" && openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${body}` : body,
       idempotencyKey: delivery.idempotencyKey,
     });
     await options?.onDecisionSent?.({ messageId: sent.messageId, interactionOpenId: openId, degraded: reason });
@@ -1039,10 +1040,11 @@ export async function sendIssueDecisionLane(
     });
   }
   const degrade = async (reason: FeishuDecisionDegradeReason, openId: string | null) => {
+    const body = envelope?.fallback_text?.trim() || delivery.body;
     const sent = await handle.sendProactiveThreadReply({
       chatId: delivery.chatId,
       replyToMessageId: delivery.replyToMessageId ?? undefined,
-      body: envelope?.fallback_text?.trim() || delivery.body,
+      body: reason === "send_failed" && openId ? `${formatMentionForCard({ openId, name: "", key: "" })} ${body}` : body,
       idempotencyKey: delivery.idempotencyKey,
     });
     await options?.onDecisionSent?.({ messageId: sent.messageId, interactionOpenId: openId, degraded: reason });

@@ -16,6 +16,7 @@ summary: 当前机器人 Chat/Issue 话题与轮次推送，以及独立的 Mess
 - **增量上下文**：[AgentIssueUpdatesRepo](../packages/server/src/store/repos/agent-issue-updates-repo.ts)仅对有效飞书 Issue 话题及已启用的通知通道合并活动，过滤目标会话自己的回声。更新写成待投递消息，不逐条唤醒 Agent；[claim wire](../packages/server/src/api/wire/tasks.ts)按预算附加该话题的 Issue 与摘要。普通私聊不接收这些播报，摘要不能替代 Issue 详情与评论查询。
 - **轮次推送**：[TasksRepo](../packages/server/src/store/repos/tasks-repo.ts)在非 Chat 任务结束时，对它绑定的 Issue Session 单及它通过 `task_id` 写过评论的其他单，逐单检查没有活跃 Issue 任务后准备话题总结。两条路径在结束事务内复用 relay 信封与话题推送，信封按 `relay:<issue_id>:<task_id>` 去重；同一单的多条评论只推一次。Chat 任务不触发，避免话题回复循环叫醒。需要人工输入时也可准备话题提醒。领取、投递与完成均核对绑定、Issue、工作区、Chat 和 Agent 的一致性，失配不继续发送。话题总结本身不自动修改 Issue 状态或追加 Issue 评论。
 - **出站投递**：控制面只在已落库的 bot 状态为 `online` 且 revision 匹配时领取带租约的 delivery，通过 daemon 下发，经 [concierge host](../apps/remi/cli/multiremi.ts)发送并回报；失败按持久化 outbox 规则重试。bot 状态改为确认落库的 RPC 上报并独立随心跳补报，防止丢失 `online` 后无人领取。[send.ts](../packages/connectors/src/feishu/send.ts)使用 delivery 幂等键，根消息成功后以返回的消息 ID 固定话题目标；这不等于真实飞书端已验证恰好一次投递。
+- **决策卡片**：[共享卡片构造器](../packages/shared/src/feishu-task-card.ts)的输入框 `max_length` 不超过飞书上限 1000，Issue 决策的自定义回答上限为 1000。Issue 决策与任务人工请求的发送入口均只在不可重试的卡片拒收时降级文字（`send_failed`）；已有有效收件人时，文字开头保留该人的 @。没有收件人的降级不 @，可重试错误继续交给 outbox 退避，不提前发文字。正常提交与原卡片终态更新规则见[话题回复契约](feishu-topic-replies.md)。
 
 ### 斜杠命令与「结束任务」
 
