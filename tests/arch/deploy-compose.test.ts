@@ -10,6 +10,9 @@ import ts from "typescript";
 import { parse } from "yaml";
 import { isTerminalPlatformOperationStatus } from "@multiremi/store/repos/platform-operations-repo.js";
 import type { MultiremiPlatformOperationStatus } from "@multiremi/contracts/types.js";
+import { DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS } from "../../packages/platform-updater/src/health-check.js";
+import { DEFAULT_USAGE_MIGRATION_TIMEOUT_MS, validateComposeStartupBudgets } from "../../packages/platform-updater/src/startup-budget.js";
+import { DEFAULT_USAGE_MIGRATION_TIMEOUT_MS as SERVER_USAGE_MIGRATION_TIMEOUT_MS } from "@multiremi/store/usage-migration.js";
 
 const repoRoot = resolve(import.meta.dir, "../..");
 const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.application.yml"), "utf8")) as {
@@ -32,6 +35,22 @@ function splitSection(readme: string): string {
 }
 
 describe("application compose stack", () => {
+  test("both deployment templates satisfy the updater startup budgets for both API roles", () => {
+    expect(DEFAULT_USAGE_MIGRATION_TIMEOUT_MS).toBe(SERVER_USAGE_MIGRATION_TIMEOUT_MS);
+    for (const file of ["compose.application.yml", "compose.platform.yml"]) {
+      const composeFile = resolve(repoRoot, "deploy/docker", file);
+      const template = parse(readFileSync(composeFile, "utf8"));
+      for (const name of ["api", "api-runtime"]) {
+        expect(template.services[name].healthcheck.start_period).toBe("360s");
+        expect(template.services[name].healthcheck.start_interval).toBeUndefined();
+      }
+      expect(template.services.web.depends_on.api.condition).toBe("service_healthy");
+      expect(() => validateComposeStartupBudgets(template, {
+        composeFile, coreServices: ["api", "api-runtime"], healthTimeoutMs: DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS,
+      })).not.toThrow();
+    }
+  });
+
   test("ships no ingestion service, profile, or endpoint registry", () => {
     // The sidecar is retired. Anything left behind here — a service, a profile
     // to enable it, an endpoint name to point at it — would be config that
